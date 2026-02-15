@@ -1,6 +1,6 @@
 #pragma once
 
-#include "include/GL/glew.h"
+#include <GL/glew.h>
 #include <atomic>
 #include <windows.h>
 
