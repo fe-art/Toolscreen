@@ -2784,6 +2784,10 @@ void RenderWelcomeToast(bool isFullscreen) {
     GLfloat lastColor[4];
     GLint lastMatrixMode;
     GLfloat projMatrix[16], modelMatrix[16];
+    GLint lastUnpackRowLength = 0;
+    GLint lastUnpackSkipPixels = 0;
+    GLint lastUnpackSkipRows = 0;
+    GLint lastUnpackAlignment = 0;
 
     glGetIntegerv(GL_CURRENT_PROGRAM, &lastProgram);
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &lastTexture);
@@ -2799,6 +2803,10 @@ void RenderWelcomeToast(bool isFullscreen) {
     glGetIntegerv(GL_MATRIX_MODE, &lastMatrixMode);
     glGetFloatv(GL_PROJECTION_MATRIX, projMatrix);
     glGetFloatv(GL_MODELVIEW_MATRIX, modelMatrix);
+    glGetIntegerv(GL_UNPACK_ROW_LENGTH, &lastUnpackRowLength);
+    glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &lastUnpackSkipPixels);
+    glGetIntegerv(GL_UNPACK_SKIP_ROWS, &lastUnpackSkipRows);
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &lastUnpackAlignment);
 
     // Setup rendering state for textured quad (fixed-function pipeline)
     glUseProgram(0);
@@ -2823,6 +2831,16 @@ void RenderWelcomeToast(bool isFullscreen) {
     // Draw textured quad at top-left
     glBindTexture(GL_TEXTURE_2D, texture);
     glColor4f(1.0f, 1.0f, 1.0f, toastOpacity);
+
+    // Make images render safely
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+    glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
 
     float x = 0.0f;
     float y = 0.0f;
@@ -2863,6 +2881,12 @@ void RenderWelcomeToast(bool isFullscreen) {
     else
         glDisable(GL_TEXTURE_2D);
     glBlendFuncSeparate(lastBlendSrcRGB, lastBlendDstRGB, lastBlendSrcA, lastBlendDstA);
+
+    // Restore pixel-store state we changed
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, lastUnpackRowLength);
+    glPixelStorei(GL_UNPACK_SKIP_PIXELS, lastUnpackSkipPixels);
+    glPixelStorei(GL_UNPACK_SKIP_ROWS, lastUnpackSkipRows);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, lastUnpackAlignment);
 }
 
 void RenderPerformanceOverlay(bool showPerformanceOverlay) {
