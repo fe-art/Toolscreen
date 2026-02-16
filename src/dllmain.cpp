@@ -1564,7 +1564,7 @@ void main() {
                                             if (mon) {
                                                 MONITORINFO mi{};
                                                 mi.cbSize = sizeof(mi);
-                                                if (GetMonitorInfo(mon, &mi)) { targetRect = mi.rcWork; }
+                                                if (GetMonitorInfo(mon, &mi)) { targetRect = mi.rcMonitor; }
                                             }
                                         }
                                         const int targetW = (targetRect.right - targetRect.left);
@@ -1585,7 +1585,9 @@ void main() {
                                             SetWindowLongPtr(hwnd, GWL_STYLE, static_cast<LONG_PTR>(style));
 
                                             DWORD exStyle = static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_EXSTYLE));
-                                            exStyle &= ~(WS_EX_TOPMOST | WS_EX_TOOLWINDOW);
+                                            // Clear edge styles so the client area matches the monitor rect exactly.
+                                            exStyle &= ~(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_DLGMODALFRAME |
+                                                         WS_EX_STATICEDGE);
                                             exStyle |= WS_EX_APPWINDOW;
                                             SetWindowLongPtr(hwnd, GWL_EXSTYLE, static_cast<LONG_PTR>(exStyle));
                                         }
@@ -1594,7 +1596,7 @@ void main() {
                                                      SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
                                         g_cachedGameTextureId.store(UINT_MAX);
 
-                                        Log("[TOAST] toast1 clicked - switched to borderless-windowed (primary monitor work area) " +
+                                        Log("[TOAST] toast1 clicked - switched to borderless-windowed (primary monitor resolution) " +
                                             std::to_string(targetW) + "x" + std::to_string(targetH) + " at (" +
                                             std::to_string(targetRect.left) + "," + std::to_string(targetRect.top) + ")");
                                     }
