@@ -87,7 +87,7 @@ secondaryMode = 'Thin'
 triggerOnRelease = false
 
     [hotkey.conditions]
-    exclusions = []
+    exclusions = [ 'F3' ]
     gameState = []
 
 [[hotkey]]
@@ -99,7 +99,7 @@ secondaryMode = 'EyeZoom'
 triggerOnRelease = false
 
     [hotkey.conditions]
-    exclusions = []
+    exclusions = [ 'F3' ]
     gameState = []
 
 [[hotkey]]
@@ -111,7 +111,7 @@ secondaryMode = 'Wide'
 triggerOnRelease = false
 
     [hotkey.conditions]
-    exclusions = []
+    exclusions = [ 'F3' ]
     gameState = []
 
 [[image]]
