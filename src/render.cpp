@@ -2980,9 +2980,13 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
             request.textureGridModeWidth = g_textureGridModeWidth.load(std::memory_order_relaxed);
             request.textureGridModeHeight = g_textureGridModeHeight.load(std::memory_order_relaxed);
 
-            // Welcome toast (shown briefly after DLL injection)
-            request.showWelcomeToast = g_welcomeToastVisible.load();
+            // Toast prompts:
+            // Always request toast rendering; RenderWelcomeToast() itself enforces:
+            // - toast1 shows in windowed
+            // - toast2 shows in fullscreen until Ctrl+I for this session
+            // This avoids the prompt disappearing due to transient state/request gating.
             request.welcomeToastIsFullscreen = IsFullscreen();
+            request.showWelcomeToast = true;
 
             // Background and border config for async rendering
             request.backgroundIsImage = (modeToRender->background.selectedMode == "image");

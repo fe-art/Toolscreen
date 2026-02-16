@@ -2683,206 +2683,259 @@ bool IsGuiHotkeyPressed(WPARAM wParam) { return CheckHotkeyMatch(g_config.guiHot
 
 // Welcome toast state
 std::atomic<bool> g_welcomeToastVisible{ false };
+std::atomic<bool> g_configurePromptDismissedThisSession{ false };
 
 void RenderWelcomeToast(bool isFullscreen) {
-    if (!g_welcomeToastVisible.load()) return;
+    // Semantics:
+    // - toast1 (windowed fullscreenPrompt) should ALWAYS show in windowed mode.
+    // - toast2 (fullscreen configurePrompt) should ALWAYS show in fullscreen UNTIL Ctrl+I is pressed for this session.
+    if (isFullscreen && g_configurePromptDismissedThisSession.load(std::memory_order_relaxed)) { return; }
 
-    // Per-toast visibility toggles from config
-    //if (!isFullscreen && g_config.disableFullscreenPrompt) return;
-    //if (isFullscreen && g_config.disableConfigurePrompt) return;
+    // Core-profile-safe rendering (Minecraft 1.17+): use shaders + VAO/VBO.
+    static GLuint s_program = 0;
+    static GLuint s_vao = 0;
+    static GLuint s_vbo = 0;
+    static GLint s_locTexture = -1;
+    static GLint s_locOpacity = -1;
 
-    // IMPORTANT: This prompt should only stop showing when the user opens the GUI (Ctrl+I)
-    // for the current session. Fullscreen toggles can recreate the OpenGL context, so we
-    // must be able to recreate our GL resources when the HGLRC changes.
-    float toastOpacity = 1.0f;
-
-    // Static texture state - loaded once per OpenGL context from embedded resources
     static GLuint s_toast1Texture = 0;
     static GLuint s_toast2Texture = 0;
     static int s_toast1Width = 0, s_toast1Height = 0;
     static int s_toast2Width = 0, s_toast2Height = 0;
-    static bool s_texturesLoaded = false;
 
-    // Fullscreen toggles (and some driver events) can recreate the OpenGL context.
-    // Texture object IDs are context-specific, so reload when the current HGLRC changes.
-    static HGLRC s_lastToastContext = NULL;
+    // Reset GL objects when context changes.
+    static HGLRC s_lastCtx = NULL;
     HGLRC currentCtx = wglGetCurrentContext();
-    if (currentCtx != s_lastToastContext) {
-        s_lastToastContext = currentCtx;
-        s_texturesLoaded = false;
+    if (currentCtx != s_lastCtx) {
+        s_lastCtx = currentCtx;
+        s_program = 0;
+        s_vao = 0;
+        s_vbo = 0;
+        s_locTexture = -1;
+        s_locOpacity = -1;
         s_toast1Texture = 0;
         s_toast2Texture = 0;
         s_toast1Width = s_toast1Height = 0;
         s_toast2Width = s_toast2Height = 0;
     }
 
-    if (!s_texturesLoaded) {
-        s_texturesLoaded = true;
+    // Ensure shader program exists
+    if (s_program == 0) {
+        const char* vtxSrc = R"(#version 330 core
+layout(location = 0) in vec2 aPos;
+layout(location = 1) in vec2 aTexCoord;
+out vec2 TexCoord;
+void main() {
+    gl_Position = vec4(aPos, 0.0, 1.0);
+    TexCoord = aTexCoord;
+})";
+        const char* fragSrc = R"(#version 330 core
+out vec4 FragColor;
+in vec2 TexCoord;
+uniform sampler2D uTexture;
+uniform float uOpacity;
+void main() {
+    vec4 c = texture(uTexture, TexCoord);
+    FragColor = vec4(c.rgb, c.a * uOpacity);
+})";
 
-        // Explicitly disable vertical flip for toast texture loading.
-        // The global stbi_set_flip_vertically_on_load(true) from LoadAllImages()
-        // would otherwise flip the texture, making V=0 = bottom of image.
-        // Without flip, V=0 = top of image, which matches our glOrtho Y-down UV mapping.
+        s_program = CreateShaderProgram(vtxSrc, fragSrc);
+        if (s_program != 0) {
+            s_locTexture = glGetUniformLocation(s_program, "uTexture");
+            s_locOpacity = glGetUniformLocation(s_program, "uOpacity");
+            glUseProgram(s_program);
+            glUniform1i(s_locTexture, 0);
+            glUseProgram(0);
+        }
+    }
+
+    // Ensure VAO/VBO exist
+    if (s_vao == 0) {
+        glGenVertexArrays(1, &s_vao);
+    }
+    if (s_vbo == 0) {
+        glGenBuffers(1, &s_vbo);
+    }
+    if (s_vao != 0 && s_vbo != 0) {
+        glBindVertexArray(s_vao);
+        glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
+        glBufferData(GL_ARRAY_BUFFER, 6 * 4 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
+        glBindVertexArray(0);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+    }
+
+    // Ensure textures exist (lazy load from embedded resources)
+    auto ensureToastTexture = [&](int resourceId, GLuint& outTexture, int& outW, int& outH) {
+        if (outTexture != 0 && outW > 0 && outH > 0) { return; }
+
+        // Disable vertical flip for toast textures.
         stbi_set_flip_vertically_on_load_thread(0);
 
         HMODULE hModule = NULL;
         GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                            (LPCWSTR)&RenderWelcomeToast, &hModule);
+        if (!hModule) { return; }
 
-        auto loadToastTexture = [&](int resourceId, GLuint& outTexture, int& outW, int& outH) {
-            HRSRC hResource = FindResourceW(hModule, MAKEINTRESOURCEW(resourceId), RT_RCDATA);
-            if (!hResource) return;
-            HGLOBAL hData = LoadResource(hModule, hResource);
-            if (!hData) return;
-            DWORD dataSize = SizeofResource(hModule, hResource);
-            const unsigned char* rawData = (const unsigned char*)LockResource(hData);
-            if (!rawData || dataSize == 0) return;
+        HRSRC hResource = FindResourceW(hModule, MAKEINTRESOURCEW(resourceId), RT_RCDATA);
+        if (!hResource) { return; }
+        HGLOBAL hData = LoadResource(hModule, hResource);
+        if (!hData) { return; }
 
-            int w, h, channels;
-            unsigned char* pixels = stbi_load_from_memory(rawData, (int)dataSize, &w, &h, &channels, 4);
-            if (!pixels) return;
+        DWORD dataSize = SizeofResource(hModule, hResource);
+        const unsigned char* rawData = (const unsigned char*)LockResource(hData);
+        if (!rawData || dataSize == 0) { return; }
 
-            glGenTextures(1, &outTexture);
-            glBindTexture(GL_TEXTURE_2D, outTexture);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-            glBindTexture(GL_TEXTURE_2D, 0);
+        int w = 0, h = 0, channels = 0;
+        unsigned char* pixels = stbi_load_from_memory(rawData, (int)dataSize, &w, &h, &channels, 4);
+        if (!pixels || w <= 0 || h <= 0) { return; }
 
-            outW = w;
-            outH = h;
-            stbi_image_free(pixels);
-        };
+        glGenTextures(1, &outTexture);
+        glBindTexture(GL_TEXTURE_2D, outTexture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+        glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+        glBindTexture(GL_TEXTURE_2D, 0);
 
-        loadToastTexture(IDR_TOAST1_PNG, s_toast1Texture, s_toast1Width, s_toast1Height);
-        loadToastTexture(IDR_TOAST2_PNG, s_toast2Texture, s_toast2Width, s_toast2Height);
-    }
+        outW = w;
+        outH = h;
+        stbi_image_free(pixels);
+    };
 
-    // Pick the right texture based on fullscreen state
+    ensureToastTexture(IDR_TOAST1_PNG, s_toast1Texture, s_toast1Width, s_toast1Height);
+    ensureToastTexture(IDR_TOAST2_PNG, s_toast2Texture, s_toast2Width, s_toast2Height);
+
+    // Pick texture based on fullscreen state
     GLuint texture = isFullscreen ? s_toast2Texture : s_toast1Texture;
     int imgW = isFullscreen ? s_toast2Width : s_toast1Width;
     int imgH = isFullscreen ? s_toast2Height : s_toast1Height;
+    if (s_program == 0 || s_vao == 0 || s_vbo == 0 || texture == 0 || imgW <= 0 || imgH <= 0) { return; }
 
-    if (texture == 0 || imgW == 0 || imgH == 0) return;
-
-    // Get current viewport dimensions for orthographic projection
+    // Viewport size
     GLint viewport[4];
     glGetIntegerv(GL_VIEWPORT, viewport);
     int vpW = viewport[2];
     int vpH = viewport[3];
+    if (vpW <= 0 || vpH <= 0) { return; }
 
-    // Save OpenGL state
-    GLint lastProgram, lastTexture, lastActiveTexture;
-    GLboolean lastBlend, lastDepthTest, lastTex2D;
-    GLint lastBlendSrcRGB, lastBlendDstRGB, lastBlendSrcA, lastBlendDstA;
-    GLfloat lastColor[4];
-    GLint lastMatrixMode;
-    GLfloat projMatrix[16], modelMatrix[16];
-    GLint lastUnpackRowLength = 0;
-    GLint lastUnpackSkipPixels = 0;
-    GLint lastUnpackSkipRows = 0;
-    GLint lastUnpackAlignment = 0;
+    // Save GL state (minimal but robust)
+    GLint savedProgram = 0, savedVAO = 0, savedVBO = 0, savedFBO = 0, savedTex = 0, savedActiveTex = 0;
+    GLboolean savedBlend = GL_FALSE, savedDepthTest = GL_FALSE, savedScissor = GL_FALSE, savedStencil = GL_FALSE;
+    GLint savedBlendSrcRGB = 0, savedBlendDstRGB = 0, savedBlendSrcA = 0, savedBlendDstA = 0;
+    GLint savedViewport[4];
+    GLboolean savedColorMask[4];
+    GLint savedUnpackRowLength = 0, savedUnpackSkipPixels = 0, savedUnpackSkipRows = 0, savedUnpackAlignment = 0;
 
-    glGetIntegerv(GL_CURRENT_PROGRAM, &lastProgram);
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &lastTexture);
-    glGetIntegerv(GL_ACTIVE_TEXTURE, &lastActiveTexture);
-    lastBlend = glIsEnabled(GL_BLEND);
-    lastDepthTest = glIsEnabled(GL_DEPTH_TEST);
-    lastTex2D = glIsEnabled(GL_TEXTURE_2D);
-    glGetIntegerv(GL_BLEND_SRC_RGB, &lastBlendSrcRGB);
-    glGetIntegerv(GL_BLEND_DST_RGB, &lastBlendDstRGB);
-    glGetIntegerv(GL_BLEND_SRC_ALPHA, &lastBlendSrcA);
-    glGetIntegerv(GL_BLEND_DST_ALPHA, &lastBlendDstA);
-    glGetFloatv(GL_CURRENT_COLOR, lastColor);
-    glGetIntegerv(GL_MATRIX_MODE, &lastMatrixMode);
-    glGetFloatv(GL_PROJECTION_MATRIX, projMatrix);
-    glGetFloatv(GL_MODELVIEW_MATRIX, modelMatrix);
-    glGetIntegerv(GL_UNPACK_ROW_LENGTH, &lastUnpackRowLength);
-    glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &lastUnpackSkipPixels);
-    glGetIntegerv(GL_UNPACK_SKIP_ROWS, &lastUnpackSkipRows);
-    glGetIntegerv(GL_UNPACK_ALIGNMENT, &lastUnpackAlignment);
-
-    // Setup rendering state for textured quad (fixed-function pipeline)
-    glUseProgram(0);
+    glGetIntegerv(GL_CURRENT_PROGRAM, &savedProgram);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &savedVAO);
+    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &savedVBO);
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &savedFBO);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &savedActiveTex);
     glActiveTexture(GL_TEXTURE0);
-    glEnable(GL_TEXTURE_2D);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &savedTex);
+    savedBlend = glIsEnabled(GL_BLEND);
+    savedDepthTest = glIsEnabled(GL_DEPTH_TEST);
+    savedScissor = glIsEnabled(GL_SCISSOR_TEST);
+    savedStencil = glIsEnabled(GL_STENCIL_TEST);
+    glGetIntegerv(GL_BLEND_SRC_RGB, &savedBlendSrcRGB);
+    glGetIntegerv(GL_BLEND_DST_RGB, &savedBlendDstRGB);
+    glGetIntegerv(GL_BLEND_SRC_ALPHA, &savedBlendSrcA);
+    glGetIntegerv(GL_BLEND_DST_ALPHA, &savedBlendDstA);
+    glGetIntegerv(GL_VIEWPORT, savedViewport);
+    glGetBooleanv(GL_COLOR_WRITEMASK, savedColorMask);
+    glGetIntegerv(GL_UNPACK_ROW_LENGTH, &savedUnpackRowLength);
+    glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &savedUnpackSkipPixels);
+    glGetIntegerv(GL_UNPACK_SKIP_ROWS, &savedUnpackSkipRows);
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &savedUnpackAlignment);
+
+    // Setup state
+    // IMPORTANT: Do NOT force framebuffer 0 here.
+    // The render thread draws overlays into an offscreen FBO and then blits it; binding 0 would
+    // render the toast into the default framebuffer and it would never show up in the final output.
+    // Also avoid stomping the caller's viewport; use the currently-active viewport we queried above.
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_STENCIL_TEST);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glDisable(GL_DEPTH_TEST);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
-    // Set up orthographic projection (screen coordinates, origin top-left)
-    glMatrixMode(GL_PROJECTION);
-    glLoadIdentity();
-    glOrtho(0, vpW, vpH, 0, -1, 1);
-    glMatrixMode(GL_MODELVIEW);
-    glLoadIdentity();
-
-    // Scale toast image based on viewport size (baseline 1080p)
+    // Scale based on viewport (baseline 1080p)
     float scaleFactor = (static_cast<float>(vpH) / 1080.0f) * 0.45f;
     float drawW = (float)imgW * scaleFactor;
     float drawH = (float)imgH * scaleFactor;
 
-    // Draw textured quad at top-left
+    // Top-left placement in NDC
+    float px1 = 0.0f, py1 = 0.0f;
+    float px2 = drawW, py2 = drawH;
+    float nx1 = (px1 / vpW) * 2.0f - 1.0f;
+    float nx2 = (px2 / vpW) * 2.0f - 1.0f;
+    float ny_top = 1.0f - (py1 / vpH) * 2.0f;
+    float ny_bot = 1.0f - (py2 / vpH) * 2.0f;
+
+    float verts[] = {
+        nx1, ny_bot, 0.0f, 1.0f,
+        nx2, ny_bot, 1.0f, 1.0f,
+        nx2, ny_top, 1.0f, 0.0f,
+        nx1, ny_bot, 0.0f, 1.0f,
+        nx2, ny_top, 1.0f, 0.0f,
+        nx1, ny_top, 0.0f, 0.0f,
+    };
+
+    // Draw
+    glUseProgram(s_program);
+    glBindVertexArray(s_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
+    glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, texture);
-    glColor4f(1.0f, 1.0f, 1.0f, toastOpacity);
+    glUniform1f(s_locOpacity, 1.0f);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
 
-    // Make images render safely
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-    glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
-    glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    // Restore state
+    glUseProgram(savedProgram);
+    glBindVertexArray(savedVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, savedVBO);
+    glBindFramebuffer(GL_FRAMEBUFFER, savedFBO);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, savedTex);
+    glActiveTexture(savedActiveTex);
+    if (oglViewport)
+        oglViewport(savedViewport[0], savedViewport[1], savedViewport[2], savedViewport[3]);
+    else
+        glViewport(savedViewport[0], savedViewport[1], savedViewport[2], savedViewport[3]);
+    glColorMask(savedColorMask[0], savedColorMask[1], savedColorMask[2], savedColorMask[3]);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, savedUnpackRowLength);
+    glPixelStorei(GL_UNPACK_SKIP_PIXELS, savedUnpackSkipPixels);
+    glPixelStorei(GL_UNPACK_SKIP_ROWS, savedUnpackSkipRows);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, savedUnpackAlignment);
 
-    float x = 0.0f;
-    float y = 0.0f;
-
-    glBegin(GL_QUADS);
-    glTexCoord2f(0.0f, 0.0f);
-    glVertex2f(x, y);
-    glTexCoord2f(1.0f, 0.0f);
-    glVertex2f(x + drawW, y);
-    glTexCoord2f(1.0f, 1.0f);
-    glVertex2f(x + drawW, y + drawH);
-    glTexCoord2f(0.0f, 1.0f);
-    glVertex2f(x, y + drawH);
-    glEnd();
-
-    // Restore OpenGL state
-    glMatrixMode(GL_PROJECTION);
-    glLoadMatrixf(projMatrix);
-    glMatrixMode(GL_MODELVIEW);
-    glLoadMatrixf(modelMatrix);
-    glMatrixMode(lastMatrixMode);
-
-    glUseProgram(lastProgram);
-    glActiveTexture(lastActiveTexture);
-    glBindTexture(GL_TEXTURE_2D, lastTexture);
-    glColor4f(lastColor[0], lastColor[1], lastColor[2], lastColor[3]);
-
-    if (lastBlend)
+    if (savedBlend)
         glEnable(GL_BLEND);
     else
         glDisable(GL_BLEND);
-    if (lastDepthTest)
+    if (savedDepthTest)
         glEnable(GL_DEPTH_TEST);
     else
         glDisable(GL_DEPTH_TEST);
-    if (lastTex2D)
-        glEnable(GL_TEXTURE_2D);
+    if (savedScissor)
+        glEnable(GL_SCISSOR_TEST);
     else
-        glDisable(GL_TEXTURE_2D);
-    glBlendFuncSeparate(lastBlendSrcRGB, lastBlendDstRGB, lastBlendSrcA, lastBlendDstA);
-
-    // Restore pixel-store state we changed
-    glPixelStorei(GL_UNPACK_ROW_LENGTH, lastUnpackRowLength);
-    glPixelStorei(GL_UNPACK_SKIP_PIXELS, lastUnpackSkipPixels);
-    glPixelStorei(GL_UNPACK_SKIP_ROWS, lastUnpackSkipRows);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, lastUnpackAlignment);
+        glDisable(GL_SCISSOR_TEST);
+    if (savedStencil)
+        glEnable(GL_STENCIL_TEST);
+    else
+        glDisable(GL_STENCIL_TEST);
+    glBlendFuncSeparate(savedBlendSrcRGB, savedBlendDstRGB, savedBlendSrcA, savedBlendDstA);
 }
 
 void RenderPerformanceOverlay(bool showPerformanceOverlay) {

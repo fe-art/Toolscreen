@@ -707,6 +707,10 @@ void RenderProfilerOverlay(bool showProfiler, bool showPerformanceOverlay);
 
 // Welcome toast overlay (prompt visibility controlled by config toggles)
 extern std::atomic<bool> g_welcomeToastVisible;
+// Dismiss-only flag for the configure prompt (toast2). Once the GUI is opened (Ctrl+I),
+// toast2 should stop showing for the remainder of the current session.
+// toast1 (fullscreenPrompt) is intentionally NOT controlled by this flag.
+extern std::atomic<bool> g_configurePromptDismissedThisSession;
 void RenderWelcomeToast(bool isFullscreen);
 
 void HandleConfigLoadFailed(HDC hDc, BOOL (*oWglSwapBuffers)(HDC));

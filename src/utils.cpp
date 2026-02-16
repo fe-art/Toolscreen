@@ -1151,10 +1151,46 @@ bool SwitchToMode(const std::string& newModeId, const std::string& source, bool 
 }
 
 bool IsFullscreen() {
-    RECT r;
-    GetWindowRect(g_minecraftHwnd.load(), &r);
-    bool isFull = r.left == 0 && r.top == 0 && r.right == GetCachedScreenWidth() && r.bottom == GetCachedScreenHeight();
-    return isFull;
+    HWND hwnd = g_minecraftHwnd.load();
+    if (!hwnd) { return false; }
+
+    RECT r{};
+    if (!GetWindowRect(hwnd, &r)) { return false; }
+
+    RECT monRect{};
+    if (!GetMonitorRectForWindow(hwnd, monRect)) {
+        // Fallback to legacy primary-monitor heuristic.
+        return r.left == 0 && r.top == 0 && r.right == GetCachedScreenWidth() && r.bottom == GetCachedScreenHeight();
+    }
+
+    // Borderless windows can be off by a pixel due to DPI rounding or driver quirks.
+    const int tol = 1;
+    const bool leftOk = std::abs(r.left - monRect.left) <= tol;
+    const bool topOk = std::abs(r.top - monRect.top) <= tol;
+    const bool rightOk = std::abs(r.right - monRect.right) <= tol;
+    const bool bottomOk = std::abs(r.bottom - monRect.bottom) <= tol;
+    return leftOk && topOk && rightOk && bottomOk;
+}
+
+bool GetMonitorRectForWindow(HWND hwnd, RECT& outRect) {
+    if (!hwnd) { return false; }
+    HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    if (!mon) { return false; }
+
+    MONITORINFO mi{};
+    mi.cbSize = sizeof(mi);
+    if (!GetMonitorInfo(mon, &mi)) { return false; }
+
+    outRect = mi.rcMonitor;
+    return true;
+}
+
+bool GetMonitorSizeForWindow(HWND hwnd, int& outW, int& outH) {
+    RECT r{};
+    if (!GetMonitorRectForWindow(hwnd, r)) { return false; }
+    outW = (r.right - r.left);
+    outH = (r.bottom - r.top);
+    return (outW > 0 && outH > 0);
 }
 
 bool IsCursorVisible() {

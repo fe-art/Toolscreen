@@ -2737,8 +2737,8 @@ static void RenderThreadFunc(void* gameGLContext) {
         // Initialize Virtual Camera if enabled in config
         auto initCfg = GetConfigSnapshot();
         if (initCfg && initCfg->debug.virtualCameraEnabled) {
-            int screenW = GetSystemMetrics(SM_CXSCREEN);
-            int screenH = GetSystemMetrics(SM_CYSCREEN);
+            int screenW = GetCachedScreenWidth();
+            int screenH = GetCachedScreenHeight();
             int vcW, vcH;
             GetVirtualCamScaledSize(screenW, screenH, 1.0f, vcW, vcH);
             if (StartVirtualCamera(vcW, vcH, initCfg->debug.virtualCameraFps)) {

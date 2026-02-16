@@ -154,8 +154,17 @@ void UpdateCachedScreenMetrics() {
     int prevWidth = s_cachedScreenWidth.load(std::memory_order_relaxed);
     int prevHeight = s_cachedScreenHeight.load(std::memory_order_relaxed);
 
-    int newWidth = GetSystemMetrics(SM_CXSCREEN);
-    int newHeight = GetSystemMetrics(SM_CYSCREEN);
+    int newWidth = 0;
+    int newHeight = 0;
+
+    // Multi-monitor support: treat the "screen" as the monitor the game window is on.
+    // This keeps all fullscreen math correct even when Minecraft is fullscreen/borderless on a non-primary monitor.
+    HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
+    if (!GetMonitorSizeForWindow(hwnd, newWidth, newHeight)) {
+        // Fallback to primary monitor.
+        newWidth = GetSystemMetrics(SM_CXSCREEN);
+        newHeight = GetSystemMetrics(SM_CYSCREEN);
+    }
 
     s_cachedScreenWidth.store(newWidth, std::memory_order_relaxed);
     s_cachedScreenHeight.store(newHeight, std::memory_order_relaxed);
@@ -172,7 +181,11 @@ void UpdateCachedScreenMetrics() {
 int GetCachedScreenWidth() {
     int w = s_cachedScreenWidth.load(std::memory_order_relaxed);
     if (w == 0) {
-        w = GetSystemMetrics(SM_CXSCREEN);
+        int h = 0;
+        HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
+        if (!GetMonitorSizeForWindow(hwnd, w, h)) {
+            w = GetSystemMetrics(SM_CXSCREEN);
+        }
         s_cachedScreenWidth.store(w, std::memory_order_relaxed);
     }
     return w;
@@ -181,7 +194,11 @@ int GetCachedScreenWidth() {
 int GetCachedScreenHeight() {
     int h = s_cachedScreenHeight.load(std::memory_order_relaxed);
     if (h == 0) {
-        h = GetSystemMetrics(SM_CYSCREEN);
+        int w = 0;
+        HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
+        if (!GetMonitorSizeForWindow(hwnd, w, h)) {
+            h = GetSystemMetrics(SM_CYSCREEN);
+        }
         s_cachedScreenHeight.store(h, std::memory_order_relaxed);
     }
     return h;

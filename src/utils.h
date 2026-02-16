@@ -343,6 +343,13 @@ struct ModeViewportInfo {
     bool stretchEnabled = false;
 };
 
+// Multi-monitor helpers
+// Returns the rcMonitor rect for the monitor nearest to the given window.
+// Returns false if the monitor info couldn't be queried.
+bool GetMonitorRectForWindow(HWND hwnd, RECT& outRect);
+// Convenience wrapper to get monitor width/height for a window.
+bool GetMonitorSizeForWindow(HWND hwnd, int& outW, int& outH);
+
 bool IsFullscreen();
 bool IsCursorVisible();
 void WriteCurrentModeToFile(const std::string& modeId);

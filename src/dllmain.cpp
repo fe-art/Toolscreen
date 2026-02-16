@@ -1364,7 +1364,9 @@ BOOL WINAPI hkwglSwapBuffers(HDC hDc) {
                 // (InitializeGPUResources runs after this early-return path).
                 // Also uses modern GL (shaders + VAO) because Minecraft 1.17+ uses core profile
                 // where fixed-function (glBegin/glEnd) doesn't work.
-                if (g_welcomeToastVisible.load() /*&& !frameCfg.disableConfigurePrompt*/ && windowWidth > 0 && windowHeight > 0) {
+                // toast1 (fullscreenPrompt) should ALWAYS show in windowed mode.
+                // Don't gate on any session flag or config toggle.
+                if (windowWidth > 0 && windowHeight > 0) {
                     // Self-contained GL resources (created lazily, persisted)
                     static GLuint s_wt_program = 0;
                     static GLuint s_wt_vao = 0, s_wt_vbo = 0;
@@ -1390,9 +1392,9 @@ BOOL WINAPI hkwglSwapBuffers(HDC hDc) {
                         s_wt_texH = 0;
                     }
 
+                    // Initialize lazily, but be resilient: fullscreen toggles can recreate contexts and
+                    // occasionally resource creation can fail transiently. Keep retrying until fully ready.
                     if (!s_wt_initialized) {
-                        s_wt_initialized = true;
-
                         // Create a minimal shader program
                         const char* vtxSrc = R"(#version 330 core
 layout(location = 0) in vec2 aPos;
@@ -1411,65 +1413,75 @@ void main() {
     vec4 c = texture(uTexture, TexCoord);
     FragColor = vec4(c.rgb, c.a * uOpacity);
 })";
-                        s_wt_program = CreateShaderProgram(vtxSrc, fragSrc);
-                        if (s_wt_program) {
-                            s_wt_locTexture = glGetUniformLocation(s_wt_program, "uTexture");
-                            s_wt_locOpacity = glGetUniformLocation(s_wt_program, "uOpacity");
+                        if (s_wt_program == 0) {
+                            s_wt_program = CreateShaderProgram(vtxSrc, fragSrc);
+                            if (s_wt_program) {
+                                s_wt_locTexture = glGetUniformLocation(s_wt_program, "uTexture");
+                                s_wt_locOpacity = glGetUniformLocation(s_wt_program, "uOpacity");
 
-                            // Set sampler uniform once
-                            glUseProgram(s_wt_program);
-                            glUniform1i(s_wt_locTexture, 0);
-                            glUseProgram(0);
+                                // Set sampler uniform once
+                                glUseProgram(s_wt_program);
+                                glUniform1i(s_wt_locTexture, 0);
+                                glUseProgram(0);
+                            }
                         }
 
                         // Create VAO/VBO (4 floats per vertex: x, y, u, v)
-                        glGenVertexArrays(1, &s_wt_vao);
-                        glGenBuffers(1, &s_wt_vbo);
-                        glBindVertexArray(s_wt_vao);
-                        glBindBuffer(GL_ARRAY_BUFFER, s_wt_vbo);
-                        glBufferData(GL_ARRAY_BUFFER, 6 * 4 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
-                        glEnableVertexAttribArray(0);
-                        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
-                        glEnableVertexAttribArray(1);
-                        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
-                        glBindVertexArray(0);
-                        glBindBuffer(GL_ARRAY_BUFFER, 0);
+                        if (s_wt_vao == 0) { glGenVertexArrays(1, &s_wt_vao); }
+                        if (s_wt_vbo == 0) { glGenBuffers(1, &s_wt_vbo); }
+                        if (s_wt_vao && s_wt_vbo) {
+                            glBindVertexArray(s_wt_vao);
+                            glBindBuffer(GL_ARRAY_BUFFER, s_wt_vbo);
+                            glBufferData(GL_ARRAY_BUFFER, 6 * 4 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
+                            glEnableVertexAttribArray(0);
+                            glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+                            glEnableVertexAttribArray(1);
+                            glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
+                            glBindVertexArray(0);
+                            glBindBuffer(GL_ARRAY_BUFFER, 0);
+                        }
 
                         // Load toast texture (disable flip for consistent V=0 = top of image)
-                        stbi_set_flip_vertically_on_load_thread(0);
+                        if (s_wt_texture == 0 || s_wt_texW <= 0 || s_wt_texH <= 0) {
+                            stbi_set_flip_vertically_on_load_thread(0);
 
-                        HMODULE hModule = NULL;
-                        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                                           (LPCWSTR)&g_welcomeToastVisible, &hModule);
-                        HRSRC hResource = FindResourceW(hModule, MAKEINTRESOURCEW(IDR_TOAST1_PNG), RT_RCDATA);
-                        if (hResource) {
-                            HGLOBAL hData = LoadResource(hModule, hResource);
-                            if (hData) {
-                                DWORD dataSize = SizeofResource(hModule, hResource);
-                                const unsigned char* rawData = (const unsigned char*)LockResource(hData);
-                                if (rawData && dataSize > 0) {
-                                    int w, h, channels;
-                                    unsigned char* pixels = stbi_load_from_memory(rawData, (int)dataSize, &w, &h, &channels, 4);
-                                    if (pixels) {
-                                        glGenTextures(1, &s_wt_texture);
-                                        glBindTexture(GL_TEXTURE_2D, s_wt_texture);
-                                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-                                        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-                                        glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
-                                        glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
-                                        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-                                        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-                                        glBindTexture(GL_TEXTURE_2D, 0);
-                                        s_wt_texW = w;
-                                        s_wt_texH = h;
-                                        stbi_image_free(pixels);
+                            HMODULE hModule = NULL;
+                            GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                               (LPCWSTR)&g_welcomeToastVisible, &hModule);
+                            HRSRC hResource = FindResourceW(hModule, MAKEINTRESOURCEW(IDR_TOAST1_PNG), RT_RCDATA);
+                            if (hResource) {
+                                HGLOBAL hData = LoadResource(hModule, hResource);
+                                if (hData) {
+                                    DWORD dataSize = SizeofResource(hModule, hResource);
+                                    const unsigned char* rawData = (const unsigned char*)LockResource(hData);
+                                    if (rawData && dataSize > 0) {
+                                        int w, h, channels;
+                                        unsigned char* pixels = stbi_load_from_memory(rawData, (int)dataSize, &w, &h, &channels, 4);
+                                        if (pixels) {
+                                            if (s_wt_texture == 0) { glGenTextures(1, &s_wt_texture); }
+                                            glBindTexture(GL_TEXTURE_2D, s_wt_texture);
+                                            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                                            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                                            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                                            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                                            glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+                                            glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+                                            glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+                                            glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+                                            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+                                            glBindTexture(GL_TEXTURE_2D, 0);
+                                            s_wt_texW = w;
+                                            s_wt_texH = h;
+                                            stbi_image_free(pixels);
+                                        }
                                     }
                                 }
                             }
                         }
+
+                        // Mark initialized only when fully ready
+                        s_wt_initialized = (s_wt_program != 0 && s_wt_vao != 0 && s_wt_vbo != 0 && s_wt_texture != 0 && s_wt_texW > 0 &&
+                                            s_wt_texH > 0);
                     }
 
                     if (s_wt_program && s_wt_vao && s_wt_texture && s_wt_texW > 0 && s_wt_texH > 0) {
@@ -1554,13 +1566,16 @@ void main() {
                                         cursorClient.x >= 0 && cursorClient.y >= 0 && cursorClient.x < drawW && cursorClient.y < drawH;
 
                                     if (clickedToast) {
-                                        // Always target the PRIMARY monitor.
-                                        // Use rcWork (not rcMonitor) so this behaves like a normal window (taskbar visible),
-                                        // which also helps avoid driver "fullscreen" heuristics.
+                                        // Multi-monitor support: target the monitor the game window is currently on.
+                                        // Use rcMonitor so the window matches the monitor's exact pixel resolution.
+                                        // We still keep it acting like a normal window by avoiding WS_POPUP / WS_EX_TOPMOST.
                                         RECT targetRect{ 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN) };
                                         {
-                                            const POINT primaryPt{ 0, 0 };
-                                            HMONITOR mon = MonitorFromPoint(primaryPt, MONITOR_DEFAULTTOPRIMARY);
+                                            HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+                                            if (!mon) {
+                                                const POINT primaryPt{ 0, 0 };
+                                                mon = MonitorFromPoint(primaryPt, MONITOR_DEFAULTTOPRIMARY);
+                                            }
                                             if (mon) {
                                                 MONITORINFO mi{};
                                                 mi.cbSize = sizeof(mi);
@@ -1596,7 +1611,7 @@ void main() {
                                                      SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
                                         g_cachedGameTextureId.store(UINT_MAX);
 
-                                        Log("[TOAST] toast1 clicked - switched to borderless-windowed (primary monitor resolution) " +
+                                        Log("[TOAST] toast1 clicked - switched to borderless-windowed (current monitor resolution) " +
                                             std::to_string(targetW) + "x" + std::to_string(targetH) + " at (" +
                                             std::to_string(targetRect.left) + "," + std::to_string(targetRect.top) + ")");
                                     }
@@ -1906,8 +1921,9 @@ void main() {
                     submission.context.isRawWindowedMode = !isFull; // In windowed mode, skip all overlays
                     submission.context.windowW = windowWidth;
                     submission.context.windowH = windowHeight;
-                    submission.context.showWelcomeToast = g_welcomeToastVisible.load();
                     submission.context.welcomeToastIsFullscreen = isFull;
+                    // Always request toast rendering; RenderWelcomeToast() enforces session dismissal for toast2.
+                    submission.context.showWelcomeToast = true;
                     submission.isDualRenderingPath = hideAnimOnScreen;
 
                     // Create fence and flush - these MUST be on GL thread
