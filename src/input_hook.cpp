@@ -222,6 +222,10 @@ InputHandlerResult HandleImGuiInput(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM 
 
     if (!g_showGui.load()) { return { false, 0 }; }
 
+    // ImGui context can legitimately be unavailable on this thread (e.g. when ImGui is owned by the render thread).
+    // Avoid calling backend handlers without a current context to prevent null deref/assert crashes.
+    if (!ImGui::GetCurrentContext()) { return { false, 0 }; }
+
     if (ImGui_ImplWin32_WndProcHandler(hWnd, uMsg, wParam, lParam)) {
         if (ImGui::GetCurrentContext()) {
             ImGuiIO& io = ImGui::GetIO();
@@ -262,7 +266,8 @@ InputHandlerResult HandleGuiToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     }
 
     bool is_closing = g_showGui.load();
-    if (wParam == VK_ESCAPE && ImGui::IsAnyItemActive()) { is_closing = false; }
+    // ImGui context may not be available on this thread; guard to avoid crashes.
+    if (wParam == VK_ESCAPE && ImGui::GetCurrentContext() && ImGui::IsAnyItemActive()) { is_closing = false; }
     if (wParam == VK_ESCAPE && IsHotkeyBindingActive()) { is_closing = false; }
     if (wParam == VK_ESCAPE && IsRebindBindingActive()) { is_closing = false; }
 

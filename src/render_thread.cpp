@@ -154,6 +154,72 @@ static ImFont* g_eyeZoomTextFont = nullptr;
 static std::string g_eyeZoomFontPathCached = "";
 static float g_eyeZoomScaleFactor = 1.0f;
 
+static bool RT_TryInitializeImGui(HWND hwnd, const Config& cfg) {
+    if (g_renderThreadImGuiInitialized) { return true; }
+    if (!hwnd) { return false; }
+
+    IMGUI_CHECKVERSION();
+
+    if (!g_renderThreadImGuiContext) {
+        g_renderThreadImGuiContext = ImGui::CreateContext();
+        if (!g_renderThreadImGuiContext) {
+            Log("Render Thread: Failed to create ImGui context");
+            return false;
+        }
+    }
+
+    ImGui::SetCurrentContext(g_renderThreadImGuiContext);
+
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+
+    // Scale based on screen height
+    const int screenHeight = GetCachedScreenHeight();
+    float scaleFactor = 1.0f;
+    if (screenHeight > 1080) { scaleFactor = static_cast<float>(screenHeight) / 1080.0f; }
+    scaleFactor = roundf(scaleFactor * 4.0f) / 4.0f;
+    if (scaleFactor < 1.0f) { scaleFactor = 1.0f; }
+    g_eyeZoomScaleFactor = scaleFactor;
+
+    // Load base font (fall back to default if missing)
+    if (!cfg.fontPath.empty()) {
+        ImFont* baseFont = io.Fonts->AddFontFromFileTTF(cfg.fontPath.c_str(), 16.0f * scaleFactor);
+        if (!baseFont) {
+            Log("Render Thread: Failed to load base font from " + cfg.fontPath + ", using default");
+            io.Fonts->AddFontDefault();
+        }
+    } else {
+        io.Fonts->AddFontDefault();
+    }
+
+    // Load EyeZoom text font (uses custom path if set, otherwise global font)
+    std::string eyeZoomFontPath = cfg.eyezoom.textFontPath.empty() ? cfg.fontPath : cfg.eyezoom.textFontPath;
+    if (!eyeZoomFontPath.empty()) {
+        g_eyeZoomTextFont = io.Fonts->AddFontFromFileTTF(eyeZoomFontPath.c_str(), 80.0f * scaleFactor);
+        g_eyeZoomFontPathCached = eyeZoomFontPath;
+    }
+    if (!g_eyeZoomTextFont) {
+        Log("Render Thread: Failed to load EyeZoom font, using default");
+        g_eyeZoomTextFont = io.Fonts->AddFontDefault();
+    }
+
+    ImGui::StyleColorsDark();
+    LoadTheme();
+    ApplyAppearanceConfig();
+    ImGui::GetStyle().ScaleAllSizes(scaleFactor);
+
+    // Initialize backends
+    ImGui_ImplWin32_Init(hwnd);
+    ImGui_ImplOpenGL3_Init("#version 330");
+
+    // Initialize larger font for overlay text labels
+    InitializeOverlayTextFont(cfg.fontPath, 16.0f, scaleFactor);
+
+    g_renderThreadImGuiInitialized = true;
+    LogCategory("init", "Render Thread: ImGui initialized successfully");
+    return true;
+}
+
 // RENDER THREAD SHADER PROGRAMS
 // These shaders are created on the render thread context (not shared with main thread)
 
@@ -3084,6 +3150,14 @@ static void RenderThreadFunc(void* gameGLContext) {
             // Check if we need to render any ImGui content
             bool shouldRenderAnyImGui = request.shouldRenderGui || request.showPerformanceOverlay || request.showProfiler ||
                                         request.showEyeZoom || request.showTextureGrid;
+
+            // Lazy-init ImGui the first time we actually need to render it.
+            // Some systems can start the render thread before a valid HWND is published,
+            // which previously meant the GUI never initialized (Ctrl+I would do nothing, then ESC could crash).
+            if (!g_renderThreadImGuiInitialized && shouldRenderAnyImGui) {
+                HWND hwnd = g_minecraftHwnd.load();
+                if (hwnd) { RT_TryInitializeImGui(hwnd, cfg); }
+            }
 
             // Early exit if nothing to render
             // BUT don't early exit if we need to render ImGui or the welcome toast (raw OpenGL)
