@@ -182,7 +182,14 @@ if (ImGui::BeginTabItem("General")) {
         ImGui::TableNextColumn();
         if (modeConfig) {
             ImGui::PushID((std::string(label) + "_width").c_str());
-            if (Spinner("##w", &modeConfig->width, 10, 1, maxWidth, 64, 3)) { g_configIsDirty = true; }
+            if (Spinner("##w", &modeConfig->width, 10, 1, maxWidth, 64, 3)) {
+                // Basic tab edits are absolute pixel dimensions.
+                // If an expression was previously set, it would overwrite this on next launch (and on any recalc).
+                // Clear the expression and relative sentinel so the new value is persisted.
+                if (!modeConfig->widthExpr.empty()) { modeConfig->widthExpr.clear(); }
+                modeConfig->relativeWidth = -1.0f;
+                g_configIsDirty = true;
+            }
             ImGui::PopID();
         }
 
@@ -190,7 +197,11 @@ if (ImGui::BeginTabItem("General")) {
         ImGui::TableNextColumn();
         if (modeConfig) {
             ImGui::PushID((std::string(label) + "_height").c_str());
-            if (Spinner("##h", &modeConfig->height, 10, 1, maxHeight, 64, 3)) { g_configIsDirty = true; }
+            if (Spinner("##h", &modeConfig->height, 10, 1, maxHeight, 64, 3)) {
+                if (!modeConfig->heightExpr.empty()) { modeConfig->heightExpr.clear(); }
+                modeConfig->relativeHeight = -1.0f;
+                g_configIsDirty = true;
+            }
             ImGui::PopID();
         }
 
