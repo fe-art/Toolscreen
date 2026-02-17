@@ -53,6 +53,23 @@ extern std::mutex g_triggerOnReleaseMutex;
 
 // Forward declaration for ImGui handler
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+static bool s_forcedShowCursor = false;
+
+static void EnsureSystemCursorVisible() {
+    if (g_gameVersion < GameVersion(1, 13, 0)) { return; }
+
+    CURSORINFO ci{ sizeof(CURSORINFO) };
+    if (GetCursorInfo(&ci) && (ci.flags & CURSOR_SHOWING)) { return; }
+    ShowCursor(TRUE);
+}
+
+static void EnsureSystemCursorHidden() {
+    if (g_gameVersion < GameVersion(1, 13, 0)) { return; }
+
+    CURSORINFO ci{ sizeof(CURSORINFO) };
+    if (GetCursorInfo(&ci) && !(ci.flags & CURSOR_SHOWING)) { return; }
+    ShowCursor(FALSE);
+}
 
 InputHandlerResult HandleMouseMoveViewportOffset(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM& lParam) {
     PROFILE_SCOPE("HandleMouseMoveViewportOffset");
@@ -196,6 +213,13 @@ InputHandlerResult HandleSetCursor(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 
     if (uMsg != WM_SETCURSOR) { return { false, 0 }; }
 
+    if (g_showGui.load() && s_forcedShowCursor && g_gameVersion >= GameVersion(1, 13, 0)) {
+        EnsureSystemCursorVisible();
+        static HCURSOR s_arrowCursor = LoadCursorW(NULL, IDC_ARROW);
+        SetCursor(s_arrowCursor);
+        return { true, true };
+    }
+
     if (!IsCursorVisible() && !g_showGui.load()) {
         SetCursor(NULL);
         return { true, true };
@@ -264,6 +288,10 @@ InputHandlerResult HandleGuiToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 
     if (is_closing) {
         g_showGui = false;
+        if (s_forcedShowCursor) {
+            EnsureSystemCursorHidden();
+            s_forcedShowCursor = false;
+        }
 
         // Flush any queued ImGui input and release any mouse capture we may have taken.
         ImGuiInputQueue_Clear();
@@ -305,9 +333,16 @@ InputHandlerResult HandleGuiToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         s_isWindowOverlayDragging = false;
     } else if (wParam != VK_ESCAPE) {
         g_showGui = true;
-        g_wasCursorVisible = IsCursorVisible();
+        const bool wasCursorVisible = IsCursorVisible();
+        g_wasCursorVisible = wasCursorVisible;
         g_guiNeedsRecenter = true;
         ClipCursor(NULL);
+        if (!wasCursorVisible && g_gameVersion >= GameVersion(1, 13, 0)) {
+            s_forcedShowCursor = true;
+            EnsureSystemCursorVisible();
+            static HCURSOR s_arrowCursor = LoadCursorW(NULL, IDC_ARROW);
+            SetCursor(s_arrowCursor);
+        }
 
         // Dismiss ONLY the fullscreen configure prompt (toast2) for THIS SESSION once the user opens the GUI.
         // toast1 (windowed fullscreenPrompt) should continue to show in windowed mode.
@@ -1161,6 +1196,15 @@ InputHandlerResult HandleCharRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 
 LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     PROFILE_SCOPE("SubclassedWndProc");
+    if (g_showGui.load() && s_forcedShowCursor && g_gameVersion >= GameVersion(1, 13, 0)) {
+        EnsureSystemCursorVisible();
+        static HCURSOR s_arrowCursor = LoadCursorW(NULL, IDC_ARROW);
+        SetCursor(s_arrowCursor);
+    }
+    if (!g_showGui.load() && s_forcedShowCursor) {
+        EnsureSystemCursorHidden();
+        s_forcedShowCursor = false;
+    }
 
     RegisterBindingInputEvent(uMsg, wParam, lParam);
 
