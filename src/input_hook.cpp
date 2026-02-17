@@ -703,8 +703,7 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                         g_triggerOnReleasePending.insert(hotkeyId);
                         if (s_enableHotkeyDebug) { Log("[Hotkey] Alt trigger-on-release hotkey pressed, added to pending: " + hotkeyId); }
                         // Pass through the key-down event to the game so modifier keys work with other combos
-                        if (hotkey.blockKeyFromGame) return { true, 0 };
-                        return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
+                        return { false, 0 };
                     } else {
                         // Key released - check if invalidated
                         bool wasInvalidated = false;
@@ -717,8 +716,7 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
 
                         if (wasInvalidated) {
                             if (s_enableHotkeyDebug) { Log("[Hotkey] Alt trigger-on-release hotkey invalidated: " + hotkeyId); }
-                            if (hotkey.blockKeyFromGame) return { true, 0 };
-                            return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
+                            return { false, 0 };
                         }
                     }
                 }
@@ -732,8 +730,7 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                         std::chrono::duration_cast<std::chrono::milliseconds>(now - g_hotkeyTimestamps[hotkeyId]).count() <
                             hotkey.debounce) {
                         if (s_enableHotkeyDebug) { Log("[Hotkey] Alt hotkey matched but debounced: " + hotkeyId); }
-                        if (hotkey.blockKeyFromGame) return { true, 0 };
-                        return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
+                        return { true, 1 };
                     }
                     g_hotkeyTimestamps[hotkeyId] = now;
 
@@ -744,9 +741,9 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                     if (s_enableHotkeyDebug) { Log("[Hotkey] ✓✓✓ ALT HOTKEY TRIGGERED: " + hotkeyId + " -> " + newSecMode); }
 
                     if (!newSecMode.empty()) { SwitchToMode(newSecMode, "alt hotkey"); }
+                    return { true, 1 };
                 }
-                if (hotkey.blockKeyFromGame) return { true, 0 };
-                return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
+                return { false, 0 };
             }
         }
 
@@ -767,8 +764,7 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                     g_triggerOnReleasePending.insert(hotkeyId);
                     if (s_enableHotkeyDebug) { Log("[Hotkey] Trigger-on-release hotkey pressed, added to pending: " + hotkeyId); }
                     // Pass through the key-down event to the game so modifier keys work with other combos
-                    if (hotkey.blockKeyFromGame) return { true, 0 };
-                    return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
+                    return { false, 0 };
                 } else {
                     // Key released - check if invalidated
                     bool wasInvalidated = false;
@@ -784,8 +780,7 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                         if (s_enableHotkeyDebug) {
                             Log("[Hotkey] Trigger-on-release hotkey invalidated (another key was pressed): " + hotkeyId);
                         }
-                        if (hotkey.blockKeyFromGame) return { true, 0 };
-                        return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
+                        return { false, 0 };
                     }
                     // Fall through to trigger the hotkey
                 }
@@ -799,8 +794,7 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                 if (g_hotkeyTimestamps.count(hotkeyId) &&
                     std::chrono::duration_cast<std::chrono::milliseconds>(now - g_hotkeyTimestamps[hotkeyId]).count() < hotkey.debounce) {
                     if (s_enableHotkeyDebug) { Log("[Hotkey] Main hotkey matched but debounced: " + hotkeyId); }
-                    if (hotkey.blockKeyFromGame) return { true, 0 };
-                    return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
+                    return { true, 1 };
                 }
                 g_hotkeyTimestamps[hotkeyId] = now;
 
@@ -819,9 +813,9 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                 }
 
                 if (!targetMode.empty()) { SwitchToMode(targetMode, "main hotkey"); }
+                return { true, 1 };
             }
-            if (hotkey.blockKeyFromGame) return { true, 0 };
-            return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
+            return { false, 0 };
         }
     }
 
@@ -853,7 +847,7 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
             if (g_hotkeyTimestamps.count(hotkeyId) &&
                 std::chrono::duration_cast<std::chrono::milliseconds>(now - g_hotkeyTimestamps[hotkeyId]).count() < sensHotkey.debounce) {
                 if (s_enableHotkeyDebug) { Log("[Hotkey] Sensitivity hotkey matched but debounced: " + hotkeyId); }
-                return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
+                return { true, 1 };
             }
             g_hotkeyTimestamps[hotkeyId] = now;
 
@@ -872,7 +866,7 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
 
                     if (s_enableHotkeyDebug) { Log("[Hotkey] ✓✓✓ SENSITIVITY HOTKEY TOGGLED OFF: " + hotkeyId); }
 
-                    return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
+                    return { true, 1 };
                 }
 
                 // Toggle ON - apply the override
@@ -911,7 +905,7 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                 }
             }
 
-            return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
+            return { true, 1 };
         }
     }
 
