@@ -27,6 +27,7 @@
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <set>
 #include <shared_mutex>
 #include <string>
 #include <thread>
@@ -2338,7 +2339,7 @@ void RenderSettingsGUI() {
         return gameState.c_str(); // Fallback to original name
     };
 
-   bool is_binding = IsHotkeyBindingActive();
+    bool is_binding = IsHotkeyBindingActive();
 
     if (is_binding) {
         if (!s_bindingInitialized) {
