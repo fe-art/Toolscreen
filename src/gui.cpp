@@ -27,6 +27,7 @@
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <set>
 #include <shared_mutex>
 #include <string>
 #include <thread>
@@ -2334,8 +2335,10 @@ void RenderSettingsGUI() {
     };
 
     // Static state for tracking keys during binding
-    static std::vector<DWORD> s_bindingKeys; // Keys currently being tracked for binding
-    static bool s_hadKeysPressed = false;    // Whether we've seen any keys pressed this session
+    static std::vector<DWORD> s_bindingKeys;
+    static bool s_hadKeysPressed = false;
+    static std::set<DWORD> s_preHeldKeys;
+    static bool s_bindingInitialized = false;
 
     static const std::vector<const char*> validGameStates = { "wall",    "inworld,cursor_free", "inworld,cursor_grabbed", "title",
                                                               "waiting", "generating" };
@@ -2364,11 +2367,21 @@ void RenderSettingsGUI() {
     bool is_binding = IsHotkeyBindingActive();
 
     if (is_binding) {
+        if (!s_bindingInitialized) {
+            s_preHeldKeys.clear();
+            for (int vk = 1; vk < 0xFF; ++vk) {
+                if (GetAsyncKeyState(vk) & 0x8000) {
+                    s_preHeldKeys.insert(static_cast<DWORD>(vk));
+                }
+            }
+            s_bindingInitialized = true;
+        }
         ImGui::OpenPopup("Bind Hotkey");
     } else {
-        // Reset binding state when not active
         s_bindingKeys.clear();
         s_hadKeysPressed = false;
+        s_preHeldKeys.clear();
+        s_bindingInitialized = false;
     }
 
     if (ImGui::BeginPopupModal("Bind Hotkey", NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
@@ -2386,6 +2399,8 @@ void RenderSettingsGUI() {
             s_altHotkeyToBind = { -1, -1 };
             s_bindingKeys.clear();
             s_hadKeysPressed = false;
+            s_preHeldKeys.clear();
+            s_bindingInitialized = false;
             ImGui::CloseCurrentPopup();
             ImGui::EndPopup();
             return;
@@ -2425,19 +2440,30 @@ void RenderSettingsGUI() {
 
             s_bindingKeys.clear();
             s_hadKeysPressed = false;
+            s_preHeldKeys.clear();
+            s_bindingInitialized = false;
             ImGui::CloseCurrentPopup();
         };
 
-        // Build list of currently pressed keys
+        // Evict pre-held keys once they are physically released
+        for (auto it = s_preHeldKeys.begin(); it != s_preHeldKeys.end(); ) {
+            if (!(GetAsyncKeyState(*it) & 0x8000)) {
+                it = s_preHeldKeys.erase(it);
+            } else {
+                ++it;
+            }
+        }
+
+        // Build list of currently pressed keys (excluding pre-held keys)
         std::vector<DWORD> currentlyPressed;
 
         // Check modifier keys first (in order: Ctrl, Shift, Alt)
-        if (GetAsyncKeyState(VK_LCONTROL) & 0x8000) currentlyPressed.push_back(VK_LCONTROL);
-        if (GetAsyncKeyState(VK_RCONTROL) & 0x8000) currentlyPressed.push_back(VK_RCONTROL);
-        if (GetAsyncKeyState(VK_LSHIFT) & 0x8000) currentlyPressed.push_back(VK_LSHIFT);
-        if (GetAsyncKeyState(VK_RSHIFT) & 0x8000) currentlyPressed.push_back(VK_RSHIFT);
-        if (GetAsyncKeyState(VK_LMENU) & 0x8000) currentlyPressed.push_back(VK_LMENU);
-        if (GetAsyncKeyState(VK_RMENU) & 0x8000) currentlyPressed.push_back(VK_RMENU);
+        if ((GetAsyncKeyState(VK_LCONTROL) & 0x8000) && !s_preHeldKeys.count(VK_LCONTROL)) currentlyPressed.push_back(VK_LCONTROL);
+        if ((GetAsyncKeyState(VK_RCONTROL) & 0x8000) && !s_preHeldKeys.count(VK_RCONTROL)) currentlyPressed.push_back(VK_RCONTROL);
+        if ((GetAsyncKeyState(VK_LSHIFT) & 0x8000) && !s_preHeldKeys.count(VK_LSHIFT)) currentlyPressed.push_back(VK_LSHIFT);
+        if ((GetAsyncKeyState(VK_RSHIFT) & 0x8000) && !s_preHeldKeys.count(VK_RSHIFT)) currentlyPressed.push_back(VK_RSHIFT);
+        if ((GetAsyncKeyState(VK_LMENU) & 0x8000) && !s_preHeldKeys.count(VK_LMENU)) currentlyPressed.push_back(VK_LMENU);
+        if ((GetAsyncKeyState(VK_RMENU) & 0x8000) && !s_preHeldKeys.count(VK_RMENU)) currentlyPressed.push_back(VK_RMENU);
 
         // Check all other keys
         for (int vk = 1; vk < 0xFF; ++vk) {
@@ -2446,6 +2472,7 @@ void RenderSettingsGUI() {
                 vk == VK_LCONTROL || vk == VK_RCONTROL || vk == VK_LSHIFT || vk == VK_RSHIFT || vk == VK_LMENU || vk == VK_RMENU) {
                 continue;
             }
+            if (s_preHeldKeys.count(static_cast<DWORD>(vk))) continue;
             if (GetAsyncKeyState(vk) & 0x8000) { currentlyPressed.push_back(vk); }
         }
 
