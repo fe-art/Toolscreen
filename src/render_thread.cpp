@@ -1,6 +1,7 @@
 #include "render_thread.h"
 #include "fake_cursor.h"
 #include "gui.h"
+#include "imgui_input_queue.h"
 #include "mirror_thread.h"
 #include "obs_thread.h"
 #include "profiler.h"
@@ -3384,6 +3385,10 @@ static void RenderThreadFunc(void* gameGLContext) {
                 // Start ImGui frame
                 ImGui_ImplOpenGL3_NewFrame();
                 ImGui_ImplWin32_NewFrame();
+
+                // Feed queued input from the Win32 message thread into ImGui.
+                // Must happen before ImGui::NewFrame() to affect the current frame.
+                ImGuiInputQueue_DrainToImGui();
                 ImGui::NewFrame();
 
                 // Render texture grid if enabled
@@ -3491,6 +3496,9 @@ static void RenderThreadFunc(void* gameGLContext) {
 
                 // Render profiler
                 RenderProfilerOverlay(request.showProfiler, request.showPerformanceOverlay);
+
+                // Publish capture flags for the window thread (ESC handling, overlay keyboard forwarding, etc.)
+                ImGuiInputQueue_PublishCaptureState();
 
                 ImGui::Render();
                 ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());

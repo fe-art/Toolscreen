@@ -11,6 +11,8 @@
 
 #include "imgui_impl_win32.h"
 
+#include "imgui_input_queue.h"
+
 #include <chrono>
 #include <map>
 #include <set>
@@ -222,22 +224,9 @@ InputHandlerResult HandleImGuiInput(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM 
 
     if (!g_showGui.load()) { return { false, 0 }; }
 
-    // ImGui context can legitimately be unavailable on this thread (e.g. when ImGui is owned by the render thread).
-    // Avoid calling backend handlers without a current context to prevent null deref/assert crashes.
-    if (!ImGui::GetCurrentContext()) { return { false, 0 }; }
-
-    if (ImGui_ImplWin32_WndProcHandler(hWnd, uMsg, wParam, lParam)) {
-        if (ImGui::GetCurrentContext()) {
-            ImGuiIO& io = ImGui::GetIO();
-            if (uMsg >= WM_MOUSEFIRST && uMsg <= WM_MOUSELAST) {
-                if (io.WantCaptureMouse) { return { true, true }; }
-            } else if ((uMsg >= WM_KEYFIRST && uMsg <= WM_KEYLAST) || uMsg == WM_CHAR) {
-                if (io.WantCaptureKeyboard) { return { true, true }; }
-            } else {
-                return { true, true };
-            }
-        }
-    }
+    // IMPORTANT: Never call ImGui from this thread.
+    // Instead, enqueue the message for the render thread (which owns the ImGui context).
+    ImGuiInputQueue_EnqueueWin32Message(hWnd, uMsg, wParam, lParam);
     return { false, 0 };
 }
 
@@ -266,13 +255,20 @@ InputHandlerResult HandleGuiToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     }
 
     bool is_closing = g_showGui.load();
-    // ImGui context may not be available on this thread; guard to avoid crashes.
-    if (wParam == VK_ESCAPE && ImGui::GetCurrentContext() && ImGui::IsAnyItemActive()) { is_closing = false; }
+
+    // Don't close the GUI if ImGui has an active item (e.g. editing a text box).
+    // This flag is published by the render thread.
+    if (wParam == VK_ESCAPE && g_imguiAnyItemActive.load(std::memory_order_acquire)) { is_closing = false; }
     if (wParam == VK_ESCAPE && IsHotkeyBindingActive()) { is_closing = false; }
     if (wParam == VK_ESCAPE && IsRebindBindingActive()) { is_closing = false; }
 
     if (is_closing) {
         g_showGui = false;
+
+        // Flush any queued ImGui input and release any mouse capture we may have taken.
+        ImGuiInputQueue_Clear();
+        ImGuiInputQueue_ResetMouseCapture(hWnd);
+
         if (!g_wasCursorVisible.load()) {
             RECT fullScreenRect;
             fullScreenRect.left = 0;
@@ -340,11 +336,8 @@ InputHandlerResult HandleWindowOverlayKeyboard(HWND hWnd, UINT uMsg, WPARAM wPar
     // (once from our WM_KEYDOWN being translated, once from our forwarded WM_CHAR)
     if (uMsg != WM_KEYDOWN && uMsg != WM_KEYUP && uMsg != WM_SYSKEYDOWN && uMsg != WM_SYSKEYUP) { return { false, 0 }; }
 
-    bool imguiWantsKeyboard = false;
-    if (g_showGui.load() && ImGui::GetCurrentContext()) {
-        ImGuiIO& io = ImGui::GetIO();
-        imguiWantsKeyboard = io.WantCaptureKeyboard;
-    }
+    // Never query ImGui from this thread. Use state published by render thread.
+    bool imguiWantsKeyboard = g_showGui.load() && g_imguiWantCaptureKeyboard.load(std::memory_order_acquire);
 
     if (!imguiWantsKeyboard) {
         if (ForwardKeyboardToWindowOverlay(uMsg, wParam, lParam)) { return { true, 1 }; }
@@ -461,6 +454,8 @@ InputHandlerResult HandleActivate(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
     if (uMsg != WM_ACTIVATE) { return { false, 0 }; }
 
     if (wParam == WA_INACTIVE) {
+        ImGuiInputQueue_EnqueueFocus(false);
+
         // Log only in debug mode to avoid I/O on every focus change
         if (auto cs = GetConfigSnapshot(); cs && cs->debug.showHotkeyDebug) Log("[WINDOW] Window became inactive.");
         extern std::atomic<bool> g_isGameFocused;
@@ -470,6 +465,8 @@ InputHandlerResult HandleActivate(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         RestoreWindowsMouseSpeed();
         RestoreKeyRepeatSettings();
     } else {
+        ImGuiInputQueue_EnqueueFocus(true);
+
         // Log only in debug mode
         if (auto cs = GetConfigSnapshot(); cs && cs->debug.showHotkeyDebug) Log("[WINDOW] Window became active.");
         extern std::atomic<bool> g_isGameFocused;
