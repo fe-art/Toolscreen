@@ -365,6 +365,9 @@
                 if (Spinner("##EyeZoomCloneWidth", &g_config.eyezoom.cloneWidth, 2, 2, maxCloneWidth)) {
                     // Ensure value stays even
                     if (g_config.eyezoom.cloneWidth % 2 != 0) { g_config.eyezoom.cloneWidth = (g_config.eyezoom.cloneWidth / 2) * 2; }
+                    // Clamp overlay width to the new clone width
+                    int maxOverlay = g_config.eyezoom.cloneWidth / 2;
+                    if (g_config.eyezoom.overlayWidth > maxOverlay) g_config.eyezoom.overlayWidth = maxOverlay;
                     g_configIsDirty = true;
                 }
                 ImGui::NextColumn();
@@ -373,6 +376,16 @@
                 // Max value is the mode's game height
                 int maxCloneHeight = mode.height;
                 if (Spinner("##EyeZoomCloneHeight", &g_config.eyezoom.cloneHeight, 10, 1, maxCloneHeight)) g_configIsDirty = true;
+                ImGui::NextColumn();
+                ImGui::Text("Overlay Width (per side)");
+                ImGui::NextColumn();
+                {
+                    int maxOverlay = g_config.eyezoom.cloneWidth / 2;
+                    if (Spinner("##EyeZoomOverlayWidth", &g_config.eyezoom.overlayWidth, 1, 0, maxOverlay)) g_configIsDirty = true;
+                }
+                ImGui::SameLine();
+                HelpMarker("How many colored overlay boxes + numbers to draw on EACH side of the center line.\n"
+                           "cloneWidth controls how wide the clone samples; overlayWidth only controls how much of the numbered overlay is drawn.");
                 ImGui::Columns(1);
 
                 ImGui::Separator();

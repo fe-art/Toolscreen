@@ -1222,6 +1222,7 @@ void CursorsConfigFromToml(const toml::table& tbl, CursorsConfig& cfg) {
 
 void EyeZoomConfigToToml(const EyeZoomConfig& cfg, toml::table& out) {
     out.insert("cloneWidth", cfg.cloneWidth);
+    out.insert("overlayWidth", cfg.overlayWidth);
     out.insert("cloneHeight", cfg.cloneHeight);
     out.insert("stretchWidth", cfg.stretchWidth);
     out.insert("windowWidth", cfg.windowWidth);
@@ -1246,6 +1247,23 @@ void EyeZoomConfigToToml(const EyeZoomConfig& cfg, toml::table& out) {
 
 void EyeZoomConfigFromToml(const toml::table& tbl, EyeZoomConfig& cfg) {
     cfg.cloneWidth = GetOr(tbl, "cloneWidth", ConfigDefaults::EYEZOOM_CLONE_WIDTH);
+    // cloneWidth must be even and >= 2 for center-split math used by the overlay.
+    if (cfg.cloneWidth < 2) cfg.cloneWidth = 2;
+    if (cfg.cloneWidth % 2 != 0) cfg.cloneWidth = (cfg.cloneWidth / 2) * 2;
+
+    // overlayWidth is boxes/labels PER SIDE. Backward-compatible default is cloneWidth/2.
+    // Allow older configs (without overlayWidth) to behave like before.
+    int overlayDefaultSentinel = -1;
+    int overlayWidth = GetOr(tbl, "overlayWidth", overlayDefaultSentinel);
+    if (overlayWidth == overlayDefaultSentinel) {
+        cfg.overlayWidth = cfg.cloneWidth / 2;
+    } else {
+        cfg.overlayWidth = overlayWidth;
+    }
+    if (cfg.overlayWidth < 0) cfg.overlayWidth = 0;
+    int maxOverlay = cfg.cloneWidth / 2;
+    if (cfg.overlayWidth > maxOverlay) cfg.overlayWidth = maxOverlay;
+
     cfg.cloneHeight = GetOr(tbl, "cloneHeight", ConfigDefaults::EYEZOOM_CLONE_HEIGHT);
     cfg.stretchWidth = GetOr(tbl, "stretchWidth", ConfigDefaults::EYEZOOM_STRETCH_WIDTH);
     cfg.windowWidth = GetOr(tbl, "windowWidth", ConfigDefaults::EYEZOOM_WINDOW_WIDTH);

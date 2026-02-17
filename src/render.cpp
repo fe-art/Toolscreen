@@ -1711,6 +1711,9 @@ void handleEyeZoomMode(const GLState& s, float opacity, int animatedViewportX) {
 
         float pixelWidthOnScreen = zoomOutputWidth / (float)zoomConfig.cloneWidth;
         int labelsPerSide = zoomConfig.cloneWidth / 2;
+        int overlayLabelsPerSide = zoomConfig.overlayWidth;
+        if (overlayLabelsPerSide < 0) overlayLabelsPerSide = labelsPerSide;
+        if (overlayLabelsPerSide > labelsPerSide) overlayLabelsPerSide = labelsPerSide;
         float centerY_local = zoomOutputHeight / 2.0f;
 
         float boxHeight;
@@ -1720,10 +1723,11 @@ void handleEyeZoomMode(const GLState& s, float opacity, int animatedViewportX) {
             boxHeight = static_cast<float>(zoomConfig.rectHeight);
         }
 
-        int boxIndex = 0;
-        for (int xOffset = -labelsPerSide; xOffset <= labelsPerSide; xOffset++) {
+        for (int xOffset = -overlayLabelsPerSide; xOffset <= overlayLabelsPerSide; xOffset++) {
             if (xOffset == 0) continue;
 
+            // Map xOffset (relative to center) to the full clone column index [0..cloneWidth-1]
+            int boxIndex = xOffset + labelsPerSide - (xOffset > 0 ? 1 : 0);
             float boxLeft = boxIndex * pixelWidthOnScreen;
             float boxRight = boxLeft + pixelWidthOnScreen;
             float boxBottom_local = centerY_local - boxHeight / 2.0f;
@@ -1732,8 +1736,6 @@ void handleEyeZoomMode(const GLState& s, float opacity, int animatedViewportX) {
             Color boxColor = (boxIndex % 2 == 0) ? zoomConfig.gridColor1 : zoomConfig.gridColor2;
             float boxOpacity = (boxIndex % 2 == 0) ? zoomConfig.gridColor1Opacity : zoomConfig.gridColor2Opacity;
             glUniform4f(g_solidColorShaderLocs.color, boxColor.r, boxColor.g, boxColor.b, boxOpacity);
-
-            boxIndex++;
 
             // Convert to NDC in temp texture space
             float boxNdcLeft = (boxLeft / (float)zoomOutputWidth) * 2.0f - 1.0f;
@@ -1880,6 +1882,9 @@ void handleEyeZoomMode(const GLState& s, float opacity, int animatedViewportX) {
 
         float pixelWidthOnScreen = zoomOutputWidth / (float)zoomConfig.cloneWidth;
         int labelsPerSide = zoomConfig.cloneWidth / 2;
+        int overlayLabelsPerSide = zoomConfig.overlayWidth;
+        if (overlayLabelsPerSide < 0) overlayLabelsPerSide = labelsPerSide;
+        if (overlayLabelsPerSide > labelsPerSide) overlayLabelsPerSide = labelsPerSide;
         float centerY = zoomY + zoomOutputHeight / 2.0f;
 
         float boxHeight;
@@ -1889,10 +1894,11 @@ void handleEyeZoomMode(const GLState& s, float opacity, int animatedViewportX) {
             boxHeight = static_cast<float>(zoomConfig.rectHeight);
         }
 
-        int boxIndex = 0;
-        for (int xOffset = -labelsPerSide; xOffset <= labelsPerSide; xOffset++) {
+        for (int xOffset = -overlayLabelsPerSide; xOffset <= overlayLabelsPerSide; xOffset++) {
             if (xOffset == 0) continue;
 
+            // Map xOffset (relative to center) to the full clone column index [0..cloneWidth-1]
+            int boxIndex = xOffset + labelsPerSide - (xOffset > 0 ? 1 : 0);
             float boxLeft = zoomX + (boxIndex * pixelWidthOnScreen);
             float boxRight = boxLeft + pixelWidthOnScreen;
             float boxBottom = centerY - boxHeight / 2.0f;
@@ -1901,8 +1907,6 @@ void handleEyeZoomMode(const GLState& s, float opacity, int animatedViewportX) {
             Color boxColor = (boxIndex % 2 == 0) ? zoomConfig.gridColor1 : zoomConfig.gridColor2;
             float boxOpacity = (boxIndex % 2 == 0) ? zoomConfig.gridColor1Opacity : zoomConfig.gridColor2Opacity;
             glUniform4f(g_solidColorShaderLocs.color, boxColor.r, boxColor.g, boxColor.b, boxOpacity);
-
-            boxIndex++;
 
             float boxNdcLeft = (boxLeft / (float)fullW) * 2.0f - 1.0f;
             float boxNdcRight = (boxRight / (float)fullW) * 2.0f - 1.0f;

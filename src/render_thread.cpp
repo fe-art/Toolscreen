@@ -1784,16 +1784,20 @@ static void RT_RenderEyeZoom(GLuint gameTexture, int requestViewportX, int fullW
 
     float pixelWidthOnScreen = zoomOutputWidth / (float)zoomConfig.cloneWidth;
     int labelsPerSide = zoomConfig.cloneWidth / 2;
+    int overlayLabelsPerSide = zoomConfig.overlayWidth;
+    if (overlayLabelsPerSide < 0) overlayLabelsPerSide = labelsPerSide;
+    if (overlayLabelsPerSide > labelsPerSide) overlayLabelsPerSide = labelsPerSide;
     // Use zoomY_gl (OpenGL coordinates) for centerY since NDC conversion expects Y=0 at bottom
     float centerY = zoomY_gl + zoomOutputHeight / 2.0f;
 
     // Use configured font size for box height
     float boxHeight = zoomConfig.linkRectToFont ? (zoomConfig.textFontSize * 1.2f) : (float)zoomConfig.rectHeight;
 
-    int boxIndex = 0;
-    for (int xOffset = -labelsPerSide; xOffset <= labelsPerSide; xOffset++) {
+    for (int xOffset = -overlayLabelsPerSide; xOffset <= overlayLabelsPerSide; xOffset++) {
         if (xOffset == 0) continue;
 
+        // Map xOffset (relative to center) to the full clone column index [0..cloneWidth-1]
+        int boxIndex = xOffset + labelsPerSide - (xOffset > 0 ? 1 : 0);
         float boxLeft = zoomX + (boxIndex * pixelWidthOnScreen);
         float boxRight = boxLeft + pixelWidthOnScreen;
         float boxBottom = centerY - boxHeight / 2.0f;
@@ -1802,8 +1806,6 @@ static void RT_RenderEyeZoom(GLuint gameTexture, int requestViewportX, int fullW
         Color boxColor = (boxIndex % 2 == 0) ? zoomConfig.gridColor1 : zoomConfig.gridColor2;
         float boxOpacity = (boxIndex % 2 == 0) ? zoomConfig.gridColor1Opacity : zoomConfig.gridColor2Opacity;
         glUniform4f(rt_solidColorShaderLocs.color, boxColor.r, boxColor.g, boxColor.b, boxOpacity);
-
-        boxIndex++;
 
         float boxNdcLeft = (boxLeft / (float)fullW) * 2.0f - 1.0f;
         float boxNdcRight = (boxRight / (float)fullW) * 2.0f - 1.0f;
@@ -3502,10 +3504,23 @@ static void RenderThreadFunc(void* gameGLContext) {
                         // Calculate per-box width based on the actual output width
                         float pixelWidthOnScreen = zoomOutputWidth / (float)zoomConfig.cloneWidth;
                         int labelsPerSide = zoomConfig.cloneWidth / 2;
+                        int overlayLabelsPerSide = zoomConfig.overlayWidth;
+                        if (overlayLabelsPerSide < 0) overlayLabelsPerSide = labelsPerSide;
+                        if (overlayLabelsPerSide > labelsPerSide) overlayLabelsPerSide = labelsPerSide;
                         float centerY = zoomY + zoomOutputHeight / 2.0f;
 
                         ImDrawList* drawList = request.shouldRenderGui ? ImGui::GetBackgroundDrawList() : ImGui::GetForegroundDrawList();
-                        float fontSize = (float)zoomConfig.textFontSize;
+                        // Auto-scale font size down based on the current box size.
+                        // Even though overlayWidth only changes how many boxes are drawn, users often adjust these settings together;
+                        // scaling by box size ensures the numbers always fit.
+                        float requestedFontSize = (float)zoomConfig.textFontSize;
+                        float boxHeight = zoomConfig.linkRectToFont ? (requestedFontSize * 1.2f) : (float)zoomConfig.rectHeight;
+                        float maxFontByWidth = pixelWidthOnScreen * 0.85f; // leave some horizontal padding
+                        float maxFontByHeight = boxHeight * 0.80f;          // leave some vertical padding
+                        float fontSize = requestedFontSize;
+                        if (maxFontByWidth > 0.0f) fontSize = std::min(fontSize, maxFontByWidth);
+                        if (maxFontByHeight > 0.0f) fontSize = std::min(fontSize, maxFontByHeight);
+                        if (fontSize < 6.0f) fontSize = 6.0f;
                         // Combine textColorOpacity with the fade opacity
                         float finalTextAlpha = zoomConfig.textColorOpacity * request.eyeZoomFadeOpacity;
                         ImU32 textColor =
@@ -3515,24 +3530,30 @@ static void RenderThreadFunc(void* gameGLContext) {
                         // Get the font to use for rendering (use EyeZoom-specific font if available)
                         ImFont* font = g_eyeZoomTextFont ? g_eyeZoomTextFont : ImGui::GetFont();
 
-                        int boxIndex = 0;
-                        for (int xOffset = -labelsPerSide; xOffset <= labelsPerSide; xOffset++) {
+                        for (int xOffset = -overlayLabelsPerSide; xOffset <= overlayLabelsPerSide; xOffset++) {
                             if (xOffset == 0) continue;
 
+                            int boxIndex = xOffset + labelsPerSide - (xOffset > 0 ? 1 : 0);
                             float boxLeft = zoomX + (boxIndex * pixelWidthOnScreen);
-                            boxIndex++;
 
                             int displayNumber = abs(xOffset);
                             std::string text = std::to_string(displayNumber);
 
-                            // Use font->CalcTextSizeA with the configured fontSize for proper sizing
-                            ImVec2 textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, text.c_str());
+                            // Shrink further for multi-digit numbers if needed to fit inside a single box.
+                            float finalFontSize = fontSize;
+                            ImVec2 textSize = font->CalcTextSizeA(finalFontSize, FLT_MAX, 0.0f, text.c_str());
+                            float maxTextWidth = pixelWidthOnScreen * 0.90f;
+                            if (maxTextWidth > 0.0f && textSize.x > maxTextWidth && textSize.x > 0.0f) {
+                                float scale = maxTextWidth / textSize.x;
+                                finalFontSize = std::max(6.0f, finalFontSize * scale);
+                                textSize = font->CalcTextSizeA(finalFontSize, FLT_MAX, 0.0f, text.c_str());
+                            }
                             float numberCenterX = boxLeft + pixelWidthOnScreen / 2.0f;
                             float numberCenterY = centerY;
                             ImVec2 textPos(numberCenterX - textSize.x / 2.0f, numberCenterY - textSize.y / 2.0f);
 
                             // Use AddText overload with font and fontSize to render at configured size
-                            drawList->AddText(font, fontSize, textPos, textColor, text.c_str());
+                            drawList->AddText(font, finalFontSize, textPos, textColor, text.c_str());
                         }
                     }
                 }

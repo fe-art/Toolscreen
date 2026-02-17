@@ -392,6 +392,10 @@ struct CursorsConfig {
 };
 struct EyeZoomConfig {
     int cloneWidth = 24;
+    // Number of overlay grid boxes (and number labels) to render on EACH side of the center line.
+    // Example: cloneWidth=30 => 15 pixels per side sampled; overlayWidth=5 => only render 5 boxes per side (10 total).
+    // Set to cloneWidth/2 to match legacy behavior (overlay covers the full clone width).
+    int overlayWidth = 12;
     int cloneHeight = 2080;
     int stretchWidth = 810; // Width of the rendered zoom output on screen
     int windowWidth = 384;
