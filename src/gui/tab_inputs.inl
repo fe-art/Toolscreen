@@ -13,7 +13,7 @@ if (ImGui::BeginTabItem("Inputs")) {
 
             ImGui::Text("Mouse Sensitivity:");
             ImGui::SetNextItemWidth(600);
-            if (ImGui::SliderFloat("##mouseSensitivity", &g_config.mouseSensitivity, 0.1f, 3.0f, "%.2fx")) { g_configIsDirty = true; }
+            if (ImGui::SliderFloat("##mouseSensitivity", &g_config.mouseSensitivity, 0.001f, 10.0f, "%.3fx")) { g_configIsDirty = true; }
             ImGui::SameLine();
             HelpMarker("Multiplies mouse movement for raw input events (mouselook).\n"
                        "1.0 = normal sensitivity, higher = faster, lower = slower.\n"

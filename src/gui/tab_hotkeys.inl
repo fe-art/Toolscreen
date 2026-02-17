@@ -420,17 +420,17 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                     ImGui::Text("X Sensitivity:");
                     ImGui::SameLine();
                     ImGui::SetNextItemWidth(150);
-                    if (ImGui::SliderFloat("##sensX", &sensHotkey.sensitivityX, 0.1f, 3.0f, "%.2fx")) { g_configIsDirty = true; }
+                    if (ImGui::SliderFloat("##sensX", &sensHotkey.sensitivityX, 0.001f, 10.0f, "%.3fx")) { g_configIsDirty = true; }
 
                     ImGui::Text("Y Sensitivity:");
                     ImGui::SameLine();
                     ImGui::SetNextItemWidth(150);
-                    if (ImGui::SliderFloat("##sensY", &sensHotkey.sensitivityY, 0.1f, 3.0f, "%.2fx")) { g_configIsDirty = true; }
+                    if (ImGui::SliderFloat("##sensY", &sensHotkey.sensitivityY, 0.001f, 10.0f, "%.3fx")) { g_configIsDirty = true; }
                 } else {
                     ImGui::Text("Sensitivity:");
                     ImGui::SameLine();
                     ImGui::SetNextItemWidth(150);
-                    if (ImGui::SliderFloat("##sens", &sensHotkey.sensitivity, 0.1f, 3.0f, "%.2fx")) { g_configIsDirty = true; }
+                    if (ImGui::SliderFloat("##sens", &sensHotkey.sensitivity, 0.001f, 10.0f, "%.3fx")) { g_configIsDirty = true; }
                 }
 
                 if (ImGui::TreeNode("Required Game States##sens")) {

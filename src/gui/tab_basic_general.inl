@@ -256,7 +256,7 @@ if (ImGui::BeginTabItem("General")) {
     ImGui::Text("Global:");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(200);
-    if (ImGui::SliderFloat("##globalSensBasic", &g_config.mouseSensitivity, 0.1f, 3.0f, "%.2fx")) { g_configIsDirty = true; }
+    if (ImGui::SliderFloat("##globalSensBasic", &g_config.mouseSensitivity, 0.001f, 10.0f, "%.3fx")) { g_configIsDirty = true; }
     ImGui::SameLine();
     HelpMarker("Global mouse sensitivity multiplier (1.0 = normal).\nAffects all modes unless overridden.");
 
@@ -267,8 +267,8 @@ if (ImGui::BeginTabItem("General")) {
             ImGui::Text("EyeZoom:");
             ImGui::SameLine();
             ImGui::SetNextItemWidth(200);
-            if (ImGui::SliderFloat("##eyezoomSensBasic", &eyezoomMode->modeSensitivity, 0.01f, 3.0f, "%.2fx")) {
-                if (eyezoomMode->modeSensitivity < 0.01f) eyezoomMode->modeSensitivity = 0.01f;
+            if (ImGui::SliderFloat("##eyezoomSensBasic", &eyezoomMode->modeSensitivity, 0.001f, 10.0f, "%.3fx")) {
+                if (eyezoomMode->modeSensitivity < 0.001f) eyezoomMode->modeSensitivity = 0.001f;
                 eyezoomMode->sensitivityOverrideEnabled = true;
                 g_configIsDirty = true;
             }
