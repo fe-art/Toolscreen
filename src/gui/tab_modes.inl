@@ -1,4 +1,4 @@
-﻿if (ImGui::BeginTabItem("Modes")) {
+﻿if (ImGui::BeginTabItem(TR("Modes"))) {
     g_currentlyEditingMirror = "";
     int mode_to_remove = -1;
 
@@ -9,11 +9,11 @@
     bool resolutionSupported = IsResolutionChangeSupported(g_gameVersion);
     if (!resolutionSupported) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.7f, 0.0f, 1.0f)); // Orange/yellow warning color
-        ImGui::TextWrapped("WARNING: Resolution changing is not supported for Minecraft version %d.%d.%d (requires 1.13+). "
-                           "Mode dimension editing and switching are disabled.",
+        ImGui::TextWrapped(TR("WARNING: Resolution changing is not supported for Minecraft version %d.%d.%d (requires 1.13+). "
+                           "Mode dimension editing and switching are disabled."),
                            g_gameVersion.valid ? g_gameVersion.major : 0, g_gameVersion.valid ? g_gameVersion.minor : 0,
                            g_gameVersion.valid ? g_gameVersion.patch : 0);
-        ImGui::TextWrapped("Other features (overlays, images, cursors) remain functional.");
+        ImGui::TextWrapped(TR("Other features (overlays, images, cursors) remain functional."));
         ImGui::PopStyleColor();
         ImGui::Separator();
     }
@@ -21,7 +21,7 @@
     // Check if raw input is disabled (50+ WM_MOUSEMOVE events without raw input)
     if (g_wmMouseMoveCount.load() > 50) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.5f, 0.5f, 1.0f)); // Red warning color
-        ImGui::TextWrapped("WARNING: You have Raw Input disabled. Please enable it in Options -> Controls -> Mouse Settings.");
+        ImGui::TextWrapped(TR("WARNING: You have Raw Input disabled. Please enable it in Options -> Controls -> Mouse Settings."));
         ImGui::PopStyleColor();
         ImGui::Separator();
     }
@@ -29,7 +29,7 @@
     SliderCtrlClickTip();
 
     // --- DEFAULT MODES SECTION ---
-    ImGui::SeparatorText("Default Modes");
+    ImGui::SeparatorText(TR("Default Modes"));
 
     // --- FULLSCREEN MODE ---
     for (size_t i = 0; i < g_config.modes.size(); ++i) {
@@ -48,7 +48,7 @@
                 if (!resolutionSupported) { ImGui::BeginDisabled(); }
 
                 ImGui::Columns(2, "dims", false);
-                ImGui::Text("Width");
+                ImGui::Text(TR("Width"));
                 ImGui::NextColumn();
                 // Use temporary variable for spinner, then defer the change to logic thread
                 int tempWidth = mode.width;
@@ -62,7 +62,7 @@
                     g_pendingDimensionChange.sendWmSize = (g_currentModeId == mode.id);
                 }
                 ImGui::NextColumn();
-                ImGui::Text("Height");
+                ImGui::Text(TR("Height"));
                 ImGui::NextColumn();
                 int tempHeight = mode.height;
                 if (Spinner("##Height", &tempHeight, 1, 1)) {
@@ -76,7 +76,7 @@
                 }
                 ImGui::Columns(1);
 
-                if (ImGui::Button("Switch to this Mode")) {
+                if (ImGui::Button(TR("Switch to this Mode"))) {
                     // Defer mode switch to avoid deadlock (g_configMutex is held during GUI rendering)
                     std::lock_guard<std::mutex> pendingLock(g_pendingModeSwitchMutex);
                     g_pendingModeSwitch.pending = true;
@@ -93,42 +93,42 @@
 
                 // --- TRANSITION SETTINGS ---
                 ImGui::Separator();
-                if (ImGui::TreeNode("Transition Settings")) {
+                if (ImGui::TreeNode(TR("Transition Settings"))) {
                     RenderTransitionSettingsHorizontalNoBackground(mode, "Fullscreen");
                     ImGui::TreePop();
                 }
 
                 // --- BORDER SETTINGS ---
-                if (ImGui::TreeNode("Border Settings")) {
-                    if (ImGui::Checkbox("Enable Border", &mode.border.enabled)) { g_configIsDirty = true; }
+                if (ImGui::TreeNode(TR("Border Settings"))) {
+                    if (ImGui::Checkbox(TR("Enable Border"), &mode.border.enabled)) { g_configIsDirty = true; }
                     ImGui::SameLine();
-                    HelpMarker("Draw a border around the game viewport. Border appears outside the game area.");
+                    HelpMarker(TR("Draw a border around the game viewport. Border appears outside the game area."));
 
                     if (mode.border.enabled) {
-                        ImGui::Text("Color:");
+                        ImGui::Text(TR("Color:"));
                         ImVec4 borderCol = ImVec4(mode.border.color.r, mode.border.color.g, mode.border.color.b, 1.0f);
                         if (ImGui::ColorEdit3("##BorderColor", (float*)&borderCol, ImGuiColorEditFlags_NoInputs)) {
                             mode.border.color = { borderCol.x, borderCol.y, borderCol.z };
                             g_configIsDirty = true;
                         }
 
-                        ImGui::Text("Width:");
+                        ImGui::Text(TR("Width:"));
                         ImGui::SetNextItemWidth(100);
                         if (Spinner("##BorderWidth", &mode.border.width, 1, 1, 50)) { g_configIsDirty = true; }
                         ImGui::SameLine();
-                        ImGui::TextDisabled("px");
+                        ImGui::TextDisabled(TR("px"));
 
-                        ImGui::Text("Corner Radius:");
+                        ImGui::Text(TR("Corner Radius:"));
                         ImGui::SetNextItemWidth(100);
                         if (Spinner("##BorderRadius", &mode.border.radius, 1, 0, 100)) { g_configIsDirty = true; }
                         ImGui::SameLine();
-                        ImGui::TextDisabled("px");
+                        ImGui::TextDisabled(TR("px"));
                     }
                     ImGui::TreePop();
                 }
                 ImGui::Separator();
 
-                if (ImGui::TreeNode("Mirrors")) {
+                if (ImGui::TreeNode(TR("Mirrors"))) {
                     int mirror_idx_to_remove = -1;
                     for (size_t k = 0; k < mode.mirrorIds.size(); ++k) {
                         ImGui::PushID(static_cast<int>(k));
@@ -156,7 +156,7 @@
                     ImGui::TreePop();
                 }
 
-                if (ImGui::TreeNode("Mirror Groups")) {
+                if (ImGui::TreeNode(TR("Mirror Groups"))) {
                     int group_idx_to_remove = -1;
                     for (size_t k = 0; k < mode.mirrorGroupIds.size(); ++k) {
                         ImGui::PushID(static_cast<int>(k));
@@ -185,7 +185,7 @@
                     ImGui::TreePop();
                 }
 
-                if (ImGui::TreeNode("Images")) {
+                if (ImGui::TreeNode(TR("Images"))) {
                     int image_idx_to_remove = -1;
                     for (size_t k = 0; k < mode.imageIds.size(); ++k) {
                         ImGui::PushID(static_cast<int>(k));
@@ -213,7 +213,7 @@
                     ImGui::TreePop();
                 }
 
-                if (ImGui::TreeNode("Window Overlays")) {
+                if (ImGui::TreeNode(TR("Window Overlays"))) {
                     int windowOverlay_idx_to_remove = -1;
                     for (size_t k = 0; k < mode.windowOverlayIds.size(); ++k) {
                         ImGui::PushID(static_cast<int>(k));
@@ -244,12 +244,12 @@
 
 
                 // --- SENSITIVITY OVERRIDE ---
-                if (ImGui::TreeNode("Sensitivity Override##Fullscreen")) {
-                    if (ImGui::Checkbox("Override Sensitivity", &mode.sensitivityOverrideEnabled)) { g_configIsDirty = true; }
-                    HelpMarker("When enabled, this mode uses its own mouse sensitivity instead of the global setting.");
+                if (ImGui::TreeNode(TR("Sensitivity Override##Fullscreen"))) {
+                    if (ImGui::Checkbox(TR("Override Sensitivity"), &mode.sensitivityOverrideEnabled)) { g_configIsDirty = true; }
+                    HelpMarker(TR("When enabled, this mode uses its own mouse sensitivity instead of the global setting."));
 
                     if (mode.sensitivityOverrideEnabled) {
-                        if (ImGui::Checkbox("Separate X/Y", &mode.separateXYSensitivity)) {
+                        if (ImGui::Checkbox(TR("Separate X/Y"), &mode.separateXYSensitivity)) {
                             g_configIsDirty = true;
                             // Initialize X/Y values from combined sensitivity if just enabled
                             if (mode.separateXYSensitivity) {
@@ -258,27 +258,27 @@
                             }
                         }
                         ImGui::SameLine();
-                        HelpMarker("Use different sensitivity values for horizontal (X) and vertical (Y) mouse movement.");
+                        HelpMarker(TR("Use different sensitivity values for horizontal (X) and vertical (Y) mouse movement."));
 
                         if (mode.separateXYSensitivity) {
-                            ImGui::Text("X Sensitivity:");
+                            ImGui::Text(TR("X Sensitivity:"));
                             ImGui::SetNextItemWidth(200);
-                            if (ImGui::SliderFloat("##FullscreenSensitivityX", &mode.modeSensitivityX, 0.001f, 10.0f, "%.3fx")) {
+                            if (ImGui::SliderFloat("##FullscreenSensitivityX", &mode.modeSensitivityX, 0.1f, 3.0f, "%.2fx")) {
                                 g_configIsDirty = true;
                             }
-                            ImGui::Text("Y Sensitivity:");
+                            ImGui::Text(TR("Y Sensitivity:"));
                             ImGui::SetNextItemWidth(200);
-                            if (ImGui::SliderFloat("##FullscreenSensitivityY", &mode.modeSensitivityY, 0.001f, 10.0f, "%.3fx")) {
+                            if (ImGui::SliderFloat("##FullscreenSensitivityY", &mode.modeSensitivityY, 0.1f, 3.0f, "%.2fx")) {
                                 g_configIsDirty = true;
                             }
                         } else {
-                            ImGui::Text("Sensitivity:");
+                            ImGui::Text(TR("Sensitivity:"));
                             ImGui::SetNextItemWidth(200);
-                            if (ImGui::SliderFloat("##FullscreenSensitivity", &mode.modeSensitivity, 0.001f, 10.0f, "%.3fx")) {
+                            if (ImGui::SliderFloat("##FullscreenSensitivity", &mode.modeSensitivity, 0.1f, 3.0f, "%.2fx")) {
                                 g_configIsDirty = true;
                             }
                             ImGui::SameLine();
-                            HelpMarker("Mouse sensitivity for this mode (1.0 = normal)");
+                            HelpMarker(TR("Mouse sensitivity for this mode (1.0 = normal)"));
                         }
                     }
                     ImGui::TreePop();
@@ -311,7 +311,7 @@
                 ImGui::Columns(2, "mode_config_cols", false);
                 ImGui::SetColumnWidth(0, 150);
 
-                ImGui::Text("Game Width");
+                ImGui::Text(TR("Game Width"));
                 ImGui::NextColumn();
                 int tempWidth2 = mode.width;
                 if (Spinner("##ModeWidth", &tempWidth2, 1, 1, screenWidth)) {
@@ -323,7 +323,7 @@
                     g_pendingDimensionChange.sendWmSize = (g_currentModeId == mode.id);
                 }
                 ImGui::NextColumn();
-                ImGui::Text("Game Height");
+                ImGui::Text(TR("Game Height"));
                 ImGui::NextColumn();
                 int tempHeight2 = mode.height;
                 if (Spinner("##ModeHeight", &tempHeight2, 1, 1, 16384)) {
@@ -336,7 +336,7 @@
                 }
                 ImGui::Columns(1);
 
-                if (ImGui::Button("Switch to this Mode")) {
+                if (ImGui::Button(TR("Switch to this Mode"))) {
                     // Defer mode switch to avoid deadlock (g_configMutex is held during GUI rendering)
                     std::lock_guard<std::mutex> pendingLock(g_pendingModeSwitchMutex);
                     g_pendingModeSwitch.pending = true;
@@ -354,12 +354,12 @@
 
                 // --- EYEZOOM SETTINGS (shown directly at top, not in collapsible TreeNode) ---
                 ImGui::Separator();
-                ImGui::Text("EyeZoom Settings");
+                ImGui::Text(TR("EyeZoom Settings"));
 
-                ImGui::Text("Clone Settings (Source)");
+                ImGui::Text(TR("Clone Settings (Source)"));
                 ImGui::Columns(2, "eyezoom_clone_cols", false);
                 ImGui::SetColumnWidth(0, 150);
-                ImGui::Text("Clone Width");
+                ImGui::Text(TR("Clone Width"));
                 ImGui::NextColumn();
                 // Clone Width must be even - step by 2, enforce even values
                 // Max value is the mode's game width
@@ -367,34 +367,31 @@
                 if (Spinner("##EyeZoomCloneWidth", &g_config.eyezoom.cloneWidth, 2, 2, maxCloneWidth)) {
                     // Ensure value stays even
                     if (g_config.eyezoom.cloneWidth % 2 != 0) { g_config.eyezoom.cloneWidth = (g_config.eyezoom.cloneWidth / 2) * 2; }
-                    // Clamp overlay width to the new clone width
-                    int maxOverlay = g_config.eyezoom.cloneWidth / 2;
-                    if (g_config.eyezoom.overlayWidth > maxOverlay) g_config.eyezoom.overlayWidth = maxOverlay;
                     g_configIsDirty = true;
                 }
                 ImGui::NextColumn();
-                ImGui::Text("Clone Height");
+                ImGui::Text(TR("Clone Height"));
                 ImGui::NextColumn();
                 // Max value is the mode's game height
                 int maxCloneHeight = mode.height;
                 if (Spinner("##EyeZoomCloneHeight", &g_config.eyezoom.cloneHeight, 10, 1, maxCloneHeight)) g_configIsDirty = true;
                 ImGui::NextColumn();
-                ImGui::Text("Overlay Pixels");
+                ImGui::Text(TR("Overlay Pixels"));
                 ImGui::NextColumn();
                 {
                     int maxOverlay = g_config.eyezoom.cloneWidth / 2;
                     if (Spinner("##EyeZoomOverlayWidth", &g_config.eyezoom.overlayWidth, 1, 0, maxOverlay)) g_configIsDirty = true;
                 }
                 ImGui::SameLine();
-                HelpMarker("How many colored overlay boxes + numbers to draw on EACH side of the center line.\n"
-                           "cloneWidth controls how wide the clone samples; overlayWidth only controls how much of the numbered overlay is drawn.");
+                HelpMarker(TR("How many colored overlay boxes + numbers to draw on EACH side of the center line.\n"
+                           "cloneWidth controls how wide the clone samples; overlayWidth only controls how much of the numbered overlay is drawn."));
                 ImGui::Columns(1);
 
                 ImGui::Separator();
-                ImGui::Text("Margin Settings (Output)");
+                ImGui::Text(TR("Margin Settings (Output)"));
                 ImGui::Columns(2, "eyezoom_margin_cols", false);
                 ImGui::SetColumnWidth(0, 150);
-                ImGui::Text("Horizontal Margin");
+                ImGui::Text(TR("Horizontal Margin"));
                 ImGui::NextColumn();
                 // Calculate max margin based on EyeZoom mode's TARGET viewport position (not current animated position)
                 // This prevents the margin from being clamped during mode transitions
@@ -407,7 +404,7 @@
                 if (maxHMargin < 0) maxHMargin = 0;
                 if (Spinner("##EyeZoomHorizontalMargin", &g_config.eyezoom.horizontalMargin, 10, 0, maxHMargin)) g_configIsDirty = true;
                 ImGui::NextColumn();
-                ImGui::Text("Vertical Margin");
+                ImGui::Text(TR("Vertical Margin"));
                 ImGui::NextColumn();
                 // Calculate max vertical margin: ensure zoom output height stays at least 20% of screen height
                 int monitorHeight = GetCachedScreenHeight();
@@ -417,7 +414,7 @@
                 ImGui::Columns(1);
 
                 ImGui::Separator();
-                ImGui::Text("Color Settings");
+                ImGui::Text(TR("Color Settings"));
                 // Grid Color 1 with opacity
                 {
                     ImVec4 col1 = ImVec4(g_config.eyezoom.gridColor1.r, g_config.eyezoom.gridColor1.g, g_config.eyezoom.gridColor1.b,
@@ -460,29 +457,29 @@
                 }
 
                 ImGui::Separator();
-                ImGui::Text("Text Settings");
-                if (ImGui::Checkbox("Auto Font Size", &g_config.eyezoom.autoFontSize)) {
+                ImGui::Text(TR("Text Settings"));
+                if (ImGui::Checkbox(TR("Auto Font Size"), &g_config.eyezoom.autoFontSize)) {
                     g_configIsDirty = true;
                 }
                 ImGui::SameLine();
-                HelpMarker("When enabled, EyeZoom label text is auto-fit to the current box size.\n"
-                           "Disable to manually override the font size (no auto-fit limits).");
+                HelpMarker(TR("When enabled, EyeZoom label text is auto-fit to the current box size.\n"
+                           "Disable to manually override the font size (no auto-fit limits)."));
 
                 if (!g_config.eyezoom.autoFontSize) {
                     ImGui::SetNextItemWidth(250);
-                    if (ImGui::SliderInt("Text Font Size (px)", &g_config.eyezoom.textFontSize, 1, 96)) {
+                    if (ImGui::SliderInt(TR("Text Font Size (px)"), &g_config.eyezoom.textFontSize, 1, 96)) {
                         g_configIsDirty = true;
                         // Apply size immediately (used by some non-RT calculations like linked rectangle height).
                         SetOverlayTextFontSize(g_config.eyezoom.textFontSize);
                     }
                 } else {
-                    ImGui::TextDisabled("Font size will be clamped to fit inside the overlay boxes.");
+                    ImGui::TextDisabled(TR("Font size will be clamped to fit inside the overlay boxes."));
                     if (g_config.eyezoom.linkRectToFont) {
-                        ImGui::TextDisabled("Note: With 'Link Rectangle to Font Size' enabled, box height is still based on Text Font Size.");
+                        ImGui::TextDisabled(TR("Note: With 'Link Rectangle to Font Size' enabled, box height is still based on Text Font Size."));
                     }
                 }
 
-                ImGui::Text("Text Font:");
+                ImGui::Text(TR("Text Font:"));
                 ImGui::SetNextItemWidth(300);
                 if (ImGui::InputText("##EyeZoomTextFont", &g_config.eyezoom.textFontPath)) {
                     g_configIsDirty = true;
@@ -513,9 +510,9 @@
                     }
                 }
                 ImGui::SameLine();
-                HelpMarker("Custom font for EyeZoom overlay text. Leave empty to use the global font. Supports TTF and OTF files.");
+                HelpMarker(TR("Custom font for EyeZoom overlay text. Leave empty to use the global font. Supports TTF and OTF files."));
 
-                if (ImGui::Checkbox("Link Rectangle to Font Size", &g_config.eyezoom.linkRectToFont)) {
+                if (ImGui::Checkbox(TR("Link Rectangle to Font Size"), &g_config.eyezoom.linkRectToFont)) {
                     g_configIsDirty = true;
                     // If linking is enabled, sync the rectangle height to font size
                     if (g_config.eyezoom.linkRectToFont) {
@@ -526,21 +523,21 @@
                 // Only show override slider when linking is disabled
                 if (!g_config.eyezoom.linkRectToFont) {
                     ImGui::SetNextItemWidth(250);
-                    if (ImGui::SliderInt("Override Rectangle Height (px)", &g_config.eyezoom.rectHeight, 8, 120)) {
+                    if (ImGui::SliderInt(TR("Override Rectangle Height (px)"), &g_config.eyezoom.rectHeight, 8, 120)) {
                         g_configIsDirty = true;
                     }
                 }
 
                 // --- BACKGROUND SECTION ---
-                if (ImGui::TreeNode("Background")) {
-                    if (ImGui::RadioButton("Color", mode.background.selectedMode == "color")) {
+                if (ImGui::TreeNode(TR("Background"))) {
+                    if (ImGui::RadioButton(TR("Color"), mode.background.selectedMode == "color")) {
                         if (mode.background.selectedMode != "color") {
                             mode.background.selectedMode = "color";
                             g_configIsDirty = true;
                         }
                     }
                     ImGui::SameLine();
-                    if (ImGui::RadioButton("Gradient", mode.background.selectedMode == "gradient")) {
+                    if (ImGui::RadioButton(TR("Gradient"), mode.background.selectedMode == "gradient")) {
                         if (mode.background.selectedMode != "gradient") {
                             mode.background.selectedMode = "gradient";
                             // Initialize default stops if empty
@@ -553,7 +550,7 @@
                         }
                     }
                     ImGui::SameLine();
-                    if (ImGui::RadioButton("Image", mode.background.selectedMode == "image")) {
+                    if (ImGui::RadioButton(TR("Image"), mode.background.selectedMode == "image")) {
                         if (mode.background.selectedMode != "image") {
                             mode.background.selectedMode = "image";
                             g_configIsDirty = true;
@@ -571,12 +568,12 @@
                     } else if (mode.background.selectedMode == "gradient") {
                         // Angle slider
                         ImGui::SetNextItemWidth(200);
-                        if (ImGui::SliderFloat("Angle##bgGradAngle", &mode.background.gradientAngle, 0.0f, 360.0f, "%.0f deg")) {
+                        if (ImGui::SliderFloat(TR("Angle##bgGradAngle"), &mode.background.gradientAngle, 0.0f, 360.0f, "%.0f deg")) {
                             g_configIsDirty = true;
                         }
 
                         // Color stops
-                        ImGui::Text("Color Stops:");
+                        ImGui::Text(TR("Color Stops:"));
                         int stopToRemove = -1;
                         for (size_t i = 0; i < mode.background.gradientStops.size(); i++) {
                             ImGui::PushID(static_cast<int>(i));
@@ -609,7 +606,7 @@
 
                         // Add stop button (max 8 stops)
                         if (mode.background.gradientStops.size() < 8) {
-                            if (ImGui::Button("+ Add Color Stop##bgGrad")) {
+                            if (ImGui::Button(TR("+ Add Color Stop##bgGrad"))) {
                                 // Add at midpoint with gray color
                                 GradientColorStop newStop;
                                 newStop.position = 0.5f;
@@ -624,7 +621,7 @@
 
                         // Animation controls
                         ImGui::Separator();
-                        ImGui::Text("Animation:");
+                        ImGui::Text(TR("Animation:"));
                         const char* animTypeNames[] = { "None", "Rotate", "Slide", "Wave", "Spiral", "Fade" };
                         int currentAnimType = static_cast<int>(mode.background.gradientAnimation);
                         ImGui::SetNextItemWidth(120);
@@ -646,7 +643,7 @@
                             }*/
                         }
                     } else if (mode.background.selectedMode == "image") {
-                        if (ImGui::InputText("Path", &mode.background.image)) {
+                        if (ImGui::InputText(TR("Path"), &mode.background.image)) {
                             ClearImageError("eyezoom_bg");
                             g_configIsDirty = true;
                             g_allImagesLoaded = false;
@@ -679,36 +676,36 @@
                 }
 
                 // --- BORDER SETTINGS ---
-                if (ImGui::TreeNode("Border Settings##EyeZoom")) {
-                    if (ImGui::Checkbox("Enable Border##EyeZoom", &mode.border.enabled)) { g_configIsDirty = true; }
+                if (ImGui::TreeNode(TR("Border Settings##EyeZoom"))) {
+                    if (ImGui::Checkbox(TR("Enable Border##EyeZoom"), &mode.border.enabled)) { g_configIsDirty = true; }
                     ImGui::SameLine();
-                    HelpMarker("Draw a border around the game viewport. Border appears outside the game area.");
+                    HelpMarker(TR("Draw a border around the game viewport. Border appears outside the game area."));
 
                     if (mode.border.enabled) {
-                        ImGui::Text("Color:");
+                        ImGui::Text(TR("Color:"));
                         ImVec4 borderCol = ImVec4(mode.border.color.r, mode.border.color.g, mode.border.color.b, 1.0f);
                         if (ImGui::ColorEdit3("##BorderColorEyeZoom", (float*)&borderCol, ImGuiColorEditFlags_NoInputs)) {
                             mode.border.color = { borderCol.x, borderCol.y, borderCol.z };
                             g_configIsDirty = true;
                         }
 
-                        ImGui::Text("Width:");
+                        ImGui::Text(TR("Width:"));
                         ImGui::SetNextItemWidth(100);
                         if (Spinner("##BorderWidthEyeZoom", &mode.border.width, 1, 1, 50)) { g_configIsDirty = true; }
                         ImGui::SameLine();
-                        ImGui::TextDisabled("px");
+                        ImGui::TextDisabled(TR("px"));
 
-                        ImGui::Text("Corner Radius:");
+                        ImGui::Text(TR("Corner Radius:"));
                         ImGui::SetNextItemWidth(100);
                         if (Spinner("##BorderRadiusEyeZoom", &mode.border.radius, 1, 0, 100)) { g_configIsDirty = true; }
                         ImGui::SameLine();
-                        ImGui::TextDisabled("px");
+                        ImGui::TextDisabled(TR("px"));
                     }
                     ImGui::TreePop();
                 }
 
                 // --- MIRRORS SECTION ---
-                if (ImGui::TreeNode("Mirrors")) {
+                if (ImGui::TreeNode(TR("Mirrors"))) {
                     int mirror_idx_to_remove = -1;
                     for (size_t k = 0; k < mode.mirrorIds.size(); ++k) {
                         ImGui::PushID(static_cast<int>(k));
@@ -737,7 +734,7 @@
                 }
 
                 // --- MIRROR GROUPS SECTION ---
-                if (ImGui::TreeNode("Mirror Groups##EyeZoom")) {
+                if (ImGui::TreeNode(TR("Mirror Groups##EyeZoom"))) {
                     int group_idx_to_remove = -1;
                     for (size_t k = 0; k < mode.mirrorGroupIds.size(); ++k) {
                         ImGui::PushID(static_cast<int>(k));
@@ -796,7 +793,7 @@
                 }
 
                 // --- WINDOW OVERLAYS SECTION ---
-                if (ImGui::TreeNode("Window Overlays")) {
+                if (ImGui::TreeNode(TR("Window Overlays"))) {
                     int overlay_idx_to_remove = -1;
                     for (size_t k = 0; k < mode.windowOverlayIds.size(); ++k) {
                         ImGui::PushID(static_cast<int>(k));
@@ -827,32 +824,32 @@
 
                 // --- TRANSITION SETTINGS ---
                 ImGui::Separator();
-                if (ImGui::TreeNode("Transition Settings##EyeZoom")) {
+                if (ImGui::TreeNode(TR("Transition Settings##EyeZoom"))) {
                     RenderTransitionSettingsHorizontal(mode, "EyeZoom");
 
                     // Slide Zoom In option
                     ImGui::Separator();
-                    if (ImGui::Checkbox("Slide Zoom In", &g_config.eyezoom.slideZoomIn)) { g_configIsDirty = true; }
+                    if (ImGui::Checkbox(TR("Slide Zoom In"), &g_config.eyezoom.slideZoomIn)) { g_configIsDirty = true; }
                     ImGui::SameLine();
-                    HelpMarker("When enabled, the zoom overlay slides in from the left instead of growing with the viewport. Both reach "
-                               "their targets at the same time.");
+                    HelpMarker(TR("When enabled, the zoom overlay slides in from the left instead of growing with the viewport. Both reach "
+                               "their targets at the same time."));
 
-                    if (ImGui::Checkbox("Slide Mirrors In", &g_config.eyezoom.slideMirrorsIn)) { g_configIsDirty = true; }
+                    if (ImGui::Checkbox(TR("Slide Mirrors In"), &g_config.eyezoom.slideMirrorsIn)) { g_configIsDirty = true; }
                     ImGui::SameLine();
-                    HelpMarker("When enabled, mirrors slide in from the screen edge they are closest to (left or right) instead of "
-                               "appearing instantly during transitions.");
+                    HelpMarker(TR("When enabled, mirrors slide in from the screen edge they are closest to (left or right) instead of "
+                               "appearing instantly during transitions."));
 
                     ImGui::TreePop();
                 }
 
 
                 // --- SENSITIVITY OVERRIDE ---
-                if (ImGui::TreeNode("Sensitivity Override##EyeZoom")) {
-                    if (ImGui::Checkbox("Override Sensitivity", &mode.sensitivityOverrideEnabled)) { g_configIsDirty = true; }
-                    HelpMarker("When enabled, this mode uses its own mouse sensitivity instead of the global setting.");
+                if (ImGui::TreeNode(TR("Sensitivity Override##EyeZoom"))) {
+                    if (ImGui::Checkbox(TR("Override Sensitivity"), &mode.sensitivityOverrideEnabled)) { g_configIsDirty = true; }
+                    HelpMarker(TR("When enabled, this mode uses its own mouse sensitivity instead of the global setting."));
 
                     if (mode.sensitivityOverrideEnabled) {
-                        if (ImGui::Checkbox("Separate X/Y##EyeZoom", &mode.separateXYSensitivity)) {
+                        if (ImGui::Checkbox(TR("Separate X/Y##EyeZoom"), &mode.separateXYSensitivity)) {
                             g_configIsDirty = true;
                             if (mode.separateXYSensitivity) {
                                 mode.modeSensitivityX = mode.modeSensitivity;
@@ -860,27 +857,27 @@
                             }
                         }
                         ImGui::SameLine();
-                        HelpMarker("Use different sensitivity values for horizontal (X) and vertical (Y) mouse movement.");
+                        HelpMarker(TR("Use different sensitivity values for horizontal (X) and vertical (Y) mouse movement."));
 
                         if (mode.separateXYSensitivity) {
-                            ImGui::Text("X Sensitivity:");
+                            ImGui::Text(TR("X Sensitivity:"));
                             ImGui::SetNextItemWidth(200);
-                            if (ImGui::SliderFloat("##EyeZoomSensitivityX", &mode.modeSensitivityX, 0.001f, 10.0f, "%.3fx")) {
+                            if (ImGui::SliderFloat("##EyeZoomSensitivityX", &mode.modeSensitivityX, 0.1f, 3.0f, "%.2fx")) {
                                 g_configIsDirty = true;
                             }
-                            ImGui::Text("Y Sensitivity:");
+                            ImGui::Text(TR("Y Sensitivity:"));
                             ImGui::SetNextItemWidth(200);
-                            if (ImGui::SliderFloat("##EyeZoomSensitivityY", &mode.modeSensitivityY, 0.001f, 10.0f, "%.3fx")) {
+                            if (ImGui::SliderFloat("##EyeZoomSensitivityY", &mode.modeSensitivityY, 0.1f, 3.0f, "%.2fx")) {
                                 g_configIsDirty = true;
                             }
                         } else {
-                            ImGui::Text("Sensitivity:");
+                            ImGui::Text(TR("Sensitivity:"));
                             ImGui::SetNextItemWidth(200);
-                            if (ImGui::SliderFloat("##EyeZoomSensitivity", &mode.modeSensitivity, 0.001f, 10.0f, "%.3fx")) {
+                            if (ImGui::SliderFloat("##EyeZoomSensitivity", &mode.modeSensitivity, 0.1f, 3.0f, "%.2fx")) {
                                 g_configIsDirty = true;
                             }
                             ImGui::SameLine();
-                            HelpMarker("Mouse sensitivity for this mode (1.0 = normal)");
+                            HelpMarker(TR("Mouse sensitivity for this mode (1.0 = normal)"));
                         }
                     }
                     ImGui::TreePop();
@@ -1330,7 +1327,7 @@
                 ImGui::Columns(2, "thin_dims", false);
 
                 // Normal mode: editable spinners
-                ImGui::Text("Width");
+                ImGui::Text(TR("Width"));
                 ImGui::NextColumn();
                 int tempWidth3 = mode.width;
                 if (Spinner("##Width", &tempWidth3, 1, 1, screenWidth)) {
@@ -1342,7 +1339,7 @@
                     g_pendingDimensionChange.sendWmSize = (g_currentModeId == mode.id);
                 }
                 ImGui::NextColumn();
-                ImGui::Text("Height");
+                ImGui::Text(TR("Height"));
                 ImGui::NextColumn();
                 int tempHeight3 = mode.height;
                 if (Spinner("##Height", &tempHeight3, 1, 1, screenHeight)) {
@@ -1355,7 +1352,7 @@
                 }
                 ImGui::Columns(1);
 
-                if (ImGui::Button("Switch to this Mode##Thin")) {
+                if (ImGui::Button(TR("Switch to this Mode##Thin"))) {
                     std::lock_guard<std::mutex> pendingLock(g_pendingModeSwitchMutex);
                     g_pendingModeSwitch.pending = true;
                     g_pendingModeSwitch.modeId = mode.id;
@@ -1371,17 +1368,17 @@
 
                 // Transition Settings
                 ImGui::Separator();
-                if (ImGui::TreeNode("Transition Settings##Thin")) {
+                if (ImGui::TreeNode(TR("Transition Settings##Thin"))) {
                     RenderTransitionSettingsHorizontal(mode, "Thin");
-                    if (ImGui::Checkbox("Slide Mirrors In##Thin", &mode.slideMirrorsIn)) { g_configIsDirty = true; }
+                    if (ImGui::Checkbox(TR("Slide Mirrors In##Thin"), &mode.slideMirrorsIn)) { g_configIsDirty = true; }
                     if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip("Mirrors slide in from the screen edges instead of appearing instantly");
+                        ImGui::SetTooltip(TR("Mirrors slide in from the screen edges instead of appearing instantly"));
                     }
                     ImGui::TreePop();
                 }
 
                 // Background
-                if (ImGui::TreeNode("Background##Thin")) {
+                if (ImGui::TreeNode(TR("Background##Thin"))) {
                     if (ImGui::RadioButton("Color##Thin", mode.background.selectedMode == "color")) {
                         mode.background.selectedMode = "color";
                         g_configIsDirty = true;
@@ -1415,10 +1412,10 @@
                         if (ImGui::ColorEdit3("##bgColorThin", &mode.background.color.r)) { g_configIsDirty = true; }
                     } else if (mode.background.selectedMode == "gradient") {
                         ImGui::SetNextItemWidth(200);
-                        if (ImGui::SliderFloat("Angle##bgGradAngleThin", &mode.background.gradientAngle, 0.0f, 360.0f, "%.0f deg")) {
+                        if (ImGui::SliderFloat(TR("Angle##bgGradAngleThin"), &mode.background.gradientAngle, 0.0f, 360.0f, "%.0f deg")) {
                             g_configIsDirty = true;
                         }
-                        ImGui::Text("Color Stops:");
+                        ImGui::Text(TR("Color Stops:"));
                         int stopToRemove = -1;
                         for (size_t i = 0; i < mode.background.gradientStops.size(); i++) {
                             ImGui::PushID(static_cast<int>(i));
@@ -1442,7 +1439,7 @@
                             g_configIsDirty = true;
                         }
                         if (mode.background.gradientStops.size() < 8) {
-                            if (ImGui::Button("+ Add Color Stop##bgGradThin")) {
+                            if (ImGui::Button(TR("+ Add Color Stop##bgGradThin"))) {
                                 GradientColorStop newStop;
                                 newStop.position = 0.5f;
                                 newStop.color = { 0.5f, 0.5f, 0.5f };
@@ -1455,7 +1452,7 @@
 
                         // Animation controls
                         ImGui::Separator();
-                        ImGui::Text("Animation:");
+                        ImGui::Text(TR("Animation:"));
                         const char* animTypeNamesThin[] = { "None", "Rotate", "Slide", "Wave", "Spiral", "Fade" };
                         int currentAnimTypeThin = static_cast<int>(mode.background.gradientAnimation);
                         ImGui::SetNextItemWidth(120);
@@ -1478,7 +1475,7 @@
                         }
                     } else if (mode.background.selectedMode == "image") {
                         std::string thinErrorKey = "mode_bg_thin";
-                        if (ImGui::InputText("Path##Thin", &mode.background.image)) {
+                        if (ImGui::InputText(TR("Path##Thin"), &mode.background.image)) {
                             ClearImageError(thinErrorKey);
                             g_configIsDirty = true;
                             g_allImagesLoaded = false;
@@ -1507,23 +1504,23 @@
                 }
 
                 // Border Settings
-                if (ImGui::TreeNode("Border Settings##Thin")) {
-                    if (ImGui::Checkbox("Enable Border##Thin", &mode.border.enabled)) { g_configIsDirty = true; }
+                if (ImGui::TreeNode(TR("Border Settings##Thin"))) {
+                    if (ImGui::Checkbox(TR("Enable Border##Thin"), &mode.border.enabled)) { g_configIsDirty = true; }
                     if (mode.border.enabled) {
-                        ImGui::Text("Color:");
+                        ImGui::Text(TR("Color:"));
                         ImVec4 borderCol = ImVec4(mode.border.color.r, mode.border.color.g, mode.border.color.b, 1.0f);
                         if (ImGui::ColorEdit3("##BorderColorThin", (float*)&borderCol, ImGuiColorEditFlags_NoInputs)) {
                             mode.border.color = { borderCol.x, borderCol.y, borderCol.z };
                             g_configIsDirty = true;
                         }
-                        ImGui::Text("Width:");
+                        ImGui::Text(TR("Width:"));
                         if (Spinner("##BorderWidthThin", &mode.border.width, 1, 1, 50)) { g_configIsDirty = true; }
                     }
                     ImGui::TreePop();
                 }
 
                 // Mirrors
-                if (ImGui::TreeNode("Mirrors##Thin")) {
+                if (ImGui::TreeNode(TR("Mirrors##Thin"))) {
                     int mirror_idx_to_remove = -1;
                     for (size_t k = 0; k < mode.mirrorIds.size(); ++k) {
                         ImGui::PushID(static_cast<int>(k));
@@ -1551,7 +1548,7 @@
                 }
 
                 // Mirror Groups
-                if (ImGui::TreeNode("Mirror Groups##Thin")) {
+                if (ImGui::TreeNode(TR("Mirror Groups##Thin"))) {
                     int group_idx_to_remove = -1;
                     for (size_t k = 0; k < mode.mirrorGroupIds.size(); ++k) {
                         ImGui::PushID(static_cast<int>(k));
@@ -1581,7 +1578,7 @@
                 }
 
                 // Images
-                if (ImGui::TreeNode("Images##Thin")) {
+                if (ImGui::TreeNode(TR("Images##Thin"))) {
                     int image_idx_to_remove = -1;
                     for (size_t k = 0; k < mode.imageIds.size(); ++k) {
                         ImGui::PushID(static_cast<int>(k));
@@ -1638,12 +1635,12 @@
                 }
 
                 // --- SENSITIVITY OVERRIDE ---
-                if (ImGui::TreeNode("Sensitivity Override##Thin")) {
-                    if (ImGui::Checkbox("Override Sensitivity##Thin", &mode.sensitivityOverrideEnabled)) { g_configIsDirty = true; }
-                    HelpMarker("When enabled, this mode uses its own mouse sensitivity instead of the global setting.");
+                if (ImGui::TreeNode(TR("Sensitivity Override##Thin"))) {
+                    if (ImGui::Checkbox(TR("Override Sensitivity##Thin"), &mode.sensitivityOverrideEnabled)) { g_configIsDirty = true; }
+                    HelpMarker(TR("When enabled, this mode uses its own mouse sensitivity instead of the global setting."));
 
                     if (mode.sensitivityOverrideEnabled) {
-                        if (ImGui::Checkbox("Separate X/Y##Thin", &mode.separateXYSensitivity)) {
+                        if (ImGui::Checkbox(TR("Separate X/Y##Thin"), &mode.separateXYSensitivity)) {
                             g_configIsDirty = true;
                             if (mode.separateXYSensitivity) {
                                 mode.modeSensitivityX = mode.modeSensitivity;
@@ -1651,27 +1648,27 @@
                             }
                         }
                         ImGui::SameLine();
-                        HelpMarker("Use different sensitivity values for horizontal (X) and vertical (Y) mouse movement.");
+                        HelpMarker(TR("Use different sensitivity values for horizontal (X) and vertical (Y) mouse movement."));
 
                         if (mode.separateXYSensitivity) {
-                            ImGui::Text("X Sensitivity:");
+                            ImGui::Text(TR("X Sensitivity:"));
                             ImGui::SetNextItemWidth(200);
-                            if (ImGui::SliderFloat("##ThinSensitivityX", &mode.modeSensitivityX, 0.001f, 10.0f, "%.3fx")) {
+                            if (ImGui::SliderFloat("##ThinSensitivityX", &mode.modeSensitivityX, 0.1f, 3.0f, "%.2fx")) {
                                 g_configIsDirty = true;
                             }
-                            ImGui::Text("Y Sensitivity:");
+                            ImGui::Text(TR("Y Sensitivity:"));
                             ImGui::SetNextItemWidth(200);
-                            if (ImGui::SliderFloat("##ThinSensitivityY", &mode.modeSensitivityY, 0.001f, 10.0f, "%.3fx")) {
+                            if (ImGui::SliderFloat("##ThinSensitivityY", &mode.modeSensitivityY, 0.1f, 3.0f, "%.2fx")) {
                                 g_configIsDirty = true;
                             }
                         } else {
-                            ImGui::Text("Sensitivity:");
+                            ImGui::Text(TR("Sensitivity:"));
                             ImGui::SetNextItemWidth(200);
-                            if (ImGui::SliderFloat("##ThinSensitivity", &mode.modeSensitivity, 0.001f, 10.0f, "%.3fx")) {
+                            if (ImGui::SliderFloat("##ThinSensitivity", &mode.modeSensitivity, 0.1f, 3.0f, "%.2fx")) {
                                 g_configIsDirty = true;
                             }
                             ImGui::SameLine();
-                            HelpMarker("Mouse sensitivity for this mode (1.0 = normal)");
+                            HelpMarker(TR("Mouse sensitivity for this mode (1.0 = normal)"));
                         }
                     }
                     ImGui::TreePop();
@@ -1700,7 +1697,7 @@
                 ImGui::Columns(2, "wide_dims", false);
 
                 // Absolute pixel spinners mode
-                ImGui::Text("Width");
+                ImGui::Text(TR("Width"));
                 ImGui::NextColumn();
                 int tempWidth4 = mode.width;
                 if (Spinner("##Width", &tempWidth4, 1, 1, screenWidth)) {
@@ -1712,7 +1709,7 @@
                     g_pendingDimensionChange.sendWmSize = (g_currentModeId == mode.id);
                 }
                 ImGui::NextColumn();
-                ImGui::Text("Height");
+                ImGui::Text(TR("Height"));
                 ImGui::NextColumn();
                 int tempHeight4 = mode.height;
                 if (Spinner("##Height", &tempHeight4, 1, 1, screenHeight)) {
@@ -1725,7 +1722,7 @@
                 }
                 ImGui::Columns(1);
 
-                if (ImGui::Button("Switch to this Mode##Wide")) {
+                if (ImGui::Button(TR("Switch to this Mode##Wide"))) {
                     std::lock_guard<std::mutex> pendingLock(g_pendingModeSwitchMutex);
                     g_pendingModeSwitch.pending = true;
                     g_pendingModeSwitch.modeId = mode.id;
@@ -1741,17 +1738,17 @@
 
                 // Transition Settings
                 ImGui::Separator();
-                if (ImGui::TreeNode("Transition Settings##Wide")) {
+                if (ImGui::TreeNode(TR("Transition Settings##Wide"))) {
                     RenderTransitionSettingsHorizontal(mode, "Wide");
-                    if (ImGui::Checkbox("Slide Mirrors In##Wide", &mode.slideMirrorsIn)) { g_configIsDirty = true; }
+                    if (ImGui::Checkbox(TR("Slide Mirrors In##Wide"), &mode.slideMirrorsIn)) { g_configIsDirty = true; }
                     if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip("Mirrors slide in from the screen edges instead of appearing instantly");
+                        ImGui::SetTooltip(TR("Mirrors slide in from the screen edges instead of appearing instantly"));
                     }
                     ImGui::TreePop();
                 }
 
                 // Background
-                if (ImGui::TreeNode("Background##Wide")) {
+                if (ImGui::TreeNode(TR("Background##Wide"))) {
                     if (ImGui::RadioButton("Color##Wide", mode.background.selectedMode == "color")) {
                         mode.background.selectedMode = "color";
                         g_configIsDirty = true;
@@ -1785,10 +1782,10 @@
                         if (ImGui::ColorEdit3("##bgColorWide", &mode.background.color.r)) { g_configIsDirty = true; }
                     } else if (mode.background.selectedMode == "gradient") {
                         ImGui::SetNextItemWidth(200);
-                        if (ImGui::SliderFloat("Angle##bgGradAngleWide", &mode.background.gradientAngle, 0.0f, 360.0f, "%.0f deg")) {
+                        if (ImGui::SliderFloat(TR("Angle##bgGradAngleWide"), &mode.background.gradientAngle, 0.0f, 360.0f, "%.0f deg")) {
                             g_configIsDirty = true;
                         }
-                        ImGui::Text("Color Stops:");
+                        ImGui::Text(TR("Color Stops:"));
                         int stopToRemove = -1;
                         for (size_t i = 0; i < mode.background.gradientStops.size(); i++) {
                             ImGui::PushID(static_cast<int>(i));
@@ -1812,7 +1809,7 @@
                             g_configIsDirty = true;
                         }
                         if (mode.background.gradientStops.size() < 8) {
-                            if (ImGui::Button("+ Add Color Stop##bgGradWide")) {
+                            if (ImGui::Button(TR("+ Add Color Stop##bgGradWide"))) {
                                 GradientColorStop newStop;
                                 newStop.position = 0.5f;
                                 newStop.color = { 0.5f, 0.5f, 0.5f };
@@ -1825,7 +1822,7 @@
 
                         // Animation controls
                         ImGui::Separator();
-                        ImGui::Text("Animation:");
+                        ImGui::Text(TR("Animation:"));
                         const char* animTypeNamesWide[] = { "None", "Rotate", "Slide", "Wave", "Spiral", "Fade" };
                         int currentAnimTypeWide = static_cast<int>(mode.background.gradientAnimation);
                         ImGui::SetNextItemWidth(120);
@@ -1848,7 +1845,7 @@
                         }
                     } else if (mode.background.selectedMode == "image") {
                         std::string wideErrorKey = "mode_bg_wide";
-                        if (ImGui::InputText("Path##Wide", &mode.background.image)) {
+                        if (ImGui::InputText(TR("Path##Wide"), &mode.background.image)) {
                             ClearImageError(wideErrorKey);
                             g_configIsDirty = true;
                             g_allImagesLoaded = false;
@@ -1877,23 +1874,23 @@
                 }
 
                 // Border Settings
-                if (ImGui::TreeNode("Border Settings##Wide")) {
-                    if (ImGui::Checkbox("Enable Border##Wide", &mode.border.enabled)) { g_configIsDirty = true; }
+                if (ImGui::TreeNode(TR("Border Settings##Wide"))) {
+                    if (ImGui::Checkbox(TR("Enable Border##Wide"), &mode.border.enabled)) { g_configIsDirty = true; }
                     if (mode.border.enabled) {
-                        ImGui::Text("Color:");
+                        ImGui::Text(TR("Color:"));
                         ImVec4 borderCol = ImVec4(mode.border.color.r, mode.border.color.g, mode.border.color.b, 1.0f);
                         if (ImGui::ColorEdit3("##BorderColorWide", (float*)&borderCol, ImGuiColorEditFlags_NoInputs)) {
                             mode.border.color = { borderCol.x, borderCol.y, borderCol.z };
                             g_configIsDirty = true;
                         }
-                        ImGui::Text("Width:");
+                        ImGui::Text(TR("Width:"));
                         if (Spinner("##BorderWidthWide", &mode.border.width, 1, 1, 50)) { g_configIsDirty = true; }
                     }
                     ImGui::TreePop();
                 }
 
                 // Mirrors
-                if (ImGui::TreeNode("Mirrors##Wide")) {
+                if (ImGui::TreeNode(TR("Mirrors##Wide"))) {
                     int mirror_idx_to_remove = -1;
                     for (size_t k = 0; k < mode.mirrorIds.size(); ++k) {
                         ImGui::PushID(static_cast<int>(k));
@@ -1921,7 +1918,7 @@
                 }
 
                 // Mirror Groups
-                if (ImGui::TreeNode("Mirror Groups##Wide")) {
+                if (ImGui::TreeNode(TR("Mirror Groups##Wide"))) {
                     int group_idx_to_remove = -1;
                     for (size_t k = 0; k < mode.mirrorGroupIds.size(); ++k) {
                         ImGui::PushID(static_cast<int>(k));
@@ -1951,7 +1948,7 @@
                 }
 
                 // Images
-                if (ImGui::TreeNode("Images##Wide")) {
+                if (ImGui::TreeNode(TR("Images##Wide"))) {
                     int image_idx_to_remove = -1;
                     for (size_t k = 0; k < mode.imageIds.size(); ++k) {
                         ImGui::PushID(static_cast<int>(k));
@@ -2008,12 +2005,12 @@
                 }
 
                 // --- SENSITIVITY OVERRIDE ---
-                if (ImGui::TreeNode("Sensitivity Override##Wide")) {
-                    if (ImGui::Checkbox("Override Sensitivity##Wide", &mode.sensitivityOverrideEnabled)) { g_configIsDirty = true; }
-                    HelpMarker("When enabled, this mode uses its own mouse sensitivity instead of the global setting.");
+                if (ImGui::TreeNode(TR("Sensitivity Override##Wide"))) {
+                    if (ImGui::Checkbox(TR("Override Sensitivity##Wide"), &mode.sensitivityOverrideEnabled)) { g_configIsDirty = true; }
+                    HelpMarker(TR("When enabled, this mode uses its own mouse sensitivity instead of the global setting."));
 
                     if (mode.sensitivityOverrideEnabled) {
-                        if (ImGui::Checkbox("Separate X/Y##Wide", &mode.separateXYSensitivity)) {
+                        if (ImGui::Checkbox(TR("Separate X/Y##Wide"), &mode.separateXYSensitivity)) {
                             g_configIsDirty = true;
                             if (mode.separateXYSensitivity) {
                                 mode.modeSensitivityX = mode.modeSensitivity;
@@ -2021,27 +2018,27 @@
                             }
                         }
                         ImGui::SameLine();
-                        HelpMarker("Use different sensitivity values for horizontal (X) and vertical (Y) mouse movement.");
+                        HelpMarker(TR("Use different sensitivity values for horizontal (X) and vertical (Y) mouse movement."));
 
                         if (mode.separateXYSensitivity) {
-                            ImGui::Text("X Sensitivity:");
+                            ImGui::Text(TR("X Sensitivity:"));
                             ImGui::SetNextItemWidth(200);
-                            if (ImGui::SliderFloat("##WideSensitivityX", &mode.modeSensitivityX, 0.001f, 10.0f, "%.3fx")) {
+                            if (ImGui::SliderFloat("##WideSensitivityX", &mode.modeSensitivityX, 0.1f, 3.0f, "%.2fx")) {
                                 g_configIsDirty = true;
                             }
-                            ImGui::Text("Y Sensitivity:");
+                            ImGui::Text(TR("Y Sensitivity:"));
                             ImGui::SetNextItemWidth(200);
-                            if (ImGui::SliderFloat("##WideSensitivityY", &mode.modeSensitivityY, 0.001f, 10.0f, "%.3fx")) {
+                            if (ImGui::SliderFloat("##WideSensitivityY", &mode.modeSensitivityY, 0.1f, 3.0f, "%.2fx")) {
                                 g_configIsDirty = true;
                             }
                         } else {
-                            ImGui::Text("Sensitivity:");
+                            ImGui::Text(TR("Sensitivity:"));
                             ImGui::SetNextItemWidth(200);
-                            if (ImGui::SliderFloat("##WideSensitivity", &mode.modeSensitivity, 0.001f, 10.0f, "%.3fx")) {
+                            if (ImGui::SliderFloat("##WideSensitivity", &mode.modeSensitivity, 0.1f, 3.0f, "%.2fx")) {
                                 g_configIsDirty = true;
                             }
                             ImGui::SameLine();
-                            HelpMarker("Mouse sensitivity for this mode (1.0 = normal)");
+                            HelpMarker(TR("Mouse sensitivity for this mode (1.0 = normal)"));
                         }
                     }
                     ImGui::TreePop();
@@ -2055,7 +2052,7 @@
     }
 
     // --- CUSTOM MODES SECTION ---
-    ImGui::SeparatorText("Custom Modes");
+    ImGui::SeparatorText(TR("Custom Modes"));
 
     for (size_t i = 0; i < g_config.modes.size(); ++i) {
         auto& mode = g_config.modes[i];
@@ -2077,16 +2074,16 @@
             // Popup modal outside of node_open block so it can be displayed even when collapsed
             std::string popup_id = "Delete Mode?##" + std::to_string(i);
             if (ImGui::BeginPopupModal(popup_id.c_str(), NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-                ImGui::Text("Are you sure you want to delete mode '%s'?\nThis cannot be undone.", mode.id.c_str());
+                ImGui::Text(TR("Are you sure you want to delete mode '%s'?\nThis cannot be undone."), mode.id.c_str());
                 ImGui::Separator();
-                if (ImGui::Button("OK", ImVec2(120, 0))) {
+                if (ImGui::Button(TR("OK"), ImVec2(120, 0))) {
                     mode_to_remove = (int)i;
                     g_configIsDirty = true;
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::SetItemDefaultFocus();
                 ImGui::SameLine();
-                if (ImGui::Button("Cancel", ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
+                if (ImGui::Button(TR("Cancel"), ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
                 ImGui::EndPopup();
             }
 
@@ -2094,7 +2091,7 @@
             bool node_open = ImGui::TreeNodeEx("##mode_node", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", mode.id.c_str());
 
             if (node_open) {
-                ImGui::Text("Name");
+                ImGui::Text(TR("Name"));
                 ImGui::SetNextItemWidth(250);
 
                 // Check for duplicate names and reserved names
@@ -2124,10 +2121,10 @@
 
                 if (hasDuplicate) {
                     ImGui::SameLine();
-                    ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Name already exists!");
+                    ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), TR("Name already exists!"));
                 } else if (isReservedName) {
                     ImGui::SameLine();
-                    ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Name is reserved!");
+                    ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), TR("Name is reserved!"));
                 }
 
                 if (!resolutionSupported) { ImGui::BeginDisabled(); }
@@ -2135,7 +2132,7 @@
                 ImGui::Columns(2, "dims", false);
 
                 // Absolute pixel spinners mode
-                ImGui::Text("Width");
+                ImGui::Text(TR("Width"));
                 ImGui::NextColumn();
                 int tempWidth5 = mode.width;
                 if (Spinner("##Width", &tempWidth5, 1, 1)) {
@@ -2147,7 +2144,7 @@
                     g_pendingDimensionChange.sendWmSize = (g_currentModeId == mode.id);
                 }
                 ImGui::NextColumn();
-                ImGui::Text("Height");
+                ImGui::Text(TR("Height"));
                 ImGui::NextColumn();
                 int tempHeight5 = mode.height;
                 if (Spinner("##Height", &tempHeight5, 1, 1)) {
@@ -2160,7 +2157,7 @@
                 }
                 ImGui::Columns(1);
 
-                if (ImGui::Button("Switch to this Mode")) {
+                if (ImGui::Button(TR("Switch to this Mode"))) {
                     // Defer mode switch to avoid deadlock (g_configMutex is held during GUI rendering)
                     std::lock_guard<std::mutex> pendingLock(g_pendingModeSwitchMutex);
                     g_pendingModeSwitch.pending = true;
@@ -2171,11 +2168,11 @@
 
                 // --- TRANSITION SETTINGS ---
                 ImGui::Separator();
-                if (ImGui::TreeNode("Transition Settings##CustomMode")) {
+                if (ImGui::TreeNode(TR("Transition Settings##CustomMode"))) {
                     RenderTransitionSettingsHorizontal(mode, "CustomMode");
-                    if (ImGui::Checkbox("Slide Mirrors In##CustomMode", &mode.slideMirrorsIn)) { g_configIsDirty = true; }
+                    if (ImGui::Checkbox(TR("Slide Mirrors In##CustomMode"), &mode.slideMirrorsIn)) { g_configIsDirty = true; }
                     if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip("Mirrors slide in from the screen edges instead of appearing instantly");
+                        ImGui::SetTooltip(TR("Mirrors slide in from the screen edges instead of appearing instantly"));
                     }
                     ImGui::TreePop();
                 }
@@ -2183,44 +2180,44 @@
                 ;
 
                 // --- BORDER SETTINGS ---
-                if (ImGui::TreeNode("Border Settings##CustomMode")) {
-                    if (ImGui::Checkbox("Enable Border##CustomMode", &mode.border.enabled)) { g_configIsDirty = true; }
+                if (ImGui::TreeNode(TR("Border Settings##CustomMode"))) {
+                    if (ImGui::Checkbox(TR("Enable Border##CustomMode"), &mode.border.enabled)) { g_configIsDirty = true; }
                     ImGui::SameLine();
-                    HelpMarker("Draw a border around the game viewport. Border appears outside the game area.");
+                    HelpMarker(TR("Draw a border around the game viewport. Border appears outside the game area."));
 
                     if (mode.border.enabled) {
-                        ImGui::Text("Color:");
+                        ImGui::Text(TR("Color:"));
                         ImVec4 borderCol = ImVec4(mode.border.color.r, mode.border.color.g, mode.border.color.b, 1.0f);
                         if (ImGui::ColorEdit3("##BorderColorCustom", (float*)&borderCol, ImGuiColorEditFlags_NoInputs)) {
                             mode.border.color = { borderCol.x, borderCol.y, borderCol.z };
                             g_configIsDirty = true;
                         }
 
-                        ImGui::Text("Width:");
+                        ImGui::Text(TR("Width:"));
                         ImGui::SetNextItemWidth(100);
                         if (Spinner("##BorderWidthCustom", &mode.border.width, 1, 1, 50)) { g_configIsDirty = true; }
                         ImGui::SameLine();
-                        ImGui::TextDisabled("px");
+                        ImGui::TextDisabled(TR("px"));
 
-                        ImGui::Text("Corner Radius:");
+                        ImGui::Text(TR("Corner Radius:"));
                         ImGui::SetNextItemWidth(100);
                         if (Spinner("##BorderRadiusCustom", &mode.border.radius, 1, 0, 100)) { g_configIsDirty = true; }
                         ImGui::SameLine();
-                        ImGui::TextDisabled("px");
+                        ImGui::TextDisabled(TR("px"));
                     }
                     ImGui::TreePop();
                 }
                 ImGui::Separator();
 
-                if (ImGui::TreeNode("Background")) {
-                    if (ImGui::RadioButton("Color", mode.background.selectedMode == "color")) {
+                if (ImGui::TreeNode(TR("Background"))) {
+                    if (ImGui::RadioButton(TR("Color"), mode.background.selectedMode == "color")) {
                         if (mode.background.selectedMode != "color") {
                             mode.background.selectedMode = "color";
                             g_configIsDirty = true;
                         }
                     }
                     ImGui::SameLine();
-                    if (ImGui::RadioButton("Gradient", mode.background.selectedMode == "gradient")) {
+                    if (ImGui::RadioButton(TR("Gradient"), mode.background.selectedMode == "gradient")) {
                         if (mode.background.selectedMode != "gradient") {
                             mode.background.selectedMode = "gradient";
                             if (mode.background.gradientStops.size() < 2) {
@@ -2232,7 +2229,7 @@
                         }
                     }
                     ImGui::SameLine();
-                    if (ImGui::RadioButton("Image", mode.background.selectedMode == "image")) {
+                    if (ImGui::RadioButton(TR("Image"), mode.background.selectedMode == "image")) {
                         if (mode.background.selectedMode != "image") {
                             mode.background.selectedMode = "image";
                             g_configIsDirty = true;
@@ -2253,7 +2250,7 @@
                         if (ImGui::SliderFloat(("Angle" + gradId).c_str(), &mode.background.gradientAngle, 0.0f, 360.0f, "%.0f deg")) {
                             g_configIsDirty = true;
                         }
-                        ImGui::Text("Color Stops:");
+                        ImGui::Text(TR("Color Stops:"));
                         int stopToRemove = -1;
                         for (size_t i = 0; i < mode.background.gradientStops.size(); i++) {
                             ImGui::PushID(static_cast<int>(i));
@@ -2290,7 +2287,7 @@
 
                         // Animation controls
                         ImGui::Separator();
-                        ImGui::Text("Animation:");
+                        ImGui::Text(TR("Animation:"));
                         const char* animTypeNamesCustom[] = { "None", "Rotate", "Slide", "Wave", "Spiral", "Fade" };
                         int currentAnimTypeCustom = static_cast<int>(mode.background.gradientAnimation);
                         ImGui::SetNextItemWidth(120);
@@ -2313,7 +2310,7 @@
                         }
                     } else if (mode.background.selectedMode == "image") {
                         std::string modeErrorKey = "mode_bg_" + mode.id;
-                        if (ImGui::InputText("Path", &mode.background.image)) {
+                        if (ImGui::InputText(TR("Path"), &mode.background.image)) {
                             ClearImageError(modeErrorKey);
                             g_configIsDirty = true;
                             g_allImagesLoaded = false;
@@ -2345,7 +2342,7 @@
                     ImGui::TreePop();
                 }
 
-                if (ImGui::TreeNode("Mirrors")) {
+                if (ImGui::TreeNode(TR("Mirrors"))) {
                     int mirror_idx_to_remove = -1;
                     for (size_t k = 0; k < mode.mirrorIds.size(); ++k) {
                         ImGui::PushID(static_cast<int>(k));
@@ -2373,7 +2370,7 @@
                     ImGui::TreePop();
                 }
 
-                if (ImGui::TreeNode("Mirror Groups##Custom")) {
+                if (ImGui::TreeNode(TR("Mirror Groups##Custom"))) {
                     int group_idx_to_remove = -1;
                     for (size_t k = 0; k < mode.mirrorGroupIds.size(); ++k) {
                         ImGui::PushID(static_cast<int>(k));
@@ -2430,7 +2427,7 @@
                     ImGui::TreePop();
                 }
 
-                if (ImGui::TreeNode("Window Overlays")) {
+                if (ImGui::TreeNode(TR("Window Overlays"))) {
                     int windowOverlay_idx_to_remove = -1;
                     for (size_t k = 0; k < mode.windowOverlayIds.size(); ++k) {
                         ImGui::PushID(static_cast<int>(k));
@@ -2459,33 +2456,33 @@
                     ImGui::TreePop();
                 }
 
-                if (ImGui::TreeNode("Stretch Properties")) {
-                    if (ImGui::Checkbox("Enable Stretch", &mode.stretch.enabled)) g_configIsDirty = true;
+                if (ImGui::TreeNode(TR("Stretch Properties"))) {
+                    if (ImGui::Checkbox(TR("Enable Stretch"), &mode.stretch.enabled)) g_configIsDirty = true;
                     ImGui::Columns(2, "stretch_cols", false);
                     ImGui::SetColumnWidth(0, 150);
-                    ImGui::Text("X Position");
+                    ImGui::Text(TR("X Position"));
                     ImGui::NextColumn();
                     if (Spinner("##StretchX", &mode.stretch.x)) g_configIsDirty = true;
                     ImGui::SameLine();
-                    if (ImGui::Button("Center H")) {
+                    if (ImGui::Button(TR("Center H"))) {
                         mode.stretch.x = (GetCachedScreenWidth() - mode.stretch.width) / 2;
                         g_configIsDirty = true;
                     }
                     ImGui::NextColumn();
-                    ImGui::Text("Width");
+                    ImGui::Text(TR("Width"));
                     ImGui::NextColumn();
                     if (Spinner("##StretchW", &mode.stretch.width, 1, 1)) g_configIsDirty = true;
                     ImGui::NextColumn();
-                    ImGui::Text("Y Position");
+                    ImGui::Text(TR("Y Position"));
                     ImGui::NextColumn();
                     if (Spinner("##StretchY", &mode.stretch.y)) g_configIsDirty = true;
                     ImGui::SameLine();
-                    if (ImGui::Button("Center V")) {
+                    if (ImGui::Button(TR("Center V"))) {
                         mode.stretch.y = (GetCachedScreenHeight() - mode.stretch.height) / 2;
                         g_configIsDirty = true;
                     }
                     ImGui::NextColumn();
-                    ImGui::Text("Height");
+                    ImGui::Text(TR("Height"));
                     ImGui::NextColumn();
                     if (Spinner("##StretchH", &mode.stretch.height, 1, 1)) g_configIsDirty = true;
                     ImGui::Columns(1);
@@ -2493,17 +2490,17 @@
                 }
 
                 // --- EXPRESSIONS SECTION ---
-                if (ImGui::TreeNode("Expressions")) {
-                    ImGui::TextWrapped("Use expressions for dynamic dimensions based on screen size.");
-                    ImGui::TextDisabled("Variables: screenWidth, screenHeight");
-                    ImGui::TextDisabled("Functions: min(), max(), floor(), ceil(), round(), abs()");
+                if (ImGui::TreeNode(TR("Expressions"))) {
+                    ImGui::TextWrapped(TR("Use expressions for dynamic dimensions based on screen size."));
+                    ImGui::TextDisabled(TR("Variables: screenWidth, screenHeight"));
+                    ImGui::TextDisabled(TR("Functions: min(), max(), floor(), ceil(), round(), abs()"));
                     ImGui::Separator();
 
                     int screenW = GetCachedScreenWidth();
                     int screenH = GetCachedScreenHeight();
 
                     // Mode Width Expression
-                    ImGui::Text("Mode Width:");
+                    ImGui::Text(TR("Mode Width:"));
                     ImGui::SetNextItemWidth(250);
                     if (ImGui::InputText("##ModeWidthExpr", &mode.widthExpr)) {
                         g_configIsDirty = true;
@@ -2516,7 +2513,7 @@
                         std::string err;
                         if (!ValidateExpression(mode.widthExpr, err)) {
                             ImGui::SameLine();
-                            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Invalid");
+                            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), TR("Invalid"));
                             if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", err.c_str()); }
                         } else {
                             ImGui::SameLine();
@@ -2525,7 +2522,7 @@
                     }
 
                     // Mode Height Expression
-                    ImGui::Text("Mode Height:");
+                    ImGui::Text(TR("Mode Height:"));
                     ImGui::SetNextItemWidth(250);
                     if (ImGui::InputText("##ModeHeightExpr", &mode.heightExpr)) {
                         g_configIsDirty = true;
@@ -2538,7 +2535,7 @@
                         std::string err;
                         if (!ValidateExpression(mode.heightExpr, err)) {
                             ImGui::SameLine();
-                            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Invalid");
+                            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), TR("Invalid"));
                             if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", err.c_str()); }
                         } else {
                             ImGui::SameLine();
@@ -2547,10 +2544,10 @@
                     }
 
                     ImGui::Separator();
-                    ImGui::Text("Stretch Expressions:");
+                    ImGui::Text(TR("Stretch Expressions:"));
 
                     // Stretch Width Expression
-                    ImGui::Text("Stretch Width:");
+                    ImGui::Text(TR("Stretch Width:"));
                     ImGui::SetNextItemWidth(250);
                     if (ImGui::InputText("##StretchWidthExpr", &mode.stretch.widthExpr)) {
                         g_configIsDirty = true;
@@ -2563,7 +2560,7 @@
                         std::string err;
                         if (!ValidateExpression(mode.stretch.widthExpr, err)) {
                             ImGui::SameLine();
-                            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Invalid");
+                            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), TR("Invalid"));
                             if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", err.c_str()); }
                         } else {
                             ImGui::SameLine();
@@ -2572,7 +2569,7 @@
                     }
 
                     // Stretch Height Expression
-                    ImGui::Text("Stretch Height:");
+                    ImGui::Text(TR("Stretch Height:"));
                     ImGui::SetNextItemWidth(250);
                     if (ImGui::InputText("##StretchHeightExpr", &mode.stretch.heightExpr)) {
                         g_configIsDirty = true;
@@ -2585,7 +2582,7 @@
                         std::string err;
                         if (!ValidateExpression(mode.stretch.heightExpr, err)) {
                             ImGui::SameLine();
-                            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Invalid");
+                            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), TR("Invalid"));
                             if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", err.c_str()); }
                         } else {
                             ImGui::SameLine();
@@ -2594,7 +2591,7 @@
                     }
 
                     // Stretch X Expression
-                    ImGui::Text("Stretch X Position:");
+                    ImGui::Text(TR("Stretch X Position:"));
                     ImGui::SetNextItemWidth(250);
                     if (ImGui::InputText("##StretchXExpr", &mode.stretch.xExpr)) {
                         g_configIsDirty = true;
@@ -2606,7 +2603,7 @@
                         std::string err;
                         if (!ValidateExpression(mode.stretch.xExpr, err)) {
                             ImGui::SameLine();
-                            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Invalid");
+                            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), TR("Invalid"));
                             if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", err.c_str()); }
                         } else {
                             ImGui::SameLine();
@@ -2615,7 +2612,7 @@
                     }
 
                     // Stretch Y Expression
-                    ImGui::Text("Stretch Y Position:");
+                    ImGui::Text(TR("Stretch Y Position:"));
                     ImGui::SetNextItemWidth(250);
                     if (ImGui::InputText("##StretchYExpr", &mode.stretch.yExpr)) {
                         g_configIsDirty = true;
@@ -2627,7 +2624,7 @@
                         std::string err;
                         if (!ValidateExpression(mode.stretch.yExpr, err)) {
                             ImGui::SameLine();
-                            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Invalid");
+                            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), TR("Invalid"));
                             if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", err.c_str()); }
                         } else {
                             ImGui::SameLine();
@@ -2638,12 +2635,12 @@
                     ImGui::TreePop();
                 }
 
-                if (ImGui::TreeNode("Sensitivity Override")) {
-                    if (ImGui::Checkbox("Override Sensitivity", &mode.sensitivityOverrideEnabled)) { g_configIsDirty = true; }
-                    HelpMarker("When enabled, this mode uses its own mouse sensitivity instead of the global setting.");
+                if (ImGui::TreeNode(TR("Sensitivity Override"))) {
+                    if (ImGui::Checkbox(TR("Override Sensitivity"), &mode.sensitivityOverrideEnabled)) { g_configIsDirty = true; }
+                    HelpMarker(TR("When enabled, this mode uses its own mouse sensitivity instead of the global setting."));
 
                     if (mode.sensitivityOverrideEnabled) {
-                        if (ImGui::Checkbox("Separate X/Y##Custom", &mode.separateXYSensitivity)) {
+                        if (ImGui::Checkbox(TR("Separate X/Y##Custom"), &mode.separateXYSensitivity)) {
                             g_configIsDirty = true;
                             if (mode.separateXYSensitivity) {
                                 mode.modeSensitivityX = mode.modeSensitivity;
@@ -2651,27 +2648,27 @@
                             }
                         }
                         ImGui::SameLine();
-                        HelpMarker("Use different sensitivity values for horizontal (X) and vertical (Y) mouse movement.");
+                        HelpMarker(TR("Use different sensitivity values for horizontal (X) and vertical (Y) mouse movement."));
 
                         if (mode.separateXYSensitivity) {
-                            ImGui::Text("X Sensitivity:");
+                            ImGui::Text(TR("X Sensitivity:"));
                             ImGui::SetNextItemWidth(200);
-                            if (ImGui::SliderFloat("##ModeSensitivityX", &mode.modeSensitivityX, 0.001f, 10.0f, "%.3fx")) {
+                            if (ImGui::SliderFloat("##ModeSensitivityX", &mode.modeSensitivityX, 0.1f, 3.0f, "%.2fx")) {
                                 g_configIsDirty = true;
                             }
-                            ImGui::Text("Y Sensitivity:");
+                            ImGui::Text(TR("Y Sensitivity:"));
                             ImGui::SetNextItemWidth(200);
-                            if (ImGui::SliderFloat("##ModeSensitivityY", &mode.modeSensitivityY, 0.001f, 10.0f, "%.3fx")) {
+                            if (ImGui::SliderFloat("##ModeSensitivityY", &mode.modeSensitivityY, 0.1f, 3.0f, "%.2fx")) {
                                 g_configIsDirty = true;
                             }
                         } else {
-                            ImGui::Text("Sensitivity:");
+                            ImGui::Text(TR("Sensitivity:"));
                             ImGui::SetNextItemWidth(200);
-                            if (ImGui::SliderFloat("##ModeSensitivity", &mode.modeSensitivity, 0.001f, 10.0f, "%.3fx")) {
+                            if (ImGui::SliderFloat("##ModeSensitivity", &mode.modeSensitivity, 0.1f, 3.0f, "%.2fx")) {
                                 g_configIsDirty = true;
                             }
                             ImGui::SameLine();
-                            HelpMarker("Mouse sensitivity for this mode (1.0 = normal)");
+                            HelpMarker(TR("Mouse sensitivity for this mode (1.0 = normal)"));
                         }
                     }
                     ImGui::TreePop();
@@ -2714,7 +2711,7 @@
 
     if (!resolutionSupported) { ImGui::BeginDisabled(); }
 
-    if (ImGui::Button("Add New Mode")) {
+    if (ImGui::Button(TR("Add New Mode"))) {
         ModeConfig newMode;
         newMode.id = "New Mode " + std::to_string(g_config.modes.size() + 1);
         newMode.width = GetCachedScreenWidth();
@@ -2726,51 +2723,24 @@
     }
 
     ImGui::SameLine();
-    if (ImGui::Button("Reset to Defaults##modes")) { ImGui::OpenPopup("Reset Modes to Defaults?"); }
+    if (ImGui::Button(TR("Reset to Defaults##modes"))) { ImGui::OpenPopup("Reset Modes to Defaults?"); }
 
     if (!resolutionSupported) { ImGui::EndDisabled(); }
 
     if (ImGui::BeginPopupModal("Reset Modes to Defaults?", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.0f, 1.0f), "WARNING:");
-        ImGui::Text("This will delete ALL user-created modes and restore the default modes.");
-        ImGui::Text("This action cannot be undone.");
+        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.0f, 1.0f), TR("WARNING:"));
+        ImGui::Text(TR("This will delete ALL user-created modes and restore the default modes."));
+        ImGui::Text(TR("This action cannot be undone."));
         ImGui::Separator();
-        if (ImGui::Button("Confirm Reset", ImVec2(120, 0))) {
+        if (ImGui::Button(TR("Confirm Reset"), ImVec2(120, 0))) {
             g_config.modes = GetDefaultModes();
             g_config.eyezoom = GetDefaultEyeZoomConfig();
-
-            // After resetting, apply dynamic sizing so percentage/expression defaults behave correctly.
-            // (Example: Wide mode uses height = 0.25, which must be converted to pixels.)
-            int screenW = GetCachedScreenWidth();
-            int screenH = GetCachedScreenHeight();
-            if (screenW < 1) screenW = 1;
-            if (screenH < 1) screenH = 1;
-
-            for (auto& mode : g_config.modes) {
-                bool widthIsRelative = mode.widthExpr.empty() && mode.relativeWidth >= 0.0f && mode.relativeWidth <= 1.0f;
-                bool heightIsRelative = mode.heightExpr.empty() && mode.relativeHeight >= 0.0f && mode.relativeHeight <= 1.0f;
-
-                if (widthIsRelative) {
-                    int w = static_cast<int>(mode.relativeWidth * screenW);
-                    if (w < 1) w = 1;
-                    mode.width = w;
-                }
-                if (heightIsRelative) {
-                    int h = static_cast<int>(mode.relativeHeight * screenH);
-                    if (h < 1) h = 1;
-                    mode.height = h;
-                }
-            }
-
-            // Evaluate expression-based dimensions (uses cached screen size).
-            RecalculateExpressionDimensions();
-
             g_configIsDirty = true;
             ImGui::CloseCurrentPopup();
         }
         ImGui::SetItemDefaultFocus();
         ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
+        if (ImGui::Button(TR("Cancel"), ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
         ImGui::EndPopup();
     }
 

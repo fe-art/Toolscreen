@@ -481,6 +481,7 @@ struct Config {
     bool basicModeEnabled = false;                          // true = Basic mode GUI, false = Advanced mode GUI (default)
     bool disableFullscreenPrompt = false;                   // Disable fullscreen toast prompt (toast2)
     bool disableConfigurePrompt = false;                    // Disable configure toast prompt (toast1)
+    std::string language = "en";                            // GUI language code ("en", "es", …)
 };
 struct GameViewportGeometry {
     int gameW = 0, gameH = 0;

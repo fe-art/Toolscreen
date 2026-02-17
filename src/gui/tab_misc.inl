@@ -176,5 +176,22 @@ if (ImGui::BeginTabItem("Misc")) {
         ImGui::EndPopup();
     }
 
+    ImGui::Spacing();
+    ImGui::SeparatorText(TR("Language"));
+
+    {
+        static const char* langs[]     = { "English" };
+        static const char* langCodes[] = { "en"      };
+        int currentLang = 0;
+        for (int i = 0; i < IM_ARRAYSIZE(langCodes); ++i) {
+            if (g_config.language == langCodes[i]) { currentLang = i; break; }
+        }
+        if (ImGui::Combo("##language", &currentLang, langs, IM_ARRAYSIZE(langs))) {
+            g_config.language = langCodes[currentLang];
+            g_configIsDirty = true;
+            LoadLanguage(g_config.language);
+        }
+    }
+
     ImGui::EndTabItem();
 }

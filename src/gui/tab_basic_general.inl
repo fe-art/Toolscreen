@@ -1,4 +1,4 @@
-if (ImGui::BeginTabItem("General")) {
+if (ImGui::BeginTabItem(TR("General"))) {
     g_currentlyEditingMirror = "";
     g_imageDragMode.store(false);
     g_windowOverlayDragMode.store(false);
@@ -18,7 +18,7 @@ if (ImGui::BeginTabItem("General")) {
         }
 
         ImGui::SameLine();
-        ImGui::Text("Hotkey:");
+        ImGui::Text(TR("Hotkey:"));
         ImGui::SameLine();
 
         if (hotkeyIdx != -1) {
@@ -35,7 +35,7 @@ if (ImGui::BeginTabItem("General")) {
             }
             ImGui::PopID();
         } else {
-            ImGui::TextDisabled("[No hotkey]");
+            ImGui::TextDisabled(TR("[No hotkey]"));
         }
     };
 
@@ -113,7 +113,7 @@ if (ImGui::BeginTabItem("General")) {
         return false;
     };
 
-    ImGui::SeparatorText("Modes");
+    ImGui::SeparatorText(TR("Modes"));
 
     // Helper to check if a mode has a hotkey bound (non-empty keys)
     auto HasHotkeyBound = [&](const std::string& modeId) -> bool {
@@ -190,14 +190,7 @@ if (ImGui::BeginTabItem("General")) {
         ImGui::TableNextColumn();
         if (modeConfig) {
             ImGui::PushID((std::string(label) + "_width").c_str());
-            if (Spinner("##w", &modeConfig->width, 10, 1, maxWidth, 64, 3)) {
-                // Basic tab edits are absolute pixel dimensions.
-                // If an expression was previously set, it would overwrite this on next launch (and on any recalc).
-                // Clear the expression and relative sentinel so the new value is persisted.
-                if (!modeConfig->widthExpr.empty()) { modeConfig->widthExpr.clear(); }
-                modeConfig->relativeWidth = -1.0f;
-                g_configIsDirty = true;
-            }
+            if (Spinner("##w", &modeConfig->width, 10, 1, maxWidth, 64, 3)) { g_configIsDirty = true; }
             ImGui::PopID();
         }
 
@@ -205,11 +198,7 @@ if (ImGui::BeginTabItem("General")) {
         ImGui::TableNextColumn();
         if (modeConfig) {
             ImGui::PushID((std::string(label) + "_height").c_str());
-            if (Spinner("##h", &modeConfig->height, 10, 1, maxHeight, 64, 3)) {
-                if (!modeConfig->heightExpr.empty()) { modeConfig->heightExpr.clear(); }
-                modeConfig->relativeHeight = -1.0f;
-                g_configIsDirty = true;
-            }
+            if (Spinner("##h", &modeConfig->height, 10, 1, maxHeight, 64, 3)) { g_configIsDirty = true; }
             ImGui::PopID();
         }
 
@@ -268,7 +257,7 @@ if (ImGui::BeginTabItem("General")) {
 
         // Custom centered headers
         ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
-        const char* headers[] = { "Mode", "Width", "Height", "Hotkey", "EyeZoom Settings" };
+        const char* headers[] = { TR("Mode"), TR("Width"), TR("Height"), TR("Hotkey"), TR("EyeZoom Settings") };
         for (int i = 0; i < 5; i++) {
             ImGui::TableSetColumnIndex(i);
             float columnWidth = ImGui::GetColumnWidth();
@@ -296,35 +285,35 @@ if (ImGui::BeginTabItem("General")) {
     }
 
     // --- SENSITIVITY SECTION ---
-    ImGui::SeparatorText("Sensitivity");
+    ImGui::SeparatorText(TR("Sensitivity"));
 
     // Global Mouse Sensitivity
-    ImGui::Text("Global:");
+    ImGui::Text(TR("Global:"));
     ImGui::SameLine();
     ImGui::SetNextItemWidth(200);
-    if (ImGui::SliderFloat("##globalSensBasic", &g_config.mouseSensitivity, 0.001f, 10.0f, "%.3fx")) { g_configIsDirty = true; }
+    if (ImGui::SliderFloat("##globalSensBasic", &g_config.mouseSensitivity, 0.1f, 3.0f, "%.2fx")) { g_configIsDirty = true; }
     ImGui::SameLine();
-    HelpMarker("Global mouse sensitivity multiplier (1.0 = normal).\nAffects all modes unless overridden.");
+    HelpMarker(TR("Global mouse sensitivity multiplier (1.0 = normal).\nAffects all modes unless overridden."));
 
     // EyeZoom Sensitivity Override
     {
         ModeConfig* eyezoomMode = GetModeConfig("EyeZoom");
         if (eyezoomMode) {
-            ImGui::Text("EyeZoom:");
+            ImGui::Text(TR("EyeZoom:"));
             ImGui::SameLine();
             ImGui::SetNextItemWidth(200);
-            if (ImGui::SliderFloat("##eyezoomSensBasic", &eyezoomMode->modeSensitivity, 0.001f, 10.0f, "%.3fx")) {
-                if (eyezoomMode->modeSensitivity < 0.001f) eyezoomMode->modeSensitivity = 0.001f;
+            if (ImGui::SliderFloat("##eyezoomSensBasic", &eyezoomMode->modeSensitivity, 0.01f, 3.0f, "%.2fx")) {
+                if (eyezoomMode->modeSensitivity < 0.01f) eyezoomMode->modeSensitivity = 0.01f;
                 eyezoomMode->sensitivityOverrideEnabled = true;
                 g_configIsDirty = true;
             }
             ImGui::SameLine();
-            HelpMarker("EyeZoom mode sensitivity (1.0 = normal).\nOverrides global sensitivity when in EyeZoom.");
+            HelpMarker(TR("EyeZoom mode sensitivity (1.0 = normal).\nOverrides global sensitivity when in EyeZoom."));
         }
     }
 
     ImGui::Separator();
-    ImGui::SeparatorText("Overlays");
+    ImGui::SeparatorText(TR("Overlays"));
 
     // --- NINJABRAINBOT OVERLAY ---
     {
@@ -389,7 +378,7 @@ if (ImGui::BeginTabItem("General")) {
         bool ninjabrainEnabled =
             ModeHasNinjabrain("Fullscreen") || ModeHasNinjabrain("EyeZoom") || ModeHasNinjabrain("Thin") || ModeHasNinjabrain("Wide");
 
-        if (ImGui::Checkbox("Ninjabrainbot Overlay", &ninjabrainEnabled)) {
+        if (ImGui::Checkbox(TR("Ninjabrainbot Overlay"), &ninjabrainEnabled)) {
             if (ninjabrainEnabled) {
                 // Ensure the Ninjabrain Bot image exists
                 if (!FindNinjabrainBotImage()) { CreateNinjabrainBotImage(); }
@@ -410,8 +399,8 @@ if (ImGui::BeginTabItem("General")) {
     }
 
     // --- MIRRORS SECTION ---
-    ImGui::SeparatorText("Mirrors");
-    ImGui::TextDisabled("Assign mirrors and mirror groups to modes");
+    ImGui::SeparatorText(TR("Mirrors"));
+    ImGui::TextDisabled(TR("Assign mirrors and mirror groups to modes"));
 
     // Helper lambda to render mirror assignments for a mode
     auto RenderMirrorAssignments = [&](const std::string& modeId, const char* label) {

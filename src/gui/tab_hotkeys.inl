@@ -1,22 +1,22 @@
 // Only show Hotkeys tab if resolution changing is supported (1.13+)
 if (IsResolutionChangeSupported(g_gameVersion)) {
-    if (ImGui::BeginTabItem("Hotkeys")) {
+    if (ImGui::BeginTabItem(TR("Hotkeys"))) {
         g_currentlyEditingMirror = ""; // Disable image drag mode in other tabs
         g_imageDragMode.store(false);
         g_windowOverlayDragMode.store(false);
 
         if (!g_isStateOutputAvailable.load(std::memory_order_acquire)) {
             ImGui::Spacing();
-            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.25f, 1.0f), "Warning: wpstateout.txt not found.");
-            ImGui::TextWrapped("State-based hotkey restrictions are currently disabled, so hotkeys will trigger regardless of required "
-                               "game states. Install the State Output mod to enable these conditions.");
+            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.25f, 1.0f), TR("Warning: wpstateout.txt not found."));
+            ImGui::TextWrapped(TR("State-based hotkey restrictions are currently disabled, so hotkeys will trigger regardless of required "
+                               "game states. Install the State Output mod to enable these conditions."));
             ImGui::Separator();
         }
 
         SliderCtrlClickTip();
 
         // GUI Hotkey Section
-        ImGui::SeparatorText("GUI Hotkey");
+        ImGui::SeparatorText(TR("GUI Hotkey"));
         ImGui::PushID("gui_hotkey");
         std::string guiKeyStr = GetKeyComboString(g_config.guiHotkey);
         std::string guiNode_label = "Open/Close GUI: " + (guiKeyStr.empty() ? "[None]" : guiKeyStr);
@@ -36,18 +36,18 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
         ImGui::PopID();
 
         // Borderless Hotkey Section
-        ImGui::SeparatorText("Window Hotkeys");
+        ImGui::SeparatorText(TR("Window Hotkeys"));
         ImGui::PushID("borderless_hotkey");
         std::string borderlessKeyStr = GetKeyComboString(g_config.borderlessHotkey);
         std::string borderlessNodeLabel =
-            "Toggle Borderless: " + (borderlessKeyStr.empty() ? "[None]" : borderlessKeyStr);
+            std::string(TR("Toggle Borderless: ")) + (borderlessKeyStr.empty() ? TR("[None]") : borderlessKeyStr);
 
         bool borderlessNodeOpen =
             ImGui::TreeNodeEx("##borderless_hotkey_node", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", borderlessNodeLabel.c_str());
         if (borderlessNodeOpen) {
             const bool isBindingBorderless = (s_mainHotkeyToBind == -998);
             const char* borderlessButtonLabel =
-                isBindingBorderless ? "[Press Keys...]" : (borderlessKeyStr.empty() ? "[None]" : borderlessKeyStr.c_str());
+                isBindingBorderless ? TR("[Press Keys...]") : (borderlessKeyStr.empty() ? TR("[None]") : borderlessKeyStr.c_str());
             if (ImGui::Button(borderlessButtonLabel)) {
                 s_mainHotkeyToBind = -998; // Special ID for borderless toggle hotkey
                 s_altHotkeyToBind = { -1, -1 };
@@ -57,7 +57,7 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
             ImGui::SameLine();
             ImGui::TextDisabled("(?)");
             if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Toggles the game window between its previous windowed size and a borderless, monitor-sized window.");
+                ImGui::SetTooltip(TR("Toggles the game window between its previous windowed size and a borderless, monitor-sized window."));
             }
             ImGui::TreePop();
         }
@@ -68,7 +68,7 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
         {
             std::string imgOverlayKeyStr = GetKeyComboString(g_config.imageOverlaysHotkey);
             std::string imgOverlayNodeLabel =
-                "Toggle Image Overlays: " + (imgOverlayKeyStr.empty() ? "[None]" : imgOverlayKeyStr);
+                std::string(TR("Toggle Image Overlays: ")) + (imgOverlayKeyStr.empty() ? TR("[None]") : imgOverlayKeyStr);
 
             const bool imgOverlaysVisible = g_imageOverlaysVisible.load(std::memory_order_acquire);
             const ImVec4 visibleGreen = ImVec4(0.20f, 1.00f, 0.20f, 1.00f);
@@ -78,13 +78,13 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                 ImGui::TreeNodeEx("##image_overlay_toggle_node", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", imgOverlayNodeLabel.c_str());
 
             ImGui::SameLine();
-            ImGui::TextDisabled("Status:");
+            ImGui::TextDisabled(TR("Status:"));
             ImGui::SameLine();
-            ImGui::TextColored(imgOverlaysVisible ? visibleGreen : hiddenRed, "%s", imgOverlaysVisible ? "Shown" : "Hidden");
+            ImGui::TextColored(imgOverlaysVisible ? visibleGreen : hiddenRed, "%s", imgOverlaysVisible ? TR("Shown") : TR("Hidden"));
             if (imgOverlayNodeOpen) {
                 const bool isBindingImgOverlay = (s_mainHotkeyToBind == -997);
                 const char* imgOverlayButtonLabel =
-                    isBindingImgOverlay ? "[Press Keys...]" : (imgOverlayKeyStr.empty() ? "[None]" : imgOverlayKeyStr.c_str());
+                    isBindingImgOverlay ? TR("[Press Keys...]") : (imgOverlayKeyStr.empty() ? TR("[None]") : imgOverlayKeyStr.c_str());
                 if (ImGui::Button(imgOverlayButtonLabel)) {
                     s_mainHotkeyToBind = -997;
                     s_altHotkeyToBind = { -1, -1 };
@@ -94,14 +94,14 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                 ImGui::SameLine();
                 ImGui::TextDisabled("(?)");
                 if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("Toggles visibility of all Image Overlays (does not change your mode config).");
+                    ImGui::SetTooltip(TR("Toggles visibility of all Image Overlays (does not change your mode config)."));
                 }
                 ImGui::TreePop();
             }
 
             std::string winOverlayKeyStr = GetKeyComboString(g_config.windowOverlaysHotkey);
             std::string winOverlayNodeLabel =
-                "Toggle Window Overlays: " + (winOverlayKeyStr.empty() ? "[None]" : winOverlayKeyStr);
+                std::string(TR("Toggle Window Overlays: ")) + (winOverlayKeyStr.empty() ? TR("[None]") : winOverlayKeyStr);
 
             const bool winOverlaysVisible = g_windowOverlaysVisible.load(std::memory_order_acquire);
 
@@ -109,13 +109,13 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                 ImGui::TreeNodeEx("##window_overlay_toggle_node", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", winOverlayNodeLabel.c_str());
 
             ImGui::SameLine();
-            ImGui::TextDisabled("Status:");
+            ImGui::TextDisabled(TR("Status:"));
             ImGui::SameLine();
-            ImGui::TextColored(winOverlaysVisible ? visibleGreen : hiddenRed, "%s", winOverlaysVisible ? "Shown" : "Hidden");
+            ImGui::TextColored(winOverlaysVisible ? visibleGreen : hiddenRed, "%s", winOverlaysVisible ? TR("Shown") : TR("Hidden"));
             if (winOverlayNodeOpen) {
                 const bool isBindingWinOverlay = (s_mainHotkeyToBind == -996);
                 const char* winOverlayButtonLabel =
-                    isBindingWinOverlay ? "[Press Keys...]" : (winOverlayKeyStr.empty() ? "[None]" : winOverlayKeyStr.c_str());
+                    isBindingWinOverlay ? TR("[Press Keys...]") : (winOverlayKeyStr.empty() ? TR("[None]") : winOverlayKeyStr.c_str());
                 if (ImGui::Button(winOverlayButtonLabel)) {
                     s_mainHotkeyToBind = -996;
                     s_altHotkeyToBind = { -1, -1 };
@@ -125,15 +125,14 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                 ImGui::SameLine();
                 ImGui::TextDisabled("(?)");
                 if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("Toggles visibility of all Window Overlays (does not change your mode config).\n"
-                                      "When hidden, overlay interaction forwarding is also disabled.");
+                    ImGui::SetTooltip(TR("Toggles visibility of all Window Overlays (does not change your mode config).\nWhen hidden, overlay interaction forwarding is also disabled."));
                 }
                 ImGui::TreePop();
             }
         }
         ImGui::PopID();
 
-        ImGui::SeparatorText("Mode Hotkeys");
+        ImGui::SeparatorText(TR("Mode Hotkeys"));
         int hotkey_to_remove = -1;
         for (size_t i = 0; i < g_config.hotkeys.size(); ++i) {
             auto& hotkey = g_config.hotkeys[i];
@@ -148,15 +147,15 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
 
             // Popup modal outside of node_open block so it can be displayed even when collapsed
             if (ImGui::BeginPopupModal(("Delete Hotkey?##" + std::to_string(i)).c_str(), NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-                ImGui::Text("Are you sure you want to delete this hotkey?");
+                ImGui::Text(TR("Are you sure you want to delete this hotkey?"));
                 ImGui::Separator();
-                if (ImGui::Button("OK")) {
+                if (ImGui::Button(TR("OK"))) {
                     hotkey_to_remove = (int)i;
                     g_configIsDirty = true;
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::SameLine();
-                if (ImGui::Button("Cancel")) { ImGui::CloseCurrentPopup(); }
+                if (ImGui::Button(TR("Cancel"))) { ImGui::CloseCurrentPopup(); }
                 ImGui::EndPopup();
             }
 
@@ -172,7 +171,7 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                     MarkHotkeyBindingActive();
                 }
 
-                ImGui::SeparatorText("Target Mode");
+                ImGui::SeparatorText(TR("Target Mode"));
                 ImGui::SetNextItemWidth(150);
                 const char* modeDisplay = hotkey.secondaryMode.empty() ? "[None]" : hotkey.secondaryMode.c_str();
                 if (ImGui::BeginCombo("Mode", modeDisplay)) {
@@ -194,7 +193,7 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                         if (is_fullscreen) {
                             ImGui::EndDisabled();
                             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-                                ImGui::SetTooltip("Fullscreen is the implicit toggle-back mode");
+                                ImGui::SetTooltip(TR("Fullscreen is the implicit toggle-back mode"));
                             }
                         }
                     }
@@ -202,9 +201,9 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                 }
                 ImGui::SameLine();
                 ImGui::TextDisabled("(?)");
-                if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Pressing this hotkey toggles between Fullscreen and this mode"); }
+                if (ImGui::IsItemHovered()) { ImGui::SetTooltip(TR("Pressing this hotkey toggles between Fullscreen and this mode")); }
 
-                ImGui::SeparatorText("Alternative Secondary Modes");
+                ImGui::SeparatorText(TR("Alternative Secondary Modes"));
                 int alt_to_remove = -1;
                 for (size_t j = 0; j < hotkey.altSecondaryModes.size(); ++j) {
                     auto& alt = hotkey.altSecondaryModes[j];
@@ -243,7 +242,7 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                             if (is_fullscreen) {
                                 ImGui::EndDisabled();
                                 if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-                                    ImGui::SetTooltip("Fullscreen is the implicit toggle-back mode");
+                                    ImGui::SetTooltip(TR("Fullscreen is the implicit toggle-back mode"));
                                 }
                             }
                         }
@@ -255,7 +254,7 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                     hotkey.altSecondaryModes.erase(hotkey.altSecondaryModes.begin() + alt_to_remove);
                     g_configIsDirty = true;
                 }
-                if (ImGui::Button("Add Alternative Mode")) {
+                if (ImGui::Button(TR("Add Alternative Mode"))) {
                     hotkey.altSecondaryModes.push_back(AltSecondaryMode{});
                     g_configIsDirty = true;
                 }
@@ -263,37 +262,22 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                 ImGui::Separator();
                 ImGui::Columns(2, "debounce_col", false);
                 ImGui::SetColumnWidth(0, 150);
-                ImGui::Text("Debounce (ms)");
+                ImGui::Text(TR("Debounce (ms)"));
                 ImGui::NextColumn();
                 if (Spinner("##debounce", &hotkey.debounce, 1, 0)) g_configIsDirty = true;
                 ImGui::Columns(1);
 
-                if (ImGui::Checkbox("Trigger on Release", &hotkey.triggerOnRelease)) { g_configIsDirty = true; }
+                if (ImGui::Checkbox(TR("Trigger on Release"), &hotkey.triggerOnRelease)) { g_configIsDirty = true; }
                 if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("When checked, the hotkey triggers when the key is released instead of pressed");
+                    ImGui::SetTooltip(TR("When checked, the hotkey triggers when the key is released instead of pressed"));
                 }
 
-                if (ImGui::Checkbox("Block key from game", &hotkey.blockKeyFromGame)) { g_configIsDirty = true; }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("When enabled, the key event that matches this hotkey is consumed and will NOT be forwarded to the game.\n"
-                                     "The hotkey will still trigger normally.");
-                }
-
-                if (ImGui::Checkbox("Allow exit to Fullscreen regardless of game state",
-                                   &hotkey.allowExitToFullscreenRegardlessOfGameState)) {
-                    g_configIsDirty = true;
-                }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("When enabled, toggling BACK to Fullscreen is allowed even if required game states are not met.\n"
-                                     "Toggling INTO the target mode still requires the configured game state.");
-                }
-
-                if (ImGui::TreeNode("Required Game States")) {
+                if (ImGui::TreeNode(TR("Required Game States"))) {
                     // Check if "Any" state is active (empty gameState array)
                     bool isAnySelected = hotkey.conditions.gameState.empty();
 
                     // "Any" option at the top
-                    if (ImGui::Checkbox("Any", &isAnySelected)) {
+                    if (ImGui::Checkbox(TR("Any"), &isAnySelected)) {
                         if (isAnySelected) {
                             // Clear all game states to represent "Any"
                             hotkey.conditions.gameState.clear();
@@ -362,7 +346,7 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                     ImGui::TreePop();
                 }
 
-                if (ImGui::TreeNode("Exclusion Keys")) {
+                if (ImGui::TreeNode(TR("Exclusion Keys"))) {
                     int exclusion_to_remove = -1;
                     auto& exclusions = hotkey.conditions.exclusions;
                     for (size_t j = 0; j < exclusions.size(); ++j) {
@@ -392,7 +376,7 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                         exclusions.erase(exclusions.begin() + exclusion_to_remove);
                         g_configIsDirty = true;
                     }
-                    if (ImGui::Button("+ Add Exclusion")) {
+                    if (ImGui::Button(TR("+ Add Exclusion"))) {
                         exclusions.push_back(0);
                         g_configIsDirty = true;
                     }
@@ -411,7 +395,7 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
             RebuildHotkeyMainKeys_Internal();
         }
         ImGui::Separator();
-        if (ImGui::Button("Add New Hotkey")) {
+        if (ImGui::Button(TR("Add New Hotkey"))) {
             try {
                 HotkeyConfig newHotkey;
                 newHotkey.keys = std::vector<DWORD>(); // Explicitly initialize empty vector
@@ -430,14 +414,14 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
         }
 
         ImGui::SameLine();
-        if (ImGui::Button("Reset to Defaults##hotkeys")) { ImGui::OpenPopup("Reset Hotkeys to Defaults?"); }
+        if (ImGui::Button(TR("Reset to Defaults##hotkeys"))) { ImGui::OpenPopup("Reset Hotkeys to Defaults?"); }
 
         if (ImGui::BeginPopupModal("Reset Hotkeys to Defaults?", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.0f, 1.0f), "WARNING:");
-            ImGui::Text("This will delete ALL custom hotkeys and restore the default hotkeys.");
-            ImGui::Text("This action cannot be undone.");
+            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.0f, 1.0f), TR("WARNING:"));
+            ImGui::Text(TR("This will delete ALL custom hotkeys and restore the default hotkeys."));
+            ImGui::Text(TR("This action cannot be undone."));
             ImGui::Separator();
-            if (ImGui::Button("Confirm Reset", ImVec2(120, 0))) {
+            if (ImGui::Button(TR("Confirm Reset"), ImVec2(120, 0))) {
                 g_config.hotkeys = GetDefaultHotkeys();
                 ResetAllHotkeySecondaryModes(); // Sync secondary mode state after reset
                 // DEADLOCK FIX: Use internal version since g_configMutex is already held
@@ -448,18 +432,18 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
             }
             ImGui::SetItemDefaultFocus();
             ImGui::SameLine();
-            if (ImGui::Button("Cancel", ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
+            if (ImGui::Button(TR("Cancel"), ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
             ImGui::EndPopup();
         }
 
         // ============================================================================
         // SENSITIVITY HOTKEYS SECTION
         // ============================================================================
-        ImGui::SeparatorText("Sensitivity Hotkeys");
+        ImGui::SeparatorText(TR("Sensitivity Hotkeys"));
         ImGui::TextDisabled("(?)");
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Sensitivity hotkeys temporarily override mouse sensitivity.\n"
-                              "The override persists until the next mode change.");
+            ImGui::SetTooltip(TR("Sensitivity hotkeys temporarily override mouse sensitivity.\n"
+                              "The override persists until the next mode change."));
         }
 
         int sens_hotkey_to_remove = -1;
@@ -479,15 +463,15 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
             // Popup modal
             if (ImGui::BeginPopupModal(("Delete Sensitivity Hotkey?##" + std::to_string(i)).c_str(), NULL,
                                        ImGuiWindowFlags_AlwaysAutoResize)) {
-                ImGui::Text("Are you sure you want to delete this sensitivity hotkey?");
+                ImGui::Text(TR("Are you sure you want to delete this sensitivity hotkey?"));
                 ImGui::Separator();
-                if (ImGui::Button("OK")) {
+                if (ImGui::Button(TR("OK"))) {
                     sens_hotkey_to_remove = (int)i;
                     g_configIsDirty = true;
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::SameLine();
-                if (ImGui::Button("Cancel")) { ImGui::CloseCurrentPopup(); }
+                if (ImGui::Button(TR("Cancel"))) { ImGui::CloseCurrentPopup(); }
                 ImGui::EndPopup();
             }
 
@@ -506,11 +490,11 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                     MarkHotkeyBindingActive();
                 }
                 ImGui::SameLine();
-                HelpMarker("Click to bind a key combination for this sensitivity override.");
+                HelpMarker(TR("Click to bind a key combination for this sensitivity override."));
 
                 // Sensitivity value
-                ImGui::SeparatorText("Sensitivity");
-                if (ImGui::Checkbox("Separate X/Y##sens", &sensHotkey.separateXY)) {
+                ImGui::SeparatorText(TR("Sensitivity"));
+                if (ImGui::Checkbox(TR("Separate X/Y##sens"), &sensHotkey.separateXY)) {
                     if (!sensHotkey.separateXY) {
                         // When disabling, sync X/Y to unified value
                         sensHotkey.sensitivityX = sensHotkey.sensitivity;
@@ -519,31 +503,31 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                     g_configIsDirty = true;
                 }
                 ImGui::SameLine();
-                HelpMarker("Enable to set different sensitivity values for X and Y axes.");
+                HelpMarker(TR("Enable to set different sensitivity values for X and Y axes."));
 
                 if (sensHotkey.separateXY) {
-                    ImGui::Text("X Sensitivity:");
+                    ImGui::Text(TR("X Sensitivity:"));
                     ImGui::SameLine();
                     ImGui::SetNextItemWidth(150);
-                    if (ImGui::SliderFloat("##sensX", &sensHotkey.sensitivityX, 0.001f, 10.0f, "%.3fx")) { g_configIsDirty = true; }
+                    if (ImGui::SliderFloat("##sensX", &sensHotkey.sensitivityX, 0.1f, 3.0f, "%.2fx")) { g_configIsDirty = true; }
 
-                    ImGui::Text("Y Sensitivity:");
+                    ImGui::Text(TR("Y Sensitivity:"));
                     ImGui::SameLine();
                     ImGui::SetNextItemWidth(150);
-                    if (ImGui::SliderFloat("##sensY", &sensHotkey.sensitivityY, 0.001f, 10.0f, "%.3fx")) { g_configIsDirty = true; }
+                    if (ImGui::SliderFloat("##sensY", &sensHotkey.sensitivityY, 0.1f, 3.0f, "%.2fx")) { g_configIsDirty = true; }
                 } else {
-                    ImGui::Text("Sensitivity:");
+                    ImGui::Text(TR("Sensitivity:"));
                     ImGui::SameLine();
                     ImGui::SetNextItemWidth(150);
-                    if (ImGui::SliderFloat("##sens", &sensHotkey.sensitivity, 0.001f, 10.0f, "%.3fx")) { g_configIsDirty = true; }
+                    if (ImGui::SliderFloat("##sens", &sensHotkey.sensitivity, 0.1f, 3.0f, "%.2fx")) { g_configIsDirty = true; }
                 }
 
-                if (ImGui::TreeNode("Required Game States##sens")) {
+                if (ImGui::TreeNode(TR("Required Game States##sens"))) {
                     // Check if "Any" state is active (empty gameState array)
                     bool isAnySelected = sensHotkey.conditions.gameState.empty();
 
                     // "Any" option at the top
-                    if (ImGui::Checkbox("Any##sens", &isAnySelected)) {
+                    if (ImGui::Checkbox(TR("Any##sens"), &isAnySelected)) {
                         if (isAnySelected) {
                             // Clear all game states to represent "Any"
                             sensHotkey.conditions.gameState.clear();
@@ -613,13 +597,13 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                 }
 
                 // Toggle mode
-                if (ImGui::Checkbox("Toggle##sens", &sensHotkey.toggle)) { g_configIsDirty = true; }
+                if (ImGui::Checkbox(TR("Toggle##sens"), &sensHotkey.toggle)) { g_configIsDirty = true; }
                 ImGui::SameLine();
-                HelpMarker(
-                    "When enabled, pressing the hotkey again resets sensitivity back to normal (mode override or global sensitivity).");
+                HelpMarker(TR(
+                    "When enabled, pressing the hotkey again resets sensitivity back to normal (mode override or global sensitivity)."));
 
                 // Debounce
-                ImGui::Text("Debounce:");
+                ImGui::Text(TR("Debounce:"));
                 ImGui::SameLine();
                 ImGui::SetNextItemWidth(100);
                 if (ImGui::InputInt("ms##sens_debounce", &sensHotkey.debounce)) {
@@ -639,7 +623,7 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
             RebuildHotkeyMainKeys_Internal();
         }
 
-        if (ImGui::Button("Add Sensitivity Hotkey")) {
+        if (ImGui::Button(TR("Add Sensitivity Hotkey"))) {
             try {
                 SensitivityHotkeyConfig newSensHotkey;
                 newSensHotkey.keys = std::vector<DWORD>();

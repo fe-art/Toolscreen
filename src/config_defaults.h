@@ -245,6 +245,7 @@ constexpr int CONFIG_KEY_REPEAT_DELAY = 0;
 constexpr bool CONFIG_BASIC_MODE_ENABLED = false;
 constexpr bool CONFIG_DISABLE_FULLSCREEN_PROMPT = false;
 constexpr bool CONFIG_DISABLE_CONFIGURE_PROMPT = false;
+inline const std::string CONFIG_LANGUAGE = "en";
 inline const std::string CONFIG_MIRROR_MATCH_COLORSPACE = "Auto";
 
 // Default GUI hotkey: LCtrl+I

@@ -1,4 +1,4 @@
-if (ImGui::BeginTabItem("Inputs")) {
+if (ImGui::BeginTabItem(TR("Inputs"))) {
     g_currentlyEditingMirror = "";
     g_imageDragMode.store(false);
     g_windowOverlayDragMode.store(false);
@@ -8,53 +8,53 @@ if (ImGui::BeginTabItem("Inputs")) {
         // =====================================================================
         // MOUSE SUB-TAB
         // =====================================================================
-        if (ImGui::BeginTabItem("Mouse")) {
+        if (ImGui::BeginTabItem(TR("Mouse"))) {
             SliderCtrlClickTip();
 
-            ImGui::SeparatorText("Mouse Settings");
+            ImGui::SeparatorText(TR("Mouse Settings"));
 
-            ImGui::Text("Mouse Sensitivity:");
+            ImGui::Text(TR("Mouse Sensitivity:"));
             ImGui::SetNextItemWidth(600);
-            if (ImGui::SliderFloat("##mouseSensitivity", &g_config.mouseSensitivity, 0.001f, 10.0f, "%.3fx")) { g_configIsDirty = true; }
+            if (ImGui::SliderFloat("##mouseSensitivity", &g_config.mouseSensitivity, 0.1f, 3.0f, "%.2fx")) { g_configIsDirty = true; }
             ImGui::SameLine();
-            HelpMarker("Multiplies mouse movement for raw input events (mouselook).\n"
+            HelpMarker(TR("Multiplies mouse movement for raw input events (mouselook).\n"
                        "1.0 = normal sensitivity, higher = faster, lower = slower.\n"
-                       "Useful for adjusting mouse speed when using stretched resolutions.");
+                       "Useful for adjusting mouse speed when using stretched resolutions."));
 
-            ImGui::Text("Windows Mouse Speed:");
+            ImGui::Text(TR("Windows Mouse Speed:"));
             ImGui::SetNextItemWidth(600);
             int windowsSpeedValue = g_config.windowsMouseSpeed;
-            if (ImGui::SliderInt("##windowsMouseSpeed", &windowsSpeedValue, 0, 20, windowsSpeedValue == 0 ? "Disabled" : "%d")) {
+            if (ImGui::SliderInt("##windowsMouseSpeed", &windowsSpeedValue, 0, 20, windowsSpeedValue == 0 ? TR("Disabled") : "%d")) {
                 g_config.windowsMouseSpeed = windowsSpeedValue;
                 g_configIsDirty = true;
             }
             ImGui::SameLine();
-            HelpMarker("Temporarily overrides Windows mouse speed setting while game is running.\n"
+            HelpMarker(TR("Temporarily overrides Windows mouse speed setting while game is running.\n"
                        "0 = Disabled (use system setting)\n"
                        "1-20 = Override Windows mouse speed (10 = default Windows speed)\n"
-                       "Affects cursor movement in game menus. Original setting is restored on exit.");
+                       "Affects cursor movement in game menus. Original setting is restored on exit."));
 
             if (g_gameVersion < GameVersion(1, 13, 0)) {
-                if (ImGui::Checkbox("Let Cursor Escape Window", &g_config.allowCursorEscape)) { g_configIsDirty = true; }
+                if (ImGui::Checkbox(TR("Let Cursor Escape Window"), &g_config.allowCursorEscape)) { g_configIsDirty = true; }
                 ImGui::SameLine();
-                HelpMarker("For pre 1.13, prevents the cursor being locked to the game window when in fullscreen");
+                HelpMarker(TR("For pre 1.13, prevents the cursor being locked to the game window when in fullscreen"));
             }
 
             ImGui::Spacing();
-            ImGui::SeparatorText("Cursor Configuration");
+            ImGui::SeparatorText(TR("Cursor Configuration"));
 
-            if (ImGui::Checkbox("Enable Custom Cursors", &g_config.cursors.enabled)) {
+            if (ImGui::Checkbox(TR("Enable Custom Cursors"), &g_config.cursors.enabled)) {
                 g_configIsDirty = true;
                 // Schedule cursor reload (will happen outside GUI rendering to avoid deadlock)
                 g_cursorsNeedReload = true;
             }
             ImGui::SameLine();
-            HelpMarker("When enabled, the mouse cursor will change based on the current game state.");
+            HelpMarker(TR("When enabled, the mouse cursor will change based on the current game state."));
 
             ImGui::Spacing();
 
             if (g_config.cursors.enabled) {
-                ImGui::Text("Configure cursors for different game states:");
+                ImGui::Text(TR("Configure cursors for different game states:"));
                 ImGui::Spacing();
 
                 // Available cursor options
@@ -132,7 +132,7 @@ if (ImGui::BeginTabItem("Inputs")) {
                     }
 
                     // Cursor dropdown
-                    ImGui::Text("Cursor:");
+                    ImGui::Text(TR("Cursor:"));
                     ImGui::SameLine();
                     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.35f);
                     if (ImGui::BeginCombo("##cursor", currentCursorName)) {
@@ -185,7 +185,7 @@ if (ImGui::BeginTabItem("Inputs")) {
                     ImGui::SameLine();
                     ImGui::Spacing();
                     ImGui::SameLine();
-                    ImGui::Text("Size:");
+                    ImGui::Text(TR("Size:"));
                     ImGui::SameLine();
 
                     // Slider takes remaining width
@@ -214,14 +214,14 @@ if (ImGui::BeginTabItem("Inputs")) {
                 ImGui::Separator();
                 ImGui::Spacing();
 
-                if (ImGui::Button("Reset to Defaults##cursors")) { ImGui::OpenPopup("Reset Cursors to Defaults?"); }
+                if (ImGui::Button(TR("Reset to Defaults##cursors"))) { ImGui::OpenPopup("Reset Cursors to Defaults?"); }
 
                 if (ImGui::BeginPopupModal("Reset Cursors to Defaults?", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-                    ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.0f, 1.0f), "WARNING:");
-                    ImGui::Text("This will reset all cursor settings to their default values.");
-                    ImGui::Text("This action cannot be undone.");
+                    ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.0f, 1.0f), TR("WARNING:"));
+                    ImGui::Text(TR("This will reset all cursor settings to their default values."));
+                    ImGui::Text(TR("This action cannot be undone."));
                     ImGui::Separator();
-                    if (ImGui::Button("Confirm Reset", ImVec2(120, 0))) {
+                    if (ImGui::Button(TR("Confirm Reset"), ImVec2(120, 0))) {
                         g_config.cursors = GetDefaultCursors();
                         g_configIsDirty = true;
                         g_cursorsNeedReload = true;
@@ -229,7 +229,7 @@ if (ImGui::BeginTabItem("Inputs")) {
                     }
                     ImGui::SetItemDefaultFocus();
                     ImGui::SameLine();
-                    if (ImGui::Button("Cancel", ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
+                    if (ImGui::Button(TR("Cancel"), ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
                     ImGui::EndPopup();
                 }
             }
@@ -240,53 +240,53 @@ if (ImGui::BeginTabItem("Inputs")) {
         // =====================================================================
         // KEYBOARD SUB-TAB
         // =====================================================================
-        if (ImGui::BeginTabItem("Keyboard")) {
+        if (ImGui::BeginTabItem(TR("Keyboard"))) {
             SliderCtrlClickTip();
 
             // --- Key Repeat Rate Settings ---
-            ImGui::SeparatorText("Key Repeat Rate");
+            ImGui::SeparatorText(TR("Key Repeat Rate"));
 
-            ImGui::Text("Key Repeat Start Delay:");
+            ImGui::Text(TR("Key Repeat Start Delay:"));
             ImGui::SetNextItemWidth(600);
             int startDelayValue = g_config.keyRepeatStartDelay;
-            if (ImGui::SliderInt("##keyRepeatStartDelay", &startDelayValue, 0, 500, startDelayValue == 0 ? "Default" : "%d ms")) {
+            if (ImGui::SliderInt("##keyRepeatStartDelay", &startDelayValue, 0, 500, startDelayValue == 0 ? TR("Default") : "%d ms")) {
                 g_config.keyRepeatStartDelay = startDelayValue;
                 g_configIsDirty = true;
                 ApplyKeyRepeatSettings();
             }
             ImGui::SameLine();
-            HelpMarker("Delay before a held key starts repeating.\n"
+            HelpMarker(TR("Delay before a held key starts repeating.\n"
                        "0 = Use Windows default, 1-500ms = custom delay.\n"
-                       "Only applied while the game window is focused.");
+                       "Only applied while the game window is focused."));
 
-            ImGui::Text("Key Repeat Delay:");
+            ImGui::Text(TR("Key Repeat Delay:"));
             ImGui::SetNextItemWidth(600);
             int repeatDelayValue = g_config.keyRepeatDelay;
-            if (ImGui::SliderInt("##keyRepeatDelay", &repeatDelayValue, 0, 500, repeatDelayValue == 0 ? "Default" : "%d ms")) {
+            if (ImGui::SliderInt("##keyRepeatDelay", &repeatDelayValue, 0, 500, repeatDelayValue == 0 ? TR("Default") : "%d ms")) {
                 g_config.keyRepeatDelay = repeatDelayValue;
                 g_configIsDirty = true;
                 ApplyKeyRepeatSettings();
             }
             ImGui::SameLine();
-            HelpMarker("Time between repeated key presses while held.\n"
+            HelpMarker(TR("Time between repeated key presses while held.\n"
                        "0 = Use Windows default, 1-500ms = custom delay.\n"
-                       "Only applied while the game window is focused.");
+                       "Only applied while the game window is focused."));
 
             ImGui::Spacing();
 
             // --- Key Rebinding Section ---
-            ImGui::SeparatorText("Key Rebinding");
-            ImGui::TextWrapped("Intercept keyboard inputs and remap them before they reach the game.");
+            ImGui::SeparatorText(TR("Key Rebinding"));
+            ImGui::TextWrapped(TR("Intercept keyboard inputs and remap them before they reach the game."));
             ImGui::Spacing();
 
             // Master toggle
-            if (ImGui::Checkbox("Enable Key Rebinding", &g_config.keyRebinds.enabled)) {
+            if (ImGui::Checkbox(TR("Enable Key Rebinding"), &g_config.keyRebinds.enabled)) {
                 g_configIsDirty = true;
                 std::lock_guard<std::mutex> hotkeyLock(g_hotkeyMainKeysMutex);
                 RebuildHotkeyMainKeys_Internal();
             }
             ImGui::SameLine();
-            HelpMarker("When enabled, configured key rebinds will intercept keyboard input and send the remapped key to the game instead.");
+            HelpMarker(TR("When enabled, configured key rebinds will intercept keyboard input and send the remapped key to the game instead."));
 
             if (g_config.keyRebinds.enabled) {
                 ImGui::Spacing();
@@ -335,8 +335,8 @@ if (ImGui::BeginTabItem("Inputs")) {
                 if (is_rebind_from_binding) { ImGui::OpenPopup("Bind From Key"); }
 
                 if (ImGui::BeginPopupModal("Bind From Key", NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
-                    ImGui::Text("Press a key to bind as INPUT.");
-                    ImGui::Text("Press ESC to cancel.");
+                    ImGui::Text(TR("Press a key to bind as INPUT."));
+                    ImGui::Text(TR("Press ESC to cancel."));
                     ImGui::Separator();
 
                     static uint64_t s_lastBindingInputSeqInputs1 = 0;
@@ -376,8 +376,8 @@ if (ImGui::BeginTabItem("Inputs")) {
                 if (is_vk_binding) { ImGui::OpenPopup("Bind Output VK"); }
 
                 if (ImGui::BeginPopupModal("Bind Output VK", NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
-                    ImGui::Text("Press a key to set OUTPUT Virtual Key Code.");
-                    ImGui::Text("Press ESC to cancel.");
+                    ImGui::Text(TR("Press a key to set OUTPUT Virtual Key Code."));
+                    ImGui::Text(TR("Press ESC to cancel."));
                     ImGui::Separator();
 
                     static uint64_t s_lastBindingInputSeqInputs2 = 0;
@@ -416,8 +416,8 @@ if (ImGui::BeginTabItem("Inputs")) {
                 if (is_scan_binding) { ImGui::OpenPopup("Bind Output Scan"); }
 
                 if (ImGui::BeginPopupModal("Bind Output Scan", NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
-                    ImGui::Text("Press a key to set OUTPUT Scan Code.");
-                    ImGui::Text("Press ESC to cancel.");
+                    ImGui::Text(TR("Press a key to set OUTPUT Scan Code."));
+                    ImGui::Text(TR("Press ESC to cancel."));
                     ImGui::Separator();
 
                     static uint64_t s_lastBindingInputSeqInputs3 = 0;
@@ -489,7 +489,7 @@ if (ImGui::BeginTabItem("Inputs")) {
                     ImGui::SameLine();
 
                     // --- INPUT KEY ---
-                    ImGui::Text("Input:");
+                    ImGui::Text(TR("Input:"));
                     ImGui::SameLine();
                     std::string fromKeyStr = VkToString(rebind.fromKey);
                     std::string fromLabel = (s_rebindFromKeyToBind == (int)i) ? "[Press key...]##from" : (fromKeyStr + "##from");
@@ -499,14 +499,14 @@ if (ImGui::BeginTabItem("Inputs")) {
                         s_rebindOutputScanToBind = -1;
                         MarkRebindBindingActive();
                     }
-                    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Click to bind the key to intercept"); }
+                    if (ImGui::IsItemHovered()) { ImGui::SetTooltip(TR("Click to bind the key to intercept")); }
 
                     ImGui::SameLine();
                     ImGui::Text("->");
                     ImGui::SameLine();
 
                     // --- OUTPUT VK CODE ---
-                    ImGui::Text("Text:");
+                    ImGui::Text(TR("Text:"));
                     ImGui::SameLine();
                     DWORD displayVK = rebind.useCustomOutput ? rebind.customOutputVK : rebind.toKey;
                     std::string vkKeyStr = VkToString(displayVK);
@@ -518,12 +518,12 @@ if (ImGui::BeginTabItem("Inputs")) {
                         s_rebindOutputScanToBind = -1;
                         MarkRebindBindingActive();
                     }
-                    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Click to bind which character is typed in chat/recipe book"); }
+                    if (ImGui::IsItemHovered()) { ImGui::SetTooltip(TR("Click to bind which character is typed in chat/recipe book")); }
 
                     ImGui::SameLine();
 
                     // --- OUTPUT SCAN CODE ---
-                    ImGui::Text("Game Keybind:");
+                    ImGui::Text(TR("Game Keybind:"));
                     ImGui::SameLine();
                     // Get the scan code to display - use custom if set, otherwise derive from toKey
                     DWORD displayScan = rebind.useCustomOutput ? rebind.customOutputScanCode : getScanCodeWithExtendedFlag(rebind.toKey);
@@ -546,7 +546,7 @@ if (ImGui::BeginTabItem("Inputs")) {
                         }
                     }
 
-                    if (scanKeyStr.empty()) { scanKeyStr = "[Unbound]"; }
+                    if (scanKeyStr.empty()) { scanKeyStr = TR("[Unbound]"); }
 
                     std::string scanLabel = (s_rebindOutputScanToBind == (int)i) ? "[Press key...]##scan" : (scanKeyStr + "##scan");
                     if (ImGui::Button(scanLabel.c_str(), ImVec2(100, 0))) {
@@ -555,7 +555,7 @@ if (ImGui::BeginTabItem("Inputs")) {
                         s_rebindOutputVKToBind = -1;
                         MarkRebindBindingActive();
                     }
-                    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Click to bind which game keybind is triggered"); }
+                    if (ImGui::IsItemHovered()) { ImGui::SetTooltip(TR("Click to bind which game keybind is triggered")); }
 
                     ImGui::PopID();
                 }
@@ -569,7 +569,7 @@ if (ImGui::BeginTabItem("Inputs")) {
                 }
 
                 ImGui::Spacing();
-                if (ImGui::Button("Add Rebind")) {
+                if (ImGui::Button(TR("Add Rebind"))) {
                     g_config.keyRebinds.rebinds.push_back(KeyRebind{});
                     g_configIsDirty = true;
                     std::lock_guard<std::mutex> hotkeyLock(g_hotkeyMainKeysMutex);

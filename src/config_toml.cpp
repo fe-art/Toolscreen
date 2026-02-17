@@ -1417,6 +1417,7 @@ void AppearanceConfigFromToml(const toml::table& tbl, AppearanceConfig& cfg) {
 void ConfigToToml(const Config& config, toml::table& out) {
     out.insert("configVersion", config.configVersion);
     out.insert("defaultMode", config.defaultMode);
+    out.insert("language", config.language);
     out.insert("fontPath", config.fontPath);
     out.insert("fpsLimit", config.fpsLimit);
     out.insert("fpsLimitSleepThreshold", config.fpsLimitSleepThreshold);
@@ -1542,6 +1543,7 @@ void ConfigToToml(const Config& config, toml::table& out) {
 void ConfigFromToml(const toml::table& tbl, Config& config) {
     config.configVersion = GetOr(tbl, "configVersion", ConfigDefaults::DEFAULT_CONFIG_VERSION);
     config.defaultMode = GetStringOr(tbl, "defaultMode", ConfigDefaults::CONFIG_DEFAULT_MODE);
+    config.language = GetStringOr(tbl, "language", ConfigDefaults::CONFIG_LANGUAGE);
     config.fontPath = GetStringOr(tbl, "fontPath", ConfigDefaults::CONFIG_FONT_PATH);
     config.fpsLimit = GetOr(tbl, "fpsLimit", ConfigDefaults::CONFIG_FPS_LIMIT);
     config.fpsLimitSleepThreshold = GetOr(tbl, "fpsLimitSleepThreshold", ConfigDefaults::CONFIG_FPS_LIMIT_SLEEP_THRESHOLD);
@@ -1715,6 +1717,7 @@ bool SaveConfigToTomlFile(const Config& config, const std::wstring& path) {
         // Define the order of top-level keys
         std::vector<std::string> orderedKeys = { "configVersion",
                                                  "defaultMode",
+                                                 "language",
                                                  "fontPath",
                                                  "fpsLimit",
                                                  "fpsLimitSleepThreshold",

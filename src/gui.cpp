@@ -1,4 +1,5 @@
 ﻿#include "gui.h"
+#include "i18n.h"
 #include "config_toml.h"
 #include "expression_parser.h"
 #include "fake_cursor.h"
@@ -2118,6 +2119,15 @@ void LoadConfig() {
 
         // Initialize mirror thread global colorspace mode from loaded config
         SetGlobalMirrorGammaMode(g_config.mirrorGammaMode);
+
+        // Load translation table for the configured language.
+        // If the saved language has no built-in resource, reset to English so
+        // the UI doesn't get stuck rendering a language the user can't switch away from.
+        if (!LoadLanguage(g_config.language) && g_config.language != "en") {
+            Log("i18n: Language '" + g_config.language + "' not available, resetting to English.");
+            g_config.language = "en";
+            g_configIsDirty = true;
+        }
 
         // Mark config as successfully loaded (must be last line in try block)
         extern std::atomic<bool> g_configLoaded;
