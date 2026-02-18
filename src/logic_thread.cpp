@@ -110,6 +110,8 @@ void InvalidateCachedScreenMetrics() {
 
 // Tracked for UpdateActiveMirrorConfigs - detect when active mirrors change
 static std::vector<std::string> s_lastActiveMirrorIds;
+static std::string s_lastMirrorConfigModeId;
+static uint64_t s_lastMirrorConfigSnapshotVersion = 0;
 
 // Update mirror capture configs when active mirrors change (mode switch or config edit)
 // This was previously done on every frame in RenderModeInternal - now only when needed
@@ -121,8 +123,16 @@ void UpdateActiveMirrorConfigs() {
     if (!cfgSnap) return;
     const Config& cfg = *cfgSnap;
 
+    // If neither mode nor config snapshot changed, skip all work.
+    // This avoids rebuilding mirror lists 60 times/sec when nothing is changing.
+    const uint64_t snapVer = g_configSnapshotVersion.load(std::memory_order_acquire);
+
     // Get current mode ID from double-buffer (lock-free)
     std::string currentModeId = g_modeIdBuffers[g_currentModeIdIndex.load(std::memory_order_acquire)];
+
+    if (currentModeId == s_lastMirrorConfigModeId && snapVer == s_lastMirrorConfigSnapshotVersion) {
+        return;
+    }
     const ModeConfig* mode = GetModeFromSnapshot(cfg, currentModeId);
     if (!mode) { return; }
 
@@ -200,6 +210,10 @@ void UpdateActiveMirrorConfigs() {
         UpdateMirrorCaptureConfigs(activeMirrorsForCapture);
         s_lastActiveMirrorIds = currentMirrorIds;
     }
+
+    // Remember what we processed this tick.
+    s_lastMirrorConfigModeId = currentModeId;
+    s_lastMirrorConfigSnapshotVersion = snapVer;
 }
 
 void UpdateCachedScreenMetrics() {

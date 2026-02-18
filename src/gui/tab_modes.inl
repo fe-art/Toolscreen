@@ -388,6 +388,15 @@
                 ImGui::SameLine();
                 HelpMarker("How many colored overlay boxes + numbers to draw on EACH side of the center line.\n"
                            "cloneWidth controls how wide the clone samples; overlayWidth only controls how much of the numbered overlay is drawn.");
+
+                ImGui::NextColumn();
+                ImGui::Text("Zoom FPS");
+                ImGui::NextColumn();
+                if (Spinner("##EyeZoomCloneFps", &g_config.eyezoom.cloneFps, 1, 60, 120)) g_configIsDirty = true;
+                ImGui::SameLine();
+                HelpMarker("Caps how often the EyeZoom clone texture updates (in frames per second).\n"
+                           "0 = unlimited (update every frame).\n"
+                           "Useful to reduce GPU work when EyeZoom is visible or captured by OBS.");
                 ImGui::Columns(1);
 
                 ImGui::Separator();

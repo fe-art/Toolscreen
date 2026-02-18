@@ -1538,8 +1538,36 @@ DWORD WINAPI FileMonitorThread(LPVOID lpParam) {
         std::vector<char> buffer;
         buffer.reserve(128);
 
+        // Track last write time so we don't re-read the file when nothing changed.
+        FILETIME lastWriteTime{};
+        bool haveLastWriteTime = false;
+
+        // Adaptive polling: fast when the file is actively changing, slower when idle.
+        DWORD sleepMs = 16;
+        int consecutiveNoChange = 0;
+
         while (!g_stopMonitoring) {
-            Sleep(5);
+            Sleep(sleepMs);
+
+            FILETIME curWriteTime{};
+            if (GetFileTime(hFile, NULL, NULL, &curWriteTime)) {
+                if (haveLastWriteTime && CompareFileTime(&lastWriteTime, &curWriteTime) == 0) {
+                    // Back off when idle (no state changes). Reset instantly on the next change.
+                    consecutiveNoChange++;
+                    if (consecutiveNoChange > 600) {
+                        sleepMs = 100;
+                    } else if (consecutiveNoChange > 180) {
+                        sleepMs = 50;
+                    } else if (consecutiveNoChange > 60) {
+                        sleepMs = 33;
+                    }
+                    continue; // No change, skip all work.
+                }
+                lastWriteTime = curWriteTime;
+                haveLastWriteTime = true;
+                consecutiveNoChange = 0;
+                sleepMs = 16;
+            }
 
             if (SetFilePointer(hFile, 0, NULL, FILE_BEGIN) == INVALID_SET_FILE_POINTER) { continue; }
 
@@ -1594,12 +1622,16 @@ DWORD WINAPI ImageMonitorThread(LPVOID lpParam) {
         static std::map<std::string, FILETIME> s_lastWriteTimes;
 
         while (!g_stopImageMonitoring) {
-            Sleep(50);
+            // 50ms polling can be expensive when there are many images (CreateFile + GetFileTime per image).
+            // Slow this down; hot-reload is still "fast enough" for typical use.
+            Sleep(250);
 
-            std::string localGameState = g_gameStateBuffers[g_currentGameStateIndex.load(std::memory_order_acquire)];
+            // Use snapshot to avoid racing GUI edits and to allow future lock-free snapshot impls.
+            auto cfgSnap = GetConfigSnapshot();
+            if (!cfgSnap) { continue; }
 
-            std::vector<ImageConfig> imagesToCheck;
-            imagesToCheck = g_config.images;
+            const auto& imagesToCheck = cfgSnap->images;
+            if (imagesToCheck.empty()) { continue; }
 
             for (const auto& img : imagesToCheck) {
                 if (img.path.empty()) continue;

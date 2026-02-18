@@ -17,6 +17,9 @@ static std::atomic<bool> g_mirrorCaptureShouldStop{ false };
 // Safe capture window flag: true during SwapBuffers hook execution
 std::atomic<bool> g_safeToCapture{ false };
 
+// Updated by UpdateMirrorCaptureConfigs (logic thread) and read by SwapBuffers hook.
+std::atomic<int> g_activeMirrorCaptureCount{ 0 };
+
 static HGLRC g_mirrorCaptureContext = NULL;
 static HDC g_mirrorCaptureDC = NULL;
 static bool g_mirrorContextIsShared = false; // True if using pre-shared context
@@ -42,6 +45,10 @@ std::atomic<int> g_captureFinalH{ 0 };
 FrameCaptureNotification g_captureQueue[CAPTURE_QUEUE_SIZE];
 std::atomic<int> g_captureQueueHead{ 0 };
 std::atomic<int> g_captureQueueTail{ 0 };
+
+// CPU optimization: avoid polling the queue at 1ms intervals when nothing is submitting captures.
+static std::mutex g_captureSignalMutex;
+static std::condition_variable g_captureSignalCV;
 
 // Double-buffered shared copy textures (render thread writes, capture thread reads)
 // Using double-buffering to avoid reading while writing
@@ -906,6 +913,9 @@ void SubmitFrameCapture(GLuint gameTexture, int width, int height) {
     if (!CaptureQueuePush(notif)) {
         // Queue full - delete the fence since mirror thread won't get it
         glDeleteSync(fenceForMirrorThread);
+    } else {
+        // Wake mirror thread so it doesn't have to poll.
+        g_captureSignalCV.notify_one();
     }
 
     restoreState();
@@ -1362,6 +1372,25 @@ static void MirrorCaptureThreadFunc(void* unused) {
                 hasNotification = CaptureQueuePop(notif);
             }
 
+            if (!hasNotification) {
+                // Nothing new submitted. Don't spin at 1kHz.
+                // If we have no valid texture and/or no active configs, we can wait longer.
+                bool hasConfigs = false;
+                {
+                    std::lock_guard<std::mutex> lock(g_threadedMirrorConfigMutex);
+                    hasConfigs = !g_threadedMirrorConfigs.empty();
+                }
+
+                const auto waitTime = (!hasValidTexture && !hasConfigs) ? std::chrono::milliseconds(100) : std::chrono::milliseconds(16);
+                std::unique_lock<std::mutex> lk(g_captureSignalMutex);
+                g_captureSignalCV.wait_for(lk, waitTime, [] {
+                    if (g_mirrorCaptureShouldStop.load()) return true;
+                    // Wake when there is at least one queued capture notification.
+                    return g_captureQueueTail.load(std::memory_order_relaxed) != g_captureQueueHead.load(std::memory_order_acquire);
+                });
+                continue;
+            }
+
             if (hasNotification) {
                 PROFILE_SCOPE_CAT("Process Frame Capture", "Mirror Thread");
 
@@ -1418,10 +1447,7 @@ static void MirrorCaptureThreadFunc(void* unused) {
             }
 
             // Skip mirror processing if we don't have valid texture data yet
-            if (!hasValidTexture) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                continue;
-            }
+            if (!hasValidTexture) { continue; }
 
             int gameW = validW;
             int gameH = validH;
@@ -1434,10 +1460,7 @@ static void MirrorCaptureThreadFunc(void* unused) {
                 configs = g_threadedMirrorConfigs;
             }
 
-            if (configs.empty()) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                continue;
-            }
+            if (configs.empty()) { continue; }
 
             // Global colorspace mode for matching (applies to all mirrors)
             MirrorGammaMode gammaMode = GetGlobalMirrorGammaMode();
@@ -1952,6 +1975,9 @@ void UpdateMirrorCaptureConfigs(const std::vector<MirrorConfig>& activeMirrors) 
     }
 
     g_threadedMirrorConfigs = configs;
+
+    // Publish a cheap summary so the SwapBuffers hook can skip SubmitFrameCapture when nothing needs it.
+    g_activeMirrorCaptureCount.store(static_cast<int>(g_threadedMirrorConfigs.size()), std::memory_order_release);
 }
 
 void UpdateMirrorFPS(const std::string& mirrorName, int fps) {

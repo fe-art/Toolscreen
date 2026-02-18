@@ -49,6 +49,10 @@
 Config g_config;
 std::atomic<bool> g_configIsDirty{ false };
 
+// Monotonic version for published config snapshots.
+// Readers can use this to avoid recomputing derived state when config hasn't changed.
+std::atomic<uint64_t> g_configSnapshotVersion{ 0 };
+
 // ============================================================================
 // CONFIG SNAPSHOT (RCU) - Lock-free immutable config for reader threads
 // ============================================================================
@@ -57,17 +61,19 @@ std::atomic<bool> g_configIsDirty{ false };
 // Reader threads call GetConfigSnapshot() for a safe, lock-free snapshot.
 // ============================================================================
 static std::shared_ptr<const Config> g_configSnapshot;
-static std::mutex g_configSnapshotMutex; // Only held briefly by publisher
 
 void PublishConfigSnapshot() {
     auto snapshot = std::make_shared<const Config>(g_config);
-    std::lock_guard<std::mutex> lock(g_configSnapshotMutex);
-    g_configSnapshot = std::move(snapshot);
+    // Lock-free publish: atomic store of shared_ptr.
+    std::atomic_store_explicit(&g_configSnapshot, std::move(snapshot), std::memory_order_release);
+
+    // Bump version AFTER publishing.
+    g_configSnapshotVersion.fetch_add(1, std::memory_order_release);
 }
 
 std::shared_ptr<const Config> GetConfigSnapshot() {
-    std::lock_guard<std::mutex> lock(g_configSnapshotMutex);
-    return g_configSnapshot;
+    // Lock-free read: atomic load of shared_ptr.
+    return std::atomic_load_explicit(&g_configSnapshot, std::memory_order_acquire);
 }
 
 // ============================================================================
@@ -1308,34 +1314,41 @@ BOOL WINAPI hkwglSwapBuffers(HDC hDc) {
         if (!hwnd) { return owglSwapBuffers(hDc); }
         if (hwnd != g_minecraftHwnd.load()) { g_minecraftHwnd.store(hwnd); }
 
-        // Submit frame capture to PBO for async DMA transfer
-        // The glGetTexImage call queues a GPU command and returns immediately when bound to a PBO
+        // Submit frame capture (GPU-to-GPU copy of the game texture) ONLY when something consumes it.
+        // This copy is expensive: it blits the full game texture + inserts fences + flushes.
+        // When no mirrors / EyeZoom / OBS / virtual-camera are active, doing this every frame wastes GPU time.
         {
-            GLuint gameTexture = g_cachedGameTextureId.load();
-            if (gameTexture != UINT_MAX) {
-                ModeViewportInfo viewport = GetCurrentModeViewport();
-                if (viewport.valid) {
-                    // Ensure all game render commands are submitted to GPU before capturing
-                    // This is critical for cross-context texture reads - the render thread
-                    // will wait on a fence for the commands to complete
-                    glFlush();
+            const bool needCaptureForMirrors = (g_activeMirrorCaptureCount.load(std::memory_order_acquire) > 0);
+            const bool needCaptureForEyeZoom = g_showEyeZoom.load(std::memory_order_relaxed) ||
+                                               g_isTransitioningFromEyeZoom.load(std::memory_order_relaxed);
+            const bool needCaptureForObsOrVc = g_graphicsHookDetected.load(std::memory_order_acquire) || IsVirtualCameraActive();
 
-                    // Sync screen/game geometry for capture thread to compute render cache
-                    const int fullW_capture = GetCachedScreenWidth();
-                    const int fullH_capture = GetCachedScreenHeight();
-                    g_captureScreenW.store(fullW_capture, std::memory_order_release);
-                    g_captureScreenH.store(fullH_capture, std::memory_order_release);
-                    g_captureGameW.store(viewport.width, std::memory_order_release);
-                    g_captureGameH.store(viewport.height, std::memory_order_release);
-                    // Calculate actual game viewport position (finalX, finalY, finalW, finalH)
-                    // Always use stretchX/Y/Width/Height - these contain the actual screen position
-                    // whether stretch is enabled (custom position) or disabled (centered)
-                    g_captureFinalX.store(viewport.stretchX, std::memory_order_release);
-                    g_captureFinalY.store(viewport.stretchY, std::memory_order_release);
-                    g_captureFinalW.store(viewport.stretchWidth, std::memory_order_release);
-                    g_captureFinalH.store(viewport.stretchHeight, std::memory_order_release);
+            const bool needCapture = needCaptureForMirrors || needCaptureForEyeZoom || needCaptureForObsOrVc;
+            if (needCapture) {
+                GLuint gameTexture = g_cachedGameTextureId.load(std::memory_order_acquire);
+                if (gameTexture != UINT_MAX) {
+                    ModeViewportInfo viewport = GetCurrentModeViewport();
+                    if (viewport.valid) {
+                        // Sync screen/game geometry for capture thread to compute render cache.
+                        const int fullW_capture = GetCachedScreenWidth();
+                        const int fullH_capture = GetCachedScreenHeight();
+                        g_captureScreenW.store(fullW_capture, std::memory_order_release);
+                        g_captureScreenH.store(fullH_capture, std::memory_order_release);
+                        g_captureGameW.store(viewport.width, std::memory_order_release);
+                        g_captureGameH.store(viewport.height, std::memory_order_release);
 
-                    SubmitFrameCapture(gameTexture, viewport.width, viewport.height);
+                        // Calculate actual game viewport position (finalX, finalY, finalW, finalH).
+                        // Always use stretchX/Y/Width/Height - these contain the actual screen position
+                        // whether stretch is enabled (custom position) or disabled (centered).
+                        g_captureFinalX.store(viewport.stretchX, std::memory_order_release);
+                        g_captureFinalY.store(viewport.stretchY, std::memory_order_release);
+                        g_captureFinalW.store(viewport.stretchWidth, std::memory_order_release);
+                        g_captureFinalH.store(viewport.stretchHeight, std::memory_order_release);
+
+                        // SubmitFrameCapture already inserts its own fences and flushes after them;
+                        // avoid an extra glFlush here (it can reduce FPS by forcing more driver work per frame).
+                        SubmitFrameCapture(gameTexture, viewport.width, viewport.height);
+                    }
                 }
             }
         }
@@ -1418,9 +1431,20 @@ BOOL WINAPI hkwglSwapBuffers(HDC hDc) {
                 // (InitializeGPUResources runs after this early-return path).
                 // Also uses modern GL (shaders + VAO) because Minecraft 1.17+ uses core profile
                 // where fixed-function (glBegin/glEnd) doesn't work.
-                // toast1 (fullscreenPrompt) should ALWAYS show in windowed mode.
-                // Don't gate on any session flag or config toggle.
-                if (windowWidth > 0 && windowHeight > 0) {
+                // NOTE: Rendering this every frame forever costs GPU time.
+                // For performance, show it only briefly after injection / entering windowed mode
+                // (and stop once the user opens the GUI).
+                static auto s_wt_startTime = std::chrono::steady_clock::now();
+                static bool s_wt_prevFullscreen = true;
+                const bool isFullNow = IsFullscreen();
+                if (!isFullNow && s_wt_prevFullscreen) { s_wt_startTime = std::chrono::steady_clock::now(); }
+                s_wt_prevFullscreen = isFullNow;
+
+                const float wtElapsed =
+                    std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - s_wt_startTime).count();
+                const bool wantWindowedToast = (wtElapsed <= 10.0f) && !g_showGui.load(std::memory_order_relaxed);
+
+                if (wantWindowedToast && windowWidth > 0 && windowHeight > 0) {
                     // Self-contained GL resources (created lazily, persisted)
                     static GLuint s_wt_program = 0;
                     static GLuint s_wt_vao = 0, s_wt_vbo = 0;
@@ -1886,6 +1910,104 @@ void main() {
         // Release ensures all preceding EyeZoom stores are visible when the reader acquires this value
         g_isTransitioningFromEyeZoom.store(isTransitioningFromEyeZoom, std::memory_order_release);
 
+        // Dual rendering: when OBS hook is detected OR virtual camera is active, render separately for OBS/virtual cam and for user's screen.
+        // This must be computed BEFORE any early-exit checks that reference it.
+        const bool needsDualRendering = g_graphicsHookDetected.load(std::memory_order_acquire) || IsVirtualCameraActive();
+
+        // PERF: If Toolscreen has nothing to draw and the current mode has no visible effect,
+        // skip ALL custom rendering work (including expensive GL state backup).
+        // This is critical for games like Minecraft where repeated glGet* calls can stall the driver.
+        {
+            const bool modeSizesFullscreen = (modeToRenderCopy.width == fullW && modeToRenderCopy.height == fullH);
+            const bool stretchIsFullscreen =
+                (!modeToRenderCopy.stretch.enabled) ||
+                (modeToRenderCopy.stretch.width == fullW && modeToRenderCopy.stretch.height == fullH && modeToRenderCopy.stretch.x == 0 &&
+                 modeToRenderCopy.stretch.y == 0);
+            const bool borderVisible = modeToRenderCopy.border.enabled && modeToRenderCopy.border.width > 0;
+
+            const bool anyModeOverlaysConfigured =
+                (!modeToRenderCopy.mirrorIds.empty() || !modeToRenderCopy.mirrorGroupIds.empty() ||
+                 (g_imageOverlaysVisible.load(std::memory_order_acquire) && !modeToRenderCopy.imageIds.empty()) ||
+                 (g_windowOverlaysVisible.load(std::memory_order_acquire) && !modeToRenderCopy.windowOverlayIds.empty()));
+
+            const bool anyImGuiOrDebugOverlay = shouldRenderGui || showPerformanceOverlay || showProfiler || showEyeZoomOnScreen ||
+                                                frameCfg.debug.showTextureGrid;
+
+            const bool anyOtherCustomOutput = frameCfg.debug.fakeCursor || g_screenshotRequested.load(std::memory_order_relaxed);
+
+            const bool canSkipCustomRender = isFull && !needsDualRendering && !IsModeTransitionActive() && modeSizesFullscreen &&
+                                             stretchIsFullscreen && !borderVisible && !anyModeOverlaysConfigured &&
+                                             !anyImGuiOrDebugOverlay && !anyOtherCustomOutput;
+
+            if (canSkipCustomRender) {
+                // FPS limiter still applies (user expects it), and transition animation still needs to tick.
+                // We jump directly to the final SwapBuffers + bookkeeping.
+
+                int targetFPS = frameCfg.fpsLimit;
+                if (targetFPS > 0 && g_highResTimer) {
+                    PROFILE_SCOPE_CAT("FPS Limit Sleep (Skip Render)", "Timing");
+
+                    const double targetFrameTimeUs = 1000000.0 / targetFPS;
+                    const bool isHighFPS = targetFPS > 500;
+
+                    std::lock_guard<std::mutex> lock(g_fpsLimitMutex);
+                    auto now = std::chrono::high_resolution_clock::now();
+                    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(now - g_lastFrameEndTime).count();
+                    double timeToWaitUs = targetFrameTimeUs - elapsed;
+
+                    if (timeToWaitUs > 0) {
+                        if (isHighFPS) {
+                            LARGE_INTEGER dueTime;
+                            dueTime.QuadPart = -static_cast<LONGLONG>(timeToWaitUs * 10LL);
+                            if (SetWaitableTimer(g_highResTimer, &dueTime, 0, NULL, NULL, FALSE)) {
+                                WaitForSingleObject(g_highResTimer, 1000);
+                            }
+                        } else {
+                            if (timeToWaitUs > 10) {
+                                LARGE_INTEGER dueTime;
+                                dueTime.QuadPart = -static_cast<LONGLONG>(timeToWaitUs * 10LL);
+                                if (SetWaitableTimer(g_highResTimer, &dueTime, 0, NULL, NULL, FALSE)) {
+                                    WaitForSingleObject(g_highResTimer, 1000);
+                                }
+                            }
+                        }
+                        g_lastFrameEndTime = g_lastFrameEndTime + std::chrono::microseconds(static_cast<long long>(targetFrameTimeUs));
+                    } else {
+                        g_lastFrameEndTime = now;
+                    }
+                }
+
+                if (IsModeTransitionActive()) {
+                    PROFILE_SCOPE_CAT("Mode Transition Animation (Skip Render)", "SwapBuffers");
+                    UpdateModeTransition();
+                }
+
+                if (frameCfg.debug.delayRenderingUntilFinished) { glFinish(); }
+                if (frameCfg.debug.delayRenderingUntilBlitted) { WaitForOverlayBlitFence(); }
+
+                auto swapStartTime = std::chrono::high_resolution_clock::now();
+                BOOL result = owglSwapBuffers(hDc);
+
+                g_safeToCapture.store(false, std::memory_order_release);
+
+                auto swapEndTime = std::chrono::high_resolution_clock::now();
+                std::chrono::duration<double, std::milli> swapDuration = swapEndTime - swapStartTime;
+                g_originalFrameTimeMs = swapDuration.count();
+
+                std::chrono::duration<double, std::milli> fp_ms = swapStartTime - startTime;
+                g_lastFrameTimeMs = fp_ms.count();
+
+                {
+                    int nextIndex = 1 - g_lastFrameModeIdIndex.load(std::memory_order_relaxed);
+                    g_lastFrameModeIdBuffers[nextIndex] = desiredModeId;
+                    g_lastFrameModeIdIndex.store(nextIndex, std::memory_order_release);
+                    g_lastFrameModeId = desiredModeId;
+                }
+
+                return result;
+            }
+        }
+
         if (!g_glInitialized) {
             PROFILE_SCOPE_CAT("GPU Resource Init Check", "SwapBuffers");
             Log("[RENDER] Conditions met for GPU resource initialization.");
@@ -1908,10 +2030,13 @@ void main() {
 
         {
             PROFILE_SCOPE_CAT("Texture Cleanup", "SwapBuffers");
-            std::lock_guard<std::mutex> lock(g_texturesToDeleteMutex);
-            if (!g_texturesToDelete.empty()) {
-                glDeleteTextures((GLsizei)g_texturesToDelete.size(), g_texturesToDelete.data());
-                g_texturesToDelete.clear();
+            if (g_hasTexturesToDelete.load(std::memory_order_acquire)) {
+                std::lock_guard<std::mutex> lock(g_texturesToDeleteMutex);
+                if (!g_texturesToDelete.empty()) {
+                    glDeleteTextures((GLsizei)g_texturesToDelete.size(), g_texturesToDelete.data());
+                    g_texturesToDelete.clear();
+                }
+                g_hasTexturesToDelete.store(false, std::memory_order_release);
             }
         }
 
@@ -1934,9 +2059,7 @@ void main() {
         // This ensures OBS captures from backbuffer normally when not animating
         g_obsCaptureReady.store(false);
 
-        // Dual rendering: when OBS hook is detected OR virtual camera is active, render separately for OBS/virtual cam and for user's
-        // screen This allows OBS/virtual camera to capture different content (e.g., animations, different overlays)
-        bool needsDualRendering = g_graphicsHookDetected.load() || IsVirtualCameraActive();
+        // needsDualRendering is computed above (before the skip-render fast path)
 
         // When hideAnimationsInGame is enabled and we're transitioning, skip animation on user's screen
         // (OBS still gets the animated version)
@@ -2011,7 +2134,7 @@ void main() {
         // All ImGui rendering is handled by render thread (via FrameRenderRequest ImGui state fields)
         // Screenshot handling stays on main thread since it needs direct backbuffer access
         if (g_screenshotRequested.exchange(false)) {
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, s.fb);
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, s.read_fb);
             ScreenshotToClipboard(fullW, fullH);
         }
 

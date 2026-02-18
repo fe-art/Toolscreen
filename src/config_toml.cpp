@@ -1246,6 +1246,7 @@ void CursorsConfigFromToml(const toml::table& tbl, CursorsConfig& cfg) {
 void EyeZoomConfigToToml(const EyeZoomConfig& cfg, toml::table& out) {
     out.insert("cloneWidth", cfg.cloneWidth);
     out.insert("overlayWidth", cfg.overlayWidth);
+    out.insert("cloneFps", cfg.cloneFps);
     out.insert("cloneHeight", cfg.cloneHeight);
     out.insert("stretchWidth", cfg.stretchWidth);
     out.insert("windowWidth", cfg.windowWidth);
@@ -1287,6 +1288,9 @@ void EyeZoomConfigFromToml(const toml::table& tbl, EyeZoomConfig& cfg) {
     if (cfg.overlayWidth < 0) cfg.overlayWidth = 0;
     int maxOverlay = cfg.cloneWidth / 2;
     if (cfg.overlayWidth > maxOverlay) cfg.overlayWidth = maxOverlay;
+
+    cfg.cloneFps = GetOr(tbl, "cloneFps", ConfigDefaults::EYEZOOM_CLONE_FPS);
+    if (cfg.cloneFps < 0) cfg.cloneFps = 0;
 
     cfg.cloneHeight = GetOr(tbl, "cloneHeight", ConfigDefaults::EYEZOOM_CLONE_HEIGHT);
     cfg.stretchWidth = GetOr(tbl, "stretchWidth", ConfigDefaults::EYEZOOM_STRETCH_WIDTH);

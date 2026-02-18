@@ -134,6 +134,7 @@ std::mutex g_backgroundTexturesMutex;
 
 std::vector<GLuint> g_texturesToDelete;
 std::mutex g_texturesToDeleteMutex;
+std::atomic<bool> g_hasTexturesToDelete{ false };
 bool g_glInitialized = false;
 std::atomic<bool> g_isGameFocused{ true };
 GameViewportGeometry g_lastFrameGeometry;
@@ -397,22 +398,33 @@ void RenderGameBorder(int x, int y, int w, int h, int borderWidth, int radius, c
 
 // Helper functions to calculate actual dimensions from scale
 void CalculateImageDimensions(const ImageConfig& img, int& outW, int& outH) {
-    // Get the actual image texture dimensions
-    auto it = g_userImages.find(img.name);
-    if (it != g_userImages.end() && it->second.textureId != 0) {
-        int texWidth = it->second.width;
-        int texHeight = it->second.height;
-        // Apply cropping to get the visible dimensions
-        int croppedWidth = texWidth - img.crop_left - img.crop_right;
-        int croppedHeight = texHeight - img.crop_top - img.crop_bottom;
-        // Apply scale
-        outW = static_cast<int>(croppedWidth * img.scale);
-        outH = static_cast<int>(croppedHeight * img.scale);
-    } else {
-        // Default size if texture not loaded
-        outW = static_cast<int>(100 * img.scale);
-        outH = static_cast<int>(100 * img.scale);
+    // NOTE: This is used in UI/drag hit-testing; avoid blocking if another thread is updating textures.
+    std::unique_lock<std::mutex> lock(g_userImagesMutex, std::try_to_lock);
+    if (lock.owns_lock()) {
+        // Get the actual image texture dimensions
+        auto it = g_userImages.find(img.name);
+        if (it != g_userImages.end() && it->second.textureId != 0) {
+            int texWidth = it->second.width;
+            int texHeight = it->second.height;
+            // Apply cropping to get the visible dimensions
+            int croppedWidth = texWidth - img.crop_left - img.crop_right;
+            int croppedHeight = texHeight - img.crop_top - img.crop_bottom;
+            if (croppedWidth < 1) croppedWidth = 1;
+            if (croppedHeight < 1) croppedHeight = 1;
+            // Apply scale
+            outW = static_cast<int>(croppedWidth * img.scale);
+            outH = static_cast<int>(croppedHeight * img.scale);
+            if (outW < 1) outW = 1;
+            if (outH < 1) outH = 1;
+            return;
+        }
     }
+
+    // Default size if texture not loaded / mutex busy
+    outW = static_cast<int>(100 * img.scale);
+    outH = static_cast<int>(100 * img.scale);
+    if (outW < 1) outW = 1;
+    if (outH < 1) outH = 1;
 }
 
 // Helper to calculate dimensions when mutex is already held (faster path)
@@ -868,31 +880,44 @@ void CleanupShaders() {
 
 void DiscardAllGPUImages() {
     PROFILE_SCOPE_CAT("GPU Image Discard", "GPU Operations");
-    std::lock_guard<std::mutex> lock(g_texturesToDeleteMutex);
+    std::vector<GLuint> texturesToDelete;
 
-    // Clean up background textures (static and animated)
-    for (auto const& [id, inst] : g_backgroundTextures) {
-        if (inst.isAnimated) {
-            for (GLuint tex : inst.frameTextures) {
-                if (tex != 0) g_texturesToDelete.push_back(tex);
+    // Collect + clear background textures (static and animated)
+    {
+        std::lock_guard<std::mutex> bgLock(g_backgroundTexturesMutex);
+        for (auto const& [id, inst] : g_backgroundTextures) {
+            if (inst.isAnimated) {
+                for (GLuint tex : inst.frameTextures) {
+                    if (tex != 0) texturesToDelete.push_back(tex);
+                }
+            } else if (inst.textureId != 0) {
+                texturesToDelete.push_back(inst.textureId);
             }
-        } else if (inst.textureId != 0) {
-            g_texturesToDelete.push_back(inst.textureId);
         }
+        g_backgroundTextures.clear();
     }
-    g_backgroundTextures.clear();
 
-    // Clean up user images (static and animated)
-    for (auto const& [id, inst] : g_userImages) {
-        if (inst.isAnimated) {
-            for (GLuint tex : inst.frameTextures) {
-                if (tex != 0) g_texturesToDelete.push_back(tex);
+    // Collect + clear user images (static and animated)
+    {
+        std::lock_guard<std::mutex> imageLock(g_userImagesMutex);
+        for (auto const& [id, inst] : g_userImages) {
+            if (inst.isAnimated) {
+                for (GLuint tex : inst.frameTextures) {
+                    if (tex != 0) texturesToDelete.push_back(tex);
+                }
+            } else if (inst.textureId != 0) {
+                texturesToDelete.push_back(inst.textureId);
             }
-        } else if (inst.textureId != 0) {
-            g_texturesToDelete.push_back(inst.textureId);
         }
+        g_userImages.clear();
     }
-    g_userImages.clear();
+
+    // Enqueue for deletion after releasing resource-map locks.
+    {
+        std::lock_guard<std::mutex> lock(g_texturesToDeleteMutex);
+        g_texturesToDelete.insert(g_texturesToDelete.end(), texturesToDelete.begin(), texturesToDelete.end());
+    }
+    if (!texturesToDelete.empty()) { g_hasTexturesToDelete.store(true, std::memory_order_release); }
     Log("All background and user image textures have been queued for deletion.");
 }
 
@@ -901,40 +926,35 @@ void SaveGLState(GLState* s) {
     glGetIntegerv(GL_CURRENT_PROGRAM, &s->p);
     glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &s->va);
     glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &s->ab);
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &s->fb);
     glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &s->read_fb);
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &s->draw_fb);
     glGetIntegerv(GL_ACTIVE_TEXTURE, &s->at);
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &s->t);
 
-    // Save texture bindings for units 0-3
-    for (int i = 0; i < 4; i++) {
-        glActiveTexture(GL_TEXTURE0 + i);
-        glGetIntegerv(GL_TEXTURE_BINDING_2D, &s->texture_bindings[i]);
+    // NOTE: We do a lot of rendering with GL_TEXTURE0 regardless of what the game had active.
+    // Save binding for the originally-active unit, plus binding for unit 0 specifically.
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &s->t);
+    if (s->at == GL_TEXTURE0) {
+        s->t0 = s->t;
+    } else {
+        glActiveTexture(GL_TEXTURE0);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &s->t0);
+        glActiveTexture(s->at); // Restore original active texture
     }
-    glActiveTexture(s->at); // Restore original active texture
+
+    // For historical callers inside render.cpp: treat fb as the original DRAW framebuffer.
+    s->fb = s->draw_fb;
 
     // Enable/disable states we modify
     s->be = glIsEnabled(GL_BLEND);
     s->de = glIsEnabled(GL_DEPTH_TEST);
     s->sc = glIsEnabled(GL_SCISSOR_TEST);
-    s->cull_enabled = glIsEnabled(GL_CULL_FACE);
     s->srgb_enabled = glIsEnabled(GL_FRAMEBUFFER_SRGB);
-    s->stencil_test_enabled = glIsEnabled(GL_STENCIL_TEST);
-
-    // Depth/cull state
-    glGetBooleanv(GL_DEPTH_WRITEMASK, &s->depth_write_mask);
-    glGetIntegerv(GL_DEPTH_FUNC, &s->depth_func);
-    glGetIntegerv(GL_CULL_FACE_MODE, &s->cull_face_mode);
-    glGetIntegerv(GL_FRONT_FACE, &s->front_face_mode);
 
     // Blend function state
     glGetIntegerv(GL_BLEND_SRC_RGB, &s->blend_src_rgb);
     glGetIntegerv(GL_BLEND_DST_RGB, &s->blend_dst_rgb);
     glGetIntegerv(GL_BLEND_SRC_ALPHA, &s->blend_src_alpha);
     glGetIntegerv(GL_BLEND_DST_ALPHA, &s->blend_dst_alpha);
-    glGetIntegerv(GL_BLEND_EQUATION_RGB, &s->blend_equation_rgb);
-    glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &s->blend_equation_alpha);
 
     // Viewport and scissor
     glGetIntegerv(GL_VIEWPORT, &s->vp[0]);
@@ -944,6 +964,9 @@ void SaveGLState(GLState* s) {
     glGetFloatv(GL_COLOR_CLEAR_VALUE, s->cc);
     glGetFloatv(GL_LINE_WIDTH, &s->lw);
     glGetBooleanv(GL_COLOR_WRITEMASK, s->color_mask);
+    glGetIntegerv(GL_UNPACK_ROW_LENGTH, &s->unpack_row_length);
+    glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &s->unpack_skip_pixels);
+    glGetIntegerv(GL_UNPACK_SKIP_ROWS, &s->unpack_skip_rows);
     glGetIntegerv(GL_PACK_ALIGNMENT, &s->pack_alignment);
     glGetIntegerv(GL_UNPACK_ALIGNMENT, &s->unpack_alignment);
 }
@@ -953,17 +976,19 @@ void RestoreGLState(const GLState& s) {
     glUseProgram(s.p);
     glBindVertexArray(s.va);
     glBindBuffer(GL_ARRAY_BUFFER, s.ab);
-    glBindFramebuffer(GL_FRAMEBUFFER, s.fb);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, s.read_fb);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s.draw_fb);
 
-    // Restore texture bindings for units 0-3
-    for (int i = 0; i < 4; i++) {
-        glActiveTexture(GL_TEXTURE0 + i);
-        glBindTexture(GL_TEXTURE_2D, s.texture_bindings[i]);
+    // Restore texture bindings (we only touch GL_TEXTURE0, plus we may have changed the active unit)
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, s.t0);
+    if (s.at != GL_TEXTURE0) {
+        glActiveTexture(s.at);
+        glBindTexture(GL_TEXTURE_2D, s.t);
+    } else {
+        // If the original active unit was 0, the above bind already restored it.
+        glActiveTexture(s.at);
     }
-    glActiveTexture(s.at); // Restore original active texture
-    glBindTexture(GL_TEXTURE_2D, s.t);
 
     // Enable/disable states
     if (s.be)
@@ -978,28 +1003,13 @@ void RestoreGLState(const GLState& s) {
         glEnable(GL_SCISSOR_TEST);
     else
         glDisable(GL_SCISSOR_TEST);
-    if (s.cull_enabled)
-        glEnable(GL_CULL_FACE);
-    else
-        glDisable(GL_CULL_FACE);
     if (s.srgb_enabled)
         glEnable(GL_FRAMEBUFFER_SRGB);
     else
         glDisable(GL_FRAMEBUFFER_SRGB);
-    if (s.stencil_test_enabled)
-        glEnable(GL_STENCIL_TEST);
-    else
-        glDisable(GL_STENCIL_TEST);
-
-    // Depth/cull state
-    glDepthMask(s.depth_write_mask ? GL_TRUE : GL_FALSE);
-    glDepthFunc(s.depth_func);
-    glCullFace(s.cull_face_mode);
-    glFrontFace(s.front_face_mode);
 
     // Blend function state
     glBlendFuncSeparate(s.blend_src_rgb, s.blend_dst_rgb, s.blend_src_alpha, s.blend_dst_alpha);
-    glBlendEquationSeparate(s.blend_equation_rgb, s.blend_equation_alpha);
 
     // Viewport and scissor - use unhooked glViewport to avoid interfering with viewport hook state
     if (oglViewport)
@@ -1012,6 +1022,9 @@ void RestoreGLState(const GLState& s) {
     glClearColor(s.cc[0], s.cc[1], s.cc[2], s.cc[3]);
     glLineWidth(s.lw);
     glColorMask(s.color_mask[0], s.color_mask[1], s.color_mask[2], s.color_mask[3]);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, s.unpack_row_length);
+    glPixelStorei(GL_UNPACK_SKIP_PIXELS, s.unpack_skip_pixels);
+    glPixelStorei(GL_UNPACK_SKIP_ROWS, s.unpack_skip_rows);
     glPixelStorei(GL_PACK_ALIGNMENT, s.pack_alignment);
     glPixelStorei(GL_UNPACK_ALIGNMENT, s.unpack_alignment);
 }
@@ -1185,6 +1198,7 @@ void UploadDecodedImageToGPU(const DecodedImageData& imgData) {
             } else if (oldInst.textureId != 0) {
                 g_texturesToDelete.push_back(oldInst.textureId);
             }
+            g_hasTexturesToDelete.store(true, std::memory_order_release);
             g_backgroundTextures.erase(it);
         }
 
@@ -1250,10 +1264,19 @@ void UploadDecodedImageToGPU(const DecodedImageData& imgData) {
             Log("Skipping GPU upload for background '" + imgData.id + "' due to null image data.");
         }
     } else if (imgData.type == DecodedImageData::Type::UserImage) {
-        // Clean up old instance if it exists
-        auto it = g_userImages.find(imgData.id);
-        if (it != g_userImages.end()) {
-            UserImageInstance& oldInst = it->second;
+        // Remove old instance under lock, but avoid holding the lock while uploading new textures.
+        UserImageInstance oldInst;
+        bool hadOldInst = false;
+        {
+            std::lock_guard<std::mutex> imageLock(g_userImagesMutex);
+            auto it = g_userImages.find(imgData.id);
+            if (it != g_userImages.end()) {
+                oldInst = std::move(it->second);
+                g_userImages.erase(it);
+                hadOldInst = true;
+            }
+        }
+        if (hadOldInst) {
             std::lock_guard<std::mutex> lock(g_texturesToDeleteMutex);
             if (oldInst.isAnimated) {
                 for (GLuint tex : oldInst.frameTextures) {
@@ -1262,8 +1285,8 @@ void UploadDecodedImageToGPU(const DecodedImageData& imgData) {
             } else if (oldInst.textureId != 0) {
                 g_texturesToDelete.push_back(oldInst.textureId);
             }
-            g_userImages.erase(it);
         }
+        if (hadOldInst) { g_hasTexturesToDelete.store(true, std::memory_order_release); }
 
         if (imgData.data) {
             UserImageInstance inst;
@@ -1310,7 +1333,10 @@ void UploadDecodedImageToGPU(const DecodedImageData& imgData) {
                 }
                 inst.textureId = inst.frameTextures[0]; // Start with first frame
 
-                g_userImages[imgData.id] = inst;
+                {
+                    std::lock_guard<std::mutex> imageLock(g_userImagesMutex);
+                    g_userImages[imgData.id] = std::move(inst);
+                }
                 Log("Uploaded animated user image '" + imgData.id + "' to GPU (" + std::to_string(imgData.frameCount) + " frames).");
             } else {
                 // Static user image
@@ -1330,7 +1356,10 @@ void UploadDecodedImageToGPU(const DecodedImageData& imgData) {
                 glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, imgData.width, imgData.frameHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, imgData.data);
                 glGenerateMipmap(GL_TEXTURE_2D);
 
-                g_userImages[imgData.id] = inst;
+                {
+                    std::lock_guard<std::mutex> imageLock(g_userImagesMutex);
+                    g_userImages[imgData.id] = std::move(inst);
+                }
                 Log("Uploaded user image '" + imgData.id + "' to GPU.");
             }
         } else {
@@ -1648,6 +1677,67 @@ void handleEyeZoomMode(const GLState& s, float opacity, int animatedViewportX) {
     int dstBottom = zoomY_gl;
     int dstTop = zoomY_gl + zoomOutputHeight;
 
+    // Optional FPS limit for updating the EyeZoom clone texture.
+    // Implementation detail: we reuse the existing snapshot texture as a clone cache.
+    // When limited, we update the snapshot at most N times per second, and render from the snapshot every frame.
+    static std::chrono::steady_clock::time_point s_eyeZoomCloneLastUpdate = {};
+    const bool cloneFpsLimited = (!useSnapshot && zoomConfig.cloneFps > 0);
+    const auto now = std::chrono::steady_clock::now();
+
+    auto EnsureEyeZoomSnapshotAllocated = [&]() {
+        if (s_eyeZoomSnapshotTexture == 0 || s_eyeZoomSnapshotWidth != zoomOutputWidth || s_eyeZoomSnapshotHeight != zoomOutputHeight) {
+            if (s_eyeZoomSnapshotTexture != 0) { glDeleteTextures(1, &s_eyeZoomSnapshotTexture); }
+            if (s_eyeZoomSnapshotFBO != 0) { glDeleteFramebuffers(1, &s_eyeZoomSnapshotFBO); }
+
+            glGenTextures(1, &s_eyeZoomSnapshotTexture);
+            glBindTexture(GL_TEXTURE_2D, s_eyeZoomSnapshotTexture);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, zoomOutputWidth, zoomOutputHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+            glGenFramebuffers(1, &s_eyeZoomSnapshotFBO);
+            glBindFramebuffer(GL_FRAMEBUFFER, s_eyeZoomSnapshotFBO);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_eyeZoomSnapshotTexture, 0);
+
+            s_eyeZoomSnapshotWidth = zoomOutputWidth;
+            s_eyeZoomSnapshotHeight = zoomOutputHeight;
+        }
+    };
+
+    auto UpdateEyeZoomSnapshotFromGameTexture = [&]() {
+        EnsureEyeZoomSnapshotAllocated();
+
+        // Render clone directly into snapshot (scaled to zoomOutputWidth/zoomOutputHeight)
+        if (s_eyeZoomBlitFBO == 0) { glGenFramebuffers(1, &s_eyeZoomBlitFBO); }
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, s_eyeZoomBlitFBO);
+        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gameTextureToUse, 0);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_eyeZoomSnapshotFBO);
+        glBlitFramebuffer(srcLeft, srcBottom, srcRight, srcTop, 0, 0, zoomOutputWidth, zoomOutputHeight, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        s_eyeZoomSnapshotValid = true;
+        s_eyeZoomCloneLastUpdate = now;
+    };
+
+    if (cloneFpsLimited) {
+        bool needsUpdate = (!s_eyeZoomSnapshotValid || s_eyeZoomSnapshotTexture == 0 || s_eyeZoomSnapshotWidth != zoomOutputWidth ||
+                            s_eyeZoomSnapshotHeight != zoomOutputHeight);
+
+        if (!needsUpdate) {
+            const auto elapsedMs =
+                std::chrono::duration_cast<std::chrono::milliseconds>(now - s_eyeZoomCloneLastUpdate).count();
+            const int intervalMs = (std::max)(1, 1000 / (std::max)(1, zoomConfig.cloneFps));
+            needsUpdate = (elapsedMs >= intervalMs);
+        }
+
+        if (needsUpdate) {
+            // If the game texture isn't ready, just keep rendering the last snapshot.
+            if (gameTextureToUse != UINT_MAX) {
+                UpdateEyeZoomSnapshotFromGameTexture();
+            }
+        }
+    }
+
     // For opacity < 1.0, we need to render to a temporary texture first, then blend to screen
     if (opacity < 1.0f) {
         // PERF: Reuse cached FBO/texture - only reallocate when dimensions change
@@ -1680,13 +1770,23 @@ void handleEyeZoomMode(const GLState& s, float opacity, int animatedViewportX) {
         glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        // Blit from game texture to temp FBO using cached blit FBO
-        if (s_eyeZoomBlitFBO == 0) { glGenFramebuffers(1, &s_eyeZoomBlitFBO); }
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, s_eyeZoomBlitFBO);
-        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gameTextureToUse, 0);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_eyeZoomTempFBO);
-
-        glBlitFramebuffer(srcLeft, srcBottom, srcRight, srcTop, 0, 0, zoomOutputWidth, zoomOutputHeight, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        // Blit clone into temp FBO.
+        // When clone FPS limiting is enabled, render from the snapshot cache.
+        if (cloneFpsLimited && s_eyeZoomSnapshotValid && s_eyeZoomSnapshotTexture != 0) {
+            if (s_eyeZoomBlitFBO == 0) { glGenFramebuffers(1, &s_eyeZoomBlitFBO); }
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, s_eyeZoomBlitFBO);
+            glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_eyeZoomSnapshotTexture, 0);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_eyeZoomTempFBO);
+            glBlitFramebuffer(0, 0, s_eyeZoomSnapshotWidth, s_eyeZoomSnapshotHeight, 0, 0, zoomOutputWidth, zoomOutputHeight,
+                              GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        } else {
+            // Uncapped: blit directly from game texture each frame
+            if (s_eyeZoomBlitFBO == 0) { glGenFramebuffers(1, &s_eyeZoomBlitFBO); }
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, s_eyeZoomBlitFBO);
+            glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gameTextureToUse, 0);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_eyeZoomTempFBO);
+            glBlitFramebuffer(srcLeft, srcBottom, srcRight, srcTop, 0, 0, zoomOutputWidth, zoomOutputHeight, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        }
 
         // Now render the colored boxes and center line to the temp FBO
         glBindFramebuffer(GL_FRAMEBUFFER, s_eyeZoomTempFBO);
@@ -1812,7 +1912,7 @@ void handleEyeZoomMode(const GLState& s, float opacity, int animatedViewportX) {
         glDisable(GL_BLEND);
 
         // STEP 1: Render zoom section from game texture (live) or snapshot (transition-out)
-        if (useSnapshot) {
+        if (useSnapshot || (cloneFpsLimited && s_eyeZoomSnapshotValid && s_eyeZoomSnapshotTexture != 0)) {
             // Transitioning FROM EyeZoom - use the cached snapshot
             // The snapshot contains the complete zoom output from the last EyeZoom frame
             // PERF: Reuse cached blit FBO instead of creating/destroying every frame
@@ -1839,25 +1939,8 @@ void handleEyeZoomMode(const GLState& s, float opacity, int animatedViewportX) {
 
             glBlitFramebuffer(srcLeft, srcBottom, srcRight, srcTop, dstLeft, dstBottom, dstRight, dstTop, GL_COLOR_BUFFER_BIT, GL_NEAREST);
 
-            // Now capture the zoom output to snapshot texture for future use
-            // Create or resize snapshot texture if needed
-            if (s_eyeZoomSnapshotTexture == 0 || s_eyeZoomSnapshotWidth != zoomOutputWidth || s_eyeZoomSnapshotHeight != zoomOutputHeight) {
-                if (s_eyeZoomSnapshotTexture != 0) { glDeleteTextures(1, &s_eyeZoomSnapshotTexture); }
-                if (s_eyeZoomSnapshotFBO != 0) { glDeleteFramebuffers(1, &s_eyeZoomSnapshotFBO); }
-
-                glGenTextures(1, &s_eyeZoomSnapshotTexture);
-                glBindTexture(GL_TEXTURE_2D, s_eyeZoomSnapshotTexture);
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, zoomOutputWidth, zoomOutputHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-
-                glGenFramebuffers(1, &s_eyeZoomSnapshotFBO);
-                glBindFramebuffer(GL_FRAMEBUFFER, s_eyeZoomSnapshotFBO);
-                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_eyeZoomSnapshotTexture, 0);
-
-                s_eyeZoomSnapshotWidth = zoomOutputWidth;
-                s_eyeZoomSnapshotHeight = zoomOutputHeight;
-            }
+            // Capture snapshot for future transition-out (only needed when we are not already using the snapshot cache).
+            EnsureEyeZoomSnapshotAllocated();
 
             // Copy from screen to snapshot (just the zoom region, without overlay boxes)
             glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
@@ -2285,23 +2368,40 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
             glBindTexture(GL_TEXTURE_2D, savedTexture);
         };
 
-        // Lambda to render solid color background by drawing 4 letterbox regions directly
-        // Faster than stencil approach - just calculate which regions need drawing
+        // Lambda to render solid color background by clearing 4 letterbox regions directly.
+        // This avoids per-region VBO uploads + draw calls (cheaper on both CPU and GPU).
         auto renderBackgroundColor = [&](const Color& color, float opacity) {
             PROFILE_SCOPE_CAT("Scissor Background Color", "Rendering");
 
-            glEnable(GL_SCISSOR_TEST);
-            glUseProgram(g_solidColorProgram);
-            glUniform4f(g_solidColorShaderLocs.color, color.r, color.g, color.b, opacity);
-            glBindVertexArray(g_vao);
-            glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
-
+            // We only use this fast-path for fully opaque backgrounds.
+            // (For translucent backgrounds we'd need blending, so keep the shader path.)
             if (opacity < 1.0f) {
+                glEnable(GL_SCISSOR_TEST);
+                glUseProgram(g_solidColorProgram);
+                glUniform4f(g_solidColorShaderLocs.color, color.r, color.g, color.b, opacity);
+                glBindVertexArray(g_vao);
+                glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
                 glEnable(GL_BLEND);
                 glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-            } else {
+
+                // Calculate viewport bounds in GL coordinates (shrink inward by letterboxExtend)
+                int vpLeft = finalX + letterboxExtendX;
+                int vpRight = finalX + finalW - letterboxExtendX;
+                int vpBottom_gl = finalY_gl + letterboxExtendY;
+                int vpTop_gl = finalY_gl + finalH - letterboxExtendY;
+
+                drawColorRegion(0, 0, fullW, vpBottom_gl);
+                drawColorRegion(0, vpTop_gl, fullW, fullH - vpTop_gl);
+                drawColorRegion(0, vpBottom_gl, vpLeft, vpTop_gl - vpBottom_gl);
+                drawColorRegion(vpRight, vpBottom_gl, fullW - vpRight, vpTop_gl - vpBottom_gl);
+
+                glDisable(GL_SCISSOR_TEST);
                 glDisable(GL_BLEND);
+                return;
             }
+
+            glDisable(GL_BLEND);
+            glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
             // Calculate viewport bounds in GL coordinates (shrink inward by letterboxExtend)
             int vpLeft = finalX + letterboxExtendX;
@@ -2309,15 +2409,21 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
             int vpBottom_gl = finalY_gl + letterboxExtendY;
             int vpTop_gl = finalY_gl + finalH - letterboxExtendY;
 
-            // Draw 4 letterbox regions around the viewport:
-            // Bottom region: from y=0 to vpBottom_gl, full width
-            drawColorRegion(0, 0, fullW, vpBottom_gl);
-            // Top region: from vpTop_gl to fullH, full width
-            drawColorRegion(0, vpTop_gl, fullW, fullH - vpTop_gl);
-            // Left region: from x=0 to vpLeft, between vpBottom_gl and vpTop_gl
-            drawColorRegion(0, vpBottom_gl, vpLeft, vpTop_gl - vpBottom_gl);
-            // Right region: from vpRight to fullW, between vpBottom_gl and vpTop_gl
-            drawColorRegion(vpRight, vpBottom_gl, fullW - vpRight, vpTop_gl - vpBottom_gl);
+            glEnable(GL_SCISSOR_TEST);
+            glClearColor(color.r, color.g, color.b, 1.0f);
+
+            // Bottom
+            glScissor(0, 0, fullW, vpBottom_gl);
+            glClear(GL_COLOR_BUFFER_BIT);
+            // Top
+            glScissor(0, vpTop_gl, fullW, fullH - vpTop_gl);
+            glClear(GL_COLOR_BUFFER_BIT);
+            // Left
+            glScissor(0, vpBottom_gl, vpLeft, vpTop_gl - vpBottom_gl);
+            glClear(GL_COLOR_BUFFER_BIT);
+            // Right
+            glScissor(vpRight, vpBottom_gl, fullW - vpRight, vpTop_gl - vpBottom_gl);
+            glClear(GL_COLOR_BUFFER_BIT);
 
             glDisable(GL_SCISSOR_TEST);
         };
@@ -2700,24 +2806,54 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
                     // Check which image is under the mouse cursor (use snapshot for safe iteration)
                     std::string hoveredImage = "";
                     const auto& dragImages = configSnap ? configSnap->images : std::vector<ImageConfig>{};
+
+                    // PERF: Avoid O(n^2) lookups (mode imageIds * total images) during hover detection.
+                    // Drag mode is rare, but this is on the game thread, so keep it cheap.
+                    std::unordered_map<std::string, const ImageConfig*> imageByName;
+                    if (configSnap) {
+                        imageByName.reserve(dragImages.size());
+                        for (const auto& img : dragImages) {
+                            imageByName.emplace(img.name, &img);
+                        }
+                    }
                     for (const auto& imageName : modeToRender->imageIds) {
                         // Look up image config by name from snapshot
                         const ImageConfig* confPtr = nullptr;
-                        for (const auto& img : dragImages) {
-                            if (img.name == imageName) {
-                                confPtr = &img;
-                                break;
+                        if (!imageByName.empty()) {
+                            auto it = imageByName.find(imageName);
+                            if (it != imageByName.end()) { confPtr = it->second; }
+                        } else {
+                            for (const auto& img : dragImages) {
+                                if (img.name == imageName) {
+                                    confPtr = &img;
+                                    break;
+                                }
                             }
                         }
                         if (!confPtr) continue;
                         const ImageConfig& conf = *confPtr;
 
-                        auto it_inst = g_userImages.find(conf.name);
-                        if (it_inst == g_userImages.end() || it_inst->second.textureId == 0) continue;
+                        // Try-lock to avoid stalling the game thread if textures are being updated.
+                        int texWidth = 0;
+                        int texHeight = 0;
+                        {
+                            std::unique_lock<std::mutex> imageLock(g_userImagesMutex, std::try_to_lock);
+                            if (!imageLock.owns_lock()) { continue; }
+                            auto it_inst = g_userImages.find(conf.name);
+                            if (it_inst == g_userImages.end() || it_inst->second.textureId == 0) continue;
+                            texWidth = it_inst->second.width;
+                            texHeight = it_inst->second.height;
+                        }
 
-                        // Calculate actual dimensions from scale
-                        int displayW, displayH;
-                        CalculateImageDimensions(conf, displayW, displayH);
+                        // Calculate actual dimensions from scale (avoid calling CalculateImageDimensions to prevent nested locking)
+                        int croppedW = texWidth - conf.crop_left - conf.crop_right;
+                        int croppedH = texHeight - conf.crop_top - conf.crop_bottom;
+                        if (croppedW < 1) croppedW = 1;
+                        if (croppedH < 1) croppedH = 1;
+                        int displayW = static_cast<int>(croppedW * conf.scale);
+                        int displayH = static_cast<int>(croppedH * conf.scale);
+                        if (displayW < 1) displayW = 1;
+                        if (displayH < 1) displayH = 1;
 
                         int finalScreenX_win, finalScreenY_win;
                         // Use viewport-aware positioning for viewport-relative anchors
@@ -2820,15 +2956,31 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
                         if (cacheLock.owns_lock()) {
                             // Reset to defaults - will be updated if we find a hovered overlay
                             hoveredOverlay = ""; // Build list of active window overlays with their configs
-                            std::vector<std::pair<std::string, WindowOverlayConfig>> activeOverlays;
+                            std::vector<const WindowOverlayConfig*> activeOverlays;
+
+                            // PERF: Avoid O(n^2) scans (mode overlay IDs * total overlays in config).
+                            std::unordered_map<std::string, const WindowOverlayConfig*> overlayByName;
+                            if (configSnap) {
+                                overlayByName.reserve(configSnap->windowOverlays.size());
+                                for (const auto& ov : configSnap->windowOverlays) {
+                                    overlayByName.emplace(ov.name, &ov);
+                                }
+                            }
                             for (const auto& overlayId : modeToRender->windowOverlayIds) {
-                                const WindowOverlayConfig* config =
-                                    configSnap ? FindWindowOverlayConfigIn(overlayId, *configSnap) : nullptr;
-                                if (config) { activeOverlays.push_back({ overlayId, *config }); }
+                                const WindowOverlayConfig* config = nullptr;
+                                if (!overlayByName.empty()) {
+                                    auto it = overlayByName.find(overlayId);
+                                    if (it != overlayByName.end()) { config = it->second; }
+                                } else {
+                                    config = configSnap ? FindWindowOverlayConfigIn(overlayId, *configSnap) : nullptr;
+                                }
+                                if (config) { activeOverlays.push_back(config); }
                             }
 
                             // Check which window overlay is under the mouse cursor
-                            for (const auto& [overlayId, conf] : activeOverlays) {
+                            for (const WindowOverlayConfig* confPtr : activeOverlays) {
+                                if (!confPtr) continue;
+                                const WindowOverlayConfig& conf = *confPtr;
                                 // Calculate actual dimensions from scale
                                 // Use Unsafe version since we already hold the cache mutex
                                 int displayW, displayH;
@@ -2842,7 +2994,7 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
                                 // Check if mouse is within this overlay's bounds
                                 if (mousePos.x >= finalScreenX_win && mousePos.x < finalScreenX_win + displayW &&
                                     mousePos.y >= finalScreenY_win && mousePos.y < finalScreenY_win + displayH) {
-                                    hoveredOverlay = overlayId;
+                                    hoveredOverlay = conf.name;
                                     break; // Take the first (topmost) overlay
                                 }
                             }
@@ -2914,13 +3066,44 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
     // Overlay opacity is always 1.0 - fade transitions removed
     float overlayOpacity = 1.0f;
 
+    // If there's nothing to draw, avoid waking the render thread and avoid compositing a fullscreen overlay texture.
+    // Submitting + blitting every frame costs GPU time even when the overlay is fully transparent.
+    const bool wantOverlayElements = hasMirrors ||
+                                    (g_imageOverlaysVisible.load(std::memory_order_acquire) && !modeToRender->imageIds.empty()) ||
+                                    (g_windowOverlaysVisible.load(std::memory_order_acquire) && !modeToRender->windowOverlayIds.empty());
+    const bool wantAnyImGui = g_shouldRenderGui.load(std::memory_order_relaxed) || g_showPerformanceOverlay.load(std::memory_order_relaxed) ||
+                              g_showProfiler.load(std::memory_order_relaxed) || g_showEyeZoom.load(std::memory_order_relaxed) ||
+                              g_showTextureGrid.load(std::memory_order_relaxed);
+
+    // Welcome toast is only relevant in fullscreen; windowed toast1 is handled by the early-return path in SwapBuffers.
+    // Also stop requesting it after a short timeout so it doesn't keep the async overlay pipeline alive for the whole session.
+    bool wantWelcomeToast = false;
+    {
+        const bool isFull = IsFullscreen();
+        static bool s_prevFullscreen = false;
+        static std::chrono::steady_clock::time_point s_fullscreenEnterTime{};
+        auto now = std::chrono::steady_clock::now();
+        if (isFull && !s_prevFullscreen) { s_fullscreenEnterTime = now; }
+        s_prevFullscreen = isFull;
+
+        if (isFull && !g_configurePromptDismissedThisSession.load(std::memory_order_relaxed)) {
+            constexpr float kHoldSeconds = 10.0f;
+            constexpr float kFadeSeconds = 1.5f;
+            const float elapsed = std::chrono::duration_cast<std::chrono::duration<float>>(now - s_fullscreenEnterTime).count();
+            // RenderWelcomeToast() auto-fades out in fullscreen; once past the hold+fade window, don't keep requesting it.
+            wantWelcomeToast = (elapsed <= (kHoldSeconds + kFadeSeconds + 0.25f));
+        }
+    }
+
+    const bool wantAsyncOverlayThisFrame = wantOverlayElements || wantAnyImGui || wantWelcomeToast;
+
     // === ASYNC OVERLAY RENDERING ===
     // All overlay rendering is done on the render thread
     // Submit lightweight request - render thread looks up active elements from g_config
     // This moves collection + rendering work off the main thread, reducing SwapBuffers hook time
     // Overlays have 1 frame of latency but this is acceptable for UI elements
 
-    if (g_renderThreadRunning.load()) {
+    if (g_renderThreadRunning.load() && wantAsyncOverlayThisFrame) {
         PROFILE_SCOPE_CAT("Async Overlay Submit/Blit", "Rendering");
 
         {
@@ -3001,13 +3184,9 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
             request.textureGridModeWidth = g_textureGridModeWidth.load(std::memory_order_relaxed);
             request.textureGridModeHeight = g_textureGridModeHeight.load(std::memory_order_relaxed);
 
-            // Toast prompts:
-            // Always request toast rendering; RenderWelcomeToast() itself enforces:
-            // - toast1 shows in windowed
-            // - toast2 shows in fullscreen until Ctrl+I for this session
-            // This avoids the prompt disappearing due to transient state/request gating.
+            // Toast prompts (fullscreen only). Windowed toast1 is drawn in the windowed early-return path.
             request.welcomeToastIsFullscreen = IsFullscreen();
-            request.showWelcomeToast = true;
+            request.showWelcomeToast = wantWelcomeToast;
 
             // Background and border config for async rendering
             request.backgroundIsImage = (modeToRender->background.selectedMode == "image");
@@ -3088,15 +3267,6 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
             glBindVertexArray(g_fullscreenQuadVAO);
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, completedTexture);
-
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_R, GL_RED);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_G, GL_GREEN);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_B, GL_BLUE);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_A, GL_ALPHA);
-
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_NONE);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
 
             // Use background shader (simpler passthrough, uniforms already set during init)
             glUseProgram(g_backgroundProgram);

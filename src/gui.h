@@ -397,6 +397,8 @@ struct EyeZoomConfig {
     // Example: cloneWidth=30 => 15 pixels per side sampled; overlayWidth=5 => only render 5 boxes per side (10 total).
     // Set to cloneWidth/2 to match legacy behavior (overlay covers the full clone width).
     int overlayWidth = 12;
+    // FPS cap for updating the magnified clone texture (0 = unlimited / update every frame)
+    int cloneFps = 0;
     int cloneHeight = 2080;
     int stretchWidth = 810; // Width of the rendered zoom output on screen
     int windowWidth = 384;
@@ -609,6 +611,7 @@ extern GameVersion g_gameVersion;
 extern std::atomic<bool> g_screenshotRequested;
 extern std::atomic<bool> g_pendingImageLoad;
 extern std::atomic<bool> g_allImagesLoaded;
+extern std::atomic<uint64_t> g_configSnapshotVersion;
 extern std::string g_configLoadError;
 extern std::mutex g_configErrorMutex;
 extern std::wstring g_modeFilePath;

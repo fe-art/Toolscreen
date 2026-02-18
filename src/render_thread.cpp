@@ -11,6 +11,7 @@
 #include "utils.h"
 #include "virtual_camera.h"
 #include "window_overlay.h"
+#include <unordered_map>
 #include <set>
 #include <thread>
 
@@ -1145,6 +1146,16 @@ static void InitRenderFBOs(int width, int height) {
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
+            // One-time parameters used by the main-thread composite path.
+            // Setting these here avoids per-frame glTexParameteri churn (driver overhead).
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_R, GL_RED);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_G, GL_GREEN);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_B, GL_BLUE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_A, GL_ALPHA);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_NONE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+
             // Create stencil renderbuffer
             glBindRenderbuffer(GL_RENDERBUFFER, fbo.stencilRbo);
             glRenderbufferStorage(GL_RENDERBUFFER, GL_STENCIL_INDEX8, width, height);
@@ -1201,6 +1212,15 @@ static void InitRenderFBOs(int width, int height) {
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+            // Match main overlay texture parameters (helps keep composite paths predictable).
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_R, GL_RED);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_G, GL_GREEN);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_B, GL_BLUE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_A, GL_ALPHA);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_NONE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
 
             // Create stencil renderbuffer
             glBindRenderbuffer(GL_RENDERBUFFER, fbo.stencilRbo);
@@ -1754,40 +1774,98 @@ static void RT_RenderEyeZoom(GLuint gameTexture, int requestViewportX, int fullW
     int zoomY = zoomConfig.verticalMargin;
     int zoomY_gl = fullH - zoomY - zoomOutputHeight;
 
-    // Determine which texture to use as source and its dimensions
-    GLuint sourceTexture = gameTexture;
-    int srcWidth, srcHeight;
-
     // Get current draw framebuffer (the FBO we're rendering to)
     GLint currentDrawFBO;
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &currentDrawFBO);
 
-    // If transitioning FROM EyeZoom and we have a valid snapshot, use the snapshot
-    // The snapshot contains the pre-rendered EyeZoom magnified content
-    if (isTransitioningFromEyeZoom && rt_eyeZoomSnapshotValid && rt_eyeZoomSnapshotTexture != 0) {
-        // Use local snapshot instead of passed parameters
-        srcWidth = rt_eyeZoomSnapshotWidth;
-        srcHeight = rt_eyeZoomSnapshotHeight;
+    // Optional FPS limit for updating the EyeZoom clone texture (render thread / OBS capture).
+    // We reuse rt_eyeZoomSnapshotTexture as a clone cache and as the transition-out snapshot.
+    static std::chrono::steady_clock::time_point rt_eyeZoomCloneLastUpdate = {};
+    const bool cloneFpsLimited = (zoomConfig.cloneFps > 0);
+    const auto now = std::chrono::steady_clock::now();
 
-        // STEP 1: Blit entire snapshot to destination
-        // Reuse a cached FBO for reading from the snapshot texture (avoid per-frame create/delete)
+    auto EnsureRtEyeZoomSnapshotAllocated = [&]() {
+        if (rt_eyeZoomSnapshotTexture == 0 || rt_eyeZoomSnapshotWidth != zoomOutputWidth || rt_eyeZoomSnapshotHeight != zoomOutputHeight) {
+            if (rt_eyeZoomSnapshotTexture != 0) { glDeleteTextures(1, &rt_eyeZoomSnapshotTexture); }
+            if (rt_eyeZoomSnapshotFBO != 0) { glDeleteFramebuffers(1, &rt_eyeZoomSnapshotFBO); }
+
+            glGenTextures(1, &rt_eyeZoomSnapshotTexture);
+            glBindTexture(GL_TEXTURE_2D, rt_eyeZoomSnapshotTexture);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, zoomOutputWidth, zoomOutputHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+            glGenFramebuffers(1, &rt_eyeZoomSnapshotFBO);
+            glBindFramebuffer(GL_FRAMEBUFFER, rt_eyeZoomSnapshotFBO);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, rt_eyeZoomSnapshotTexture, 0);
+
+            rt_eyeZoomSnapshotWidth = zoomOutputWidth;
+            rt_eyeZoomSnapshotHeight = zoomOutputHeight;
+            rt_eyeZoomSnapshotValid = false; // content needs refresh
+        }
+    };
+
+    auto BlitRtEyeZoomSnapshotToDest = [&]() {
         static GLuint snapshotReadFBO = 0;
         if (snapshotReadFBO == 0) { glGenFramebuffers(1, &snapshotReadFBO); }
         glBindFramebuffer(GL_READ_FRAMEBUFFER, snapshotReadFBO);
         glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, rt_eyeZoomSnapshotTexture, 0);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, currentDrawFBO);
+        glBlitFramebuffer(0, 0, rt_eyeZoomSnapshotWidth, rt_eyeZoomSnapshotHeight, zoomX, zoomY_gl, zoomX + zoomOutputWidth,
+                          zoomY_gl + zoomOutputHeight, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    };
 
-        // Blit entire snapshot to destination (snapshot already contains the zoomed content)
-        glBlitFramebuffer(0, 0, srcWidth, srcHeight, zoomX, zoomY_gl, zoomX + zoomOutputWidth, zoomY_gl + zoomOutputHeight,
-                          GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    // STEP 1: Render clone (either from cached snapshot, or live game texture)
+    if (isTransitioningFromEyeZoom && rt_eyeZoomSnapshotValid && rt_eyeZoomSnapshotTexture != 0) {
+        // Transitioning OUT: always freeze and use snapshot
+        BlitRtEyeZoomSnapshotToDest();
+    } else if (cloneFpsLimited) {
+        // Capped: update snapshot at most N fps, then render from snapshot
+        EnsureRtEyeZoomSnapshotAllocated();
+
+        bool needsUpdate = (!rt_eyeZoomSnapshotValid);
+        if (!needsUpdate) {
+            const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - rt_eyeZoomCloneLastUpdate).count();
+            const int intervalMs = (std::max)(1, 1000 / (std::max)(1, zoomConfig.cloneFps));
+            needsUpdate = (elapsedMs >= intervalMs);
+        }
+
+        if (needsUpdate) {
+            // Normal path: sample from game texture center using ACTUAL game texture dimensions.
+            int texWidth = gameTexW;
+            int texHeight = gameTexH;
+
+            int srcCenterX = texWidth / 2;
+            int srcLeft = srcCenterX - zoomConfig.cloneWidth / 2;
+            int srcRight = srcCenterX + zoomConfig.cloneWidth / 2;
+
+            int srcCenterY = texHeight / 2;
+            int srcBottom = srcCenterY - zoomConfig.cloneHeight / 2;
+            int srcTop = srcCenterY + zoomConfig.cloneHeight / 2;
+
+            static GLuint gameReadFBO = 0;
+            if (gameReadFBO == 0) { glGenFramebuffers(1, &gameReadFBO); }
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, gameReadFBO);
+            glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gameTexture, 0);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, rt_eyeZoomSnapshotFBO);
+            glBlitFramebuffer(srcLeft, srcBottom, srcRight, srcTop, 0, 0, zoomOutputWidth, zoomOutputHeight, GL_COLOR_BUFFER_BIT,
+                              GL_NEAREST);
+            glBindFramebuffer(GL_FRAMEBUFFER, currentDrawFBO);
+
+            rt_eyeZoomSnapshotValid = true;
+            rt_eyeZoomCloneLastUpdate = now;
+        }
+
+        if (rt_eyeZoomSnapshotValid && rt_eyeZoomSnapshotTexture != 0) {
+            BlitRtEyeZoomSnapshotToDest();
+        } else {
+            return; // No valid content to render
+        }
     } else {
-        // Normal path: sample from game texture center
-        // Use ACTUAL game texture dimensions, not EyeZoom config dimensions
-        // During transitions, the game texture may be at different sizes
+        // Uncapped: sample from game texture every frame and also refresh snapshot for transition-out
         int texWidth = gameTexW;
         int texHeight = gameTexH;
 
-        // Calculate source region from the CENTER of the game texture
         int srcCenterX = texWidth / 2;
         int srcLeft = srcCenterX - zoomConfig.cloneWidth / 2;
         int srcRight = srcCenterX + zoomConfig.cloneWidth / 2;
@@ -1796,59 +1874,25 @@ static void RT_RenderEyeZoom(GLuint gameTexture, int requestViewportX, int fullW
         int srcBottom = srcCenterY - zoomConfig.cloneHeight / 2;
         int srcTop = srcCenterY + zoomConfig.cloneHeight / 2;
 
-        // Destination region on screen
         int dstLeft = zoomX;
         int dstRight = zoomX + zoomOutputWidth;
         int dstBottom = zoomY_gl;
         int dstTop = zoomY_gl + zoomOutputHeight;
 
-        // STEP 1: Blit from game texture to FBO
-        // Reuse a cached FBO for reading from the game texture (avoid per-frame create/delete)
         static GLuint gameReadFBO = 0;
         if (gameReadFBO == 0) { glGenFramebuffers(1, &gameReadFBO); }
         glBindFramebuffer(GL_READ_FRAMEBUFFER, gameReadFBO);
         glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gameTexture, 0);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, currentDrawFBO);
-
         glBlitFramebuffer(srcLeft, srcBottom, srcRight, srcTop, dstLeft, dstBottom, dstRight, dstTop, GL_COLOR_BUFFER_BIT, GL_NEAREST);
 
-        // CAPTURE SNAPSHOT: Store the EyeZoom output for transition-out animation
-        // Only capture when we're NOT transitioning from EyeZoom (stable or transitioning TO)
-        // Use only the function parameter (from the request) - avoids race where global atomic
-        // changes mid-frame causing desync between snapshot and rendering state
-        bool shouldFreezeSnapshot = isTransitioningFromEyeZoom;
-        if (!shouldFreezeSnapshot) {
-            // Resize snapshot texture if needed
-            if (rt_eyeZoomSnapshotTexture == 0 || rt_eyeZoomSnapshotWidth != zoomOutputWidth ||
-                rt_eyeZoomSnapshotHeight != zoomOutputHeight) {
-                if (rt_eyeZoomSnapshotTexture != 0) { glDeleteTextures(1, &rt_eyeZoomSnapshotTexture); }
-                if (rt_eyeZoomSnapshotFBO != 0) { glDeleteFramebuffers(1, &rt_eyeZoomSnapshotFBO); }
-
-                glGenTextures(1, &rt_eyeZoomSnapshotTexture);
-                glBindTexture(GL_TEXTURE_2D, rt_eyeZoomSnapshotTexture);
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, zoomOutputWidth, zoomOutputHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-
-                glGenFramebuffers(1, &rt_eyeZoomSnapshotFBO);
-                glBindFramebuffer(GL_FRAMEBUFFER, rt_eyeZoomSnapshotFBO);
-                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, rt_eyeZoomSnapshotTexture, 0);
-
-                rt_eyeZoomSnapshotWidth = zoomOutputWidth;
-                rt_eyeZoomSnapshotHeight = zoomOutputHeight;
-
-                glBindFramebuffer(GL_FRAMEBUFFER, currentDrawFBO);
-            }
-
-            // Copy the rendered EyeZoom content to snapshot
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, currentDrawFBO);
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, rt_eyeZoomSnapshotFBO);
-            glBlitFramebuffer(dstLeft, dstBottom, dstRight, dstTop, 0, 0, zoomOutputWidth, zoomOutputHeight, GL_COLOR_BUFFER_BIT,
-                              GL_NEAREST);
-            glBindFramebuffer(GL_FRAMEBUFFER, currentDrawFBO);
-
-            rt_eyeZoomSnapshotValid = true;
-        }
+        // Capture snapshot for transition-out
+        EnsureRtEyeZoomSnapshotAllocated();
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, currentDrawFBO);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, rt_eyeZoomSnapshotFBO);
+        glBlitFramebuffer(dstLeft, dstBottom, dstRight, dstTop, 0, 0, zoomOutputWidth, zoomOutputHeight, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        glBindFramebuffer(GL_FRAMEBUFFER, currentDrawFBO);
+        rt_eyeZoomSnapshotValid = true;
     }
 
     // STEP 2: Render colored overlay boxes with numbers
@@ -1987,6 +2031,11 @@ static void RT_RenderMirrors(const std::vector<MirrorConfig>& activeMirrors, con
         for (const auto& conf : activeMirrors) {
             if (excludeOnlyOnMyScreen && conf.onlyOnMyScreen) continue;
 
+            // If the mirror is fully transparent, skip EVERYTHING (including fence waits).
+            // This avoids burning GPU time on mirrors that are effectively invisible.
+            const float effectiveOpacity = modeOpacity * conf.opacity;
+            if (effectiveOpacity <= 0.0f) continue;
+
             auto it = g_mirrorInstances.find(conf.name);
             if (it == g_mirrorInstances.end()) continue;
 
@@ -2098,7 +2147,9 @@ static void RT_RenderMirrors(const std::vector<MirrorConfig>& activeMirrors, con
 
     for (auto& renderData : mirrorsToRender) {
         const MirrorConfig& conf = *renderData.config;
-        glUniform1f(rt_backgroundShaderLocs.opacity, modeOpacity * conf.opacity);
+        const float effectiveOpacity = modeOpacity * conf.opacity;
+        if (effectiveOpacity <= 0.0f) continue;
+        glUniform1f(rt_backgroundShaderLocs.opacity, effectiveOpacity);
 
         glBindTexture(GL_TEXTURE_2D, renderData.texture);
 
@@ -2356,6 +2407,33 @@ static void RT_RenderMirrors(const std::vector<MirrorConfig>& activeMirrors, con
 
 // Render images using render thread's local shader programs
 // gameX/Y/W/H = game viewport position on screen (for viewport-relative positioning)
+struct RT_UserImageCache {
+    UserImageInstance::CachedImageRenderState cachedRenderState;
+    bool filterInitialized = false;
+    bool lastPixelatedScaling = false;
+};
+
+static std::unordered_map<std::string, RT_UserImageCache> g_rtUserImageCache;
+
+static void RT_CalculateImageDimensionsFromTexture(int texWidth, int texHeight, const ImageConfig& img, int& outW, int& outH) {
+    if (texWidth > 0 && texHeight > 0) {
+        int croppedWidth = texWidth - img.crop_left - img.crop_right;
+        int croppedHeight = texHeight - img.crop_top - img.crop_bottom;
+        if (croppedWidth < 1) croppedWidth = 1;
+        if (croppedHeight < 1) croppedHeight = 1;
+        outW = static_cast<int>(croppedWidth * img.scale);
+        outH = static_cast<int>(croppedHeight * img.scale);
+        if (outW < 1) outW = 1;
+        if (outH < 1) outH = 1;
+    } else {
+        // Default size if texture not loaded
+        outW = static_cast<int>(100 * img.scale);
+        outH = static_cast<int>(100 * img.scale);
+        if (outW < 1) outW = 1;
+        if (outH < 1) outH = 1;
+    }
+}
+
 static void RT_RenderImages(const std::vector<ImageConfig>& activeImages, int fullW, int fullH, int gameX, int gameY, int gameW, int gameH,
                             int gameResW, int gameResH, bool relativeStretching, float transitionProgress, int fromX, int fromY, int fromW,
                             int fromH, float modeOpacity, bool excludeOnlyOnMyScreen, GLuint vao, GLuint vbo) {
@@ -2371,17 +2449,47 @@ static void RT_RenderImages(const std::vector<ImageConfig>& activeImages, int fu
     // This ensures the FBO contains properly premultiplied alpha content
     glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 
-    for (const auto& conf : activeImages) {
-        if (excludeOnlyOnMyScreen && conf.onlyOnMyScreen) continue;
+    struct RT_ImageDrawInput {
+        const ImageConfig* conf;
+        GLuint texId;
+        int texWidth;
+        int texHeight;
+        bool isFullyTransparent;
+    };
 
-        auto it_inst = g_userImages.find(conf.name);
-        if (it_inst == g_userImages.end() || it_inst->second.textureId == 0) continue;
-        const UserImageInstance& inst = it_inst->second;
+    static thread_local std::vector<RT_ImageDrawInput> drawInputs;
+    drawInputs.clear();
+    drawInputs.reserve(activeImages.size());
+    {
+        std::lock_guard<std::mutex> lock(g_userImagesMutex);
+        for (const auto& conf : activeImages) {
+            if (excludeOnlyOnMyScreen && conf.onlyOnMyScreen) continue;
+            auto it_inst = g_userImages.find(conf.name);
+            if (it_inst == g_userImages.end() || it_inst->second.textureId == 0) continue;
+            const UserImageInstance& inst = it_inst->second;
+            drawInputs.push_back({ &conf, inst.textureId, inst.width, inst.height, inst.isFullyTransparent });
+        }
+    }
+
+    for (const auto& in : drawInputs) {
+        const ImageConfig& conf = *in.conf;
+        const GLuint texId = in.texId;
+        const int texWidth = in.texWidth;
+        const int texHeight = in.texHeight;
+        const bool isFullyTransparent = in.isFullyTransparent;
+
+        RT_UserImageCache& rtInst = g_rtUserImageCache[conf.name];
+
+        // Skip fully invisible images (opacity==0 and no visible background/border).
+        const float effectiveOpacity = conf.opacity * modeOpacity;
+        const bool hasBg = conf.background.enabled && conf.background.opacity > 0.0f && !isFullyTransparent;
+        const bool hasBorder = conf.border.enabled && conf.border.width > 0 && !isFullyTransparent;
+        if (effectiveOpacity <= 0.0f && !hasBg && !hasBorder) { continue; }
 
         // Use cached render state if valid AND config hasn't changed
         float nx1, ny1, nx2, ny2;
         int displayW, displayH;
-        const auto& cache = inst.cachedRenderState;
+        auto& cache = rtInst.cachedRenderState;
 
         // Check if config has changed - must match main thread's validation logic
         bool configChanged = !cache.isValid || cache.crop_left != conf.crop_left || cache.crop_right != conf.crop_right ||
@@ -2398,7 +2506,7 @@ static void RT_RenderImages(const std::vector<ImageConfig>& activeImages, int fu
             displayH = cache.displayH;
         } else {
             // Cache is stale - recalculate
-            CalculateImageDimensions(conf, displayW, displayH);
+            RT_CalculateImageDimensionsFromTexture(texWidth, texHeight, conf, displayW, displayH);
 
             // Check if viewport-relative (ends with "Viewport")
             bool isViewportRelative = conf.relativeTo.length() > 8 && conf.relativeTo.substr(conf.relativeTo.length() - 8) == "Viewport";
@@ -2452,10 +2560,29 @@ static void RT_RenderImages(const std::vector<ImageConfig>& activeImages, int fu
             ny2 = (static_cast<float>(finalScreenY_gl + finalDisplayH) / fullH) * 2.0f - 1.0f;
             displayW = finalDisplayW;
             displayH = finalDisplayH;
+
+            // Update render-thread-local cache
+            cache.crop_left = conf.crop_left;
+            cache.crop_right = conf.crop_right;
+            cache.crop_top = conf.crop_top;
+            cache.crop_bottom = conf.crop_bottom;
+            cache.scale = conf.scale;
+            cache.x = conf.x;
+            cache.y = conf.y;
+            cache.relativeTo = conf.relativeTo;
+            cache.screenWidth = fullW;
+            cache.screenHeight = fullH;
+            cache.displayW = displayW;
+            cache.displayH = displayH;
+            cache.nx1 = nx1;
+            cache.ny1 = ny1;
+            cache.nx2 = nx2;
+            cache.ny2 = ny2;
+            cache.isValid = true;
         }
 
         // Draw background if enabled
-        if (conf.background.enabled && conf.background.opacity > 0.0f && !inst.isFullyTransparent) {
+        if (hasBg) {
             glUseProgram(rt_solidColorProgram);
             glUniform4f(rt_solidColorShaderLocs.color, conf.background.color.r, conf.background.color.g, conf.background.color.b,
                         conf.background.opacity * modeOpacity);
@@ -2466,31 +2593,38 @@ static void RT_RenderImages(const std::vector<ImageConfig>& activeImages, int fu
 
         // Draw image
         glUseProgram(rt_imageRenderProgram);
-        glBindTexture(GL_TEXTURE_2D, inst.textureId);
+        glBindTexture(GL_TEXTURE_2D, texId);
 
         // Set texture filtering based on pixelatedScaling config
-        if (conf.pixelatedScaling) {
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        } else {
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        if (!rtInst.filterInitialized || rtInst.lastPixelatedScaling != conf.pixelatedScaling) {
+            if (conf.pixelatedScaling) {
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            } else {
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            }
+            rtInst.lastPixelatedScaling = conf.pixelatedScaling;
+            rtInst.filterInitialized = true;
         }
         glUniform1i(rt_imageRenderShaderLocs.enableColorKey, conf.enableColorKey && !conf.colorKeys.empty() ? 1 : 0);
         if (conf.enableColorKey && !conf.colorKeys.empty()) {
             glUniform3f(rt_imageRenderShaderLocs.colorKey, conf.colorKeys[0].color.r, conf.colorKeys[0].color.g, conf.colorKeys[0].color.b);
             glUniform1f(rt_imageRenderShaderLocs.sensitivity, conf.colorKeys[0].sensitivity);
         }
-        glUniform1f(rt_imageRenderShaderLocs.opacity, conf.opacity * modeOpacity);
+        glUniform1f(rt_imageRenderShaderLocs.opacity, effectiveOpacity);
 
         // Calculate texture coordinates with cropping
         // OpenGL texture coordinates: Y=0 at bottom, Y=1 at top
         // Vertices are arranged: bottom uses ty1, top uses ty2
         // So ty1 maps to bottom (after cropping from bottom), ty2 to top (after cropping from top)
-        float tu1 = static_cast<float>(conf.crop_left) / inst.width;
-        float tu2 = static_cast<float>(inst.width - conf.crop_right) / inst.width;
-        float tv1 = static_cast<float>(conf.crop_bottom) / inst.height;
-        float tv2 = static_cast<float>(inst.height - conf.crop_top) / inst.height;
+        // Avoid divide-by-zero if the texture dimensions are unavailable.
+        const float invW = (texWidth > 0) ? (1.0f / texWidth) : 0.0f;
+        const float invH = (texHeight > 0) ? (1.0f / texHeight) : 0.0f;
+        float tu1 = conf.crop_left * invW;
+        float tu2 = (texWidth - conf.crop_right) * invW;
+        float tv1 = conf.crop_bottom * invH;
+        float tv2 = (texHeight - conf.crop_top) * invH;
 
         float verts[] = { nx1, ny1, tu1, tv1, nx2, ny1, tu2, tv1, nx2, ny2, tu2, tv2,
                           nx1, ny1, tu1, tv1, nx2, ny2, tu2, tv2, nx1, ny2, tu1, tv2 };
@@ -2498,7 +2632,7 @@ static void RT_RenderImages(const std::vector<ImageConfig>& activeImages, int fu
         glDrawArrays(GL_TRIANGLES, 0, 6);
 
         // Render border if enabled (matching RenderImages behavior in render.cpp)
-        if (conf.border.enabled && conf.border.width > 0 && !inst.isFullyTransparent) {
+        if (hasBorder) {
             // Calculate window coordinates from cached NDC values
             int finalScreenX_win = static_cast<int>((nx1 + 1.0f) / 2.0f * fullW);
             int finalScreenY_gl = static_cast<int>((ny1 + 1.0f) / 2.0f * fullH);
@@ -2518,11 +2652,11 @@ static void RT_RenderImages(const std::vector<ImageConfig>& activeImages, int fu
 
 // Render window overlays using render thread's local shader programs
 // gameX/Y/W/H = game viewport position on screen (for viewport-relative positioning)
-static void RT_RenderWindowOverlays(const std::vector<std::string>& overlayIds, int fullW, int fullH, int gameX, int gameY, int gameW,
-                                    int gameH, int gameResW, int gameResH, bool relativeStretching, float transitionProgress, int fromX,
-                                    int fromY, int fromW, int fromH, float modeOpacity, bool excludeOnlyOnMyScreen, GLuint vao,
+static void RT_RenderWindowOverlays(const std::vector<const WindowOverlayConfig*>& overlays, int fullW, int fullH, int gameX, int gameY,
+                                    int gameW, int gameH, int gameResW, int gameResH, bool relativeStretching, float transitionProgress,
+                                    int fromX, int fromY, int fromW, int fromH, float modeOpacity, bool excludeOnlyOnMyScreen, GLuint vao,
                                     GLuint vbo) {
-    if (overlayIds.empty()) return;
+    if (overlays.empty()) return;
 
     glBindVertexArray(vao);
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
@@ -2540,12 +2674,19 @@ static void RT_RenderWindowOverlays(const std::vector<std::string>& overlayIds, 
         return; // Skip if can't get lock
     }
 
-    for (const auto& overlayId : overlayIds) {
-        // Use snapshot for thread-safe config lookup (render thread reads, GUI thread writes)
-        auto rtOverlaySnap = GetConfigSnapshot();
-        const WindowOverlayConfig* conf = rtOverlaySnap ? FindWindowOverlayConfigIn(overlayId, *rtOverlaySnap) : nullptr;
+    const std::string focusedName = GetFocusedWindowOverlayName();
+
+    for (const WindowOverlayConfig* conf : overlays) {
         if (!conf) continue;
         if (excludeOnlyOnMyScreen && conf->onlyOnMyScreen) continue;
+
+        const std::string& overlayId = conf->name;
+
+        // Skip fully invisible overlays (opacity==0 and no visible background/border).
+        const float effectiveOpacity = conf->opacity * modeOpacity;
+        const bool hasBg = conf->background.enabled && conf->background.opacity > 0.0f;
+        const bool hasBorder = conf->border.enabled && conf->border.width > 0;
+        if (effectiveOpacity <= 0.0f && !hasBg && !hasBorder) { continue; }
 
         auto it = g_windowOverlayCache.find(overlayId);
         if (it == g_windowOverlayCache.end() || !it->second) continue;
@@ -2568,7 +2709,14 @@ static void RT_RenderWindowOverlays(const std::vector<std::string>& overlayIds, 
             // Check if this is actually new data we haven't uploaded yet
             if (renderData != entry.lastUploadedRenderData) {
                 // Create texture if it doesn't exist
-                if (entry.glTextureId == 0) { glGenTextures(1, &entry.glTextureId); }
+                if (entry.glTextureId == 0) {
+                    glGenTextures(1, &entry.glTextureId);
+                    glBindTexture(GL_TEXTURE_2D, entry.glTextureId);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                    // Force filter refresh on first draw.
+                    entry.filterInitialized = false;
+                }
 
                 // Upload the pixel data to the texture
                 glBindTexture(GL_TEXTURE_2D, entry.glTextureId);
@@ -2585,12 +2733,6 @@ static void RT_RenderWindowOverlays(const std::vector<std::string>& overlayIds, 
                                     renderData->pixelData);
                 }
 
-                // Set texture parameters
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
                 // Track which data we uploaded
                 entry.lastUploadedRenderData = renderData;
             }
@@ -2602,8 +2744,12 @@ static void RT_RenderWindowOverlays(const std::vector<std::string>& overlayIds, 
         // Calculate dimensions
         int croppedW = entry.glTextureWidth - conf->crop_left - conf->crop_right;
         int croppedH = entry.glTextureHeight - conf->crop_top - conf->crop_bottom;
+        if (croppedW < 1) croppedW = 1;
+        if (croppedH < 1) croppedH = 1;
         int displayW = static_cast<int>(croppedW * conf->scale);
         int displayH = static_cast<int>(croppedH * conf->scale);
+        if (displayW < 1) displayW = 1;
+        if (displayH < 1) displayH = 1;
 
         // Check if viewport-relative (ends with "Viewport")
         bool isViewportRelative = conf->relativeTo.length() > 8 && conf->relativeTo.substr(conf->relativeTo.length() - 8) == "Viewport";
@@ -2656,7 +2802,7 @@ static void RT_RenderWindowOverlays(const std::vector<std::string>& overlayIds, 
         float ny2 = (static_cast<float>(screenY_gl + displayH) / fullH) * 2.0f - 1.0f;
 
         // Draw background if enabled (matching image overlay behavior)
-        if (conf->background.enabled && conf->background.opacity > 0.0f) {
+        if (hasBg) {
             glUseProgram(rt_solidColorProgram);
             glUniform4f(rt_solidColorShaderLocs.color, conf->background.color.r, conf->background.color.g, conf->background.color.b,
                         conf->background.opacity * modeOpacity);
@@ -2670,17 +2816,21 @@ static void RT_RenderWindowOverlays(const std::vector<std::string>& overlayIds, 
         glBindTexture(GL_TEXTURE_2D, entry.glTextureId);
 
         // Set texture filtering based on pixelatedScaling config
-        if (conf->pixelatedScaling) {
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        } else {
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        if (!entry.filterInitialized || entry.lastPixelatedScaling != conf->pixelatedScaling) {
+            if (conf->pixelatedScaling) {
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            } else {
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            }
+            entry.lastPixelatedScaling = conf->pixelatedScaling;
+            entry.filterInitialized = true;
         }
 
         glUniform1i(rt_imageRenderShaderLocs.enableColorKey, 0);
         // Apply per-overlay opacity multiplied by mode opacity
-        glUniform1f(rt_imageRenderShaderLocs.opacity, conf->opacity * modeOpacity);
+        glUniform1f(rt_imageRenderShaderLocs.opacity, effectiveOpacity);
 
         // Texture coordinates with cropping
         float tu1 = static_cast<float>(conf->crop_left) / entry.glTextureWidth;
@@ -2694,7 +2844,7 @@ static void RT_RenderWindowOverlays(const std::vector<std::string>& overlayIds, 
         glDrawArrays(GL_TRIANGLES, 0, 6);
 
         // Render border if enabled (matching RenderWindowOverlaysGL behavior in window_overlay.cpp)
-        if (conf->border.enabled && conf->border.width > 0) {
+        if (hasBorder) {
             RT_RenderGameBorder(screenX, screenY, displayW, displayH, conf->border.width, conf->border.radius, conf->border.color, fullW,
                                 fullH, vao, vbo);
 
@@ -2704,7 +2854,6 @@ static void RT_RenderWindowOverlays(const std::vector<std::string>& overlayIds, 
         }
 
         // Render special focused border if this overlay is currently taking inputs
-        std::string focusedName = GetFocusedWindowOverlayName();
         if (!focusedName.empty() && focusedName == overlayId) {
             // Bright green border to indicate focused state
             Color focusedBorderColor = { 0.0f, 1.0f, 0.0f, 1.0f }; // Bright green
@@ -2728,17 +2877,54 @@ static void RT_RenderWindowOverlays(const std::vector<std::string>& overlayIds, 
 // When onlyOnMyScreenPass is true, only items with onlyOnMyScreen=true are collected
 static void RT_CollectActiveElements(const Config& config, const std::string& modeId, bool onlyOnMyScreenPass,
                                      std::vector<MirrorConfig>& outMirrors, std::vector<ImageConfig>& outImages,
-                                     std::vector<std::string>& outWindowOverlayIds) {
+                                     std::vector<const WindowOverlayConfig*>& outWindowOverlays) {
     outMirrors.clear();
     outImages.clear();
-    outWindowOverlayIds.clear();
+    outWindowOverlays.clear();
 
-    // Look up mode by ID
+    // Build lookup maps for this specific immutable snapshot to avoid O(n^2) scans.
+    // These caches are safe because `config` is immutable for the lifetime of the snapshot.
+    static const Config* s_cachedConfigPtr = nullptr;
+    static std::unordered_map<std::string, const ModeConfig*> s_modeById;
+    static std::unordered_map<std::string, const MirrorConfig*> s_mirrorByName;
+    static std::unordered_map<std::string, const MirrorGroupConfig*> s_groupByName;
+    static std::unordered_map<std::string, const ImageConfig*> s_imageByName;
+    static std::unordered_map<std::string, const WindowOverlayConfig*> s_windowOverlayByName;
+
+    if (s_cachedConfigPtr != &config) {
+        s_cachedConfigPtr = &config;
+        s_modeById.clear();
+        s_mirrorByName.clear();
+        s_groupByName.clear();
+        s_imageByName.clear();
+        s_windowOverlayByName.clear();
+
+        s_modeById.reserve(config.modes.size());
+        for (const auto& m : config.modes) { s_modeById[m.id] = &m; }
+
+        s_mirrorByName.reserve(config.mirrors.size());
+        for (const auto& m : config.mirrors) { s_mirrorByName[m.name] = &m; }
+
+        s_groupByName.reserve(config.mirrorGroups.size());
+        for (const auto& g : config.mirrorGroups) { s_groupByName[g.name] = &g; }
+
+        s_imageByName.reserve(config.images.size());
+        for (const auto& img : config.images) { s_imageByName[img.name] = &img; }
+
+        s_windowOverlayByName.reserve(config.windowOverlays.size());
+        for (const auto& o : config.windowOverlays) { s_windowOverlayByName[o.name] = &o; }
+    }
+
+    // Look up mode by ID (case-insensitive fallback if exact not found)
     const ModeConfig* mode = nullptr;
-    for (const auto& m : config.modes) {
-        if (EqualsIgnoreCase(m.id, modeId)) {
-            mode = &m;
-            break;
+    if (auto it = s_modeById.find(modeId); it != s_modeById.end()) {
+        mode = it->second;
+    } else {
+        for (const auto& kv : s_modeById) {
+            if (EqualsIgnoreCase(kv.first, modeId)) {
+                mode = kv.second;
+                break;
+            }
         }
     }
     if (!mode) return;
@@ -2746,31 +2932,30 @@ static void RT_CollectActiveElements(const Config& config, const std::string& mo
     // Reserve space upfront
     outMirrors.reserve(mode->mirrorIds.size() + mode->mirrorGroupIds.size());
     outImages.reserve(mode->imageIds.size());
-    outWindowOverlayIds.reserve(mode->windowOverlayIds.size());
+    outWindowOverlays.reserve(mode->windowOverlayIds.size());
 
-    // Collect mirrors - use linear search (render thread has more time budget)
+    // Collect mirrors
     for (const auto& mirrorName : mode->mirrorIds) {
-        for (const auto& mirror : config.mirrors) {
-            if (mirror.name == mirrorName) {
-                // Filter by onlyOnMyScreen if this is an OOMS pass
-                if (!onlyOnMyScreenPass || mirror.onlyOnMyScreen) { outMirrors.push_back(mirror); }
-                break;
-            }
-        }
+        auto it = s_mirrorByName.find(mirrorName);
+        if (it == s_mirrorByName.end() || !it->second) continue;
+        const MirrorConfig& mirror = *it->second;
+        if (!onlyOnMyScreenPass || mirror.onlyOnMyScreen) { outMirrors.push_back(mirror); }
     }
 
     // Collect mirror groups (override output position for each mirror in the group)
     // Per-item sizing: each mirror in the group has its own widthPercent/heightPercent
     for (const auto& groupName : mode->mirrorGroupIds) {
-        for (const auto& group : config.mirrorGroups) {
-            if (group.name != groupName) continue;
+        auto git = s_groupByName.find(groupName);
+        if (git == s_groupByName.end() || !git->second) continue;
+        const auto& group = *git->second;
 
             for (const auto& item : group.mirrors) {
                 if (!item.enabled) continue; // Skip disabled items
-                for (const auto& mirror : config.mirrors) {
-                    if (mirror.name == item.mirrorId) {
-                        if (!onlyOnMyScreenPass || mirror.onlyOnMyScreen) {
-                            MirrorConfig groupedMirror = mirror;
+                auto mit = s_mirrorByName.find(item.mirrorId);
+                if (mit != s_mirrorByName.end() && mit->second) {
+                    const auto& mirror = *mit->second;
+                    if (!onlyOnMyScreenPass || mirror.onlyOnMyScreen) {
+                        MirrorConfig groupedMirror = mirror;
                             // Calculate group position - use relative percentages if enabled
                             int groupX = group.output.x;
                             int groupY = group.output.y;
@@ -2797,37 +2982,29 @@ static void RT_CollectActiveElements(const Config& config, const std::string& mo
                                 groupedMirror.output.scaleY = baseScaleY * item.heightPercent;
                             }
                             // Otherwise keep mirror's original scale settings
-                            outMirrors.push_back(groupedMirror);
-                        }
-                        break;
+                        outMirrors.push_back(groupedMirror);
                     }
                 }
             }
-            break;
-        }
     }
 
     // Collect images (honor runtime visibility toggle)
     if (g_imageOverlaysVisible.load(std::memory_order_acquire)) {
         for (const auto& imageName : mode->imageIds) {
-            for (const auto& image : config.images) {
-                if (image.name == imageName) {
-                    if (!onlyOnMyScreenPass || image.onlyOnMyScreen) { outImages.push_back(image); }
-                    break;
-                }
-            }
+            auto it = s_imageByName.find(imageName);
+            if (it == s_imageByName.end() || !it->second) continue;
+            const ImageConfig& image = *it->second;
+            if (!onlyOnMyScreenPass || image.onlyOnMyScreen) { outImages.push_back(image); }
         }
     }
 
     // Collect window overlays (honor runtime visibility toggle)
     if (g_windowOverlaysVisible.load(std::memory_order_acquire)) {
         for (const auto& overlayId : mode->windowOverlayIds) {
-            for (const auto& overlay : config.windowOverlays) {
-                if (overlay.name == overlayId) {
-                    if (!onlyOnMyScreenPass || overlay.onlyOnMyScreen) { outWindowOverlayIds.push_back(overlayId); }
-                    break;
-                }
-            }
+            auto it = s_windowOverlayByName.find(overlayId);
+            if (it == s_windowOverlayByName.end() || !it->second) continue;
+            const WindowOverlayConfig& overlay = *it->second;
+            if (!onlyOnMyScreenPass || overlay.onlyOnMyScreen) { outWindowOverlays.push_back(it->second); }
         }
     }
 }
@@ -2964,7 +3141,7 @@ static void RenderThreadFunc(void* gameGLContext) {
 
             {
                 std::unique_lock<std::mutex> lock(g_requestSignalMutex);
-                g_requestCV.wait_for(lock, std::chrono::milliseconds(16), [] {
+                g_requestCV.wait(lock, [] {
                     return g_requestReadySlot.load(std::memory_order_acquire) != -1 || g_obsReadySlot.load(std::memory_order_acquire) != -1 ||
                            g_renderThreadShouldStop.load();
                 });
@@ -3139,46 +3316,50 @@ static void RenderThreadFunc(void* gameGLContext) {
                         glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(bgVerts), bgVerts);
                         glDrawArrays(GL_TRIANGLES, 0, 6);
                     } else if (mode && mode->background.selectedMode == "image") {
-                        std::lock_guard<std::mutex> bgLock(g_backgroundTexturesMutex);
-                        auto bgTexIt = g_backgroundTextures.find(bgModeId);
-                        if (bgTexIt != g_backgroundTextures.end()) {
-                            BackgroundTextureInstance& bgInst = bgTexIt->second;
+                        GLuint bgTex = 0;
+                        {
+                            std::lock_guard<std::mutex> bgLock(g_backgroundTexturesMutex);
+                            auto bgTexIt = g_backgroundTextures.find(bgModeId);
+                            if (bgTexIt != g_backgroundTextures.end()) {
+                                BackgroundTextureInstance& bgInst = bgTexIt->second;
 
-                            // Advance animation frame if animated - using time-based approach for smooth playback
-                            if (bgInst.isAnimated && !bgInst.frameTextures.empty()) {
-                                auto now = std::chrono::steady_clock::now();
-                                auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - bgInst.lastFrameTime).count();
-                                int delay = bgInst.frameDelays.empty() ? 100 : bgInst.frameDelays[bgInst.currentFrame];
-                                if (delay < 10) delay = 100;
-                                // Advance multiple frames if needed to keep animation in sync with real time
-                                while (elapsed >= delay) {
-                                    elapsed -= delay;
-                                    bgInst.currentFrame = (bgInst.currentFrame + 1) % bgInst.frameTextures.size();
-                                    delay = bgInst.frameDelays.empty() ? 100 : bgInst.frameDelays[bgInst.currentFrame];
+                                // Advance animation frame if animated - using time-based approach for smooth playback
+                                if (bgInst.isAnimated && !bgInst.frameTextures.empty()) {
+                                    auto now = std::chrono::steady_clock::now();
+                                    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - bgInst.lastFrameTime).count();
+                                    int delay = bgInst.frameDelays.empty() ? 100 : bgInst.frameDelays[bgInst.currentFrame];
                                     if (delay < 10) delay = 100;
+                                    // Advance multiple frames if needed to keep animation in sync with real time
+                                    while (elapsed >= delay) {
+                                        elapsed -= delay;
+                                        bgInst.currentFrame = (bgInst.currentFrame + 1) % bgInst.frameTextures.size();
+                                        delay = bgInst.frameDelays.empty() ? 100 : bgInst.frameDelays[bgInst.currentFrame];
+                                        if (delay < 10) delay = 100;
+                                    }
+                                    bgInst.textureId = bgInst.frameTextures[bgInst.currentFrame];
+                                    // Adjust lastFrameTime by remaining elapsed to maintain accuracy
+                                    bgInst.lastFrameTime = now - std::chrono::milliseconds(elapsed);
                                 }
-                                bgInst.textureId = bgInst.frameTextures[bgInst.currentFrame];
-                                // Adjust lastFrameTime by remaining elapsed to maintain accuracy
-                                bgInst.lastFrameTime = now - std::chrono::milliseconds(elapsed);
-                            }
 
-                            GLuint bgTex = bgInst.textureId;
-                            if (bgTex != 0) {
-                                // Render background image fullscreen
-                                glUseProgram(rt_backgroundProgram);
-                                glBindVertexArray(renderVAO);
-                                glBindBuffer(GL_ARRAY_BUFFER, renderVBO);
-                                glActiveTexture(GL_TEXTURE0);
-                                glBindTexture(GL_TEXTURE_2D, bgTex);
-                                glUniform1i(rt_backgroundShaderLocs.backgroundTexture, 0);
-                                glUniform1f(rt_backgroundShaderLocs.opacity, 1.0f);
-
-                                // Fullscreen quad vertices
-                                float bgVerts[] = { -1.0f, -1.0f, 0.0f, 0.0f, 1.0f, -1.0f, 1.0f, 0.0f, 1.0f,  1.0f, 1.0f, 1.0f,
-                                                    -1.0f, -1.0f, 0.0f, 0.0f, 1.0f, 1.0f,  1.0f, 1.0f, -1.0f, 1.0f, 0.0f, 1.0f };
-                                glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(bgVerts), bgVerts);
-                                glDrawArrays(GL_TRIANGLES, 0, 6);
+                                bgTex = bgInst.textureId;
                             }
+                        }
+
+                        if (bgTex != 0) {
+                            // Render background image fullscreen
+                            glUseProgram(rt_backgroundProgram);
+                            glBindVertexArray(renderVAO);
+                            glBindBuffer(GL_ARRAY_BUFFER, renderVBO);
+                            glActiveTexture(GL_TEXTURE0);
+                            glBindTexture(GL_TEXTURE_2D, bgTex);
+                            glUniform1i(rt_backgroundShaderLocs.backgroundTexture, 0);
+                            glUniform1f(rt_backgroundShaderLocs.opacity, 1.0f);
+
+                            // Fullscreen quad vertices
+                            float bgVerts[] = { -1.0f, -1.0f, 0.0f, 0.0f, 1.0f, -1.0f, 1.0f, 0.0f, 1.0f,  1.0f, 1.0f, 1.0f,
+                                                -1.0f, -1.0f, 0.0f, 0.0f, 1.0f, 1.0f,  1.0f, 1.0f, -1.0f, 1.0f, 0.0f, 1.0f };
+                            glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(bgVerts), bgVerts);
+                            glDrawArrays(GL_TRIANGLES, 0, 6);
                         }
                     }
                 } // end if (!request.isRawWindowedMode)
@@ -3281,13 +3462,78 @@ static void RenderThreadFunc(void* gameGLContext) {
             }
 
             // Collect active elements from g_config (this work moved from main thread)
-            std::vector<MirrorConfig> activeMirrors;
-            std::vector<ImageConfig> activeImages;
-            std::vector<std::string> activeWindowOverlayIds;
-            {
+            // PERF: Cache these per (snapshot ptr, modeId, runtime visibility toggles).
+            // In steady-state gameplay, config and mode are usually stable, so rebuilding these vectors every frame
+            // is wasted CPU (string lookups + vector growth/clear).
+            static const Config* s_cachedActiveCfgPtr = nullptr;
+            static std::string s_cachedActiveModeId;
+            static bool s_cachedActiveImagesVisible = false;
+            static bool s_cachedActiveWindowOverlaysVisible = false;
+            static std::vector<MirrorConfig> s_cachedActiveMirrors;
+            static std::vector<ImageConfig> s_cachedActiveImages;
+            static std::vector<const WindowOverlayConfig*> s_cachedActiveWindowOverlays;
+
+            const bool imagesVisible = g_imageOverlaysVisible.load(std::memory_order_acquire);
+            const bool windowOverlaysVisible = g_windowOverlaysVisible.load(std::memory_order_acquire);
+
+            if (s_cachedActiveCfgPtr != &cfg || s_cachedActiveModeId != request.modeId || s_cachedActiveImagesVisible != imagesVisible ||
+                s_cachedActiveWindowOverlaysVisible != windowOverlaysVisible) {
                 PROFILE_SCOPE_CAT("RT Collect Active Elements", "Render Thread");
-                RT_CollectActiveElements(cfg, request.modeId, false, activeMirrors, activeImages, activeWindowOverlayIds);
+                s_cachedActiveCfgPtr = &cfg;
+                s_cachedActiveModeId = request.modeId;
+                s_cachedActiveImagesVisible = imagesVisible;
+                s_cachedActiveWindowOverlaysVisible = windowOverlaysVisible;
+                RT_CollectActiveElements(cfg, request.modeId, false, s_cachedActiveMirrors, s_cachedActiveImages, s_cachedActiveWindowOverlays);
             }
+
+            const std::vector<MirrorConfig>& activeMirrors = s_cachedActiveMirrors;
+            const std::vector<ImageConfig>& activeImages = s_cachedActiveImages;
+            const std::vector<const WindowOverlayConfig*>& activeWindowOverlays = s_cachedActiveWindowOverlays;
+
+            // Determine whether anything is actually VISIBLE.
+            // A mode can have items configured but fully transparent (opacity=0), which used to keep
+            // the render thread doing a full clear + fence every frame. Treat those as "nothing to render".
+            const bool excludeOoms = request.excludeOnlyOnMyScreen;
+            bool hasVisibleMirrors = false;
+            for (const auto& m : activeMirrors) {
+                if (excludeOoms && m.onlyOnMyScreen) continue;
+                if ((request.overlayOpacity * m.opacity) > 0.0f) {
+                    hasVisibleMirrors = true;
+                    break;
+                }
+            }
+
+            bool hasVisibleImages = false;
+            for (const auto& img : activeImages) {
+                if (excludeOoms && img.onlyOnMyScreen) continue;
+                // Consider background/border as potentially visible even if image opacity is 0.
+                const bool couldHaveVisibleBg = img.background.enabled && img.background.opacity > 0.0f;
+                const bool couldHaveVisibleBorder = img.border.enabled && img.border.width > 0;
+                if ((request.overlayOpacity * img.opacity) > 0.0f || couldHaveVisibleBg || couldHaveVisibleBorder) {
+                    hasVisibleImages = true;
+                    break;
+                }
+            }
+
+            bool hasVisibleWindowOverlays = false;
+            {
+                // Only check opacity/config here; actual window content presence is determined later.
+                // This is a cheap pre-filter to avoid doing full-frame work for overlays that are fully transparent.
+                if (!activeWindowOverlays.empty()) {
+                    for (const WindowOverlayConfig* oconf : activeWindowOverlays) {
+                        if (!oconf) continue;
+                        if (excludeOoms && oconf->onlyOnMyScreen) continue;
+                        const bool couldHaveVisibleBg = oconf->background.enabled && oconf->background.opacity > 0.0f;
+                        const bool couldHaveVisibleBorder = oconf->border.enabled && oconf->border.width > 0;
+                        if ((request.overlayOpacity * oconf->opacity) > 0.0f || couldHaveVisibleBg || couldHaveVisibleBorder) {
+                            hasVisibleWindowOverlays = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            const bool hasAnyVisibleOverlay = hasVisibleMirrors || hasVisibleImages || hasVisibleWindowOverlays;
 
             // Check if we need to render any ImGui content
             bool shouldRenderAnyImGui = request.shouldRenderGui || request.showPerformanceOverlay || request.showProfiler ||
@@ -3303,8 +3549,7 @@ static void RenderThreadFunc(void* gameGLContext) {
 
             // Early exit if nothing to render
             // BUT don't early exit if we need to render ImGui or the welcome toast (raw OpenGL)
-            if (activeMirrors.empty() && activeImages.empty() && activeWindowOverlayIds.empty() && !shouldRenderAnyImGui &&
-                !request.showWelcomeToast) {
+            if (!hasAnyVisibleOverlay && !shouldRenderAnyImGui && !request.showWelcomeToast) {
                 // Still need to advance FBO and signal completion even if empty
                 // Create fence for synchronization
                 GLsync fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
@@ -3354,7 +3599,7 @@ static void RenderThreadFunc(void* gameGLContext) {
             }
 
             // excludeOnlyOnMyScreen controls filtering
-            bool excludeOoms = request.excludeOnlyOnMyScreen;
+            // (computed earlier as excludeOoms)
 
             // Render EyeZoom for non-OBS passes (OBS already renders EyeZoom above)
             // This ensures EyeZoom boxes and text are in the same FBO, synchronized
@@ -3415,7 +3660,7 @@ static void RenderThreadFunc(void* gameGLContext) {
                 // Collect EyeZoom mirrors (not the target mode's mirrors)
                 std::vector<MirrorConfig> eyeZoomMirrors;
                 std::vector<ImageConfig> unusedImages;
-                std::vector<std::string> unusedOverlays;
+                std::vector<const WindowOverlayConfig*> unusedOverlays;
                 RT_CollectActiveElements(cfg, "EyeZoom", false, eyeZoomMirrors, unusedImages, unusedOverlays);
 
                 // Filter out mirrors that already exist in the target mode (don't slide those out)
@@ -3454,7 +3699,7 @@ static void RenderThreadFunc(void* gameGLContext) {
                 // Collect FROM mode mirrors
                 std::vector<MirrorConfig> fromModeMirrors;
                 std::vector<ImageConfig> unusedImages;
-                std::vector<std::string> unusedOverlays;
+                std::vector<const WindowOverlayConfig*> unusedOverlays;
                 RT_CollectActiveElements(cfg, request.fromModeId, false, fromModeMirrors, unusedImages, unusedOverlays);
 
                 // Filter out mirrors that already exist in the target mode (don't slide those out)
@@ -3489,9 +3734,9 @@ static void RenderThreadFunc(void* gameGLContext) {
             }
 
             // Render window overlays using local shaders
-            if (!activeWindowOverlayIds.empty()) {
+            if (!activeWindowOverlays.empty()) {
                 PROFILE_SCOPE_CAT("RT Window Overlay Render", "Render Thread");
-                RT_RenderWindowOverlays(activeWindowOverlayIds, request.fullW, request.fullH, request.toX, request.toY, request.toW,
+                RT_RenderWindowOverlays(activeWindowOverlays, request.fullW, request.fullH, request.toX, request.toY, request.toW,
                                         request.toH, request.gameW, request.gameH, request.relativeStretching, request.transitionProgress,
                                         request.fromX, request.fromY, request.fromW, request.fromH, request.overlayOpacity, excludeOoms,
                                         renderVAO, renderVBO);

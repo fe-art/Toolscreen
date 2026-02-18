@@ -252,6 +252,11 @@ struct UserImageInstance {
     int height = 0;
     bool isFullyTransparent = false; // True if all pixels have alpha = 0
 
+    // Render-thread-only texture sampling state cache.
+    // Avoids redundant glTexParameteri calls every frame.
+    bool filterInitialized = false;
+    bool lastPixelatedScaling = false;
+
     // Animation data (for animated GIFs)
     bool isAnimated = false;
     std::vector<GLuint> frameTextures; // All frame textures for animation

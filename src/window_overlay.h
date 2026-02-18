@@ -88,6 +88,10 @@ struct WindowOverlayCacheEntry {
     int glTextureHeight = 0;
     WindowOverlayRenderData* lastUploadedRenderData = nullptr; // Track which buffer was last uploaded
 
+    // Render-thread-only sampler state cache (avoids redundant glTexParameteri per frame)
+    bool filterInitialized = false;
+    bool lastPixelatedScaling = false;
+
     // Cached rendering data (invalidated when config changes)
     struct CachedRenderState {
         // Config hash to detect changes

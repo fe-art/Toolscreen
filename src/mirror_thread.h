@@ -26,6 +26,11 @@ extern std::atomic<bool> g_mirrorCaptureRunning;
 // Capture thread only captures while this is true - if it becomes false, capture is aborted
 extern std::atomic<bool> g_safeToCapture;
 
+// Number of active mirrors currently configured for capture in the current mode.
+// Updated by UpdateMirrorCaptureConfigs() (logic thread) and read by SwapBuffers hook to
+// avoid doing expensive full-frame GPU copies when nothing consumes them.
+extern std::atomic<int> g_activeMirrorCaptureCount;
+
 // Named ThreadedMirrorConfig to avoid conflict with MirrorCaptureConfig in gui.h
 struct ThreadedMirrorConfig {
     std::string name;

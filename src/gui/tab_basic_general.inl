@@ -249,6 +249,14 @@ if (ImGui::BeginTabItem("General")) {
                         int maxOverlay = g_config.eyezoom.cloneWidth / 2;
                         if (Spinner("##EyeZoomOverlayWidth", &g_config.eyezoom.overlayWidth, 1, 0, maxOverlay, 64, 3)) g_configIsDirty = true;
                     }
+
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::TextUnformatted("Clone FPS");
+                    ImGui::TableSetColumnIndex(1);
+                    if (Spinner("##EyeZoomCloneFps", &g_config.eyezoom.cloneFps, 1, 0, 1000, 64, 3)) g_configIsDirty = true;
+                    ImGui::SameLine();
+                    HelpMarker("Caps how often the EyeZoom clone texture updates (fps).\n0 = unlimited.");
                 }
 
                 ImGui::EndTable();

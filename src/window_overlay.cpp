@@ -1220,7 +1220,8 @@ void WindowCaptureThreadFunc() {
         const auto windowUpdateInterval = std::chrono::seconds(5); // Check for window changes every 5 seconds
 
         auto lastWindowListUpdate = std::chrono::steady_clock::now();
-        const auto windowListUpdateInterval = std::chrono::milliseconds(500); // Update window list cache every 500ms
+        const auto windowListUpdateIntervalGuiOpen = std::chrono::milliseconds(500); // GUI open: keep list fresh
+        const auto windowListUpdateIntervalGuiClosed = std::chrono::seconds(5);      // GUI closed: reduce CPU
 
         while (!g_stopWindowCaptureThread) {
             try {
@@ -1233,9 +1234,12 @@ void WindowCaptureThreadFunc() {
                 }
 
                 // Periodically refresh the window list cache for the GUI (non-blocking window enumeration)
-                if (now - lastWindowListUpdate >= windowListUpdateInterval) {
+                const bool guiOpen = g_showGui.load(std::memory_order_relaxed);
+                const auto listInterval = guiOpen ? windowListUpdateIntervalGuiOpen : windowListUpdateIntervalGuiClosed;
+                if (now - lastWindowListUpdate >= listInterval) {
                     auto newWindowList = std::make_unique<std::vector<WindowInfo>>();
-                    *newWindowList = GetCurrentlyOpenWindows(); // Expensive call on background thread
+                    // Only do the expensive enumeration frequently while the GUI is open.
+                    *newWindowList = GetCurrentlyOpenWindows();
 
                     {
                         std::lock_guard<std::mutex> lock(g_windowListCacheMutex);
@@ -1246,6 +1250,13 @@ void WindowCaptureThreadFunc() {
                         g_lastWindowListUpdate = now;
                     }
                     lastWindowListUpdate = now;
+                }
+
+                // If window overlays are hidden, skip all capture work.
+                // (We still keep the thread alive for quick re-enable.)
+                if (!g_windowOverlaysVisible.load(std::memory_order_acquire)) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    continue;
                 }
 
                 // Process deferred overlay reloads (from GUI thread)
@@ -1283,6 +1294,12 @@ void WindowCaptureThreadFunc() {
                         const WindowOverlayConfig* config = captureSnap ? FindWindowOverlayConfigIn(overlayId, *captureSnap) : nullptr;
                         if (config) { overlaysToCapture.emplace_back(overlayId, *config); }
                     }
+                }
+
+                if (overlaysToCapture.empty()) {
+                    // Nothing to capture (no configured overlays) - don't spin at 60Hz.
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    continue;
                 }
                 // Locks released - now we can capture without blocking config/cache changes
 

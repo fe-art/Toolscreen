@@ -101,30 +101,21 @@ struct GLState {
     // Core bindings
     GLint p;                   // Current program
     GLint t;                   // Texture binding for originally active texture unit
+    GLint t0;                  // Texture binding for GL_TEXTURE0 (we always render with unit 0)
     GLint ab;                  // Array buffer binding
     GLint va;                  // Vertex array binding
     GLint fb;                  // Framebuffer binding
     GLint read_fb, draw_fb;    // Read/Draw framebuffer bindings
     GLint at;                  // Active texture unit
-    GLint texture_bindings[4]; // GL_TEXTURE0 through GL_TEXTURE3
 
     // Enable/disable states we modify
     GLboolean be;                   // GL_BLEND
     GLboolean de;                   // GL_DEPTH_TEST
     GLboolean sc;                   // GL_SCISSOR_TEST
-    GLboolean cull_enabled;         // GL_CULL_FACE
     GLboolean srgb_enabled;         // GL_FRAMEBUFFER_SRGB
-    GLboolean stencil_test_enabled; // GL_STENCIL_TEST
-
-    // Depth/cull state
-    GLboolean depth_write_mask; // GL_DEPTH_WRITEMASK
-    GLint depth_func;           // GL_DEPTH_FUNC
-    GLint cull_face_mode;       // GL_CULL_FACE_MODE
-    GLint front_face_mode;      // GL_FRONT_FACE
 
     // Blend function state
     GLint blend_src_rgb, blend_dst_rgb, blend_src_alpha, blend_dst_alpha;
-    GLint blend_equation_rgb, blend_equation_alpha;
 
     // Viewport and scissor
     GLint vp[4]; // Viewport
@@ -134,7 +125,12 @@ struct GLState {
     GLfloat cc[4];                          // Clear color
     GLfloat lw;                             // Line width
     GLboolean color_mask[4];                // Color write mask (R, G, B, A)
-    GLint pack_alignment, unpack_alignment; // Pixel store state
+    // Pixel store state (we frequently change these during texture uploads)
+    GLint unpack_row_length;
+    GLint unpack_skip_pixels;
+    GLint unpack_skip_rows;
+    GLint pack_alignment;
+    GLint unpack_alignment;
 };
 
 extern GLuint g_filterProgram;
@@ -204,6 +200,7 @@ extern std::mutex g_backgroundTexturesMutex;
 
 extern std::vector<GLuint> g_texturesToDelete;
 extern std::mutex g_texturesToDeleteMutex;
+extern std::atomic<bool> g_hasTexturesToDelete;
 extern bool g_glInitialized;
 extern std::atomic<bool> g_isGameFocused;
 extern GameViewportGeometry g_lastFrameGeometry;
