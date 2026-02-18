@@ -61,6 +61,58 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
         }
         ImGui::PopID();
 
+        // Overlay visibility toggle hotkeys
+        ImGui::PushID("overlay_visibility_hotkeys");
+        {
+            std::string imgOverlayKeyStr = GetKeyComboString(g_config.imageOverlaysHotkey);
+            std::string imgOverlayNodeLabel =
+                "Toggle Image Overlays: " + (imgOverlayKeyStr.empty() ? "[None]" : imgOverlayKeyStr);
+
+            bool imgOverlayNodeOpen =
+                ImGui::TreeNodeEx("##image_overlay_toggle_node", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", imgOverlayNodeLabel.c_str());
+            if (imgOverlayNodeOpen) {
+                const bool isBindingImgOverlay = (s_mainHotkeyToBind == -997);
+                const char* imgOverlayButtonLabel =
+                    isBindingImgOverlay ? "[Press Keys...]" : (imgOverlayKeyStr.empty() ? "[None]" : imgOverlayKeyStr.c_str());
+                if (ImGui::Button(imgOverlayButtonLabel)) {
+                    s_mainHotkeyToBind = -997;
+                    s_altHotkeyToBind = { -1, -1 };
+                    s_exclusionToBind = { -1, -1 };
+                }
+                ImGui::SameLine();
+                ImGui::TextDisabled("(?)");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Toggles visibility of all Image Overlays (does not change your mode config).");
+                }
+                ImGui::TreePop();
+            }
+
+            std::string winOverlayKeyStr = GetKeyComboString(g_config.windowOverlaysHotkey);
+            std::string winOverlayNodeLabel =
+                "Toggle Window Overlays: " + (winOverlayKeyStr.empty() ? "[None]" : winOverlayKeyStr);
+
+            bool winOverlayNodeOpen =
+                ImGui::TreeNodeEx("##window_overlay_toggle_node", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", winOverlayNodeLabel.c_str());
+            if (winOverlayNodeOpen) {
+                const bool isBindingWinOverlay = (s_mainHotkeyToBind == -996);
+                const char* winOverlayButtonLabel =
+                    isBindingWinOverlay ? "[Press Keys...]" : (winOverlayKeyStr.empty() ? "[None]" : winOverlayKeyStr.c_str());
+                if (ImGui::Button(winOverlayButtonLabel)) {
+                    s_mainHotkeyToBind = -996;
+                    s_altHotkeyToBind = { -1, -1 };
+                    s_exclusionToBind = { -1, -1 };
+                }
+                ImGui::SameLine();
+                ImGui::TextDisabled("(?)");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Toggles visibility of all Window Overlays (does not change your mode config).\n"
+                                      "When hidden, overlay interaction forwarding is also disabled.");
+                }
+                ImGui::TreePop();
+            }
+        }
+        ImGui::PopID();
+
         ImGui::SeparatorText("Mode Hotkeys");
         int hotkey_to_remove = -1;
         for (size_t i = 0; i < g_config.hotkeys.size(); ++i) {

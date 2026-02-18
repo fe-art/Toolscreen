@@ -2437,6 +2437,12 @@ void RenderSettingsGUI() {
                 } else if (s_mainHotkeyToBind == -998) {
                     // Special case for borderless toggle hotkey
                     g_config.borderlessHotkey = keys;
+                } else if (s_mainHotkeyToBind == -997) {
+                    // Special case for image overlay visibility toggle hotkey
+                    g_config.imageOverlaysHotkey = keys;
+                } else if (s_mainHotkeyToBind == -996) {
+                    // Special case for window overlay visibility toggle hotkey
+                    g_config.windowOverlaysHotkey = keys;
                 } else {
                     g_config.hotkeys[s_mainHotkeyToBind].keys = keys;
                 }

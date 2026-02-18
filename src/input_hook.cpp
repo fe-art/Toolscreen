@@ -460,8 +460,117 @@ InputHandlerResult HandleBorderlessToggle(HWND hWnd, UINT uMsg, WPARAM wParam, L
     return { true, 1 };
 }
 
+InputHandlerResult HandleImageOverlaysToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    PROFILE_SCOPE("HandleImageOverlaysToggle");
+
+    // Disabled/unbound
+    if (g_config.imageOverlaysHotkey.empty()) { return { false, 0 }; }
+
+    // Avoid triggering while the user is actively binding hotkeys/rebinds in the GUI.
+    if (IsHotkeyBindingActive() || IsRebindBindingActive()) { return { false, 0 }; }
+
+    DWORD vkCode = 0;
+    switch (uMsg) {
+    case WM_KEYDOWN:
+    case WM_SYSKEYDOWN: {
+        vkCode = static_cast<DWORD>(wParam);
+        vkCode = NormalizeModifierVkFromKeyMessage(vkCode, lParam);
+        break;
+    }
+    case WM_LBUTTONDOWN:
+        vkCode = VK_LBUTTON;
+        break;
+    case WM_RBUTTONDOWN:
+        vkCode = VK_RBUTTON;
+        break;
+    case WM_MBUTTONDOWN:
+        vkCode = VK_MBUTTON;
+        break;
+    case WM_XBUTTONDOWN: {
+        WORD xButton = GET_XBUTTON_WPARAM(wParam);
+        vkCode = (xButton == XBUTTON1) ? VK_XBUTTON1 : VK_XBUTTON2;
+        break;
+    }
+    default:
+        return { false, 0 };
+    }
+
+    if (!CheckHotkeyMatch(g_config.imageOverlaysHotkey, vkCode)) { return { false, 0 }; }
+
+    // Debounce
+    static std::atomic<int64_t> s_lastToggleMs{ 0 };
+    auto now = std::chrono::steady_clock::now();
+    int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+    int64_t lastMs = s_lastToggleMs.load(std::memory_order_relaxed);
+    if (nowMs - lastMs < 250) { return { true, 1 }; }
+    s_lastToggleMs.store(nowMs, std::memory_order_relaxed);
+
+    bool newVisible = !g_imageOverlaysVisible.load(std::memory_order_acquire);
+    g_imageOverlaysVisible.store(newVisible, std::memory_order_release);
+
+    return { true, 1 };
+}
+
+InputHandlerResult HandleWindowOverlaysToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    PROFILE_SCOPE("HandleWindowOverlaysToggle");
+
+    // Disabled/unbound
+    if (g_config.windowOverlaysHotkey.empty()) { return { false, 0 }; }
+
+    // Avoid triggering while the user is actively binding hotkeys/rebinds in the GUI.
+    if (IsHotkeyBindingActive() || IsRebindBindingActive()) { return { false, 0 }; }
+
+    DWORD vkCode = 0;
+    switch (uMsg) {
+    case WM_KEYDOWN:
+    case WM_SYSKEYDOWN: {
+        vkCode = static_cast<DWORD>(wParam);
+        vkCode = NormalizeModifierVkFromKeyMessage(vkCode, lParam);
+        break;
+    }
+    case WM_LBUTTONDOWN:
+        vkCode = VK_LBUTTON;
+        break;
+    case WM_RBUTTONDOWN:
+        vkCode = VK_RBUTTON;
+        break;
+    case WM_MBUTTONDOWN:
+        vkCode = VK_MBUTTON;
+        break;
+    case WM_XBUTTONDOWN: {
+        WORD xButton = GET_XBUTTON_WPARAM(wParam);
+        vkCode = (xButton == XBUTTON1) ? VK_XBUTTON1 : VK_XBUTTON2;
+        break;
+    }
+    default:
+        return { false, 0 };
+    }
+
+    if (!CheckHotkeyMatch(g_config.windowOverlaysHotkey, vkCode)) { return { false, 0 }; }
+
+    // Debounce
+    static std::atomic<int64_t> s_lastToggleMs{ 0 };
+    auto now = std::chrono::steady_clock::now();
+    int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+    int64_t lastMs = s_lastToggleMs.load(std::memory_order_relaxed);
+    if (nowMs - lastMs < 250) { return { true, 1 }; }
+    s_lastToggleMs.store(nowMs, std::memory_order_relaxed);
+
+    bool newVisible = !g_windowOverlaysVisible.load(std::memory_order_acquire);
+    g_windowOverlaysVisible.store(newVisible, std::memory_order_release);
+
+    // If hiding, immediately drop focus so we don't forward input to an invisible overlay.
+    if (!newVisible) {
+        UnfocusWindowOverlay();
+    }
+
+    return { true, 1 };
+}
+
 InputHandlerResult HandleWindowOverlayKeyboard(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     PROFILE_SCOPE("HandleWindowOverlayKeyboard");
+
+    if (!g_windowOverlaysVisible.load(std::memory_order_acquire)) { return { false, 0 }; }
 
     bool isOverlayInteractionActive = IsWindowOverlayFocused();
 
@@ -484,6 +593,8 @@ InputHandlerResult HandleWindowOverlayKeyboard(HWND hWnd, UINT uMsg, WPARAM wPar
 
 InputHandlerResult HandleWindowOverlayMouse(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     PROFILE_SCOPE("HandleWindowOverlayMouse");
+
+    if (!g_windowOverlaysVisible.load(std::memory_order_acquire)) { return { false, 0 }; }
 
     if (uMsg < WM_MOUSEFIRST || uMsg > WM_MOUSELAST) { return { false, 0 }; }
 
@@ -1435,6 +1546,12 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 
     // This needs to run even in windowed mode (before HandleNonFullscreenCheck returns early)
     result = HandleBorderlessToggle(hWnd, uMsg, wParam, lParam);
+    if (result.consumed) return result.result;
+
+    // Overlay visibility hotkeys should work even in windowed mode
+    result = HandleImageOverlaysToggle(hWnd, uMsg, wParam, lParam);
+    if (result.consumed) return result.result;
+    result = HandleWindowOverlaysToggle(hWnd, uMsg, wParam, lParam);
     if (result.consumed) return result.result;
 
     result = HandleNonFullscreenCheck(hWnd, uMsg, wParam, lParam);

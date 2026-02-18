@@ -459,6 +459,10 @@ struct Config {
     // Hotkey to toggle borderless-windowed fullscreen for the game window.
     // Empty = disabled/unbound.
     std::vector<DWORD> borderlessHotkey = {};
+    // Hotkeys to toggle overlay visibility (runtime only; does not change mode config).
+    // Empty = disabled/unbound.
+    std::vector<DWORD> imageOverlaysHotkey = {};
+    std::vector<DWORD> windowOverlaysHotkey = {};
     CursorsConfig cursors;
     std::string fontPath = "c:\\Windows\\Fonts\\Arial.ttf"; // Custom font path for ImGui
     int fpsLimit = 0;                                       // FPS limit (0 = unlimited, 1-1000 = target FPS)
@@ -589,6 +593,9 @@ void ResizeHotkeySecondaryModes(size_t count);
 extern std::mutex g_hotkeySecondaryModesMutex;
 extern std::atomic<bool> g_cursorsNeedReload;
 extern std::atomic<bool> g_showGui;
+// Runtime visibility toggles (hotkey-controlled)
+extern std::atomic<bool> g_imageOverlaysVisible;
+extern std::atomic<bool> g_windowOverlaysVisible;
 extern std::string g_currentlyEditingMirror;
 extern std::atomic<HWND> g_minecraftHwnd;
 extern std::wstring g_toolscreenPath;

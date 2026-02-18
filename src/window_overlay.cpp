@@ -804,6 +804,8 @@ static void CalculateWindowOverlayDimensions(const WindowOverlayConfig& config, 
 
 // Get the overlay under a specific screen point
 std::string GetWindowOverlayAtPoint(int x, int y, int screenWidth, int screenHeight) {
+    if (!g_windowOverlaysVisible.load(std::memory_order_acquire)) { return ""; }
+
     std::string currentModeId;
     {
         extern std::mutex g_modeIdMutex;

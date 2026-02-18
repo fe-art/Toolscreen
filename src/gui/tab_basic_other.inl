@@ -22,6 +22,51 @@ if (ImGui::BeginTabItem("Other")) {
     }
     ImGui::PopID();
 
+    // --- OVERLAY VISIBILITY HOTKEYS ---
+    ImGui::SeparatorText("Overlay Visibility Hotkeys");
+
+    // Image overlays
+    ImGui::PushID("basic_image_overlay_toggle_hotkey");
+    {
+        std::string imgKeyStr = GetKeyComboString(g_config.imageOverlaysHotkey);
+        ImGui::Text("Toggle Image Overlays:");
+        ImGui::SameLine();
+        const bool isBindingImg = (s_mainHotkeyToBind == -997);
+        const char* imgBtnLabel = isBindingImg ? "[Press Keys...]" : (imgKeyStr.empty() ? "[Click to Bind]" : imgKeyStr.c_str());
+        if (ImGui::Button(imgBtnLabel, ImVec2(150, 0))) {
+            s_mainHotkeyToBind = -997;
+            s_altHotkeyToBind = { -1, -1 };
+            s_exclusionToBind = { -1, -1 };
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Toggles visibility of all Image Overlays.");
+        }
+    }
+    ImGui::PopID();
+
+    // Window overlays
+    ImGui::PushID("basic_window_overlay_toggle_hotkey");
+    {
+        std::string winKeyStr = GetKeyComboString(g_config.windowOverlaysHotkey);
+        ImGui::Text("Toggle Window Overlays:");
+        ImGui::SameLine();
+        const bool isBindingWin = (s_mainHotkeyToBind == -996);
+        const char* winBtnLabel = isBindingWin ? "[Press Keys...]" : (winKeyStr.empty() ? "[Click to Bind]" : winKeyStr.c_str());
+        if (ImGui::Button(winBtnLabel, ImVec2(150, 0))) {
+            s_mainHotkeyToBind = -996;
+            s_altHotkeyToBind = { -1, -1 };
+            s_exclusionToBind = { -1, -1 };
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Toggles visibility of all Window Overlays. When hidden, interaction forwarding is disabled.");
+        }
+    }
+    ImGui::PopID();
+
     // --- BORDERLESS TOGGLE HOTKEY SECTION ---
     ImGui::SeparatorText("Window Hotkeys");
     ImGui::PushID("basic_borderless_hotkey");

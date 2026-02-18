@@ -121,6 +121,8 @@ void ClearTempSensitivityOverride() {
 
 std::atomic<bool> g_cursorsNeedReload{ false };
 std::atomic<bool> g_showGui{ false };
+std::atomic<bool> g_imageOverlaysVisible{ true };
+std::atomic<bool> g_windowOverlaysVisible{ true };
 std::string g_currentlyEditingMirror;
 std::atomic<HWND> g_minecraftHwnd{ NULL };
 std::wstring g_toolscreenPath;

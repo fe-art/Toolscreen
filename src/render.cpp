@@ -2677,7 +2677,7 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
         glViewport(0, 0, fullW, fullH);
 
     // Handle image dragging when drag mode is active (BEFORE rendering)
-    if (g_imageDragMode.load()) {
+    if (g_imageDragMode.load() && g_imageOverlaysVisible.load(std::memory_order_acquire)) {
         PROFILE_SCOPE_CAT("Image Drag Mode", "Input Handling");
         // Skip if ImGui wants the mouse (user is interacting with GUI)
         ImGuiIO& io = ImGui::GetIO();
@@ -2785,7 +2785,7 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
     }
 
     // Handle window overlay dragging/resizing when drag mode is active (BEFORE rendering)
-    if (g_windowOverlayDragMode.load()) {
+    if (g_windowOverlayDragMode.load() && g_windowOverlaysVisible.load(std::memory_order_acquire)) {
         PROFILE_SCOPE_CAT("Window Overlay Drag Mode", "Input Handling");
 
         // Skip if ImGui wants the mouse (user is interacting with GUI)

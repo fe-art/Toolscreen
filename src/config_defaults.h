@@ -253,6 +253,10 @@ inline std::vector<DWORD> GetDefaultGuiHotkey() { return { VK_LCONTROL, 'I' }; }
 // Default borderless toggle hotkey: unbound/disabled
 inline std::vector<DWORD> GetDefaultBorderlessHotkey() { return {}; }
 
+// Default overlay visibility toggle hotkeys: unbound/disabled
+inline std::vector<DWORD> GetDefaultImageOverlaysHotkey() { return {}; }
+inline std::vector<DWORD> GetDefaultWindowOverlaysHotkey() { return {}; }
+
 // ============================================================================
 // Transition Type String Constants
 // ============================================================================

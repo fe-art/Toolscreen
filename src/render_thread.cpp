@@ -2767,22 +2767,26 @@ static void RT_CollectActiveElements(const Config& config, const std::string& mo
         }
     }
 
-    // Collect images
-    for (const auto& imageName : mode->imageIds) {
-        for (const auto& image : config.images) {
-            if (image.name == imageName) {
-                if (!onlyOnMyScreenPass || image.onlyOnMyScreen) { outImages.push_back(image); }
-                break;
+    // Collect images (honor runtime visibility toggle)
+    if (g_imageOverlaysVisible.load(std::memory_order_acquire)) {
+        for (const auto& imageName : mode->imageIds) {
+            for (const auto& image : config.images) {
+                if (image.name == imageName) {
+                    if (!onlyOnMyScreenPass || image.onlyOnMyScreen) { outImages.push_back(image); }
+                    break;
+                }
             }
         }
     }
 
-    // Collect window overlays
-    for (const auto& overlayId : mode->windowOverlayIds) {
-        for (const auto& overlay : config.windowOverlays) {
-            if (overlay.name == overlayId) {
-                if (!onlyOnMyScreenPass || overlay.onlyOnMyScreen) { outWindowOverlayIds.push_back(overlayId); }
-                break;
+    // Collect window overlays (honor runtime visibility toggle)
+    if (g_windowOverlaysVisible.load(std::memory_order_acquire)) {
+        for (const auto& overlayId : mode->windowOverlayIds) {
+            for (const auto& overlay : config.windowOverlays) {
+                if (overlay.name == overlayId) {
+                    if (!onlyOnMyScreenPass || overlay.onlyOnMyScreen) { outWindowOverlayIds.push_back(overlayId); }
+                    break;
+                }
             }
         }
     }

@@ -1412,6 +1412,15 @@ void ConfigToToml(const Config& config, toml::table& out) {
     for (const auto& key : config.borderlessHotkey) { borderlessHotkeyArr.push_back(static_cast<int64_t>(key)); }
     out.insert("borderlessHotkey", borderlessHotkeyArr);
 
+    // Overlay visibility toggle hotkeys (optional)
+    toml::array imageOverlaysHotkeyArr;
+    for (const auto& key : config.imageOverlaysHotkey) { imageOverlaysHotkeyArr.push_back(static_cast<int64_t>(key)); }
+    out.insert("imageOverlaysHotkey", imageOverlaysHotkeyArr);
+
+    toml::array windowOverlaysHotkeyArr;
+    for (const auto& key : config.windowOverlaysHotkey) { windowOverlaysHotkeyArr.push_back(static_cast<int64_t>(key)); }
+    out.insert("windowOverlaysHotkey", windowOverlaysHotkeyArr);
+
     // Debug
     toml::table debugTbl;
     DebugGlobalConfigToToml(config.debug, debugTbl);
@@ -1538,6 +1547,25 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
         }
     }
     if (!hasBorderlessHotkey) { config.borderlessHotkey = ConfigDefaults::GetDefaultBorderlessHotkey(); }
+
+    // Overlay visibility toggle hotkeys (optional; empty array = disabled)
+    config.imageOverlaysHotkey.clear();
+    const bool hasImageOverlaysHotkey = tbl.contains("imageOverlaysHotkey");
+    if (auto arr = GetArray(tbl, "imageOverlaysHotkey")) {
+        for (const auto& elem : *arr) {
+            if (auto val = elem.value<int64_t>()) { config.imageOverlaysHotkey.push_back(static_cast<DWORD>(*val)); }
+        }
+    }
+    if (!hasImageOverlaysHotkey) { config.imageOverlaysHotkey = ConfigDefaults::GetDefaultImageOverlaysHotkey(); }
+
+    config.windowOverlaysHotkey.clear();
+    const bool hasWindowOverlaysHotkey = tbl.contains("windowOverlaysHotkey");
+    if (auto arr = GetArray(tbl, "windowOverlaysHotkey")) {
+        for (const auto& elem : *arr) {
+            if (auto val = elem.value<int64_t>()) { config.windowOverlaysHotkey.push_back(static_cast<DWORD>(*val)); }
+        }
+    }
+    if (!hasWindowOverlaysHotkey) { config.windowOverlaysHotkey = ConfigDefaults::GetDefaultWindowOverlaysHotkey(); }
 
     // Debug
     if (auto t = GetTable(tbl, "debug")) { DebugGlobalConfigFromToml(*t, config.debug); }
@@ -1672,6 +1700,8 @@ bool SaveConfigToTomlFile(const Config& config, const std::wstring& path) {
                                                  "disableConfigurePrompt",
                                                  "guiHotkey",
                                                  "borderlessHotkey",
+                                                 "imageOverlaysHotkey",
+                                                 "windowOverlaysHotkey",
                                                  "debug",
                                                  "eyezoom",
                                                  "cursors",
