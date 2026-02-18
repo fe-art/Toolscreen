@@ -342,6 +342,12 @@ static void HelpMarker(const char* desc) {
     }
 }
 
+// Tip shown on tabs that contain sliders.
+static void SliderCtrlClickTip() {
+    ImGui::TextDisabled("Tip: Ctrl+Click any slider to input a specific value.");
+    ImGui::Spacing();
+}
+
 // Helper function to render transition settings in horizontal layout WITHOUT background column (for Fullscreen mode)
 static void RenderTransitionSettingsHorizontalNoBackground(ModeConfig& mode, const std::string& idSuffix) {
     ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(10, 5));

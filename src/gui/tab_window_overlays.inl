@@ -5,6 +5,8 @@ if (ImGui::BeginTabItem("Window Overlays")) {
     // Enable window overlay drag mode when Window Overlays tab is active
     g_windowOverlayDragMode.store(true);
 
+    SliderCtrlClickTip();
+
     int windowOverlay_to_remove = -1;
     for (size_t i = 0; i < g_config.windowOverlays.size(); ++i) {
         auto& overlay = g_config.windowOverlays[i];

@@ -3,6 +3,8 @@ if (ImGui::BeginTabItem("Other")) {
     g_imageDragMode.store(false);
     g_windowOverlayDragMode.store(false);
 
+    SliderCtrlClickTip();
+
     // --- GUI HOTKEY SECTION ---
     ImGui::SeparatorText("GUI Hotkey");
     ImGui::PushID("basic_gui_hotkey");

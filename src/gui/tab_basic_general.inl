@@ -3,6 +3,8 @@ if (ImGui::BeginTabItem("General")) {
     g_imageDragMode.store(false);
     g_windowOverlayDragMode.store(false);
 
+    SliderCtrlClickTip();
+
     // Helper lambda to render inline hotkey binding for a mode
     auto RenderInlineHotkeyBinding = [&](const std::string& targetModeId, const char* label) {
         // Find existing hotkey for this mode (Fullscreen <-> targetMode)

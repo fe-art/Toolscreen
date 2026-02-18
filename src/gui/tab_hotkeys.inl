@@ -13,6 +13,8 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
             ImGui::Separator();
         }
 
+        SliderCtrlClickTip();
+
         // GUI Hotkey Section
         ImGui::SeparatorText("GUI Hotkey");
         ImGui::PushID("gui_hotkey");

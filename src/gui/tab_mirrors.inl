@@ -3,6 +3,8 @@ if (ImGui::BeginTabItem("Mirrors")) {
     g_imageDragMode.store(false);
     g_windowOverlayDragMode.store(false);
 
+    SliderCtrlClickTip();
+
     // Track selected mirror for visual feedback
     static std::string selectedMirrorName = "";
 

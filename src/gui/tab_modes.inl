@@ -26,6 +26,8 @@
         ImGui::Separator();
     }
 
+    SliderCtrlClickTip();
+
     // --- DEFAULT MODES SECTION ---
     ImGui::SeparatorText("Default Modes");
 

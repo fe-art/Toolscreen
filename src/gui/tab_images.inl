@@ -6,6 +6,8 @@
     // Disable window overlay drag mode in Images tab
     g_windowOverlayDragMode.store(false);
 
+    SliderCtrlClickTip();
+
     // Show instructions
     ImGui::TextColored(ImVec4(0.7f, 0.9f, 0.7f, 1.0f),
                        "You can click and drag images in the game window to move them while this tab is open");

@@ -9,6 +9,8 @@ if (ImGui::BeginTabItem("Inputs")) {
         // MOUSE SUB-TAB
         // =====================================================================
         if (ImGui::BeginTabItem("Mouse")) {
+            SliderCtrlClickTip();
+
             ImGui::SeparatorText("Mouse Settings");
 
             ImGui::Text("Mouse Sensitivity:");
@@ -239,6 +241,8 @@ if (ImGui::BeginTabItem("Inputs")) {
         // KEYBOARD SUB-TAB
         // =====================================================================
         if (ImGui::BeginTabItem("Keyboard")) {
+            SliderCtrlClickTip();
+
             // --- Key Repeat Rate Settings ---
             ImGui::SeparatorText("Key Repeat Rate");
 

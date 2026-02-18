@@ -3,6 +3,8 @@ if (ImGui::BeginTabItem("Settings")) {
     g_imageDragMode.store(false);
     g_windowOverlayDragMode.store(false);
 
+    SliderCtrlClickTip();
+
     ImGui::SeparatorText("Performance");
 
     ImGui::Text("FPS Limit:");
