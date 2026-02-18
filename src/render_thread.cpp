@@ -1780,7 +1780,10 @@ static void RT_RenderEyeZoom(GLuint gameTexture, int requestViewportX, int fullW
 
     // Optional FPS limit for updating the EyeZoom clone texture (render thread / OBS capture).
     // We reuse rt_eyeZoomSnapshotTexture as a clone cache and as the transition-out snapshot.
+    // NOTE: Use high-resolution scheduling (next update time) instead of millisecond rounding to avoid cadence jitter/flicker.
     static std::chrono::steady_clock::time_point rt_eyeZoomCloneLastUpdate = {};
+    static std::chrono::steady_clock::time_point rt_eyeZoomCloneNextUpdate = {};
+    static int rt_eyeZoomCloneLastFps = 0;
     const bool cloneFpsLimited = (zoomConfig.cloneFps > 0);
     const auto now = std::chrono::steady_clock::now();
 
@@ -1823,11 +1826,16 @@ static void RT_RenderEyeZoom(GLuint gameTexture, int requestViewportX, int fullW
         // Capped: update snapshot at most N fps, then render from snapshot
         EnsureRtEyeZoomSnapshotAllocated();
 
-        bool needsUpdate = (!rt_eyeZoomSnapshotValid);
-        if (!needsUpdate) {
-            const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - rt_eyeZoomCloneLastUpdate).count();
-            const int intervalMs = (std::max)(1, 1000 / (std::max)(1, zoomConfig.cloneFps));
-            needsUpdate = (elapsedMs >= intervalMs);
+        const bool fpsChanged = (zoomConfig.cloneFps != rt_eyeZoomCloneLastFps);
+        bool needsUpdate = (!rt_eyeZoomSnapshotValid || fpsChanged);
+        if (needsUpdate) {
+            rt_eyeZoomCloneNextUpdate = now; // update ASAP on first valid frame / fps change
+        }
+
+        const int fps = (std::max)(1, zoomConfig.cloneFps);
+        const auto interval = std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(1.0 / fps));
+        if (!needsUpdate && rt_eyeZoomCloneNextUpdate != std::chrono::steady_clock::time_point{} && now >= rt_eyeZoomCloneNextUpdate) {
+            needsUpdate = true;
         }
 
         if (needsUpdate) {
@@ -1843,18 +1851,33 @@ static void RT_RenderEyeZoom(GLuint gameTexture, int requestViewportX, int fullW
             int srcBottom = srcCenterY - zoomConfig.cloneHeight / 2;
             int srcTop = srcCenterY + zoomConfig.cloneHeight / 2;
 
+            // Clamp to valid source region to avoid undefined blits (can show as intermittent flicker on some drivers).
+            srcLeft = (std::max)(0, srcLeft);
+            srcBottom = (std::max)(0, srcBottom);
+            srcRight = (std::min)(texWidth, srcRight);
+            srcTop = (std::min)(texHeight, srcTop);
+            if (srcRight <= srcLeft || srcTop <= srcBottom) {
+                // Can't update; keep last snapshot (if any)
+                needsUpdate = false;
+            }
+
             static GLuint gameReadFBO = 0;
             if (gameReadFBO == 0) { glGenFramebuffers(1, &gameReadFBO); }
             glBindFramebuffer(GL_READ_FRAMEBUFFER, gameReadFBO);
             glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gameTexture, 0);
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, rt_eyeZoomSnapshotFBO);
-            glBlitFramebuffer(srcLeft, srcBottom, srcRight, srcTop, 0, 0, zoomOutputWidth, zoomOutputHeight, GL_COLOR_BUFFER_BIT,
-                              GL_NEAREST);
-            glBindFramebuffer(GL_FRAMEBUFFER, currentDrawFBO);
+            if (needsUpdate) {
+                glBlitFramebuffer(srcLeft, srcBottom, srcRight, srcTop, 0, 0, zoomOutputWidth, zoomOutputHeight, GL_COLOR_BUFFER_BIT,
+                                  GL_NEAREST);
+                glBindFramebuffer(GL_FRAMEBUFFER, currentDrawFBO);
 
-            rt_eyeZoomSnapshotValid = true;
-            rt_eyeZoomCloneLastUpdate = now;
+                rt_eyeZoomSnapshotValid = true;
+                rt_eyeZoomCloneLastUpdate = now;
+                rt_eyeZoomCloneNextUpdate = now + (interval.count() > 0 ? interval : std::chrono::steady_clock::duration(1));
+            }
         }
+
+        rt_eyeZoomCloneLastFps = zoomConfig.cloneFps;
 
         if (rt_eyeZoomSnapshotValid && rt_eyeZoomSnapshotTexture != 0) {
             BlitRtEyeZoomSnapshotToDest();
@@ -1873,6 +1896,15 @@ static void RT_RenderEyeZoom(GLuint gameTexture, int requestViewportX, int fullW
         int srcCenterY = texHeight / 2;
         int srcBottom = srcCenterY - zoomConfig.cloneHeight / 2;
         int srcTop = srcCenterY + zoomConfig.cloneHeight / 2;
+
+        // Clamp to valid source region to avoid undefined blits.
+        srcLeft = (std::max)(0, srcLeft);
+        srcBottom = (std::max)(0, srcBottom);
+        srcRight = (std::min)(texWidth, srcRight);
+        srcTop = (std::min)(texHeight, srcTop);
+        if (srcRight <= srcLeft || srcTop <= srcBottom) {
+            return;
+        }
 
         int dstLeft = zoomX;
         int dstRight = zoomX + zoomOutputWidth;

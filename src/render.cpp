@@ -1680,7 +1680,10 @@ void handleEyeZoomMode(const GLState& s, float opacity, int animatedViewportX) {
     // Optional FPS limit for updating the EyeZoom clone texture.
     // Implementation detail: we reuse the existing snapshot texture as a clone cache.
     // When limited, we update the snapshot at most N times per second, and render from the snapshot every frame.
+    // NOTE: Use high-resolution scheduling (next update time) instead of millisecond rounding to avoid cadence jitter/flicker.
     static std::chrono::steady_clock::time_point s_eyeZoomCloneLastUpdate = {};
+    static std::chrono::steady_clock::time_point s_eyeZoomCloneNextUpdate = {};
+    static int s_eyeZoomCloneLastFps = 0;
     const bool cloneFpsLimited = (!useSnapshot && zoomConfig.cloneFps > 0);
     const auto now = std::chrono::steady_clock::now();
 
@@ -1707,12 +1710,44 @@ void handleEyeZoomMode(const GLState& s, float opacity, int animatedViewportX) {
     auto UpdateEyeZoomSnapshotFromGameTexture = [&]() {
         EnsureEyeZoomSnapshotAllocated();
 
+        // Use actual game texture dimensions when available.
+        // Out-of-bounds src rectangles with glBlitFramebuffer are undefined and can present as intermittent flicker.
+        int texWidthActual = texWidth;
+        int texHeightActual = texHeight;
+        {
+            GLint w = 0, h = 0;
+            glBindTexture(GL_TEXTURE_2D, gameTextureToUse);
+            glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &w);
+            glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &h);
+            if (w > 0 && h > 0) {
+                texWidthActual = w;
+                texHeightActual = h;
+            }
+        }
+
+        int srcCenterX_actual = texWidthActual / 2;
+        int srcLeft_actual = srcCenterX_actual - zoomConfig.cloneWidth / 2;
+        int srcRight_actual = srcCenterX_actual + zoomConfig.cloneWidth / 2;
+        int srcCenterY_actual = texHeightActual / 2;
+        int srcBottom_actual = srcCenterY_actual - zoomConfig.cloneHeight / 2;
+        int srcTop_actual = srcCenterY_actual + zoomConfig.cloneHeight / 2;
+
+        // Clamp to texture bounds (avoid undefined blits).
+        srcLeft_actual = (std::max)(0, srcLeft_actual);
+        srcBottom_actual = (std::max)(0, srcBottom_actual);
+        srcRight_actual = (std::min)(texWidthActual, srcRight_actual);
+        srcTop_actual = (std::min)(texHeightActual, srcTop_actual);
+        if (srcRight_actual <= srcLeft_actual || srcTop_actual <= srcBottom_actual) {
+            return; // Keep old snapshot (if any)
+        }
+
         // Render clone directly into snapshot (scaled to zoomOutputWidth/zoomOutputHeight)
         if (s_eyeZoomBlitFBO == 0) { glGenFramebuffers(1, &s_eyeZoomBlitFBO); }
         glBindFramebuffer(GL_READ_FRAMEBUFFER, s_eyeZoomBlitFBO);
         glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gameTextureToUse, 0);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_eyeZoomSnapshotFBO);
-        glBlitFramebuffer(srcLeft, srcBottom, srcRight, srcTop, 0, 0, zoomOutputWidth, zoomOutputHeight, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        glBlitFramebuffer(srcLeft_actual, srcBottom_actual, srcRight_actual, srcTop_actual, 0, 0, zoomOutputWidth, zoomOutputHeight,
+                  GL_COLOR_BUFFER_BIT, GL_NEAREST);
 
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         s_eyeZoomSnapshotValid = true;
@@ -1720,22 +1755,34 @@ void handleEyeZoomMode(const GLState& s, float opacity, int animatedViewportX) {
     };
 
     if (cloneFpsLimited) {
-        bool needsUpdate = (!s_eyeZoomSnapshotValid || s_eyeZoomSnapshotTexture == 0 || s_eyeZoomSnapshotWidth != zoomOutputWidth ||
-                            s_eyeZoomSnapshotHeight != zoomOutputHeight);
+        const bool dimsChanged = (s_eyeZoomSnapshotWidth != zoomOutputWidth || s_eyeZoomSnapshotHeight != zoomOutputHeight);
+        const bool fpsChanged = (zoomConfig.cloneFps != s_eyeZoomCloneLastFps);
 
-        if (!needsUpdate) {
-            const auto elapsedMs =
-                std::chrono::duration_cast<std::chrono::milliseconds>(now - s_eyeZoomCloneLastUpdate).count();
-            const int intervalMs = (std::max)(1, 1000 / (std::max)(1, zoomConfig.cloneFps));
-            needsUpdate = (elapsedMs >= intervalMs);
+        bool needsUpdate = (!s_eyeZoomSnapshotValid || s_eyeZoomSnapshotTexture == 0 || dimsChanged || fpsChanged);
+        if (needsUpdate) {
+            s_eyeZoomCloneNextUpdate = now; // update ASAP on first valid frame / resize / fps change
+        }
+
+        // Use a high-resolution interval to avoid millisecond rounding jitter.
+        const int fps = (std::max)(1, zoomConfig.cloneFps);
+        const auto interval = std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(1.0 / fps));
+        if (!needsUpdate && s_eyeZoomCloneNextUpdate != std::chrono::steady_clock::time_point{} && now >= s_eyeZoomCloneNextUpdate) {
+            needsUpdate = true;
         }
 
         if (needsUpdate) {
             // If the game texture isn't ready, just keep rendering the last snapshot.
             if (gameTextureToUse != UINT_MAX) {
+                const bool hadValidBefore = s_eyeZoomSnapshotValid;
                 UpdateEyeZoomSnapshotFromGameTexture();
+                // Only advance the schedule if we actually produced/kept valid content.
+                if (s_eyeZoomSnapshotValid || hadValidBefore) {
+                    s_eyeZoomCloneNextUpdate = now + (interval.count() > 0 ? interval : std::chrono::steady_clock::duration(1));
+                }
             }
         }
+
+        s_eyeZoomCloneLastFps = zoomConfig.cloneFps;
     }
 
     // For opacity < 1.0, we need to render to a temporary texture first, then blend to screen
