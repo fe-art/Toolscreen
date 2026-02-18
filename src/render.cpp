@@ -2368,40 +2368,23 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
             glBindTexture(GL_TEXTURE_2D, savedTexture);
         };
 
-        // Lambda to render solid color background by clearing 4 letterbox regions directly.
-        // This avoids per-region VBO uploads + draw calls (cheaper on both CPU and GPU).
+        // Lambda to render solid color background by drawing 4 letterbox regions directly
+        // Faster than stencil approach - just calculate which regions need drawing
         auto renderBackgroundColor = [&](const Color& color, float opacity) {
             PROFILE_SCOPE_CAT("Scissor Background Color", "Rendering");
 
-            // We only use this fast-path for fully opaque backgrounds.
-            // (For translucent backgrounds we'd need blending, so keep the shader path.)
+            glEnable(GL_SCISSOR_TEST);
+            glUseProgram(g_solidColorProgram);
+            glUniform4f(g_solidColorShaderLocs.color, color.r, color.g, color.b, opacity);
+            glBindVertexArray(g_vao);
+            glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+
             if (opacity < 1.0f) {
-                glEnable(GL_SCISSOR_TEST);
-                glUseProgram(g_solidColorProgram);
-                glUniform4f(g_solidColorShaderLocs.color, color.r, color.g, color.b, opacity);
-                glBindVertexArray(g_vao);
-                glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
                 glEnable(GL_BLEND);
                 glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-                // Calculate viewport bounds in GL coordinates (shrink inward by letterboxExtend)
-                int vpLeft = finalX + letterboxExtendX;
-                int vpRight = finalX + finalW - letterboxExtendX;
-                int vpBottom_gl = finalY_gl + letterboxExtendY;
-                int vpTop_gl = finalY_gl + finalH - letterboxExtendY;
-
-                drawColorRegion(0, 0, fullW, vpBottom_gl);
-                drawColorRegion(0, vpTop_gl, fullW, fullH - vpTop_gl);
-                drawColorRegion(0, vpBottom_gl, vpLeft, vpTop_gl - vpBottom_gl);
-                drawColorRegion(vpRight, vpBottom_gl, fullW - vpRight, vpTop_gl - vpBottom_gl);
-
-                glDisable(GL_SCISSOR_TEST);
+            } else {
                 glDisable(GL_BLEND);
-                return;
             }
-
-            glDisable(GL_BLEND);
-            glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
             // Calculate viewport bounds in GL coordinates (shrink inward by letterboxExtend)
             int vpLeft = finalX + letterboxExtendX;
@@ -2409,21 +2392,15 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
             int vpBottom_gl = finalY_gl + letterboxExtendY;
             int vpTop_gl = finalY_gl + finalH - letterboxExtendY;
 
-            glEnable(GL_SCISSOR_TEST);
-            glClearColor(color.r, color.g, color.b, 1.0f);
-
-            // Bottom
-            glScissor(0, 0, fullW, vpBottom_gl);
-            glClear(GL_COLOR_BUFFER_BIT);
-            // Top
-            glScissor(0, vpTop_gl, fullW, fullH - vpTop_gl);
-            glClear(GL_COLOR_BUFFER_BIT);
-            // Left
-            glScissor(0, vpBottom_gl, vpLeft, vpTop_gl - vpBottom_gl);
-            glClear(GL_COLOR_BUFFER_BIT);
-            // Right
-            glScissor(vpRight, vpBottom_gl, fullW - vpRight, vpTop_gl - vpBottom_gl);
-            glClear(GL_COLOR_BUFFER_BIT);
+            // Draw 4 letterbox regions around the viewport:
+            // Bottom region: from y=0 to vpBottom_gl, full width
+            drawColorRegion(0, 0, fullW, vpBottom_gl);
+            // Top region: from vpTop_gl to fullH, full width
+            drawColorRegion(0, vpTop_gl, fullW, fullH - vpTop_gl);
+            // Left region: from x=0 to vpLeft, between vpBottom_gl and vpTop_gl
+            drawColorRegion(0, vpBottom_gl, vpLeft, vpTop_gl - vpBottom_gl);
+            // Right region: from vpRight to fullW, between vpBottom_gl and vpTop_gl
+            drawColorRegion(vpRight, vpBottom_gl, fullW - vpRight, vpTop_gl - vpBottom_gl);
 
             glDisable(GL_SCISSOR_TEST);
         };
