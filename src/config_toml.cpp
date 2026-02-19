@@ -1416,6 +1416,7 @@ void AppearanceConfigFromToml(const toml::table& tbl, AppearanceConfig& cfg) {
 
 void ConfigToToml(const Config& config, toml::table& out) {
     out.insert("configVersion", config.configVersion);
+    out.insert("disableHookChaining", config.disableHookChaining);
     out.insert("defaultMode", config.defaultMode);
     out.insert("fontPath", config.fontPath);
     out.insert("fpsLimit", config.fpsLimit);
@@ -1541,6 +1542,7 @@ void ConfigToToml(const Config& config, toml::table& out) {
 
 void ConfigFromToml(const toml::table& tbl, Config& config) {
     config.configVersion = GetOr(tbl, "configVersion", ConfigDefaults::DEFAULT_CONFIG_VERSION);
+    config.disableHookChaining = GetOr(tbl, "disableHookChaining", ConfigDefaults::CONFIG_DISABLE_HOOK_CHAINING);
     config.defaultMode = GetStringOr(tbl, "defaultMode", ConfigDefaults::CONFIG_DEFAULT_MODE);
     config.fontPath = GetStringOr(tbl, "fontPath", ConfigDefaults::CONFIG_FONT_PATH);
     config.fpsLimit = GetOr(tbl, "fpsLimit", ConfigDefaults::CONFIG_FPS_LIMIT);
@@ -1714,6 +1716,7 @@ bool SaveConfigToTomlFile(const Config& config, const std::wstring& path) {
 
         // Define the order of top-level keys
         std::vector<std::string> orderedKeys = { "configVersion",
+                             "disableHookChaining",
                                                  "defaultMode",
                                                  "fontPath",
                                                  "fpsLimit",

@@ -470,6 +470,9 @@ struct Config {
     int fpsLimitSleepThreshold = 1000;                      // Microseconds threshold for using timer sleep during high FPS
     // Global mirror color-matching colorspace/gamma mode (applies to all mirrors)
     MirrorGammaMode mirrorGammaMode = MirrorGammaMode::Auto;
+    // When true, Toolscreen will NOT attempt to chain hooks behind third-party detours installed after us.
+    // Useful if a specific overlay/driver hook layer is unstable when chained.
+    bool disableHookChaining = true;
     bool allowCursorEscape = false;                         // Allow cursor to escape window boundaries
     float mouseSensitivity = 1.0f;                          // Mouse sensitivity multiplier (1.0 = normal)
     int windowsMouseSpeed = 0;                              // Windows mouse speed override (0 = disabled, 1-20 = override)

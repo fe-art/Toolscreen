@@ -237,6 +237,7 @@ inline const std::string CONFIG_FONT_PATH = R"(c:\Windows\Fonts\Arial.ttf)";
 constexpr int CONFIG_FPS_LIMIT = 0;
 constexpr int CONFIG_FPS_LIMIT_SLEEP_THRESHOLD = 1000;
 constexpr bool CONFIG_ALLOW_CURSOR_ESCAPE = false;
+constexpr bool CONFIG_DISABLE_HOOK_CHAINING = true;
 constexpr float CONFIG_MOUSE_SENSITIVITY = 1.0f;
 constexpr int CONFIG_WINDOWS_MOUSE_SPEED = 0;
 constexpr bool CONFIG_HIDE_ANIMATIONS_IN_GAME = false;

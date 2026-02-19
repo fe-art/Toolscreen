@@ -1,3 +1,4 @@
+disableHookChaining = true
 allowCursorEscape = true
 basicModeEnabled = true
 configVersion = 1

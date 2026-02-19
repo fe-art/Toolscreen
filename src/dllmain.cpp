@@ -1185,6 +1185,10 @@ void AttemptAggressiveGlViewportHook() {
 // If a third-party tool hooks glViewport after us, our export hook may be bypassed.
 // In that case, chain by hooking their detour target (jump destination) so both hooks run.
 static void RefreshThirdPartyViewportHookChain() {
+    // If enabled, do not attempt to chain behind third-party detours installed after us.
+    // Note: Read scalar bool directly (same rationale as other hot-path config reads in this file).
+    if (g_config.disableHookChaining) return;
+
     HMODULE hOpenGL32 = GetModuleHandle(L"opengl32.dll");
     if (!hOpenGL32) return;
 
@@ -2806,6 +2810,8 @@ static bool TryCreateAndEnableHook(void* target, void* detour, void** outOrigina
 
 // Same idea as RefreshThirdPartyViewportHookChain, but for wglSwapBuffers (commonly hooked by overlays).
 static void RefreshThirdPartyWglSwapBuffersHookChain() {
+    if (g_config.disableHookChaining) return;
+
     HMODULE hOpenGL32 = GetModuleHandle(L"opengl32.dll");
     if (!hOpenGL32) return;
 
@@ -2831,6 +2837,8 @@ static void RefreshThirdPartyWglSwapBuffersHookChain() {
 }
 
 static void RefreshThirdPartySetCursorPosHookChain() {
+    if (g_config.disableHookChaining) return;
+
     HMODULE hUser32 = GetModuleHandle(L"user32.dll");
     if (!hUser32) return;
 
@@ -2856,6 +2864,8 @@ static void RefreshThirdPartySetCursorPosHookChain() {
 }
 
 static void RefreshThirdPartyClipCursorHookChain() {
+    if (g_config.disableHookChaining) return;
+
     HMODULE hUser32 = GetModuleHandle(L"user32.dll");
     if (!hUser32) return;
 
@@ -2881,6 +2891,8 @@ static void RefreshThirdPartyClipCursorHookChain() {
 }
 
 static void RefreshThirdPartySetCursorHookChain() {
+    if (g_config.disableHookChaining) return;
+
     HMODULE hUser32 = GetModuleHandle(L"user32.dll");
     if (!hUser32) return;
 
@@ -2906,6 +2918,8 @@ static void RefreshThirdPartySetCursorHookChain() {
 }
 
 static void RefreshThirdPartyGetRawInputDataHookChain() {
+    if (g_config.disableHookChaining) return;
+
     HMODULE hUser32 = GetModuleHandle(L"user32.dll");
     if (!hUser32) return;
 
@@ -2931,6 +2945,8 @@ static void RefreshThirdPartyGetRawInputDataHookChain() {
 }
 
 static void RefreshThirdPartyGlfwSetInputModeHookChain() {
+    if (g_config.disableHookChaining) return;
+
     HMODULE hGlfw = GetModuleHandle(L"glfw.dll");
     if (!hGlfw) return;
 
@@ -2958,6 +2974,8 @@ static void RefreshThirdPartyGlfwSetInputModeHookChain() {
 // Some overlays hook the driver entrypoint we hooked (GLEW/wglGetProcAddress pointer) after us.
 // If that happens, re-chain behind their detour target as well.
 static void RefreshThirdPartyViewportHookChainFromDriverTarget() {
+    if (g_config.disableHookChaining) return;
+
     void* driverTarget = g_glViewportDriverHookTarget.load(std::memory_order_acquire);
     if (!driverTarget) return;
 
@@ -3026,6 +3044,8 @@ static void* FindIatImportedFunctionTarget(HMODULE importingModule, const char* 
 }
 
 static void RefreshThirdPartyWglSwapBuffersIatHookChain() {
+    if (g_config.disableHookChaining) return;
+
     // If an overlay hooks wglSwapBuffers by IAT patching (no prolog detour), our export-prolog detection won't see it.
     // Scan importing modules for an IAT entry that points somewhere unexpected and chain behind that target.
     HMODULE opengl32 = GetModuleHandle(L"opengl32.dll");
