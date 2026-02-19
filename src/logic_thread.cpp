@@ -444,11 +444,47 @@ void ProcessPendingDimensionChange() {
         const bool hasRelativeHeight = (mode->relativeHeight >= 0.0f && mode->relativeHeight <= 1.0f);
         if (!hasRelativeWidth && !hasRelativeHeight) { mode->useRelativeSize = false; }
 
+        // Preemptive mode always copies EyeZoom resolution.
+        // If EyeZoom was edited (or if Preemptive somehow got edited), resync Preemptive now.
+        ModeConfig* eyezoomMode = GetModeMutable("EyeZoom");
+        ModeConfig* preemptiveMode = GetModeMutable("Preemptive");
+        bool preemptiveWasResynced = false;
+        if (eyezoomMode && preemptiveMode) {
+            // Force Preemptive to absolute sizing.
+            if (!preemptiveMode->widthExpr.empty() || !preemptiveMode->heightExpr.empty() || preemptiveMode->useRelativeSize ||
+                preemptiveMode->relativeWidth >= 0.0f || preemptiveMode->relativeHeight >= 0.0f) {
+                preemptiveMode->widthExpr.clear();
+                preemptiveMode->heightExpr.clear();
+                preemptiveMode->useRelativeSize = false;
+                preemptiveMode->relativeWidth = -1.0f;
+                preemptiveMode->relativeHeight = -1.0f;
+                preemptiveWasResynced = true;
+            }
+
+            if (preemptiveMode->width != eyezoomMode->width) {
+                preemptiveMode->width = eyezoomMode->width;
+                preemptiveWasResynced = true;
+            }
+            if (preemptiveMode->height != eyezoomMode->height) {
+                preemptiveMode->height = eyezoomMode->height;
+                preemptiveWasResynced = true;
+            }
+        }
+
         // Post WM_SIZE if requested and this is the current mode
         if (g_pendingDimensionChange.sendWmSize && g_currentModeId == g_pendingDimensionChange.modeId) {
             HWND hwnd = g_minecraftHwnd.load();
             if (hwnd) { PostMessage(hwnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(mode->width, mode->height)); }
         }
+
+        // Special case: changing EyeZoom dimensions also changes Preemptive (it mirrors EyeZoom resolution).
+        if (g_pendingDimensionChange.sendWmSize && g_currentModeId == "Preemptive" && g_pendingDimensionChange.modeId == "EyeZoom" &&
+            preemptiveMode) {
+            HWND hwnd = g_minecraftHwnd.load();
+            if (hwnd) { PostMessage(hwnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(preemptiveMode->width, preemptiveMode->height)); }
+        }
+
+        if (preemptiveWasResynced) { g_configIsDirty = true; }
 
         g_configIsDirty = true;
     }

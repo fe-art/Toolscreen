@@ -1217,8 +1217,8 @@ bool IsCursorVisible() {
 }
 
 bool IsHardcodedMode(const std::string& id) {
-    return EqualsIgnoreCase(id, "Fullscreen") || EqualsIgnoreCase(id, "EyeZoom") || EqualsIgnoreCase(id, "Thin") ||
-           EqualsIgnoreCase(id, "Wide");
+    return EqualsIgnoreCase(id, "Fullscreen") || EqualsIgnoreCase(id, "EyeZoom") || EqualsIgnoreCase(id, "Preemptive") ||
+           EqualsIgnoreCase(id, "Thin") || EqualsIgnoreCase(id, "Wide");
 }
 
 bool EqualsIgnoreCase(const std::string& a, const std::string& b) {

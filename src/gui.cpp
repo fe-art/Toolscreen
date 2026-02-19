@@ -1897,6 +1897,76 @@ void LoadConfig() {
             Log("Created missing EyeZoom mode");
         }
 
+        // Ensure Preemptive mode exists.
+        // This is a built-in mode that behaves like a normal mode (no EyeZoom clone rendering),
+        // but its resolution is always kept in sync with EyeZoom.
+        {
+            ModeConfig* eyezoomModePtr = nullptr;
+            for (auto& m : g_config.modes) {
+                if (EqualsIgnoreCase(m.id, "EyeZoom")) {
+                    eyezoomModePtr = &m;
+                    break;
+                }
+            }
+
+            if (!modeExists("Preemptive")) {
+                ModeConfig preemptiveMode;
+                // Copy mirrors/background/images/etc from EyeZoom so defaults match.
+                if (eyezoomModePtr) { preemptiveMode = *eyezoomModePtr; }
+                preemptiveMode.id = "Preemptive";
+                preemptiveMode.width = eyezoomModePtr ? eyezoomModePtr->width : 384;
+                preemptiveMode.height = eyezoomModePtr ? eyezoomModePtr->height : 16384;
+
+                // Force absolute sizing (this mode copies its resolution).
+                preemptiveMode.useRelativeSize = false;
+                preemptiveMode.widthExpr.clear();
+                preemptiveMode.heightExpr.clear();
+                preemptiveMode.relativeWidth = -1.0f;
+                preemptiveMode.relativeHeight = -1.0f;
+
+                g_config.modes.push_back(preemptiveMode);
+                Log("Created missing Preemptive mode");
+            } else {
+                // Keep resolution synced + remove any expression/relative sizing.
+                ModeConfig* preemptiveModePtr = nullptr;
+                for (auto& m : g_config.modes) {
+                    if (EqualsIgnoreCase(m.id, "Preemptive")) {
+                        preemptiveModePtr = &m;
+                        break;
+                    }
+                }
+
+                if (preemptiveModePtr) {
+                    bool changed = false;
+                    if (!preemptiveModePtr->widthExpr.empty() || !preemptiveModePtr->heightExpr.empty()) {
+                        preemptiveModePtr->widthExpr.clear();
+                        preemptiveModePtr->heightExpr.clear();
+                        changed = true;
+                    }
+                    if (preemptiveModePtr->relativeWidth >= 0.0f || preemptiveModePtr->relativeHeight >= 0.0f ||
+                        preemptiveModePtr->useRelativeSize) {
+                        preemptiveModePtr->relativeWidth = -1.0f;
+                        preemptiveModePtr->relativeHeight = -1.0f;
+                        preemptiveModePtr->useRelativeSize = false;
+                        changed = true;
+                    }
+
+                    if (eyezoomModePtr) {
+                        if (preemptiveModePtr->width != eyezoomModePtr->width) {
+                            preemptiveModePtr->width = eyezoomModePtr->width;
+                            changed = true;
+                        }
+                        if (preemptiveModePtr->height != eyezoomModePtr->height) {
+                            preemptiveModePtr->height = eyezoomModePtr->height;
+                            changed = true;
+                        }
+                    }
+
+                    if (changed) { g_configIsDirty = true; }
+                }
+            }
+        }
+
         // Ensure Thin mode exists
         if (!modeExists("Thin")) {
             ModeConfig thinMode;

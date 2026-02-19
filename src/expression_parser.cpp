@@ -381,13 +381,20 @@ void RecalculateExpressionDimensions() {
 
     // Recalculate mode dimensions from expressions
     for (auto& mode : g_config.modes) {
+        // Preemptive mode is always resolution-linked to EyeZoom.
+        // It must not be expression-driven.
+        if (mode.id == "Preemptive") {
+            mode.widthExpr.clear();
+            mode.heightExpr.clear();
+        }
+
         // Width expression
-        if (!mode.widthExpr.empty()) {
+        if (mode.id != "Preemptive" && !mode.widthExpr.empty()) {
             int newWidth = EvaluateExpression(mode.widthExpr, screenW, screenH, mode.width);
             if (newWidth > 0) { mode.width = newWidth; }
         }
         // Height expression
-        if (!mode.heightExpr.empty()) {
+        if (mode.id != "Preemptive" && !mode.heightExpr.empty()) {
             int newHeight = EvaluateExpression(mode.heightExpr, screenW, screenH, mode.height);
             if (newHeight > 0) { mode.height = newHeight; }
         }
@@ -403,5 +410,23 @@ void RecalculateExpressionDimensions() {
         }
         if (!mode.stretch.xExpr.empty()) { mode.stretch.x = EvaluateExpression(mode.stretch.xExpr, screenW, screenH, mode.stretch.x); }
         if (!mode.stretch.yExpr.empty()) { mode.stretch.y = EvaluateExpression(mode.stretch.yExpr, screenW, screenH, mode.stretch.y); }
+    }
+
+    // After expression evaluation, enforce Preemptive resolution sync with EyeZoom.
+    // This makes the linkage resilient even if EyeZoom itself were expression-driven.
+    ModeConfig* eyezoomMode = nullptr;
+    ModeConfig* preemptiveMode = nullptr;
+    for (auto& mode : g_config.modes) {
+        if (!eyezoomMode && mode.id == "EyeZoom") { eyezoomMode = &mode; }
+        if (!preemptiveMode && mode.id == "Preemptive") { preemptiveMode = &mode; }
+    }
+    if (eyezoomMode && preemptiveMode) {
+        preemptiveMode->width = eyezoomMode->width;
+        preemptiveMode->height = eyezoomMode->height;
+        preemptiveMode->useRelativeSize = false;
+        preemptiveMode->relativeWidth = -1.0f;
+        preemptiveMode->relativeHeight = -1.0f;
+        preemptiveMode->widthExpr.clear();
+        preemptiveMode->heightExpr.clear();
     }
 }

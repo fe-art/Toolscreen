@@ -893,6 +893,426 @@
         }
     }
 
+    // --- PREEMPTIVE MODE SECTION ---
+    // Built-in mode: behaves like a normal mode, but its resolution is always copied from EyeZoom.
+    for (size_t i = 0; i < g_config.modes.size(); ++i) {
+        auto& mode = g_config.modes[i];
+        if (EqualsIgnoreCase(mode.id, "Preemptive")) {
+            ImGui::PushID((int)i + 15000); // Unique ID offset
+
+            bool node_open = ImGui::TreeNodeEx("##mode_node", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", mode.id.c_str());
+            ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - ImGui::GetFrameHeight());
+
+            // Don't show delete button for predefined modes
+            ImGui::Dummy(ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()));
+
+            if (node_open) {
+                if (!resolutionSupported) { ImGui::BeginDisabled(); }
+
+                // Look up EyeZoom mode so we can display the copied resolution.
+                const ModeConfig* eyezoomMode = nullptr;
+                for (const auto& m2 : g_config.modes) {
+                    if (EqualsIgnoreCase(m2.id, "EyeZoom")) {
+                        eyezoomMode = &m2;
+                        break;
+                    }
+                }
+
+                int copiedW = eyezoomMode ? eyezoomMode->width : mode.width;
+                int copiedH = eyezoomMode ? eyezoomMode->height : mode.height;
+
+                ImGui::Columns(2, "preemptive_dims", false);
+                ImGui::SetColumnWidth(0, 150);
+
+                ImGui::Text("Game Width");
+                ImGui::NextColumn();
+                {
+                    ImGui::BeginDisabled();
+                    int tempW = copiedW;
+                    (void)Spinner("##PreemptiveModeWidth", &tempW, 1, 1, screenWidth);
+                    ImGui::EndDisabled();
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(copied from EyeZoom)");
+                }
+
+                ImGui::NextColumn();
+                ImGui::Text("Game Height");
+                ImGui::NextColumn();
+                {
+                    ImGui::BeginDisabled();
+                    int tempH = copiedH;
+                    (void)Spinner("##PreemptiveModeHeight", &tempH, 1, 1, 16384);
+                    ImGui::EndDisabled();
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(copied from EyeZoom)");
+                }
+                ImGui::Columns(1);
+
+                if (!eyezoomMode) {
+                    ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.0f, 1.0f), "Note: EyeZoom mode not found; copied resolution display may be stale.");
+                }
+
+                if (ImGui::Button("Switch to this Mode##Preemptive")) {
+                    std::lock_guard<std::mutex> pendingLock(g_pendingModeSwitchMutex);
+                    g_pendingModeSwitch.pending = true;
+                    g_pendingModeSwitch.modeId = mode.id;
+                    g_pendingModeSwitch.source = "GUI Preemptive mode";
+                }
+
+                if (!resolutionSupported) { ImGui::EndDisabled(); }
+
+                if (g_currentModeId == mode.id) {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(Current)");
+                }
+
+                // --- BACKGROUND SECTION ---
+                if (ImGui::TreeNode("Background##Preemptive")) {
+                    if (ImGui::RadioButton("Color##Preemptive", mode.background.selectedMode == "color")) {
+                        if (mode.background.selectedMode != "color") {
+                            mode.background.selectedMode = "color";
+                            g_configIsDirty = true;
+                        }
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::RadioButton("Gradient##Preemptive", mode.background.selectedMode == "gradient")) {
+                        if (mode.background.selectedMode != "gradient") {
+                            mode.background.selectedMode = "gradient";
+                            // Initialize default stops if empty
+                            if (mode.background.gradientStops.size() < 2) {
+                                mode.background.gradientStops.clear();
+                                mode.background.gradientStops.push_back({ { 0.0f, 0.0f, 0.0f }, 0.0f });
+                                mode.background.gradientStops.push_back({ { 1.0f, 1.0f, 1.0f }, 1.0f });
+                            }
+                            g_configIsDirty = true;
+                        }
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::RadioButton("Image##Preemptive", mode.background.selectedMode == "image")) {
+                        if (mode.background.selectedMode != "image") {
+                            mode.background.selectedMode = "image";
+                            g_configIsDirty = true;
+                            // Load existing background image if path is set
+                            if (!mode.background.image.empty()) {
+                                g_allImagesLoaded = false;
+                                g_pendingImageLoad = true;
+                                LoadImageAsync(DecodedImageData::Type::Background, mode.id, mode.background.image, g_toolscreenPath);
+                            }
+                        }
+                    }
+
+                    if (mode.background.selectedMode == "color") {
+                        if (ImGui::ColorEdit3("##bgColorPreemptive", &mode.background.color.r)) { g_configIsDirty = true; }
+                    } else if (mode.background.selectedMode == "gradient") {
+                        // Angle slider
+                        ImGui::SetNextItemWidth(200);
+                        if (ImGui::SliderFloat("Angle##bgGradAnglePreemptive", &mode.background.gradientAngle, 0.0f, 360.0f, "%.0f deg")) {
+                            g_configIsDirty = true;
+                        }
+
+                        // Color stops
+                        ImGui::Text("Color Stops:");
+                        int stopToRemove = -1;
+                        for (size_t i2 = 0; i2 < mode.background.gradientStops.size(); i2++) {
+                            ImGui::PushID(static_cast<int>(i2));
+                            auto& stop = mode.background.gradientStops[i2];
+
+                            // Color picker
+                            if (ImGui::ColorEdit3("##StopColor", &stop.color.r, ImGuiColorEditFlags_NoInputs)) { g_configIsDirty = true; }
+                            ImGui::SameLine();
+
+                            // Position slider (0-100%)
+                            float pos = stop.position * 100.0f;
+                            ImGui::SetNextItemWidth(100);
+                            if (ImGui::SliderFloat("##StopPos", &pos, 0.0f, 100.0f, "%.0f%%")) {
+                                stop.position = pos / 100.0f;
+                                g_configIsDirty = true;
+                            }
+
+                            // Remove button (only if more than 2 stops)
+                            if (mode.background.gradientStops.size() > 2) {
+                                ImGui::SameLine();
+                                if (ImGui::Button("X##RemoveStop")) { stopToRemove = static_cast<int>(i2); }
+                            }
+
+                            ImGui::PopID();
+                        }
+                        if (stopToRemove >= 0) {
+                            mode.background.gradientStops.erase(mode.background.gradientStops.begin() + stopToRemove);
+                            g_configIsDirty = true;
+                        }
+
+                        // Add stop button (max 8 stops)
+                        if (mode.background.gradientStops.size() < 8) {
+                            if (ImGui::Button("+ Add Color Stop##bgGradPreemptive")) {
+                                // Add at midpoint with gray color
+                                GradientColorStop newStop;
+                                newStop.position = 0.5f;
+                                newStop.color = { 0.5f, 0.5f, 0.5f };
+                                mode.background.gradientStops.push_back(newStop);
+                                // Sort by position
+                                std::sort(mode.background.gradientStops.begin(), mode.background.gradientStops.end(),
+                                          [](const GradientColorStop& a, const GradientColorStop& b) { return a.position < b.position; });
+                                g_configIsDirty = true;
+                            }
+                        }
+
+                        // Animation controls
+                        ImGui::Separator();
+                        ImGui::Text("Animation:");
+                        const char* animTypeNames[] = { "None", "Rotate", "Slide", "Wave", "Spiral", "Fade" };
+                        int currentAnimType = static_cast<int>(mode.background.gradientAnimation);
+                        ImGui::SetNextItemWidth(120);
+                        if (ImGui::Combo("Type##GradAnimPreemptive", &currentAnimType, animTypeNames, IM_ARRAYSIZE(animTypeNames))) {
+                            mode.background.gradientAnimation = static_cast<GradientAnimationType>(currentAnimType);
+                            g_configIsDirty = true;
+                        }
+                        if (mode.background.gradientAnimation != GradientAnimationType::None) {
+                            ImGui::SetNextItemWidth(150);
+                            if (ImGui::SliderFloat("Speed##GradAnimSpeedPreemptive", &mode.background.gradientAnimationSpeed, 0.1f, 5.0f,
+                                                   "%.1fx")) {
+                                g_configIsDirty = true;
+                            }
+                        }
+                    } else if (mode.background.selectedMode == "image") {
+                        if (ImGui::InputText("Path##preemptive_bg", &mode.background.image)) {
+                            ClearImageError("preemptive_bg");
+                            g_configIsDirty = true;
+                            g_allImagesLoaded = false;
+                            g_pendingImageLoad = true;
+                        }
+                        ImGui::SameLine();
+                        if (ImGui::Button("Browse...##preemptive_bg")) {
+                            // Use the validated image picker
+                            ImagePickerResult result =
+                                OpenImagePickerAndValidate(g_minecraftHwnd.load(), g_toolscreenPath, g_toolscreenPath);
+
+                            if (result.completed) {
+                                if (result.success) {
+                                    mode.background.image = result.path;
+                                    ClearImageError("preemptive_bg");
+                                    g_allImagesLoaded = false;
+                                    g_pendingImageLoad = true;
+                                    g_configIsDirty = true;
+                                } else if (!result.error.empty()) {
+                                    SetImageError("preemptive_bg", result.error);
+                                }
+                            }
+                        }
+
+                        // Show error message if any
+                        std::string bgError = GetImageError("preemptive_bg");
+                        if (!bgError.empty()) { ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", bgError.c_str()); }
+                    }
+                    ImGui::TreePop();
+                }
+
+                // --- BORDER SETTINGS ---
+                if (ImGui::TreeNode("Border Settings##Preemptive")) {
+                    if (ImGui::Checkbox("Enable Border##Preemptive", &mode.border.enabled)) { g_configIsDirty = true; }
+                    ImGui::SameLine();
+                    HelpMarker("Draw a border around the game viewport. Border appears outside the game area.");
+
+                    if (mode.border.enabled) {
+                        ImGui::Text("Color:");
+                        ImVec4 borderCol = ImVec4(mode.border.color.r, mode.border.color.g, mode.border.color.b, 1.0f);
+                        if (ImGui::ColorEdit3("##BorderColorPreemptive", (float*)&borderCol, ImGuiColorEditFlags_NoInputs)) {
+                            mode.border.color = { borderCol.x, borderCol.y, borderCol.z };
+                            g_configIsDirty = true;
+                        }
+
+                        ImGui::Text("Width:");
+                        ImGui::SetNextItemWidth(100);
+                        if (Spinner("##BorderWidthPreemptive", &mode.border.width, 1, 1, 50)) { g_configIsDirty = true; }
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("px");
+
+                        ImGui::Text("Corner Radius:");
+                        ImGui::SetNextItemWidth(100);
+                        if (Spinner("##BorderRadiusPreemptive", &mode.border.radius, 1, 0, 100)) { g_configIsDirty = true; }
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("px");
+                    }
+                    ImGui::TreePop();
+                }
+
+                // --- MIRRORS SECTION ---
+                if (ImGui::TreeNode("Mirrors##Preemptive")) {
+                    int mirror_idx_to_remove = -1;
+                    for (size_t k = 0; k < mode.mirrorIds.size(); ++k) {
+                        ImGui::PushID(static_cast<int>(k));
+                        std::string del_mirror_label = "X##del_mirror_from_preemptive_" + std::to_string(k);
+                        if (ImGui::Button(del_mirror_label.c_str())) { mirror_idx_to_remove = (int)k; }
+                        ImGui::SameLine();
+                        ImGui::TextUnformatted(mode.mirrorIds[k].c_str());
+                        ImGui::PopID();
+                    }
+                    if (mirror_idx_to_remove != -1) {
+                        mode.mirrorIds.erase(mode.mirrorIds.begin() + mirror_idx_to_remove);
+                        g_configIsDirty = true;
+                    }
+                    if (ImGui::BeginCombo("Add Mirror##add_mirror_to_preemptive", "[Select Mirror]")) {
+                        for (const auto& mirrorConf : g_config.mirrors) {
+                            if (std::find(mode.mirrorIds.begin(), mode.mirrorIds.end(), mirrorConf.name) == mode.mirrorIds.end()) {
+                                if (ImGui::Selectable(mirrorConf.name.c_str())) {
+                                    mode.mirrorIds.push_back(mirrorConf.name);
+                                    g_configIsDirty = true;
+                                }
+                            }
+                        }
+                        ImGui::EndCombo();
+                    }
+                    ImGui::TreePop();
+                }
+
+                // --- MIRROR GROUPS SECTION ---
+                if (ImGui::TreeNode("Mirror Groups##Preemptive")) {
+                    int group_idx_to_remove = -1;
+                    for (size_t k = 0; k < mode.mirrorGroupIds.size(); ++k) {
+                        ImGui::PushID(static_cast<int>(k));
+                        std::string del_group_label = "X##del_mirror_group_from_preemptive_" + std::to_string(k);
+                        if (ImGui::Button(del_group_label.c_str())) { group_idx_to_remove = (int)k; }
+                        ImGui::SameLine();
+                        ImGui::TextUnformatted(mode.mirrorGroupIds[k].c_str());
+                        ImGui::PopID();
+                    }
+                    if (group_idx_to_remove != -1) {
+                        mode.mirrorGroupIds.erase(mode.mirrorGroupIds.begin() + group_idx_to_remove);
+                        g_configIsDirty = true;
+                    }
+                    if (ImGui::BeginCombo("Add Mirror Group##add_mirror_group_to_preemptive", "[Select Group]")) {
+                        for (const auto& groupConf : g_config.mirrorGroups) {
+                            if (std::find(mode.mirrorGroupIds.begin(), mode.mirrorGroupIds.end(), groupConf.name) ==
+                                mode.mirrorGroupIds.end()) {
+                                if (ImGui::Selectable(groupConf.name.c_str())) {
+                                    mode.mirrorGroupIds.push_back(groupConf.name);
+                                    g_configIsDirty = true;
+                                }
+                            }
+                        }
+                        ImGui::EndCombo();
+                    }
+                    ImGui::TreePop();
+                }
+
+                // --- IMAGES SECTION ---
+                if (ImGui::TreeNode("Images##Preemptive")) {
+                    int image_idx_to_remove = -1;
+                    for (size_t k = 0; k < mode.imageIds.size(); ++k) {
+                        ImGui::PushID(static_cast<int>(k));
+                        std::string del_img_label = "X##del_img_from_preemptive_" + std::to_string(k);
+                        if (ImGui::Button(del_img_label.c_str())) { image_idx_to_remove = (int)k; }
+                        ImGui::SameLine();
+                        ImGui::TextUnformatted(mode.imageIds[k].c_str());
+                        ImGui::PopID();
+                    }
+                    if (image_idx_to_remove != -1) {
+                        mode.imageIds.erase(mode.imageIds.begin() + image_idx_to_remove);
+                        g_configIsDirty = true;
+                    }
+                    if (ImGui::BeginCombo("Add Image##add_image_to_preemptive", "[Select Image]")) {
+                        for (const auto& imgConf : g_config.images) {
+                            if (std::find(mode.imageIds.begin(), mode.imageIds.end(), imgConf.name) == mode.imageIds.end()) {
+                                if (ImGui::Selectable(imgConf.name.c_str())) {
+                                    mode.imageIds.push_back(imgConf.name);
+                                    g_configIsDirty = true;
+                                }
+                            }
+                        }
+                        ImGui::EndCombo();
+                    }
+                    ImGui::TreePop();
+                }
+
+                // --- WINDOW OVERLAYS SECTION ---
+                if (ImGui::TreeNode("Window Overlays##Preemptive")) {
+                    int overlay_idx_to_remove = -1;
+                    for (size_t k = 0; k < mode.windowOverlayIds.size(); ++k) {
+                        ImGui::PushID(static_cast<int>(k));
+                        std::string del_overlay_label = "X##del_overlay_from_preemptive_" + std::to_string(k);
+                        if (ImGui::Button(del_overlay_label.c_str())) { overlay_idx_to_remove = (int)k; }
+                        ImGui::SameLine();
+                        ImGui::TextUnformatted(mode.windowOverlayIds[k].c_str());
+                        ImGui::PopID();
+                    }
+                    if (overlay_idx_to_remove != -1) {
+                        mode.windowOverlayIds.erase(mode.windowOverlayIds.begin() + overlay_idx_to_remove);
+                        g_configIsDirty = true;
+                    }
+                    if (ImGui::BeginCombo("Add Overlay##add_overlay_to_preemptive", "[Select Overlay]")) {
+                        for (const auto& overlayConf : g_config.windowOverlays) {
+                            if (std::find(mode.windowOverlayIds.begin(), mode.windowOverlayIds.end(), overlayConf.name) ==
+                                mode.windowOverlayIds.end()) {
+                                if (ImGui::Selectable(overlayConf.name.c_str())) {
+                                    mode.windowOverlayIds.push_back(overlayConf.name);
+                                    g_configIsDirty = true;
+                                }
+                            }
+                        }
+                        ImGui::EndCombo();
+                    }
+                    ImGui::TreePop();
+                }
+
+                // --- TRANSITION SETTINGS ---
+                ImGui::Separator();
+                if (ImGui::TreeNode("Transition Settings##Preemptive")) {
+                    RenderTransitionSettingsHorizontal(mode, "Preemptive");
+                    if (ImGui::Checkbox("Slide Mirrors In##Preemptive", &mode.slideMirrorsIn)) { g_configIsDirty = true; }
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("Mirrors slide in from the screen edges instead of appearing instantly");
+                    }
+                    ImGui::TreePop();
+                }
+
+                // --- SENSITIVITY OVERRIDE ---
+                if (ImGui::TreeNode("Sensitivity Override##Preemptive")) {
+                    if (ImGui::Checkbox("Override Sensitivity##Preemptive", &mode.sensitivityOverrideEnabled)) { g_configIsDirty = true; }
+                    HelpMarker("When enabled, this mode uses its own mouse sensitivity instead of the global setting.");
+
+                    if (mode.sensitivityOverrideEnabled) {
+                        if (ImGui::Checkbox("Separate X/Y##Preemptive", &mode.separateXYSensitivity)) {
+                            g_configIsDirty = true;
+                            if (mode.separateXYSensitivity) {
+                                mode.modeSensitivityX = mode.modeSensitivity;
+                                mode.modeSensitivityY = mode.modeSensitivity;
+                            }
+                        }
+                        ImGui::SameLine();
+                        HelpMarker("Use different sensitivity values for horizontal (X) and vertical (Y) mouse movement.");
+
+                        if (mode.separateXYSensitivity) {
+                            ImGui::Text("X Sensitivity:");
+                            ImGui::SetNextItemWidth(200);
+                            if (ImGui::SliderFloat("##PreemptiveSensitivityX", &mode.modeSensitivityX, 0.001f, 10.0f, "%.3fx")) {
+                                g_configIsDirty = true;
+                            }
+                            ImGui::Text("Y Sensitivity:");
+                            ImGui::SetNextItemWidth(200);
+                            if (ImGui::SliderFloat("##PreemptiveSensitivityY", &mode.modeSensitivityY, 0.001f, 10.0f, "%.3fx")) {
+                                g_configIsDirty = true;
+                            }
+                        } else {
+                            ImGui::Text("Sensitivity:");
+                            ImGui::SetNextItemWidth(200);
+                            if (ImGui::SliderFloat("##PreemptiveSensitivity", &mode.modeSensitivity, 0.001f, 10.0f, "%.3fx")) {
+                                g_configIsDirty = true;
+                            }
+                            ImGui::SameLine();
+                            HelpMarker("Mouse sensitivity for this mode (1.0 = normal)");
+                        }
+                    }
+                    ImGui::TreePop();
+                }
+
+                ImGui::TreePop();
+            }
+
+            ImGui::PopID();
+            break;
+        }
+    }
+
     // --- THIN MODE SECTION ---
     for (size_t i = 0; i < g_config.modes.size(); ++i) {
         auto& mode = g_config.modes[i];

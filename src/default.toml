@@ -373,6 +373,47 @@ windowOverlayIds = []
     selectedMode = 'gradient'
 
 [[mode]]
+border = { color = [ 255, 255, 255 ], enabled = false, radius = 0, width = 4 }
+height = 16384
+id = 'Preemptive'
+imageIds = [ ]
+mirrorGroupIds = [ 'Preemptive Pie' ]
+mirrorIds = [ 'E Counter' ]
+modeSensitivity = 1.0
+modeSensitivityX = 1.0
+modeSensitivityY = 1.0
+sensitivityOverrideEnabled = false
+separateXYSensitivity = false
+stretch = { enabled = false, height = 0, width = 0, x = 0, y = 0 }
+width = 384
+windowOverlayIds = []
+
+    [mode.transition]
+    gameTransition = 'Bounce'
+    overlayTransition = 'Cut'
+    backgroundTransition = 'Cut'
+    transitionDurationMs = 300
+    easeInPower = 1.0
+    easeOutPower = 3.0
+    bounceCount = 0
+    bounceIntensity = 0.15
+    bounceDurationMs = 150
+    relativeStretching = false
+    skipAnimateX = false
+    skipAnimateY = true
+    slideMirrorsIn = true
+
+    [mode.background]
+    color = [ 24, 21, 37 ]
+    gradientAngle = 45.0
+    gradientAnimation = 'Wave'
+    gradientAnimationSpeed = 0.5
+    gradientColorFade = false
+    gradientStops = [ { color = [ 84, 11, 128 ], position = 0.0 }, { color = [ 21, 0, 72 ], position = 1.0 } ]
+    image = ''
+    selectedMode = 'gradient'
+
+[[mode]]
 border = { color = [ 122, 21, 162 ], enabled = true, radius = 0, width = 1 }
 height = 'roundEven(screenHeight * 0.95)'
 id = 'Thin'
