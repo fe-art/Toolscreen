@@ -8,5 +8,7 @@
 !src/*.toml
 !src/*.png
 !src/*.rc
-!installer.jar
 !CMakeLists.txt
+!.github
+!.github/workflows/
+!.github/workflows/*.yml
