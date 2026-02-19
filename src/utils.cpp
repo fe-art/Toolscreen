@@ -46,7 +46,7 @@ std::string ResolveStackFrame(void* address) {
     if (!g_symbolsInitialized.load()) {
         // Still not initialized, return address only
         std::stringstream ss;
-        ss << "0x" << std::hex << reinterpret_cast<uintptr_t>(address) << " (symbols failed)";
+        ss << "0x" << std::hex << reinterpret_cast<uintptr_t>(address);
         return ss.str();
     }
 
