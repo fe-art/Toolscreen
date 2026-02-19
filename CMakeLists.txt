@@ -112,6 +112,7 @@ if(NOT imgui_POPULATED)
 endif()
 
 find_package(OpenGL REQUIRED)
+find_package(Java COMPONENTS Runtime)
 
 # Note: GLOB is convenient but CMake won't auto-detect new files.
 # Re-run cmake when adding new source files.
@@ -164,57 +165,45 @@ if(MSVC)
     )
 endif()
 
+# JAR packaging (requires Java)
+if(Java_JAVA_EXECUTABLE)
+    FetchContent_Declare(
+        maven
+        URL https://archive.apache.org/dist/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.zip
+        URL_HASH SHA512=8beac8d11ef208f1e2a8df0682b9448a9a363d2ad13ca74af43705549e72e74c9378823bf689287801cbbfc2f6ea9596201d19ccacfdfb682ee8a2ff4c4418ba
+    )
+    FetchContent_GetProperties(maven)
+    if(NOT maven_POPULATED)
+        FetchContent_Populate(maven)
+    endif()
 
+    FetchContent_Declare(
+        easyinjectbundled
+        GIT_REPOSITORY https://github.com/jojoe77777/EasyInjectBundled.git
+        GIT_TAG 2d53697315ff0e122c176d19c23d847cc4307c4f
+    )
+    FetchContent_GetProperties(easyinjectbundled)
+    if(NOT easyinjectbundled_POPULATED)
+        FetchContent_Populate(easyinjectbundled)
+    endif()
 
-# JAR packaging (requires 7-Zip)
-set(JAR_NAME "Toolscreen-${PROJECT_VERSION}-double-click-me.jar")
-set(INSTALLER_JAR "${CMAKE_CURRENT_SOURCE_DIR}/installer.jar")
-set(JAR_OUTPUT "${CMAKE_BINARY_DIR}/${JAR_NAME}")
-set(JAR_TEMP_DIR "${CMAKE_BINARY_DIR}/jar_temp")
-set(BRANDING_CONFIGURED "${CMAKE_BINARY_DIR}/branding.properties")
+    set(JAR_NAME "Toolscreen-${PROJECT_VERSION}-double-click-me.jar")
+    set(JAR_OUTPUT "${CMAKE_BINARY_DIR}/${JAR_NAME}")
 
-# Generate configured branding.properties at configure time
-file(GENERATE OUTPUT "${BRANDING_CONFIGURED}" CONTENT "\
-# Branding Configuration for EasyInjectBundled
-
-# Edit these values to customize the output JAR name and branding.
-# After editing, run build.bat to create a new JAR with your branding.
-
-# The name of your application (used in JAR filename)
-brand.name=Toolscreen
-
-# Version number (automatically set from version.h)
-brand.version=${PROJECT_VERSION}
-")
-
-find_program(SEVENZIP_EXECUTABLE 
-    NAMES 7z 7za
-    PATHS 
-        "C:/Program Files/7-Zip"
-        "C:/Program Files (x86)/7-Zip"
-        "$ENV{ProgramFiles}/7-Zip"
-        "$ENV{ProgramFiles\(x86\)}/7-Zip"
-)
-
-if(SEVENZIP_EXECUTABLE)
     add_custom_command(
         OUTPUT "${JAR_OUTPUT}"
-        COMMAND ${CMAKE_COMMAND} -E rm -rf "${JAR_TEMP_DIR}"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${JAR_TEMP_DIR}"
-        COMMAND ${SEVENZIP_EXECUTABLE} x "-o${JAR_TEMP_DIR}" "${INSTALLER_JAR}" -y
-        COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:${PROJECT_NAME}>" "${JAR_TEMP_DIR}/dlls/Toolscreen.dll"
-        COMMAND ${CMAKE_COMMAND} -E copy "${BRANDING_CONFIGURED}" "${JAR_TEMP_DIR}/branding.properties"
-        COMMAND ${CMAKE_COMMAND} -E chdir "${JAR_TEMP_DIR}" ${SEVENZIP_EXECUTABLE} a -tzip "${JAR_OUTPUT}" .
-        COMMAND ${CMAKE_COMMAND} -E rm -rf "${JAR_TEMP_DIR}"
-        DEPENDS ${PROJECT_NAME} "${INSTALLER_JAR}" "${BRANDING_CONFIGURED}"
-        COMMENT "Packaging ${JAR_NAME}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${easyinjectbundled_SOURCE_DIR}/custom-dlls"
+        COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:${PROJECT_NAME}>" "${easyinjectbundled_SOURCE_DIR}/custom-dlls/Toolscreen.dll"
+        COMMAND "${maven_SOURCE_DIR}/bin/mvn.cmd" -f "${easyinjectbundled_SOURCE_DIR}/pom.xml" clean package -q -Dbrand.name=Toolscreen -Dbrand.version=${PROJECT_VERSION}
+        COMMAND ${CMAKE_COMMAND} -E copy "${easyinjectbundled_SOURCE_DIR}/target/${JAR_NAME}" "${JAR_OUTPUT}"
+        DEPENDS ${PROJECT_NAME}
+        COMMENT "Building ${JAR_NAME}"
         VERBATIM
     )
 
     add_custom_target(jar ALL DEPENDS "${JAR_OUTPUT}")
     install(FILES "${JAR_OUTPUT}" DESTINATION "${CMAKE_CURRENT_SOURCE_DIR}/..")
-    
     message(STATUS "JAR packaging enabled: ${JAR_NAME}")
 else()
-    message(WARNING "7-Zip not found - JAR packaging disabled. Install from https://www.7-zip.org/ and ensure it's in your PATH.")
+    message(WARNING "Java not found - JAR packaging disabled.")
 endif()
