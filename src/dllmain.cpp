@@ -228,6 +228,8 @@ std::atomic<bool> g_gameWindowActive{ false };
 
 std::thread g_monitorThread;
 std::thread g_imageMonitorThread;
+static std::thread g_hookCompatThread;
+static std::atomic<bool> g_stopHookCompat{ false };
 HANDLE g_resizeThread = NULL;
 std::atomic<bool> g_stopMonitoring{ false };
 std::atomic<bool> g_stopImageMonitoring{ false };
@@ -255,6 +257,21 @@ void SaveConfig();
 void RenderSettingsGUI();
 void AttemptAggressiveGlViewportHook();
 GLuint CalculateGameTextureId(int windowWidth, int windowHeight, int fullWidth, int fullHeight);
+
+// --- Runtime hook-compatibility forward declarations ---
+// (Needed because these helpers are used by SwapBuffers / aggressive hook logic before their definitions.)
+static void* ResolveAbsoluteJumpTarget(void* p);
+static bool TryCreateAndEnableHook(void* target, void* detour, void** outOriginal, const char* what);
+
+static void RefreshThirdPartyViewportHookChain();
+static void RefreshThirdPartyViewportHookChainFromDriverTarget();
+static void RefreshThirdPartyWglSwapBuffersHookChain();
+static void RefreshThirdPartyWglSwapBuffersIatHookChain();
+static void RefreshThirdPartySetCursorPosHookChain();
+static void RefreshThirdPartyClipCursorHookChain();
+static void RefreshThirdPartySetCursorHookChain();
+static void RefreshThirdPartyGetRawInputDataHookChain();
+static void RefreshThirdPartyGlfwSetInputModeHookChain();
 
 bool SubclassGameWindow(HWND hwnd) {
     if (!hwnd) return false;
@@ -534,18 +551,34 @@ void RestoreKeyRepeatSettings() {
 
 typedef BOOL(WINAPI* WGLSWAPBUFFERS)(HDC);
 WGLSWAPBUFFERS owglSwapBuffers = NULL;
-typedef BOOL(WINAPI* PFNWGLDELETECONTEXTPROC)(HGLRC);
-PFNWGLDELETECONTEXTPROC owglDeleteContext = NULL;
+static WGLSWAPBUFFERS g_owglSwapBuffersThirdParty = NULL;
+static std::atomic<void*> g_wglSwapBuffersThirdPartyHookTarget{ nullptr };
 typedef BOOL(WINAPI* SETCURSORPOSPROC)(int, int);
 SETCURSORPOSPROC oSetCursorPos = NULL;
+static SETCURSORPOSPROC g_oSetCursorPosThirdParty = NULL;
+static std::atomic<void*> g_setCursorPosThirdPartyHookTarget{ nullptr };
 typedef BOOL(WINAPI* CLIPCURSORPROC)(const RECT*);
 CLIPCURSORPROC oClipCursor = NULL;
+static CLIPCURSORPROC g_oClipCursorThirdParty = NULL;
+static std::atomic<void*> g_clipCursorThirdPartyHookTarget{ nullptr };
 typedef HCURSOR(WINAPI* SETCURSORPROC)(HCURSOR);
 SETCURSORPROC oSetCursor = NULL;
+static SETCURSORPROC g_oSetCursorThirdParty = NULL;
+static std::atomic<void*> g_setCursorThirdPartyHookTarget{ nullptr };
 typedef void(WINAPI* GLVIEWPORTPROC)(GLint x, GLint y, GLsizei width, GLsizei height);
 GLVIEWPORTPROC oglViewport = NULL;
-typedef void(WINAPI* GLCLEARPROC)(GLbitfield mask);
-GLCLEARPROC oglClear = NULL;
+
+// Additional glViewport hook chains for compatibility with driver-level entrypoints and
+// third-party overlay hook layers (e.g., MSI Afterburner / RTSS) that may be installed at runtime.
+//
+// IMPORTANT:
+// - `oglViewport` remains the opengl32.dll-export hook's trampoline and is treated as our
+//   stable "bypass our hkglViewport" entrypoint for internal rendering.
+// - These additional originals are ONLY used by their respective detours.
+static GLVIEWPORTPROC g_oglViewportDriver = NULL;
+static GLVIEWPORTPROC g_oglViewportThirdParty = NULL;
+static std::atomic<void*> g_glViewportDriverHookTarget{ nullptr };
+static std::atomic<void*> g_glViewportThirdPartyHookTarget{ nullptr };
 
 // Thread-local flag to track if glViewport is being called from our own code
 thread_local bool g_internalViewportCall = false;
@@ -568,39 +601,54 @@ std::atomic<bool> g_glBlitFramebufferHooked{ false };
 
 typedef void (*GLFWSETINPUTMODE)(void* window, int mode, int value);
 GLFWSETINPUTMODE oglfwSetInputMode = NULL;
+static GLFWSETINPUTMODE g_oglfwSetInputModeThirdParty = NULL;
+static std::atomic<void*> g_glfwSetInputModeThirdPartyHookTarget{ nullptr };
 
 // GetRawInputData hook for mouse sensitivity
 typedef UINT(WINAPI* GETRAWINPUTDATAPROC)(HRAWINPUT hRawInput, UINT uiCommand, LPVOID pData, PUINT pcbSize, UINT cbSizeHeader);
 GETRAWINPUTDATAPROC oGetRawInputData = NULL;
+static GETRAWINPUTDATAPROC g_oGetRawInputDataThirdParty = NULL;
+static std::atomic<void*> g_getRawInputDataThirdPartyHookTarget{ nullptr };
 
-BOOL WINAPI hkClipCursor(const RECT* lpRect) {
+static BOOL ClipCursorHook_Impl(CLIPCURSORPROC next, const RECT* lpRect) {
+    if (!next) return FALSE;
+
     // When GUI is open, always allow cursor to move freely (even to other monitors)
-    if (g_showGui.load()) { return oClipCursor(NULL); }
+    if (g_showGui.load()) { return next(NULL); }
 
     // For 1.13.0+, just pass through the original rect
-    if (g_gameVersion >= GameVersion(1, 13, 0)) { return oClipCursor(lpRect); }
+    if (g_gameVersion >= GameVersion(1, 13, 0)) { return next(lpRect); }
 
     // For < 1.13.0, check toggle to decide whether to allow cursor escape
     // Note: Reading scalar bool directly - pragmatically safe on x86-64 for aligned bools.
     // hkClipCursor is called too frequently to justify a full snapshot per call.
     if (g_config.allowCursorEscape) {
-        return oClipCursor(NULL); // Allow cursor to escape (pass NULL)
+        return next(NULL); // Allow cursor to escape (pass NULL)
     }
-    return oClipCursor(lpRect); // Confine cursor (pass original rect)
+    return next(lpRect); // Confine cursor (pass original rect)
 }
 
-HCURSOR WINAPI hkSetCursor(HCURSOR hCursor) {
-    if (g_gameVersion >= GameVersion(1, 13, 0)) { return oSetCursor(hCursor); }
+BOOL WINAPI hkClipCursor(const RECT* lpRect) { return ClipCursorHook_Impl(oClipCursor, lpRect); }
+
+static BOOL WINAPI hkClipCursor_ThirdParty(const RECT* lpRect) {
+    CLIPCURSORPROC next = g_oClipCursorThirdParty ? g_oClipCursorThirdParty : oClipCursor;
+    return ClipCursorHook_Impl(next, lpRect);
+}
+
+static HCURSOR SetCursorHook_Impl(SETCURSORPROC next, HCURSOR hCursor) {
+    if (!next) return NULL;
+
+    if (g_gameVersion >= GameVersion(1, 13, 0)) { return next(hCursor); }
 
     std::string localGameState = g_gameStateBuffers[g_currentGameStateIndex.load(std::memory_order_acquire)];
 
     if (g_showGui.load()) {
         const CursorTextures::CursorData* cursorData = CursorTextures::GetSelectedCursor(localGameState, 64);
-        if (cursorData && cursorData->hCursor) { return oSetCursor(cursorData->hCursor); }
+        if (cursorData && cursorData->hCursor) { return next(cursorData->hCursor); }
     }
 
     // If we've already found the special cursor, skip checking
-    if (g_specialCursorHandle.load() != NULL) { return oSetCursor(hCursor); }
+    if (g_specialCursorHandle.load() != NULL) { return next(hCursor); }
 
     // Check if mask hash of new cursor is "773ff800"
     ICONINFO ii = { sizeof(ICONINFO) };
@@ -635,7 +683,14 @@ HCURSOR WINAPI hkSetCursor(HCURSOR hCursor) {
         if (ii.hbmColor) DeleteObject(ii.hbmColor);
     }
 
-    return oSetCursor(hCursor);
+    return next(hCursor);
+}
+
+HCURSOR WINAPI hkSetCursor(HCURSOR hCursor) { return SetCursorHook_Impl(oSetCursor, hCursor); }
+
+static HCURSOR WINAPI hkSetCursor_ThirdParty(HCURSOR hCursor) {
+    SETCURSORPROC next = g_oSetCursorThirdParty ? g_oSetCursorThirdParty : oSetCursor;
+    return SetCursorHook_Impl(next, hCursor);
 }
 // Note: OBS capture is now handled by obs_thread.cpp via glBlitFramebuffer hook
 // Old functions EnsureObsCaptureFBO, CaptureToObsFBO, and OBS blit redirection removed
@@ -643,10 +698,18 @@ HCURSOR WINAPI hkSetCursor(HCURSOR hCursor) {
 static int lastViewportW = 0;
 static int lastViewportH = 0;
 
-void WINAPI hkglViewport(GLint x, GLint y, GLsizei width, GLsizei height) {
+static inline void ViewportHook_Impl(GLVIEWPORTPROC next, GLint x, GLint y, GLsizei width, GLsizei height) {
+    // If called before hook installation completed, fail-safe to the unmodified call.
+    if (!next) return;
+
+    // Allow internal rendering code to bypass any viewport manipulation logic.
+    if (g_internalViewportCall) {
+        return next(x, y, width, height);
+    }
+
     if (!IsFullscreen()) {
         // Log("viewport not fullscreen");
-        return oglViewport(x, y, width, height);
+        return next(x, y, width, height);
     }
 
     // Lock-free read of transition snapshot
@@ -685,7 +748,7 @@ void WINAPI hkglViewport(GLint x, GLint y, GLsizei width, GLsizei height) {
         stretchHeight = cachedMode.stretchHeight;
     } else {
         // Cache not yet populated and no transition - fall back to original viewport call
-        return oglViewport(x, y, width, height);
+        return next(x, y, width, height);
     }
 
     bool posValid = x == 0 && y == 0;
@@ -706,7 +769,7 @@ void WINAPI hkglViewport(GLint x, GLint y, GLsizei width, GLsizei height) {
             ", width=" + std::to_string(width) + ", height=" + std::to_string(height) +
             "), lastViewportW=" + std::to_string(lastViewportW) + ", lastViewportH=" + std::to_string(lastViewportH) +
             ", modeWidth=" + std::to_string(modeWidth) + ", modeHeight=" + std::to_string(modeHeight) + ")");*/
-        return oglViewport(x, y, width, height);
+        return next(x, y, width, height);
     }
 
     GLint readFBO = 0;
@@ -718,7 +781,7 @@ void WINAPI hkglViewport(GLint x, GLint y, GLsizei width, GLsizei height) {
     if (currentTexture == 0 || readFBO != 0) {
         // Log("Returning because no texture is bound or FBO is bound (fb binding =" + std::to_string(readFBO) +
         //     " and tex binding=" + std::to_string(currentTexture) + ")");
-        return oglViewport(x, y, width, height);
+        return next(x, y, width, height);
     }
 
     lastViewportW = modeWidth;
@@ -782,75 +845,61 @@ void WINAPI hkglViewport(GLint x, GLint y, GLsizei width, GLsizei height) {
     // Log("Viewport Hook: setting viewport to " + std::to_string(stretchWidth) + "x" + std::to_string(stretchHeight) + " at (" +
     //     std::to_string(stretchX) + "," + std::to_string(stretchY_gl) + ")");
 
-    return oglViewport(stretchX, stretchY_gl, stretchWidth, stretchHeight);
+    return next(stretchX, stretchY_gl, stretchWidth, stretchHeight);
 }
 
-// Forward declaration for dynamic hooking in hkglClear
+// Primary glViewport hook (opengl32.dll export / initial hook).
+void WINAPI hkglViewport(GLint x, GLint y, GLsizei width, GLsizei height) { ViewportHook_Impl(oglViewport, x, y, width, height); }
+
+// Driver-level glViewport hook (wglGetProcAddress / GLEW-resolved function pointer).
+static void WINAPI hkglViewport_Driver(GLint x, GLint y, GLsizei width, GLsizei height) {
+    ViewportHook_Impl(g_oglViewportDriver, x, y, width, height);
+}
+
+// Third-party layer hook target (when another injector replaces the opengl32 export at runtime).
+static void WINAPI hkglViewport_ThirdParty(GLint x, GLint y, GLsizei width, GLsizei height) {
+    ViewportHook_Impl(g_oglViewportThirdParty, x, y, width, height);
+}
+
+// Forward declaration for extension hook
 void WINAPI hkglBlitNamedFramebuffer(GLuint readFramebuffer, GLuint drawFramebuffer, GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                                      GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter);
 
-thread_local bool glewInitializedInHook = false;
-thread_local bool glBlitNamedFramebufferHooked = false;
-
-void WINAPI hkglClear(GLbitfield mask) {
-    // return oglClear(mask);
-    // if (g_cachedGameTextureId.load() != UINT_MAX) { return; } // Already have a cached texture ID, skip
-    if (!glewInitializedInHook) {
-        // This flag is essential for core profile contexts. It tells GLEW to
-        // try more modern ways of getting function pointers.
-        glewExperimental = GL_TRUE;
-        if (glewInit() == GLEW_OK) {
-            glewInitializedInHook = true;
-
-            // Now that GLEW is initialized, hook glBlitNamedFramebuffer if not already hooked
-            if (!glBlitNamedFramebufferHooked && oglBlitNamedFramebuffer == NULL) {
-                PFNGLBLITNAMEDFRAMEBUFFERPROC pFunc = glBlitNamedFramebuffer;
-                if (pFunc != NULL) {
-                    if (MH_CreateHook(pFunc, &hkglBlitNamedFramebuffer, reinterpret_cast<void**>(&oglBlitNamedFramebuffer)) == MH_OK) {
-                        if (MH_EnableHook(pFunc) == MH_OK) {
-                            glBlitNamedFramebufferHooked = true;
-                            LogCategory("init", "Successfully hooked glBlitNamedFramebuffer via GLEW");
-                        } else {
-                            Log("ERROR: Failed to enable glBlitNamedFramebuffer hook");
-                        }
-                    } else {
-                        Log("ERROR: Failed to create glBlitNamedFramebuffer hook");
-                    }
-                } else {
-                    Log("WARNING: glBlitNamedFramebuffer not available via GLEW");
-                }
-            }
-        } else {
-            Log("SCARY: glewInit() failed inside hkGlClear for the current context!");
-            return;
-        }
-    }
-    return oglClear(mask);
-
-    // if (mask != GL_DEPTH_BUFFER_BIT) { return; }
-
-    GLint attachmentType = GL_NONE;
-    glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE,
-                                          &attachmentType);
-
-    if (attachmentType != GL_TEXTURE) {
-        Log("Skipping GLclear hook, attachment type is not GL_TEXTURE: " + std::to_string(attachmentType) + ")");
+static void AttemptHookGlBlitNamedFramebufferViaGlew() {
+    // If already hooked (either via opengl32 export or via this path), skip.
+    static std::atomic<bool> s_hooked{ false };
+    if (s_hooked.load(std::memory_order_acquire)) return;
+    if (oglBlitNamedFramebuffer != NULL) {
+        s_hooked.store(true, std::memory_order_release);
         return;
     }
 
-    GLint texId = 0;
-    glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &texId);
-    // Note: texId can legitimately be 0, so we don't skip on 0
-    g_cachedGameTextureId.store(texId);
-    Log("Calibrated game texture ID: " + std::to_string(texId));
+    PFNGLBLITNAMEDFRAMEBUFFERPROC pFunc = glBlitNamedFramebuffer;
+    if (pFunc == NULL) return;
+
+    // Create + enable hook on the actual resolved entrypoint.
+    MH_STATUS st = MH_CreateHook(reinterpret_cast<void*>(pFunc), reinterpret_cast<void*>(&hkglBlitNamedFramebuffer),
+                                reinterpret_cast<void**>(&oglBlitNamedFramebuffer));
+    if (st != MH_OK && st != MH_ERROR_ALREADY_CREATED) {
+        return;
+    }
+    st = MH_EnableHook(reinterpret_cast<void*>(pFunc));
+    if (st != MH_OK && st != MH_ERROR_ENABLED) {
+        return;
+    }
+
+    s_hooked.store(true, std::memory_order_release);
+    LogCategory("init", "Successfully hooked glBlitNamedFramebuffer via GLEW");
 }
 
-BOOL WINAPI hkSetCursorPos(int X, int Y) {
+static BOOL SetCursorPosHook_Impl(SETCURSORPOSPROC next, int X, int Y) {
+    if (!next) return FALSE;
+
     bool isFull = IsFullscreen();
-    if (g_showGui.load() || g_isShuttingDown.load()) { return oSetCursorPos(X, Y); }
+    if (g_showGui.load() || g_isShuttingDown.load()) { return next(X, Y); }
 
     ModeViewportInfo viewport = GetCurrentModeViewport();
-    if (!viewport.valid) { return oSetCursorPos(X, Y); }
+    if (!viewport.valid) { return next(X, Y); }
 
     CapturingState currentState = g_capturingMousePos.load();
 
@@ -876,17 +925,24 @@ BOOL WINAPI hkSetCursorPos(int X, int Y) {
         } else {
             g_nextMouseXY.store(std::make_pair(X, Y));
         }
-        return oSetCursorPos(X, Y);
+        return next(X, Y);
     }
 
     if (currentState == CapturingState::NORMAL) {
         auto [expectedX, expectedY] = g_nextMouseXY.load();
-        if (expectedX == -1 && expectedY == -1) { return oSetCursorPos(X, Y); }
-        return oSetCursorPos(expectedX, expectedY);
+        if (expectedX == -1 && expectedY == -1) { return next(X, Y); }
+        return next(expectedX, expectedY);
     }
 
     // probably never happens, maybe if we SetCursorPos from elsewhere
-    return oSetCursorPos(X, Y);
+    return next(X, Y);
+}
+
+BOOL WINAPI hkSetCursorPos(int X, int Y) { return SetCursorPosHook_Impl(oSetCursorPos, X, Y); }
+
+static BOOL WINAPI hkSetCursorPos_ThirdParty(int X, int Y) {
+    SETCURSORPOSPROC next = g_oSetCursorPosThirdParty ? g_oSetCursorPosThirdParty : oSetCursorPos;
+    return SetCursorPosHook_Impl(next, X, Y);
 }
 
 #define GLFW_CURSOR 0x00033001
@@ -894,8 +950,9 @@ BOOL WINAPI hkSetCursorPos(int X, int Y) {
 #define GLFW_CURSOR_HIDDEN 0x00034002
 #define GLFW_CURSOR_DISABLED 0x00034003
 
-void hkglfwSetInputMode(void* window, int mode, int value) {
-    if (mode != GLFW_CURSOR) { return oglfwSetInputMode(window, mode, value); }
+static void GlfwSetInputModeHook_Impl(GLFWSETINPUTMODE next, void* window, int mode, int value) {
+    if (!next) return;
+    if (mode != GLFW_CURSOR) { return next(window, mode, value); }
 
     if (value == GLFW_CURSOR_DISABLED) {
         g_capturingMousePos.store(CapturingState::DISABLED);
@@ -903,21 +960,31 @@ void hkglfwSetInputMode(void* window, int mode, int value) {
         if (g_showGui.load()) {
             return; // Skip the call to keep cursor unlocked
         }
-        oglfwSetInputMode(window, mode, value);
+        next(window, mode, value);
     } else if (value == GLFW_CURSOR_NORMAL) {
         g_capturingMousePos.store(CapturingState::NORMAL);
-        oglfwSetInputMode(window, mode, value);
+        next(window, mode, value);
     } else { // probably never happens
-        oglfwSetInputMode(window, mode, value);
+        next(window, mode, value);
     }
 
     g_capturingMousePos.store(CapturingState::NONE);
 }
 
+void hkglfwSetInputMode(void* window, int mode, int value) { GlfwSetInputModeHook_Impl(oglfwSetInputMode, window, mode, value); }
+
+static void hkglfwSetInputMode_ThirdParty(void* window, int mode, int value) {
+    GLFWSETINPUTMODE next = g_oglfwSetInputModeThirdParty ? g_oglfwSetInputModeThirdParty : oglfwSetInputMode;
+    GlfwSetInputModeHook_Impl(next, window, mode, value);
+}
+
 // Hook for GetRawInputData to apply mouse sensitivity multiplier and keyboard rebinds
-UINT WINAPI hkGetRawInputData(HRAWINPUT hRawInput, UINT uiCommand, LPVOID pData, PUINT pcbSize, UINT cbSizeHeader) {
+static UINT GetRawInputDataHook_Impl(GETRAWINPUTDATAPROC next, HRAWINPUT hRawInput, UINT uiCommand, LPVOID pData, PUINT pcbSize,
+                                    UINT cbSizeHeader) {
+    if (!next) return static_cast<UINT>(-1);
+
     // Call original first
-    UINT result = oGetRawInputData(hRawInput, uiCommand, pData, pcbSize, cbSizeHeader);
+    UINT result = next(hRawInput, uiCommand, pData, pcbSize, cbSizeHeader);
 
     // Raw input is being used - reset the WM_MOUSEMOVE counter
     g_wmMouseMoveCount.store(0);
@@ -1011,6 +1078,15 @@ UINT WINAPI hkGetRawInputData(HRAWINPUT hRawInput, UINT uiCommand, LPVOID pData,
     return result;
 }
 
+UINT WINAPI hkGetRawInputData(HRAWINPUT hRawInput, UINT uiCommand, LPVOID pData, PUINT pcbSize, UINT cbSizeHeader) {
+    return GetRawInputDataHook_Impl(oGetRawInputData, hRawInput, uiCommand, pData, pcbSize, cbSizeHeader);
+}
+
+static UINT WINAPI hkGetRawInputData_ThirdParty(HRAWINPUT hRawInput, UINT uiCommand, LPVOID pData, PUINT pcbSize, UINT cbSizeHeader) {
+    GETRAWINPUTDATAPROC next = g_oGetRawInputDataThirdParty ? g_oGetRawInputDataThirdParty : oGetRawInputData;
+    return GetRawInputDataHook_Impl(next, hRawInput, uiCommand, pData, pcbSize, cbSizeHeader);
+}
+
 void WINAPI hkglBlitNamedFramebuffer(GLuint readFramebuffer, GLuint drawFramebuffer, GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                                      GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter) {
     bool isFull = IsFullscreen();
@@ -1050,27 +1126,14 @@ void WINAPI hkglBlitNamedFramebuffer(GLuint readFramebuffer, GLuint drawFramebuf
 void AttemptAggressiveGlViewportHook() {
     int hooksCreated = 0;
 
-    // Strategy 1: Hook via GLEW (extension/driver-specific function pointer)
-    if (!g_glViewportHookedViaGLEW.load()) {
-        // glViewport is a core function, so we can get it directly
-        GLVIEWPORTPROC pGlViewportGLEW = glViewport;
-        if (pGlViewportGLEW != NULL && pGlViewportGLEW != oglViewport) {
-            Log("Attempting glViewport hook via GLEW pointer: " + std::to_string(reinterpret_cast<uintptr_t>(pGlViewportGLEW)));
-            if (MH_CreateHook(pGlViewportGLEW, &hkglViewport, reinterpret_cast<void**>(&oglViewport)) == MH_OK) {
-                if (MH_EnableHook(pGlViewportGLEW) == MH_OK) {
-                    g_glViewportHookedViaGLEW.store(true);
-                    hooksCreated++;
-                    Log("SUCCESS: glViewport hooked via GLEW");
-                } else {
-                    Log("ERROR: Failed to enable glViewport hook via GLEW");
-                }
-            } else {
-                Log("ERROR: Failed to create glViewport hook via GLEW");
-            }
-        }
+    // We only install ONE additional driver-level hook target at a time.
+    // Creating multiple hooks with the same detour but a shared `oglViewport` trampoline breaks chaining
+    // (the last MH_CreateHook overwrites the original pointer).
+    if (g_glViewportDriverHookTarget.load(std::memory_order_acquire) != nullptr) {
+        return;
     }
 
-    // Strategy 2: Hook via wglGetProcAddress (driver-specific implementation)
+    // Strategy 1 (preferred): Hook via wglGetProcAddress (driver-specific implementation)
     if (!g_glViewportHookedViaWGL.load()) {
         typedef PROC(WINAPI * PFN_wglGetProcAddress)(LPCSTR);
         HMODULE hOpenGL32 = GetModuleHandle(L"opengl32.dll");
@@ -1079,54 +1142,37 @@ void AttemptAggressiveGlViewportHook() {
                 reinterpret_cast<PFN_wglGetProcAddress>(GetProcAddress(hOpenGL32, "wglGetProcAddress"));
             if (pwglGetProcAddress) {
                 PROC pGlViewportWGL = pwglGetProcAddress("glViewport");
-                if (pGlViewportWGL != NULL && reinterpret_cast<void*>(pGlViewportWGL) != reinterpret_cast<void*>(oglViewport) &&
-                    reinterpret_cast<void*>(pGlViewportWGL) != reinterpret_cast<void*>(glViewport)) {
+                if (pGlViewportWGL != NULL && reinterpret_cast<void*>(pGlViewportWGL) != reinterpret_cast<void*>(&hkglViewport) &&
+                    reinterpret_cast<void*>(pGlViewportWGL) != reinterpret_cast<void*>(&hkglViewport_Driver) &&
+                    reinterpret_cast<void*>(pGlViewportWGL) != reinterpret_cast<void*>(oglViewport)) {
                     Log("Attempting glViewport hook via wglGetProcAddress: " + std::to_string(reinterpret_cast<uintptr_t>(pGlViewportWGL)));
                     GLVIEWPORTPROC pViewportFunc = reinterpret_cast<GLVIEWPORTPROC>(pGlViewportWGL);
-                    if (MH_CreateHook(pViewportFunc, &hkglViewport, reinterpret_cast<void**>(&oglViewport)) == MH_OK) {
-                        if (MH_EnableHook(pViewportFunc) == MH_OK) {
-                            g_glViewportHookedViaWGL.store(true);
-                            hooksCreated++;
-                            Log("SUCCESS: glViewport hooked via wglGetProcAddress");
-                        } else {
-                            Log("ERROR: Failed to enable glViewport hook via wglGetProcAddress");
-                        }
-                    } else {
-                        Log("ERROR: Failed to create glViewport hook via wglGetProcAddress");
+                    if (TryCreateAndEnableHook(reinterpret_cast<void*>(pViewportFunc), reinterpret_cast<void*>(&hkglViewport_Driver),
+                                               reinterpret_cast<void**>(&g_oglViewportDriver), "glViewport (wglGetProcAddress)")) {
+                        g_glViewportHookedViaWGL.store(true);
+                        g_glViewportDriverHookTarget.store(reinterpret_cast<void*>(pViewportFunc), std::memory_order_release);
+                        hooksCreated++;
+                        Log("SUCCESS: glViewport hooked via wglGetProcAddress (driver target)");
                     }
                 }
             }
         }
     }
 
-    // Strategy 3: Try to hook all potential glViewport implementations in memory
-    // This searches for the actual function in the loaded OpenGL driver (e.g., amdxxx.dll, nvoglv64.dll)
-    HMODULE hModules[1024];
-    DWORD cbNeeded;
-    if (EnumProcessModules(GetCurrentProcess(), hModules, sizeof(hModules), &cbNeeded)) {
-        DWORD numModules = cbNeeded / sizeof(HMODULE);
-        for (DWORD i = 0; i < numModules; i++) {
-            WCHAR moduleName[MAX_PATH];
-            if (GetModuleFileNameW(hModules[i], moduleName, MAX_PATH)) {
-                std::wstring moduleNameStr(moduleName);
-                // Check if this is an OpenGL driver DLL (AMD or NVIDIA)
-                if (moduleNameStr.find(L"atig") != std::wstring::npos || moduleNameStr.find(L"atio") != std::wstring::npos ||
-                    moduleNameStr.find(L"amd") != std::wstring::npos || moduleNameStr.find(L"nvoglv") != std::wstring::npos ||
-                    moduleNameStr.find(L"ig") != std::wstring::npos) { // Intel
-
-                    // Try to get glViewport from this module
-                    GLVIEWPORTPROC pDriverViewport = reinterpret_cast<GLVIEWPORTPROC>(GetProcAddress(hModules[i], "glViewport"));
-                    if (pDriverViewport != NULL && pDriverViewport != oglViewport) {
-                        Log("Found glViewport in driver module: " + WideToUtf8(moduleNameStr) + " at " +
-                            std::to_string(reinterpret_cast<uintptr_t>(pDriverViewport)));
-                        if (MH_CreateHook(pDriverViewport, &hkglViewport, reinterpret_cast<void**>(&oglViewport)) == MH_OK) {
-                            if (MH_EnableHook(pDriverViewport) == MH_OK) {
-                                hooksCreated++;
-                                Log("SUCCESS: glViewport hooked in driver module: " + WideToUtf8(moduleNameStr));
-                            }
-                        }
-                    }
-                }
+    // Strategy 2: Hook via the function pointer GLEW resolves for the current context.
+    // This is often the actual ICD entrypoint used by the game.
+    if (g_glViewportDriverHookTarget.load(std::memory_order_acquire) == nullptr && !g_glViewportHookedViaGLEW.load()) {
+        GLVIEWPORTPROC pGlViewportGLEW = glViewport;
+        if (pGlViewportGLEW != NULL && reinterpret_cast<void*>(pGlViewportGLEW) != reinterpret_cast<void*>(&hkglViewport) &&
+            reinterpret_cast<void*>(pGlViewportGLEW) != reinterpret_cast<void*>(&hkglViewport_Driver) &&
+            reinterpret_cast<void*>(pGlViewportGLEW) != reinterpret_cast<void*>(oglViewport)) {
+            Log("Attempting glViewport hook via GLEW pointer: " + std::to_string(reinterpret_cast<uintptr_t>(pGlViewportGLEW)));
+            if (TryCreateAndEnableHook(reinterpret_cast<void*>(pGlViewportGLEW), reinterpret_cast<void*>(&hkglViewport_Driver),
+                                       reinterpret_cast<void**>(&g_oglViewportDriver), "glViewport (GLEW pointer)")) {
+                g_glViewportHookedViaGLEW.store(true);
+                g_glViewportDriverHookTarget.store(reinterpret_cast<void*>(pGlViewportGLEW), std::memory_order_release);
+                hooksCreated++;
+                Log("SUCCESS: glViewport hooked via GLEW pointer (driver target)");
             }
         }
     }
@@ -1134,6 +1180,43 @@ void AttemptAggressiveGlViewportHook() {
     g_glViewportHookCount.fetch_add(hooksCreated);
     Log("Aggressive glViewport hooking complete. Total additional hooks created: " + std::to_string(hooksCreated));
     Log("Total glViewport hook count: " + std::to_string(g_glViewportHookCount.load()));
+}
+
+// If a third-party tool hooks glViewport after us, our export hook may be bypassed.
+// In that case, chain by hooking their detour target (jump destination) so both hooks run.
+static void RefreshThirdPartyViewportHookChain() {
+    HMODULE hOpenGL32 = GetModuleHandle(L"opengl32.dll");
+    if (!hOpenGL32) return;
+
+    void* exportViewport = reinterpret_cast<void*>(GetProcAddress(hOpenGL32, "glViewport"));
+    if (!exportViewport) return;
+
+    void* jumpTarget = ResolveAbsoluteJumpTarget(exportViewport);
+    if (!jumpTarget) {
+        // No detour on export; nothing to chain.
+        return;
+    }
+
+    // Already our own detour chain.
+    if (jumpTarget == reinterpret_cast<void*>(&hkglViewport) || jumpTarget == reinterpret_cast<void*>(&hkglViewport_Driver) ||
+        jumpTarget == reinterpret_cast<void*>(&hkglViewport_ThirdParty)) {
+        return;
+    }
+
+    // Avoid double-hooking a target we already own.
+    if (jumpTarget == g_glViewportDriverHookTarget.load(std::memory_order_acquire) ||
+        jumpTarget == g_glViewportThirdPartyHookTarget.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    // Hook the third-party detour target and chain through its original.
+    if (TryCreateAndEnableHook(jumpTarget, reinterpret_cast<void*>(&hkglViewport_ThirdParty),
+                               reinterpret_cast<void**>(&g_oglViewportThirdParty), "glViewport (third-party chain)")) {
+        g_glViewportThirdPartyHookTarget.store(jumpTarget, std::memory_order_release);
+        g_glViewportHookCount.fetch_add(1);
+        Log("Chained glViewport through third-party detour target at " + std::to_string(reinterpret_cast<uintptr_t>(jumpTarget)));
+        Log("Total glViewport hook count: " + std::to_string(g_glViewportHookCount.load()));
+    }
 }
 
 // Helper function to find the game texture ID by matching dimensions with current mode viewport
@@ -1217,9 +1300,8 @@ GLuint CalculateGameTextureId(int windowWidth, int windowHeight, int fullWidth, 
     return UINT_MAX;
 }
 
-BOOL WINAPI hkwglDeleteContext(HGLRC hglrc) { return owglDeleteContext(hglrc); }
-
-BOOL WINAPI hkwglSwapBuffers(HDC hDc) {
+static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
+    if (!next) return FALSE;
     auto startTime = std::chrono::high_resolution_clock::now();
     _set_se_translator(SEHTranslator);
 
@@ -1260,13 +1342,36 @@ BOOL WINAPI hkwglSwapBuffers(HDC hDc) {
                 // Aggressively hook glViewport for AMD GPU compatibility
                 AttemptAggressiveGlViewportHook();
 
+                // glBlitNamedFramebuffer may only be available via wglGetProcAddress/GLEW.
+                // Hook it here now that a context is current and GLEW is initialized.
+                AttemptHookGlBlitNamedFramebufferViaGlew();
+
                 // Note: glBlitFramebuffer hook for OBS is now handled by obs_thread.cpp
             } else {
                 Log("[RENDER] ERROR: Failed to initialize GLEW.");
-                return owglSwapBuffers(hDc);
+                return next(hDc);
             }
         }
-        if (g_isShuttingDown.load()) { return owglSwapBuffers(hDc); }
+        if (g_isShuttingDown.load()) { return next(hDc); }
+
+        // Runtime hook compatibility: some third-party tools install GL detours after we initialize.
+        // Periodically attempt to chain behind their detours instead of being bypassed.
+        {
+            static std::chrono::steady_clock::time_point s_lastViewportCompatCheck = std::chrono::steady_clock::now();
+            auto now = std::chrono::steady_clock::now();
+            if (now - s_lastViewportCompatCheck > std::chrono::milliseconds(2000)) {
+                RefreshThirdPartyViewportHookChain();
+                RefreshThirdPartyViewportHookChainFromDriverTarget();
+                RefreshThirdPartyWglSwapBuffersHookChain();
+                RefreshThirdPartyWglSwapBuffersIatHookChain();
+                RefreshThirdPartySetCursorPosHookChain();
+                RefreshThirdPartyClipCursorHookChain();
+                RefreshThirdPartySetCursorHookChain();
+                RefreshThirdPartyGetRawInputDataHookChain();
+                RefreshThirdPartyGlfwSetInputModeHookChain();
+                s_lastViewportCompatCheck = now;
+            }
+        }
 
         {
             HGLRC currentContext = wglGetCurrentContext();
@@ -1303,15 +1408,15 @@ BOOL WINAPI hkwglSwapBuffers(HDC hDc) {
         if (!g_logicThreadRunning.load() && g_configLoaded.load()) { StartLogicThread(); }
 
         // Early exit if config hasn't been loaded yet (prevents race conditions during startup)
-        if (!g_configLoaded.load()) { return owglSwapBuffers(hDc); }
+        if (!g_configLoaded.load()) { return next(hDc); }
 
         // Grab immutable config snapshot for this frame - all config reads in SwapBuffers use this
         auto frameCfgSnap = GetConfigSnapshot();
-        if (!frameCfgSnap) { return owglSwapBuffers(hDc); } // Config not yet published
+        if (!frameCfgSnap) { return next(hDc); } // Config not yet published
         const Config& frameCfg = *frameCfgSnap;
 
         HWND hwnd = WindowFromDC(hDc);
-        if (!hwnd) { return owglSwapBuffers(hDc); }
+        if (!hwnd) { return next(hDc); }
         if (hwnd != g_minecraftHwnd.load()) { g_minecraftHwnd.store(hwnd); }
 
         // Submit frame capture (GPU-to-GPU copy of the game texture) ONLY when something consumes it.
@@ -1764,7 +1869,7 @@ void main() {
                 }
                 ClearObsOverride();
                 g_obsPre113Windowed.store(false, std::memory_order_release);
-                return owglSwapBuffers(hDc);
+                return next(hDc);
             }
 
             // Fall through to dual rendering path
@@ -1803,8 +1908,8 @@ void main() {
 
         if (g_configLoadFailed.load()) {
             g_safeToCapture.store(false, std::memory_order_release);
-            HandleConfigLoadFailed(hDc, owglSwapBuffers);
-            return owglSwapBuffers(hDc);
+            HandleConfigLoadFailed(hDc, next);
+            return next(hDc);
         }
 
         // Lock-free read of current mode ID from double-buffer
@@ -1870,7 +1975,7 @@ void main() {
         // Validate mode before proceeding
         if (!modeFound) {
             Log("ERROR: Could not find mode to render, aborting frame");
-            return owglSwapBuffers(hDc);
+            return next(hDc);
         }
 
         bool isEyeZoom = modeToRenderCopy.id == "EyeZoom";
@@ -1986,7 +2091,7 @@ void main() {
                 if (frameCfg.debug.delayRenderingUntilBlitted) { WaitForOverlayBlitFence(); }
 
                 auto swapStartTime = std::chrono::high_resolution_clock::now();
-                BOOL result = owglSwapBuffers(hDc);
+                BOOL result = next(hDc);
 
                 g_safeToCapture.store(false, std::memory_order_release);
 
@@ -2016,7 +2121,7 @@ void main() {
             if (!g_glInitialized) {
                 Log("FATAL: GPU resource initialization failed. Aborting custom render for this frame.");
                 g_safeToCapture.store(false, std::memory_order_release);
-                return owglSwapBuffers(hDc);
+                return next(hDc);
             }
         }
 
@@ -2230,7 +2335,7 @@ void main() {
         if (frameCfg.debug.delayRenderingUntilBlitted) { WaitForOverlayBlitFence(); }
 
         auto swapStartTime = std::chrono::high_resolution_clock::now();
-        BOOL result = owglSwapBuffers(hDc);
+        BOOL result = next(hDc);
 
         // End safe capture window - next frame will start rendering soon
         g_safeToCapture.store(false, std::memory_order_release);
@@ -2254,14 +2359,23 @@ void main() {
         return result;
     } catch (const SE_Exception& e) {
         LogException("hkwglSwapBuffers (SEH)", e.getCode(), e.getInfo());
-        return owglSwapBuffers(hDc);
+        return next(hDc);
     } catch (const std::exception& e) {
         LogException("hkwglSwapBuffers", e);
-        return owglSwapBuffers(hDc);
+        return next(hDc);
     } catch (...) {
         Log("FATAL UNKNOWN EXCEPTION in hkwglSwapBuffers!");
-        return owglSwapBuffers(hDc);
+        return next(hDc);
     }
+}
+
+// Primary wglSwapBuffers hook (opengl32.dll export / initial hook).
+BOOL WINAPI hkwglSwapBuffers(HDC hDc) { return SwapBuffersHook_Impl(owglSwapBuffers, hDc); }
+
+// Chained wglSwapBuffers hook (when a third-party detour is installed after us).
+static BOOL WINAPI hkwglSwapBuffers_ThirdParty(HDC hDc) {
+    WGLSWAPBUFFERS next = g_owglSwapBuffersThirdParty ? g_owglSwapBuffersThirdParty : owglSwapBuffers;
+    return SwapBuffersHook_Impl(next, hDc);
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
@@ -2442,14 +2556,12 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 // Create all hooks
 #define HOOK(mod, name) CreateHookOrDie(GetProcAddress(mod, #name), &hk##name, &o##name, #name)
         HOOK(hOpenGL32, wglSwapBuffers);
-        HOOK(hOpenGL32, wglDeleteContext);
         if (IsVersionInRange(g_gameVersion, GameVersion(1, 0, 0), GameVersion(1, 21, 0))) {
             if (HOOK(hOpenGL32, glViewport)) {
                 g_glViewportHookCount.fetch_add(1);
                 LogCategory("init", "Initial glViewport hook created via opengl32.dll");
             }
         }
-        HOOK(hOpenGL32, glClear);
         HOOK(hUser32, SetCursorPos);
         HOOK(hUser32, ClipCursor);
         HOOK(hUser32, SetCursor);
@@ -2472,6 +2584,31 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         }
 
         LogCategory("init", "Hooks enabled.");
+
+        // Background hook compatibility monitor:
+        // Some overlays install their detours AFTER our hooks, and sometimes even bypass our SwapBuffers hook.
+        // This thread periodically detects those detours (prolog or IAT) and chains behind them.
+        g_stopHookCompat.store(false, std::memory_order_release);
+        g_hookCompatThread = std::thread([]() {
+            // Small startup delay to reduce contention during process init.
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            while (!g_stopHookCompat.load(std::memory_order_acquire) && !g_isShuttingDown.load(std::memory_order_acquire)) {
+                RefreshThirdPartyViewportHookChain();
+                RefreshThirdPartyViewportHookChainFromDriverTarget();
+                RefreshThirdPartyWglSwapBuffersHookChain();
+                RefreshThirdPartyWglSwapBuffersIatHookChain();
+                RefreshThirdPartySetCursorPosHookChain();
+                RefreshThirdPartyClipCursorHookChain();
+                RefreshThirdPartySetCursorHookChain();
+                RefreshThirdPartyGetRawInputDataHookChain();
+                RefreshThirdPartyGlfwSetInputModeHookChain();
+
+                for (int i = 0; i < 20; i++) {
+                    if (g_stopHookCompat.load(std::memory_order_acquire) || g_isShuttingDown.load(std::memory_order_acquire)) break;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
+            }
+        });
 
         // Save the original Windows mouse speed so we can restore it on exit
         SaveOriginalWindowsMouseSpeed();
@@ -2521,6 +2658,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         g_stopImageMonitoring = true;
         if (g_imageMonitorThread.joinable()) { g_imageMonitorThread.join(); }
 
+        // Stop hook compatibility monitor thread
+        g_stopHookCompat.store(true, std::memory_order_release);
+        if (g_hookCompatThread.joinable()) { g_hookCompatThread.join(); }
+
         // Stop background threads
         StopWindowCaptureThread();
 
@@ -2562,4 +2703,352 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         }
     }
     return TRUE;
+}
+
+// ---- Hook compatibility helpers (x64) ----
+// Many third-party overlays (e.g., RTSS/MSI Afterburner) install runtime detours on GL entrypoints.
+// If they hook AFTER us, our opengl32-export hook can be bypassed. To remain compatible, we hook
+// the *current jump destination* (their detour) instead of fighting over the export prolog.
+static void* ResolveAbsoluteJumpTarget(void* p) {
+    if (!p) return nullptr;
+
+    auto isReadableCodePtr = [](const void* addr) -> bool {
+        MEMORY_BASIC_INFORMATION mbi{};
+        if (VirtualQuery(addr, &mbi, sizeof(mbi)) != sizeof(mbi)) return false;
+        if (mbi.State != MEM_COMMIT) return false;
+        // We only need to read a few bytes. Accept any readable/executable protection.
+        DWORD prot = mbi.Protect & 0xFF;
+        return prot == PAGE_EXECUTE || prot == PAGE_EXECUTE_READ || prot == PAGE_EXECUTE_READWRITE || prot == PAGE_EXECUTE_WRITECOPY ||
+               prot == PAGE_READONLY || prot == PAGE_READWRITE || prot == PAGE_WRITECOPY;
+    };
+
+    void* cur = p;
+    for (int depth = 0; depth < 8; depth++) {
+        if (!isReadableCodePtr(cur)) return nullptr;
+        const uint8_t* b = reinterpret_cast<const uint8_t*>(cur);
+
+        void* next = nullptr;
+
+        // Pattern 0: jmp rel8 (EB xx)
+        if (b[0] == 0xEB) {
+            int8_t rel = *reinterpret_cast<const int8_t*>(b + 1);
+            next = const_cast<uint8_t*>(b + 2 + rel);
+        }
+        // Pattern 1: jmp rel32 (E9 xx xx xx xx)
+        else if (b[0] == 0xE9) {
+            int32_t rel = *reinterpret_cast<const int32_t*>(b + 1);
+            next = const_cast<uint8_t*>(b + 5 + rel);
+        }
+        // Pattern 2: jmp qword ptr [rip+disp32] (FF 25 xx xx xx xx)
+        // Common for x64 absolute jumps used by hook libraries.
+        else if (b[0] == 0xFF && b[1] == 0x25) {
+            int32_t disp = *reinterpret_cast<const int32_t*>(b + 2);
+            const uint8_t* ripNext = b + 6;
+            const uint8_t* slot = ripNext + disp;
+            if (!isReadableCodePtr(slot)) return nullptr;
+            next = *reinterpret_cast<void* const*>(slot);
+        }
+        // Pattern 3: mov rax, imm64; jmp rax
+        else if (b[0] == 0x48 && b[1] == 0xB8 && b[10] == 0xFF && b[11] == 0xE0) {
+            next = *reinterpret_cast<void* const*>(b + 2);
+        }
+        // Pattern 4: mov r11, imm64; jmp r11
+        else if (b[0] == 0x49 && b[1] == 0xBB && b[10] == 0x41 && b[11] == 0xFF && b[12] == 0xE3) {
+            next = *reinterpret_cast<void* const*>(b + 2);
+        }
+
+        if (!next) return nullptr;
+
+        // If we hop to a non-jump stub, return the resolved destination.
+        if (!isReadableCodePtr(next)) return next;
+        const uint8_t* nb = reinterpret_cast<const uint8_t*>(next);
+        bool looksLikeJump = (nb[0] == 0xEB) || (nb[0] == 0xE9) || (nb[0] == 0xFF && nb[1] == 0x25) ||
+                             (nb[0] == 0x48 && nb[1] == 0xB8 && nb[10] == 0xFF && nb[11] == 0xE0) ||
+                             (nb[0] == 0x49 && nb[1] == 0xBB && nb[10] == 0x41 && nb[11] == 0xFF && nb[12] == 0xE3);
+        if (!looksLikeJump) return next;
+
+        cur = next;
+    }
+
+    return nullptr;
+}
+
+static bool TryCreateAndEnableHook(void* target, void* detour, void** outOriginal, const char* what) {
+    if (!target) return false;
+
+    MH_STATUS st = MH_CreateHook(target, detour, outOriginal);
+    if (st != MH_OK && st != MH_ERROR_ALREADY_CREATED) {
+        Log(std::string("ERROR: Failed to create ") + what + " hook (status " + std::to_string((int)st) + ")");
+        return false;
+    }
+
+    st = MH_EnableHook(target);
+    if (st != MH_OK && st != MH_ERROR_ENABLED) {
+        Log(std::string("ERROR: Failed to enable ") + what + " hook (status " + std::to_string((int)st) + ")");
+        return false;
+    }
+    return true;
+}
+
+// Same idea as RefreshThirdPartyViewportHookChain, but for wglSwapBuffers (commonly hooked by overlays).
+static void RefreshThirdPartyWglSwapBuffersHookChain() {
+    HMODULE hOpenGL32 = GetModuleHandle(L"opengl32.dll");
+    if (!hOpenGL32) return;
+
+    void* exportSwap = reinterpret_cast<void*>(GetProcAddress(hOpenGL32, "wglSwapBuffers"));
+    if (!exportSwap) return;
+
+    void* jumpTarget = ResolveAbsoluteJumpTarget(exportSwap);
+    if (!jumpTarget) return;
+
+    if (jumpTarget == reinterpret_cast<void*>(&hkwglSwapBuffers) || jumpTarget == reinterpret_cast<void*>(&hkwglSwapBuffers_ThirdParty)) {
+        return;
+    }
+
+    if (jumpTarget == g_wglSwapBuffersThirdPartyHookTarget.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    if (TryCreateAndEnableHook(jumpTarget, reinterpret_cast<void*>(&hkwglSwapBuffers_ThirdParty),
+                               reinterpret_cast<void**>(&g_owglSwapBuffersThirdParty), "wglSwapBuffers (third-party chain)")) {
+        g_wglSwapBuffersThirdPartyHookTarget.store(jumpTarget, std::memory_order_release);
+        Log("Chained wglSwapBuffers through third-party detour target at " + std::to_string(reinterpret_cast<uintptr_t>(jumpTarget)));
+    }
+}
+
+static void RefreshThirdPartySetCursorPosHookChain() {
+    HMODULE hUser32 = GetModuleHandle(L"user32.dll");
+    if (!hUser32) return;
+
+    void* exportFunc = reinterpret_cast<void*>(GetProcAddress(hUser32, "SetCursorPos"));
+    if (!exportFunc) return;
+
+    void* jumpTarget = ResolveAbsoluteJumpTarget(exportFunc);
+    if (!jumpTarget) return;
+
+    if (jumpTarget == reinterpret_cast<void*>(&hkSetCursorPos) || jumpTarget == reinterpret_cast<void*>(&hkSetCursorPos_ThirdParty)) {
+        return;
+    }
+
+    if (jumpTarget == g_setCursorPosThirdPartyHookTarget.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    if (TryCreateAndEnableHook(jumpTarget, reinterpret_cast<void*>(&hkSetCursorPos_ThirdParty),
+                               reinterpret_cast<void**>(&g_oSetCursorPosThirdParty), "SetCursorPos (third-party chain)")) {
+        g_setCursorPosThirdPartyHookTarget.store(jumpTarget, std::memory_order_release);
+        Log("Chained SetCursorPos through third-party detour target at " + std::to_string(reinterpret_cast<uintptr_t>(jumpTarget)));
+    }
+}
+
+static void RefreshThirdPartyClipCursorHookChain() {
+    HMODULE hUser32 = GetModuleHandle(L"user32.dll");
+    if (!hUser32) return;
+
+    void* exportFunc = reinterpret_cast<void*>(GetProcAddress(hUser32, "ClipCursor"));
+    if (!exportFunc) return;
+
+    void* jumpTarget = ResolveAbsoluteJumpTarget(exportFunc);
+    if (!jumpTarget) return;
+
+    if (jumpTarget == reinterpret_cast<void*>(&hkClipCursor) || jumpTarget == reinterpret_cast<void*>(&hkClipCursor_ThirdParty)) {
+        return;
+    }
+
+    if (jumpTarget == g_clipCursorThirdPartyHookTarget.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    if (TryCreateAndEnableHook(jumpTarget, reinterpret_cast<void*>(&hkClipCursor_ThirdParty),
+                               reinterpret_cast<void**>(&g_oClipCursorThirdParty), "ClipCursor (third-party chain)")) {
+        g_clipCursorThirdPartyHookTarget.store(jumpTarget, std::memory_order_release);
+        Log("Chained ClipCursor through third-party detour target at " + std::to_string(reinterpret_cast<uintptr_t>(jumpTarget)));
+    }
+}
+
+static void RefreshThirdPartySetCursorHookChain() {
+    HMODULE hUser32 = GetModuleHandle(L"user32.dll");
+    if (!hUser32) return;
+
+    void* exportFunc = reinterpret_cast<void*>(GetProcAddress(hUser32, "SetCursor"));
+    if (!exportFunc) return;
+
+    void* jumpTarget = ResolveAbsoluteJumpTarget(exportFunc);
+    if (!jumpTarget) return;
+
+    if (jumpTarget == reinterpret_cast<void*>(&hkSetCursor) || jumpTarget == reinterpret_cast<void*>(&hkSetCursor_ThirdParty)) {
+        return;
+    }
+
+    if (jumpTarget == g_setCursorThirdPartyHookTarget.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    if (TryCreateAndEnableHook(jumpTarget, reinterpret_cast<void*>(&hkSetCursor_ThirdParty), reinterpret_cast<void**>(&g_oSetCursorThirdParty),
+                               "SetCursor (third-party chain)")) {
+        g_setCursorThirdPartyHookTarget.store(jumpTarget, std::memory_order_release);
+        Log("Chained SetCursor through third-party detour target at " + std::to_string(reinterpret_cast<uintptr_t>(jumpTarget)));
+    }
+}
+
+static void RefreshThirdPartyGetRawInputDataHookChain() {
+    HMODULE hUser32 = GetModuleHandle(L"user32.dll");
+    if (!hUser32) return;
+
+    void* exportFunc = reinterpret_cast<void*>(GetProcAddress(hUser32, "GetRawInputData"));
+    if (!exportFunc) return;
+
+    void* jumpTarget = ResolveAbsoluteJumpTarget(exportFunc);
+    if (!jumpTarget) return;
+
+    if (jumpTarget == reinterpret_cast<void*>(&hkGetRawInputData) || jumpTarget == reinterpret_cast<void*>(&hkGetRawInputData_ThirdParty)) {
+        return;
+    }
+
+    if (jumpTarget == g_getRawInputDataThirdPartyHookTarget.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    if (TryCreateAndEnableHook(jumpTarget, reinterpret_cast<void*>(&hkGetRawInputData_ThirdParty),
+                               reinterpret_cast<void**>(&g_oGetRawInputDataThirdParty), "GetRawInputData (third-party chain)")) {
+        g_getRawInputDataThirdPartyHookTarget.store(jumpTarget, std::memory_order_release);
+        Log("Chained GetRawInputData through third-party detour target at " + std::to_string(reinterpret_cast<uintptr_t>(jumpTarget)));
+    }
+}
+
+static void RefreshThirdPartyGlfwSetInputModeHookChain() {
+    HMODULE hGlfw = GetModuleHandle(L"glfw.dll");
+    if (!hGlfw) return;
+
+    void* exportFunc = reinterpret_cast<void*>(GetProcAddress(hGlfw, "glfwSetInputMode"));
+    if (!exportFunc) return;
+
+    void* jumpTarget = ResolveAbsoluteJumpTarget(exportFunc);
+    if (!jumpTarget) return;
+
+    if (jumpTarget == reinterpret_cast<void*>(&hkglfwSetInputMode) || jumpTarget == reinterpret_cast<void*>(&hkglfwSetInputMode_ThirdParty)) {
+        return;
+    }
+
+    if (jumpTarget == g_glfwSetInputModeThirdPartyHookTarget.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    if (TryCreateAndEnableHook(jumpTarget, reinterpret_cast<void*>(&hkglfwSetInputMode_ThirdParty),
+                               reinterpret_cast<void**>(&g_oglfwSetInputModeThirdParty), "glfwSetInputMode (third-party chain)")) {
+        g_glfwSetInputModeThirdPartyHookTarget.store(jumpTarget, std::memory_order_release);
+        Log("Chained glfwSetInputMode through third-party detour target at " + std::to_string(reinterpret_cast<uintptr_t>(jumpTarget)));
+    }
+}
+
+// Some overlays hook the driver entrypoint we hooked (GLEW/wglGetProcAddress pointer) after us.
+// If that happens, re-chain behind their detour target as well.
+static void RefreshThirdPartyViewportHookChainFromDriverTarget() {
+    void* driverTarget = g_glViewportDriverHookTarget.load(std::memory_order_acquire);
+    if (!driverTarget) return;
+
+    void* jumpTarget = ResolveAbsoluteJumpTarget(driverTarget);
+    if (!jumpTarget) return;
+
+    if (jumpTarget == reinterpret_cast<void*>(&hkglViewport) || jumpTarget == reinterpret_cast<void*>(&hkglViewport_Driver) ||
+        jumpTarget == reinterpret_cast<void*>(&hkglViewport_ThirdParty)) {
+        return;
+    }
+
+    if (jumpTarget == g_glViewportThirdPartyHookTarget.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    if (TryCreateAndEnableHook(jumpTarget, reinterpret_cast<void*>(&hkglViewport_ThirdParty),
+                               reinterpret_cast<void**>(&g_oglViewportThirdParty), "glViewport (driver third-party chain)")) {
+        g_glViewportThirdPartyHookTarget.store(jumpTarget, std::memory_order_release);
+        g_glViewportHookCount.fetch_add(1);
+        Log("Chained glViewport (driver target) through third-party detour at " +
+            std::to_string(reinterpret_cast<uintptr_t>(jumpTarget)));
+        Log("Total glViewport hook count: " + std::to_string(g_glViewportHookCount.load()));
+    }
+}
+
+// Best-effort IAT scan: locate the imported function pointer for a given module+function.
+// Returns the current thunk value (the actual call target used by the importing module), or nullptr.
+static void* FindIatImportedFunctionTarget(HMODULE importingModule, const char* importedDllNameLower, const char* funcName) {
+    if (!importingModule || !importedDllNameLower || !funcName) return nullptr;
+
+    uint8_t* base = reinterpret_cast<uint8_t*>(importingModule);
+    auto* dos = reinterpret_cast<PIMAGE_DOS_HEADER>(base);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE) return nullptr;
+    auto* nt = reinterpret_cast<PIMAGE_NT_HEADERS>(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE) return nullptr;
+
+    const IMAGE_DATA_DIRECTORY& impDir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    if (!impDir.VirtualAddress || !impDir.Size) return nullptr;
+
+    auto* desc = reinterpret_cast<PIMAGE_IMPORT_DESCRIPTOR>(base + impDir.VirtualAddress);
+    for (; desc->Name != 0; desc++) {
+        const char* dllName = reinterpret_cast<const char*>(base + desc->Name);
+        if (!dllName) continue;
+
+        // Case-insensitive compare with a lower-cased needle
+        std::string dllLower(dllName);
+        for (char& c : dllLower) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+        if (dllLower != importedDllNameLower) continue;
+
+        auto* oft = reinterpret_cast<PIMAGE_THUNK_DATA>(base + (desc->OriginalFirstThunk ? desc->OriginalFirstThunk : desc->FirstThunk));
+        auto* ft = reinterpret_cast<PIMAGE_THUNK_DATA>(base + desc->FirstThunk);
+        for (; oft->u1.AddressOfData != 0; oft++, ft++) {
+            if (IMAGE_SNAP_BY_ORDINAL(oft->u1.Ordinal)) continue;
+            auto* ibn = reinterpret_cast<PIMAGE_IMPORT_BY_NAME>(base + oft->u1.AddressOfData);
+            if (!ibn || !ibn->Name) continue;
+            if (strcmp(reinterpret_cast<const char*>(ibn->Name), funcName) == 0) {
+#if defined(_WIN64)
+                return reinterpret_cast<void*>(ft->u1.Function);
+#else
+                return reinterpret_cast<void*>(ft->u1.Function);
+#endif
+            }
+        }
+    }
+    return nullptr;
+}
+
+static void RefreshThirdPartyWglSwapBuffersIatHookChain() {
+    // If an overlay hooks wglSwapBuffers by IAT patching (no prolog detour), our export-prolog detection won't see it.
+    // Scan importing modules for an IAT entry that points somewhere unexpected and chain behind that target.
+    HMODULE opengl32 = GetModuleHandle(L"opengl32.dll");
+    if (!opengl32) return;
+
+    void* exportSwap = reinterpret_cast<void*>(GetProcAddress(opengl32, "wglSwapBuffers"));
+    if (!exportSwap) return;
+
+    HMODULE mods[1024];
+    DWORD cbNeeded = 0;
+    if (!EnumProcessModules(GetCurrentProcess(), mods, sizeof(mods), &cbNeeded)) return;
+
+    const DWORD count = cbNeeded / sizeof(HMODULE);
+    for (DWORD i = 0; i < count; i++) {
+        HMODULE m = mods[i];
+        if (!m) continue;
+
+        void* thunkTarget = FindIatImportedFunctionTarget(m, "opengl32.dll", "wglSwapBuffers");
+        if (!thunkTarget) continue;
+
+        // If the IAT points at the real export or at our detours, nothing to do.
+        if (thunkTarget == exportSwap || thunkTarget == reinterpret_cast<void*>(&hkwglSwapBuffers) ||
+            thunkTarget == reinterpret_cast<void*>(&hkwglSwapBuffers_ThirdParty)) {
+            continue;
+        }
+
+        // If we've already chained this target, stop.
+        if (thunkTarget == g_wglSwapBuffersThirdPartyHookTarget.load(std::memory_order_acquire)) {
+            return;
+        }
+
+        // Chain behind the IAT target.
+        if (TryCreateAndEnableHook(thunkTarget, reinterpret_cast<void*>(&hkwglSwapBuffers_ThirdParty),
+                                   reinterpret_cast<void**>(&g_owglSwapBuffersThirdParty), "wglSwapBuffers (IAT third-party chain)")) {
+            g_wglSwapBuffersThirdPartyHookTarget.store(thunkTarget, std::memory_order_release);
+            Log("Chained wglSwapBuffers via IAT target at " + std::to_string(reinterpret_cast<uintptr_t>(thunkTarget)));
+            return;
+        }
+    }
 }
