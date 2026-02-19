@@ -819,12 +819,12 @@ void EnsureSymbolsInitialized() {
 
     if (g_symbolsInitialized.load()) { return; }
 
-    // Check if PDB file exists before doing any symbol initialization work
+    /*// Check if PDB file exists before doing any symbol initialization work
     const char* pdbPath = "C:\\Toolscreen.pdb";
     if (GetFileAttributesA(pdbPath) == INVALID_FILE_ATTRIBUTES) {
         Log("WARNING: PDB file not found at C:\\Toolscreen.pdb - symbols will not be available");
         return;
-    }
+    }*/
 
     HANDLE process = GetCurrentProcess();
 
@@ -840,6 +840,7 @@ void EnsureSymbolsInitialized() {
     std::stringstream ssAddr;
     ssAddr << "Detected DLL loaded at address: 0x" << std::hex << dllBaseAddr;
     Log(ssAddr.str());
+    return;
 
     DWORD options = SymGetOptions();
     options |= SYMOPT_LOAD_LINES;
