@@ -831,6 +831,16 @@ plm_samples_t *plm_audio_decode(plm_audio_t *self);
 #include <stdio.h>
 #endif
 
+// Windows UTF-8 filename support for stdio (fopen)
+// pl_mpeg APIs take UTF-8 `const char*` filenames; on Windows we need _wfopen.
+#if defined(_WIN32) && !defined(PLM_NO_STDIO)
+	#include <wchar.h>
+	#ifndef WIN32_LEAN_AND_MEAN
+		#define WIN32_LEAN_AND_MEAN
+	#endif
+	#include <windows.h>
+#endif
+
 #ifndef TRUE
 #define TRUE 1
 #define FALSE 0
@@ -1436,7 +1446,27 @@ uint16_t plm_buffer_read_vlc_uint(plm_buffer_t *self, const plm_vlc_uint_t *tabl
 #ifndef PLM_NO_STDIO
 
 plm_buffer_t *plm_buffer_create_with_filename(const char *filename) {
-	FILE *fh = fopen(filename, "rb");
+	FILE *fh = NULL;
+	#if defined(_WIN32)
+		// Try UTF-8 -> UTF-16 -> _wfopen first
+		if (filename) {
+			int wlen = MultiByteToWideChar(CP_UTF8, 0, filename, -1, NULL, 0);
+			if (wlen > 0) {
+				wchar_t *wfilename = (wchar_t *)PLM_MALLOC((size_t)wlen * sizeof(wchar_t));
+				if (wfilename) {
+					MultiByteToWideChar(CP_UTF8, 0, filename, -1, wfilename, wlen);
+					fh = _wfopen(wfilename, L"rb");
+					PLM_FREE(wfilename);
+				}
+			}
+		}
+		// Fallback to plain fopen (ANSI codepage)
+		if (!fh) {
+			fh = fopen(filename, "rb");
+		}
+	#else
+		fh = fopen(filename, "rb");
+	#endif
 	if (!fh) {
 		return NULL;
 	}

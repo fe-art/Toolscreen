@@ -29,6 +29,7 @@
 #include <future>
 #include <set>
 #include <shared_mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <windowsx.h>
@@ -1126,8 +1127,8 @@ void SaveConfig() {
             _set_se_translator(SEHTranslator);
             try {
                 try {
-                    std::string narrowPath = WideToUtf8(configPath);
-                    std::ofstream o(narrowPath);
+                    // IMPORTANT (Windows/Unicode): open via std::filesystem::path to support non-ANSI user profiles.
+                    std::ofstream o(std::filesystem::path(configPath), std::ios::binary | std::ios::trunc);
                     if (!o.is_open()) {
                         Log("ERROR: Failed to open config file for writing.");
                     } else {
@@ -1184,8 +1185,8 @@ void SaveConfigImmediate() {
         // Publish updated config snapshot for reader threads (RCU pattern)
         PublishConfigSnapshot();
 
-        std::string narrowPath = WideToUtf8(configPath);
-        std::ofstream o(narrowPath);
+        // IMPORTANT (Windows/Unicode): open via std::filesystem::path to support non-ANSI user profiles.
+        std::ofstream o(std::filesystem::path(configPath), std::ios::binary | std::ios::trunc);
         if (!o.is_open()) {
             Log("ERROR: Failed to open config file for writing.");
             return;
@@ -1642,8 +1643,8 @@ void SaveTheme() {
         }
         tbl.insert_or_assign("customColors", colorsTbl);
 
-        std::string narrowPath = WideToUtf8(themePath);
-        std::ofstream o(narrowPath);
+        // IMPORTANT (Windows/Unicode): open via std::filesystem::path to support non-ANSI user profiles.
+        std::ofstream o(std::filesystem::path(themePath), std::ios::binary | std::ios::trunc);
         if (!o.is_open()) {
             Log("ERROR: Failed to open theme.toml for writing.");
             return;
@@ -1662,18 +1663,20 @@ void LoadTheme() {
     }
 
     std::wstring themePath = g_toolscreenPath + L"\\theme.toml";
-    std::string narrowPath = WideToUtf8(themePath);
-
     // Check if file exists
-    std::ifstream testFile(narrowPath);
+    std::ifstream testFile(std::filesystem::path(themePath), std::ios::binary);
     if (!testFile.good()) {
         Log("theme.toml not found, using default theme.");
         return;
     }
-    testFile.close();
-
     try {
-        toml::table tbl = toml::parse_file(narrowPath);
+        toml::parse_result result = toml::parse(testFile, themePath);
+        if (!result) {
+            const auto& err = result.error();
+            Log("ERROR: Failed to parse theme.toml: " + std::string(err.description()));
+            return;
+        }
+        toml::table tbl = std::move(result).table();
         if (tbl.contains("theme")) {
             std::string themeName = tbl["theme"].value_or<std::string>("Dark");
             g_config.appearance.theme = themeName;
@@ -1692,8 +1695,6 @@ void LoadTheme() {
                 }
             }
         }
-    } catch (const toml::parse_error& e) {
-        Log("ERROR: Failed to parse theme.toml: " + std::string(e.what()));
     } catch (const std::exception& e) { Log("ERROR: Failed to load theme: " + std::string(e.what())); }
 }
 
@@ -1771,8 +1772,8 @@ void WriteDefaultConfig(const std::wstring& path) {
             toml::table tbl;
             ConfigToToml(defaultConfig, tbl);
 
-            std::string narrowPath = WideToUtf8(path);
-            std::ofstream o(narrowPath);
+            // IMPORTANT (Windows/Unicode): open via std::filesystem::path to support non-ANSI user profiles.
+            std::ofstream o(std::filesystem::path(path), std::ios::binary | std::ios::trunc);
             o << tbl;
             o.close();
             Log("Wrote default config.toml from embedded defaults, customized for your monitor (" + std::to_string(screenWidth) + "x" +
@@ -1799,8 +1800,8 @@ void WriteDefaultConfig(const std::wstring& path) {
             toml::table tbl;
             ConfigToToml(defaultConfig, tbl);
 
-            std::string narrowPath = WideToUtf8(path);
-            std::ofstream o(narrowPath);
+            // IMPORTANT (Windows/Unicode): open via std::filesystem::path to support non-ANSI user profiles.
+            std::ofstream o(std::filesystem::path(path), std::ios::binary | std::ios::trunc);
             o << tbl;
             o.close();
             Log("Wrote fallback config.toml for your monitor (" + std::to_string(screenWidth) + "x" + std::to_string(screenHeight) + ").");
@@ -1816,7 +1817,6 @@ void LoadConfig() {
     }
 
     std::wstring configPath = g_toolscreenPath + L"\\config.toml";
-    std::string narrowPath = WideToUtf8(configPath);
 
     // Check if config.toml exists
     if (!std::filesystem::exists(configPath)) {
@@ -1842,7 +1842,16 @@ void LoadConfig() {
         g_hotkeyTimestamps.clear();
 
         // Load TOML config
-        toml::table tbl = toml::parse_file(narrowPath);
+        std::ifstream in(std::filesystem::path(configPath), std::ios::binary);
+        if (!in.is_open()) {
+            throw std::runtime_error("Failed to open config.toml for reading.");
+        }
+        toml::parse_result result = toml::parse(in, configPath);
+        if (!result) {
+            const auto& err = result.error();
+            throw std::runtime_error(std::string(err.description()));
+        }
+        toml::table tbl = std::move(result).table();
         ConfigFromToml(tbl, g_config);
         Log("Loaded config from TOML file.");
 
@@ -2266,7 +2275,7 @@ void RenderConfigErrorGUI() {
         if (ImGui::Button("Copy Debug Info")) {
             std::string configContent = "ERROR: Could not read config.toml.";
             std::wstring configPath = g_toolscreenPath + L"\\config.toml";
-            std::ifstream f(configPath);
+            std::ifstream f(std::filesystem::path(configPath), std::ios::binary);
             if (f.is_open()) {
                 std::ostringstream ss;
                 ss << f.rdbuf();

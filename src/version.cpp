@@ -35,14 +35,10 @@ GameVersion ParseMinecraftVersionFromMMCPack(const std::wstring& mmcPackPath) {
     GameVersion result;
 
     try {
-        // Convert wide string to string for ifstream
-        int size_needed = WideCharToMultiByte(CP_UTF8, 0, mmcPackPath.c_str(), (int)mmcPackPath.length(), NULL, 0, NULL, NULL);
-        std::string mmcPackPathStr(size_needed, 0);
-        WideCharToMultiByte(CP_UTF8, 0, mmcPackPath.c_str(), (int)mmcPackPath.length(), &mmcPackPathStr[0], size_needed, NULL, NULL);
-
-        std::ifstream file(mmcPackPathStr);
+        // IMPORTANT (Windows/Unicode): open via std::filesystem::path so wide Win32 APIs are used.
+        std::ifstream file(std::filesystem::path(mmcPackPath), std::ios::binary);
         if (!file.is_open()) {
-            Log("Failed to open mmc-pack.json at: " + mmcPackPathStr);
+            Log("Failed to open mmc-pack.json at: " + WideToUtf8(mmcPackPath));
             return result;
         }
 

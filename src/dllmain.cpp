@@ -2481,7 +2481,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             // Open new latest.log
             {
                 std::lock_guard<std::mutex> lock(g_logFileMutex);
-                logFile.open(latestLogPath, std::ios_base::out | std::ios_base::trunc);
+                // IMPORTANT (Windows/Unicode): open via std::filesystem::path so wide Win32 APIs are used.
+                logFile.open(std::filesystem::path(latestLogPath), std::ios_base::out | std::ios_base::trunc);
             }
 
             // Start async logging thread now that log file is open

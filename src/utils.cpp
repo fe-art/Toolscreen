@@ -17,6 +17,7 @@ extern std::atomic<GLuint> g_cachedGameTextureId;
 #include <cstdint>
 #include <cstdlib>
 #include <eh.h>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -226,7 +227,8 @@ static bool FileExistsW(const std::wstring& path) {
 }
 
 static bool ReadFileBytes(const std::wstring& path, std::vector<uint8_t>& out) {
-    std::ifstream in(path, std::ios::binary | std::ios::ate);
+    // IMPORTANT (Windows/Unicode): open via std::filesystem::path so wide Win32 APIs are used.
+    std::ifstream in(std::filesystem::path(path), std::ios::binary | std::ios::ate);
     if (!in.is_open()) return false;
 
     std::streamoff size = in.tellg();
@@ -482,7 +484,8 @@ bool CompressFileToGzip(const std::wstring& srcPath, const std::wstring& dstPath
     std::wstring tempPath = dstPath + L".tmp";
     DeleteFileW(tempPath.c_str());
 
-    std::ofstream out(tempPath, std::ios::binary | std::ios::trunc);
+    // IMPORTANT (Windows/Unicode): open via std::filesystem::path so wide Win32 APIs are used.
+    std::ofstream out(std::filesystem::path(tempPath), std::ios::binary | std::ios::trunc);
     if (!out.is_open()) return false;
 
     // Gzip header (RFC 1952)
@@ -919,7 +922,8 @@ void WriteCurrentModeToFile(const std::string& modeId) {
     // The thread-local profiler buffer gets destroyed when the thread exits,
     // while the pointer remains in the registry, causing access violations.
     std::thread([modeIdCopy, filePathCopy]() {
-        std::ofstream modeFile(filePathCopy, std::ios_base::out | std::ios_base::trunc);
+        // IMPORTANT (Windows/Unicode): open via std::filesystem::path so wide Win32 APIs are used.
+        std::ofstream modeFile(std::filesystem::path(filePathCopy), std::ios_base::out | std::ios_base::trunc);
         if (modeFile.is_open()) {
             modeFile << modeIdCopy;
             modeFile.close();

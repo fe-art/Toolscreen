@@ -1678,9 +1678,9 @@ bool SaveConfigToTomlFile(const Config& config, const std::wstring& path) {
         toml::table tbl;
         ConfigToToml(config, tbl);
 
-        // Convert wide path to narrow for ofstream
-        std::string narrowPath = WideToUtf8(path);
-        std::ofstream file(narrowPath);
+        // IMPORTANT (Windows/Unicode): do not pass UTF-8 narrow strings to std::ofstream.
+        // Use std::filesystem::path so the wide Win32 APIs are used under the hood.
+        std::ofstream file(std::filesystem::path(path), std::ios::binary | std::ios::trunc);
         if (!file.is_open()) { return false; }
 
         // Define the order of top-level keys
@@ -1849,13 +1849,22 @@ bool SaveConfigToTomlFile(const Config& config, const std::wstring& path) {
 
 bool LoadConfigFromTomlFile(const std::wstring& path, Config& config) {
     try {
-        std::string narrowPath = WideToUtf8(path);
-        toml::table tbl = toml::parse_file(narrowPath);
+        std::ifstream in(std::filesystem::path(path), std::ios::binary);
+        if (!in.is_open()) {
+            Log("ERROR: Failed to open config for reading: " + WideToUtf8(path));
+            return false;
+        }
+
+        toml::parse_result result = toml::parse(in, path);
+        if (!result) {
+            const auto& err = result.error();
+            Log("ERROR: TOML parse error: " + std::string(err.description()));
+            return false;
+        }
+
+        toml::table tbl = std::move(result).table();
         ConfigFromToml(tbl, config);
         return true;
-    } catch (const toml::parse_error& e) {
-        Log("ERROR: TOML parse error: " + std::string(e.what()));
-        return false;
     } catch (const std::exception& e) {
         Log("ERROR: Failed to load config from TOML: " + std::string(e.what()));
         return false;
