@@ -94,17 +94,46 @@ toml::array ColorToTomlArray(const Color& color) {
 
 Color ColorFromTomlArray(const toml::array* arr, Color defaultColor = { 0.0f, 0.0f, 0.0f, 1.0f }) {
     Color color = defaultColor;
-    if (arr && arr->size() >= 3) {
-        if (auto r = (*arr)[0].value<int64_t>()) color.r = static_cast<float>(*r) / 255.0f;
-        if (auto g = (*arr)[1].value<int64_t>()) color.g = static_cast<float>(*g) / 255.0f;
-        if (auto b = (*arr)[2].value<int64_t>()) color.b = static_cast<float>(*b) / 255.0f;
-        // Read alpha if present (4th element)
-        if (arr->size() >= 4) {
-            if (auto a = (*arr)[3].value<int64_t>()) color.a = static_cast<float>(*a) / 255.0f;
-        } else {
-            color.a = 1.0f; // Default to fully opaque if not specified
-        }
+    if (!arr || arr->size() < 3) {
+        return color;
     }
+
+    // Accept both legacy int arrays in [0..255] and float arrays in [0..1].
+    // Reason: older/custom user theme.toml files may store floats; previous parsing only
+    // accepted int64_t, which silently fell back to the default (often black), making UI
+    // text appear "broken"/black.
+    auto readComponent01 = [&](size_t idx, float fallback01) -> float {
+        if (idx >= arr->size()) {
+            return fallback01;
+        }
+
+        if (auto vInt = (*arr)[idx].value<int64_t>()) {
+            // Integer format: 0..255
+            return static_cast<float>(*vInt) / 255.0f;
+        }
+
+        // Float format: either 0..1 or 0..255 (rare but possible)
+        if (auto vDbl = (*arr)[idx].value<double>()) {
+            const double v = *vDbl;
+            if (v <= 1.0) {
+                return static_cast<float>(v);
+            }
+            return static_cast<float>(v / 255.0);
+        }
+
+        return fallback01;
+    };
+
+    color.r = readComponent01(0, defaultColor.r);
+    color.g = readComponent01(1, defaultColor.g);
+    color.b = readComponent01(2, defaultColor.b);
+    color.a = (arr->size() >= 4) ? readComponent01(3, defaultColor.a) : 1.0f;
+
+    // Clamp in case the config contains out-of-range values.
+    color.r = (std::max)(0.0f, (std::min)(1.0f, color.r));
+    color.g = (std::max)(0.0f, (std::min)(1.0f, color.g));
+    color.b = (std::max)(0.0f, (std::min)(1.0f, color.b));
+    color.a = (std::max)(0.0f, (std::min)(1.0f, color.a));
     return color;
 }
 

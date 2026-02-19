@@ -293,6 +293,21 @@ static bool RT_TryInitializeImGui(HWND hwnd, const Config& cfg) {
     // Initialize larger font for overlay text labels
     InitializeOverlayTextFont(cfg.fontPath, 16.0f, scaleFactor);
 
+    // Ensure the font atlas is built and the OpenGL font texture exists.
+    // If the font texture is 0/invalid, ImGui will sample a black texture for *all* draw calls,
+    // making the entire GUI appear black (not just text).
+    if (!io.Fonts->Build()) {
+        Log("Render Thread: Initial font atlas build failed; falling back to ImGui default font");
+        io.Fonts->Clear();
+        io.Fonts->AddFontDefault();
+        (void)io.Fonts->Build();
+    }
+    ImGui_ImplOpenGL3_DestroyFontsTexture();
+    ImGui_ImplOpenGL3_CreateFontsTexture();
+    if ((GLuint)(intptr_t)io.Fonts->TexID == 0) {
+        Log("ERROR: Render Thread: ImGui font texture ID is 0 after initialization; GUI may render black");
+    }
+
     g_fontsValid = true;
     g_renderThreadImGuiInitialized = true;
     LogCategory("init", "Render Thread: ImGui initialized successfully");
@@ -3748,12 +3763,23 @@ static void RenderThreadFunc(void* gameGLContext) {
                             g_eyeZoomTextFont = RT_AddFontWithArialFallback(io.Fonts, ConfigDefaults::CONFIG_FONT_PATH,
                                                                             80.0f * g_eyeZoomScaleFactor, "EyeZoom font (forced Arial)");
                             InitializeOverlayTextFont(ConfigDefaults::CONFIG_FONT_PATH, 16.0f, g_eyeZoomScaleFactor);
-                            (void)io.Fonts->Build();
+                            if (!io.Fonts->Build()) {
+                                // Last resort: build a minimal atlas with the default font.
+                                Log("ERROR: Render Thread: Font atlas still failing after Arial fallback; using ImGui default font only");
+                                io.Fonts->Clear();
+                                io.Fonts->AddFontDefault();
+                                (void)io.Fonts->Build();
+                                g_eyeZoomTextFont = ImGui::GetFont();
+                            }
                         }
 
                         // Ensure OpenGL font texture matches the rebuilt atlas.
                         ImGui_ImplOpenGL3_DestroyFontsTexture();
                         ImGui_ImplOpenGL3_CreateFontsTexture();
+
+                        if ((GLuint)(intptr_t)io.Fonts->TexID == 0) {
+                            Log("ERROR: Render Thread: ImGui font texture ID is 0 after reload; GUI may render black");
+                        }
 
                         g_fontsValid = true;
                         Log("Render Thread: Fonts reloaded successfully");
