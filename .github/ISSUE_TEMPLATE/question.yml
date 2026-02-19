@@ -1,0 +1,48 @@
+name: Question
+description: Ask a question about setup, usage, or configuration
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Not sure how something works? Ask here. Please check existing issues and the README first.
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+    validations:
+      required: true
+
+  - type: textarea
+    id: already-tried
+    attributes:
+      label: What have you already tried?
+    validations:
+      required: false
+
+  - type: input
+    id: toolscreen-version
+    attributes:
+      label: Toolscreen version
+      placeholder: "e.g. 1.2.3"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      options:
+        - Windows 11
+        - Windows 10
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context (optional)
+      description: Launcher, Minecraft version, your config.toml, screenshots — anything that might help.
+    validations:
+      required: false

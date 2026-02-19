@@ -1,0 +1,49 @@
+name: Feature Request
+description: Suggest a new feature or improvement for Toolscreen
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have an idea to make Toolscreen better? Fill out the form below.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of Toolscreen does this relate to?
+      options:
+        - Screen mirroring
+        - Overlay / GUI
+        - Hotkeys
+        - OBS integration
+        - Virtual camera
+        - Cursor rendering
+        - Configuration / settings
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Feature description
+      description: What do you want Toolscreen to do? Be as specific as possible.
+    validations:
+      required: true
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: Why do you need this? What problem does it solve for you?
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context (optional)
+      description: Screenshots, mockups, links to similar tools, or anything else that helps.
+    validations:
+      required: false
