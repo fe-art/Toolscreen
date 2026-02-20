@@ -1,4 +1,5 @@
 disableHookChaining = true
+hookChainingNextTarget = 'LatestHook'
 allowCursorEscape = true
 basicModeEnabled = true
 configVersion = 1

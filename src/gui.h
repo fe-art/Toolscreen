@@ -129,6 +129,13 @@ enum class MirrorBorderShape {
     Circle     // Circle/ellipse that fits mirror dimensions
 };
 
+// When Toolscreen detects a third-party detour on a hooked API, it can optionally chain through
+// the third-party trampoline (compatibility) or bypass it and call our original function.
+enum class HookChainingNextTarget {
+    LatestHook = 0,       // Call the latest (third-party) trampoline captured when chaining
+    OriginalFunction = 1, // Bypass third-party and call Toolscreen's original function
+};
+
 // Custom border configuration for mirrors
 struct MirrorBorderConfig {
     MirrorBorderType type = MirrorBorderType::Dynamic; // Which border type to use
@@ -473,6 +480,10 @@ struct Config {
     // When true, Toolscreen will NOT attempt to chain hooks behind third-party detours installed after us.
     // Useful if a specific overlay/driver hook layer is unstable when chained.
     bool disableHookChaining = true;
+    // When chaining is enabled, controls which function pointer the chained detour calls.
+    // - LatestHook: call the third-party trampoline (more compatible with overlays)
+    // - OriginalFunction: bypass third-party code (more stable if overlay hook is broken)
+    HookChainingNextTarget hookChainingNextTarget = HookChainingNextTarget::LatestHook;
     bool allowCursorEscape = false;                         // Allow cursor to escape window boundaries
     float mouseSensitivity = 1.0f;                          // Mouse sensitivity multiplier (1.0 = normal)
     int windowsMouseSpeed = 0;                              // Windows mouse speed override (0 = disabled, 1-20 = override)
