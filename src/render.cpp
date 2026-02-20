@@ -1032,6 +1032,10 @@ void RestoreGLState(const GLState& s) {
 void CleanupGPUResources() {
     Log("CleanupGPUResources: Starting cleanup...");
 
+    if (g_mirrorCaptureRunning.load(std::memory_order_acquire)) {
+        StopMirrorCaptureThread();
+    }
+
     // Verify we have a valid GL context before attempting cleanup
     HGLRC currentContext = wglGetCurrentContext();
     if (!currentContext) {

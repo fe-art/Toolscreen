@@ -84,11 +84,11 @@ if (ImGui::BeginTabItem("Mirrors")) {
                             std::unique_lock<std::shared_mutex> lock(g_mirrorInstancesMutex);
                             auto it = g_mirrorInstances.find(oldMirrorName);
                             if (it != g_mirrorInstances.end()) {
-                                MirrorInstance inst = std::move(it->second);
-                                g_mirrorInstances.erase(it);
-                                inst.cachedRenderState.isValid = false;
-                                inst.forceUpdateFrames = 3;
-                                g_mirrorInstances[mirror.name] = std::move(inst);
+                                auto node = g_mirrorInstances.extract(it);
+                                node.key() = mirror.name;
+                                node.mapped().cachedRenderState.isValid = false;
+                                node.mapped().forceUpdateFrames = 3;
+                                g_mirrorInstances.insert(std::move(node));
                             }
                         }
                         // Update g_threadedMirrorConfigs so capture thread uses new name
