@@ -7,3 +7,6 @@
 !src/gui/**
 !src/*.toml
 !src/*.png
+!.github
+!.github/ISSUE_TEMPLATE/
+!.github/ISSUE_TEMPLATE/*.yml
