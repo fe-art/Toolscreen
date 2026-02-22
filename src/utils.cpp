@@ -634,6 +634,8 @@ void LogCategory(const char* category, const std::string& message) {
         enabled = g_config.debug.logInit;
     else if (strcmp(category, "cursor_textures") == 0)
         enabled = g_config.debug.logCursorTextures;
+    else if (strcmp(category, "hookchain") == 0)
+        enabled = true; // Always log hookchain messages
 
     if (!enabled) return;
     Log(message); // Use standard Log for actual output
