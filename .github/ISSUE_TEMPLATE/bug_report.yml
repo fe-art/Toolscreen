@@ -1,0 +1,108 @@
+name: Bug Report
+description: Report a bug or unexpected behavior in Toolscreen
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to fill out this bug report. Please provide as much detail as possible.
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      description: What version of Windows are you running?
+      options:
+        - Windows 11
+        - Windows 10
+    validations:
+      required: true
+
+  - type: input
+    id: toolscreen-version
+    attributes:
+      label: Toolscreen version
+      placeholder: "e.g. 1.2.3"
+    validations:
+      required: true
+
+  - type: input
+    id: minecraft-version
+    attributes:
+      label: Minecraft version
+      placeholder: "e.g. 1.21.4"
+    validations:
+      required: true
+
+  - type: input
+    id: launcher
+    attributes:
+      label: Launcher + version
+      placeholder: "e.g. MultiMC 0.7.0, Prism 8.0, Vanilla, MCSR Launcher 1.16 etc."
+    validations:
+      required: true
+
+  - type: input
+    id: java-version
+    attributes:
+      label: Java version
+      description: Run `java -version` in a terminal and paste the output.
+      placeholder: "e.g. openjdk 21.0.3"
+    validations:
+      required: true
+
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU
+      placeholder: "e.g. NVIDIA RTX 3060, AMD RX 6700 XT, Intel UHD 770"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: display-mode
+    attributes:
+      label: Display mode
+      options:
+        - Fullscreen
+        - Windowed
+        - Borderless
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: Steps to reproduce, what you expected, and what actually happened.
+      placeholder: |
+        1. Open Minecraft with Toolscreen injected
+        2. ...
+        3. Expected: ...
+        4. Actual: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: launcher-log
+    attributes:
+      label: Full launcher log
+      description: |
+        Go to **Edit Instance > Minecraft Log** in your launcher (not `latest.log`). Paste the full log here.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional information (optional)
+      description: |
+        Any of the following that apply:
+        - Other mods installed
+        - `injector.log` contents
+        - Screenshot or video link
+        - Your config.toml (Advanced tab > Misc > Open Config Folder, then copy the value of config.toml)
+      render: text
+    validations:
+      required: false
