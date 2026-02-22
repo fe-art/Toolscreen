@@ -27,6 +27,7 @@
     }
 
     SliderCtrlClickTip();
+    ImGui::Text("Current default mode: %s", g_config.defaultMode.c_str());
 
     // --- DEFAULT MODES SECTION ---
     ImGui::SeparatorText("Default Modes");
@@ -83,6 +84,11 @@
                     g_pendingModeSwitch.modeId = mode.id;
                     g_pendingModeSwitch.source = "GUI mode list";
                     Log("[GUI] Deferred mode switch to: " + mode.id);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Set as default##Fullscreen")) {
+                    g_config.defaultMode = mode.id;
+                    g_configIsDirty = true;
                 }
                 // Force stretch mode for fullscreen
                 mode.stretch.enabled = true;
@@ -343,6 +349,11 @@
                     g_pendingModeSwitch.modeId = mode.id;
                     g_pendingModeSwitch.source = "GUI EyeZoom mode";
                     Log("[GUI] Deferred mode switch to: " + mode.id);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Set as default##EyeZoom")) {
+                    g_config.defaultMode = mode.id;
+                    g_configIsDirty = true;
                 }
 
                 if (!resolutionSupported) { ImGui::EndDisabled(); }
@@ -958,6 +969,11 @@
                     g_pendingModeSwitch.modeId = mode.id;
                     g_pendingModeSwitch.source = "GUI Preemptive mode";
                 }
+                ImGui::SameLine();
+                if (ImGui::Button("Set as default##Preemptive")) {
+                    g_config.defaultMode = mode.id;
+                    g_configIsDirty = true;
+                }
 
                 if (!resolutionSupported) { ImGui::EndDisabled(); }
 
@@ -1361,6 +1377,11 @@
                     g_pendingModeSwitch.modeId = mode.id;
                     g_pendingModeSwitch.source = "GUI Thin mode";
                 }
+                ImGui::SameLine();
+                if (ImGui::Button("Set as default##Thin")) {
+                    g_config.defaultMode = mode.id;
+                    g_configIsDirty = true;
+                }
 
                 if (!resolutionSupported) { ImGui::EndDisabled(); }
 
@@ -1730,6 +1751,11 @@
                     g_pendingModeSwitch.pending = true;
                     g_pendingModeSwitch.modeId = mode.id;
                     g_pendingModeSwitch.source = "GUI Wide mode";
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Set as default##Wide")) {
+                    g_config.defaultMode = mode.id;
+                    g_configIsDirty = true;
                 }
 
                 if (!resolutionSupported) { ImGui::EndDisabled(); }
@@ -2167,6 +2193,11 @@
                     g_pendingModeSwitch.modeId = mode.id;
                     g_pendingModeSwitch.source = "GUI mode detail";
                     Log("[GUI] Deferred mode switch to: " + mode.id);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Set as default")) {
+                    g_config.defaultMode = mode.id;
+                    g_configIsDirty = true;
                 }
 
                 // --- TRANSITION SETTINGS ---
@@ -2696,14 +2727,19 @@
                 currentMode = g_currentModeId;
             }
             if (EqualsIgnoreCase(currentMode, modeToDelete.id)) {
-                // Queue an instant switch to Fullscreen (deferred to avoid deadlock)
+                // Switch to default mode, unless the default mode is the one being deleted
+                std::string fallbackMode = (EqualsIgnoreCase(g_config.defaultMode, modeToDelete.id) || g_config.defaultMode.empty())
+                                               ? "Fullscreen" : g_config.defaultMode;
                 std::lock_guard<std::mutex> pendingLock(g_pendingModeSwitchMutex);
                 g_pendingModeSwitch.pending = true;
-                g_pendingModeSwitch.modeId = "Fullscreen";
+                g_pendingModeSwitch.modeId = fallbackMode;
                 g_pendingModeSwitch.source = "Mode deleted";
                 g_pendingModeSwitch.isPreview = false;
                 g_pendingModeSwitch.forceInstant = true;
-                Log("[GUI] Mode '" + modeToDelete.id + "' was active and is being deleted - switching to Fullscreen");
+                Log("[GUI] Mode '" + modeToDelete.id + "' was active and is being deleted - switching to " + fallbackMode);
+            }
+            if (EqualsIgnoreCase(g_config.defaultMode, modeToDelete.id)) {
+                g_config.defaultMode = "Fullscreen";
             }
             g_config.modes.erase(g_config.modes.begin() + mode_to_remove);
             g_configIsDirty = true;

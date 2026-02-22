@@ -1029,11 +1029,11 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                     std::string current = g_modeIdBuffers[g_currentModeIdIndex.load(std::memory_order_acquire)];
                     std::string targetMode;
 
-                    if (EqualsIgnoreCase(current, currentSecMode)) {
-                        targetMode = "Fullscreen";
-                    } else {
-                        targetMode = currentSecMode;
-                    }
+                if (EqualsIgnoreCase(current, currentSecMode)) {
+                    targetMode = cfg.defaultMode;
+                } else {
+                    targetMode = currentSecMode;
+                }
 
                     if (s_enableHotkeyDebug) {
                         Log("[Hotkey] ✓✓✓ MAIN HOTKEY TRIGGERED: " + hotkeyId + " (current: " + current + " -> target: " + targetMode + ")");

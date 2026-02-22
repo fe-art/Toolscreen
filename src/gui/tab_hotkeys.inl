@@ -183,18 +183,18 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                         g_configIsDirty = true;
                     }
                     for (const auto& mode : g_config.modes) {
-                        // Don't allow selecting Fullscreen as target (it's the implicit toggle-back mode)
-                        bool is_fullscreen = EqualsIgnoreCase(mode.id, "Fullscreen");
-                        if (is_fullscreen) { ImGui::BeginDisabled(); }
-                        if (ImGui::Selectable(mode.id.c_str(), false, is_fullscreen ? ImGuiSelectableFlags_Disabled : 0)) {
+                        // Don't allow selecting the default mode as target (it's the implicit toggle-back mode)
+                        bool is_default_mode = EqualsIgnoreCase(mode.id, g_config.defaultMode);
+                        if (is_default_mode) { ImGui::BeginDisabled(); }
+                        if (ImGui::Selectable(mode.id.c_str(), false, is_default_mode ? ImGuiSelectableFlags_Disabled : 0)) {
                             hotkey.secondaryMode = mode.id;
                             SetHotkeySecondaryMode(i, mode.id); // Update runtime state immediately
                             g_configIsDirty = true;
                         }
-                        if (is_fullscreen) {
+                        if (is_default_mode) {
                             ImGui::EndDisabled();
                             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-                                ImGui::SetTooltip("Fullscreen is the implicit toggle-back mode");
+                                ImGui::SetTooltip("Your default mode (%s) is the implicit toggle-back mode", g_config.defaultMode.c_str());
                             }
                         }
                     }
@@ -202,7 +202,7 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                 }
                 ImGui::SameLine();
                 ImGui::TextDisabled("(?)");
-                if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Pressing this hotkey toggles between Fullscreen and this mode"); }
+                if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Pressing this hotkey toggles between your default mode (%s) and this mode", g_config.defaultMode.c_str()); }
 
                 ImGui::SeparatorText("Alternative Secondary Modes");
                 int alt_to_remove = -1;
@@ -233,17 +233,17 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                             g_configIsDirty = true;
                         }
                         for (const auto& mode : g_config.modes) {
-                            // Don't allow selecting Fullscreen as target
-                            bool is_fullscreen = EqualsIgnoreCase(mode.id, "Fullscreen");
-                            if (is_fullscreen) { ImGui::BeginDisabled(); }
-                            if (ImGui::Selectable(mode.id.c_str(), false, is_fullscreen ? ImGuiSelectableFlags_Disabled : 0)) {
+                            // Don't allow selecting the default mode as target
+                            bool is_default_mode = EqualsIgnoreCase(mode.id, g_config.defaultMode);
+                            if (is_default_mode) { ImGui::BeginDisabled(); }
+                            if (ImGui::Selectable(mode.id.c_str(), false, is_default_mode ? ImGuiSelectableFlags_Disabled : 0)) {
                                 alt.mode = mode.id;
                                 g_configIsDirty = true;
                             }
-                            if (is_fullscreen) {
+                            if (is_default_mode) {
                                 ImGui::EndDisabled();
                                 if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-                                    ImGui::SetTooltip("Fullscreen is the implicit toggle-back mode");
+                                    ImGui::SetTooltip("Your default mode (%s) is the implicit toggle-back mode", g_config.defaultMode.c_str());
                                 }
                             }
                         }
@@ -279,13 +279,13 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                                      "The hotkey will still trigger normally.");
                 }
 
-                if (ImGui::Checkbox("Allow exit to Fullscreen regardless of game state",
+                if (ImGui::Checkbox("Allow exit to default mode regardless of game state",
                                    &hotkey.allowExitToFullscreenRegardlessOfGameState)) {
                     g_configIsDirty = true;
                 }
                 if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("When enabled, toggling BACK to Fullscreen is allowed even if required game states are not met.\n"
-                                     "Toggling INTO the target mode still requires the configured game state.");
+                    ImGui::SetTooltip("When enabled, toggling BACK to your default mode (%s) is allowed even if required game states are not met.\n"
+                                     "Toggling INTO the target mode still requires the configured game state.", g_config.defaultMode.c_str());
                 }
 
                 if (ImGui::TreeNode("Required Game States")) {

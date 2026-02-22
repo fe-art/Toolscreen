@@ -95,11 +95,18 @@ if (ImGui::BeginTabItem("General")) {
         RebuildHotkeyMainKeys_Internal();
         g_configIsDirty = true;
 
-        // If currently on this mode, switch to Fullscreen
+        // If this was the default mode, reset default to Fullscreen
+        if (EqualsIgnoreCase(g_config.defaultMode, modeId)) {
+            g_config.defaultMode = "Fullscreen";
+        }
+
+        // If currently on this mode, switch to default mode (or Fullscreen if the default was the one removed)
         if (EqualsIgnoreCase(g_currentModeId, modeId)) {
+            std::string fallbackMode = (EqualsIgnoreCase(g_config.defaultMode, modeId) || g_config.defaultMode.empty())
+                                           ? "Fullscreen" : g_config.defaultMode;
             std::lock_guard<std::mutex> pendingLock(g_pendingModeSwitchMutex);
             g_pendingModeSwitch.pending = true;
-            g_pendingModeSwitch.modeId = "Fullscreen";
+            g_pendingModeSwitch.modeId = fallbackMode;
             g_pendingModeSwitch.source = "Basic mode disabled";
             g_pendingModeSwitch.forceInstant = true;
         }
@@ -174,7 +181,8 @@ if (ImGui::BeginTabItem("General")) {
     };
 
     auto RenderModeTableRow = [&](const std::string& modeId, const char* label, const char* hotkeyLabel, int defaultWidth,
-                                  int defaultHeight, int maxWidth, int maxHeight, EyeZoomInlineKind eyezoomInline = EyeZoomInlineKind::None) {
+                                  int defaultHeight, int maxWidth, int maxHeight,
+                                  EyeZoomInlineKind eyezoomInline = EyeZoomInlineKind::None, bool readOnlyDimensions = false) {
         ModeConfig* modeConfig = GetModeConfig(modeId);
 
         // Ensure hotkey config exists for this mode
@@ -185,6 +193,9 @@ if (ImGui::BeginTabItem("General")) {
         // Column 1: Mode name
         ImGui::TableNextColumn();
         ImGui::Text("%s", label);
+
+        // Columns 2 & 3: Width / Height spinners (optionally read-only)
+        if (readOnlyDimensions) { ImGui::BeginDisabled(); }
 
         // Column 2: Width spinner
         ImGui::TableNextColumn();
@@ -212,6 +223,8 @@ if (ImGui::BeginTabItem("General")) {
             }
             ImGui::PopID();
         }
+
+        if (readOnlyDimensions) { ImGui::EndDisabled(); }
 
         // Column 4: Hotkey binding
         ImGui::TableNextColumn();
@@ -280,6 +293,10 @@ if (ImGui::BeginTabItem("General")) {
         // Get monitor bounds for limits
         int monitorWidth = GetCachedScreenWidth();
         int monitorHeight = GetCachedScreenHeight();
+
+        // Fullscreen row (read-only dimensions — always uses monitor resolution)
+        RenderModeTableRow("Fullscreen", "Fullscreen", "fullscreen_hotkey", monitorWidth, monitorHeight, monitorWidth, monitorHeight,
+                           EyeZoomInlineKind::None, true);
 
         // Thin row (limited to monitor bounds)
         RenderModeTableRow("Thin", "Thin", "thin_hotkey", 400, monitorHeight, monitorWidth, monitorHeight, EyeZoomInlineKind::None);

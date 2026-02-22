@@ -527,13 +527,13 @@ static void RenderTransitionSettingsHorizontal(ModeConfig& mode, const std::stri
         std::lock_guard<std::mutex> pendingLock(g_pendingModeSwitchMutex);
         g_pendingModeSwitch.pending = true;
         g_pendingModeSwitch.isPreview = true;
-        g_pendingModeSwitch.previewFromModeId = "Fullscreen";
+        g_pendingModeSwitch.previewFromModeId = g_config.defaultMode;
         g_pendingModeSwitch.modeId = mode.id;
         g_pendingModeSwitch.source = "Preview button";
-        Log("[GUI] Queued transition preview: Fullscreen -> " + mode.id);
+        Log("[GUI] Queued transition preview: " + g_config.defaultMode + " -> " + mode.id);
     }
     ImGui::SameLine();
-    HelpMarker("Preview the transition by switching from Fullscreen to this mode.");
+    HelpMarker(("Preview the transition by switching from your default mode (" + g_config.defaultMode + ") to this mode.").c_str());
 }
 
 std::string GameTransitionTypeToString(GameTransitionType type) {
@@ -1866,8 +1866,6 @@ void LoadConfig() {
         ConfigFromToml(tbl, g_config);
         Log("Loaded config from TOML file.");
 
-        // Always enforce "Fullscreen" as the default mode, regardless of what's in the config file
-        g_config.defaultMode = "Fullscreen";
 
         int screenWidth = GetCachedScreenWidth();
         int screenHeight = GetCachedScreenHeight();
