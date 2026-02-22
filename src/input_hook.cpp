@@ -97,6 +97,30 @@ static DWORD NormalizeModifierVkFromKeyMessage(DWORD rawVk, LPARAM lParam) {
     return vk;
 }
 
+// Some older configs (or manual edits) may still use the generic modifier VKs.
+// For output generation we want deterministic left/right variants so scan codes
+// are correct and games that distinguish L/R modifiers behave consistently.
+static DWORD NormalizeModifierVkFromConfig(DWORD vk, UINT scanCodeWithFlags = 0) {
+    // If a scan override is provided, use it to resolve L/R where possible.
+    const UINT scanLow = scanCodeWithFlags & 0xFF;
+    const bool isExtended = (scanCodeWithFlags & 0xFF00) != 0;
+
+    switch (vk) {
+    case VK_SHIFT:
+        // Left Shift scan=0x2A, Right Shift scan=0x36
+        if (scanLow == 0x36) return VK_RSHIFT;
+        return VK_LSHIFT;
+    case VK_CONTROL:
+        // Right Ctrl uses E0 prefix.
+        return isExtended ? VK_RCONTROL : VK_LCONTROL;
+    case VK_MENU:
+        // Right Alt (AltGr) uses E0 prefix.
+        return isExtended ? VK_RMENU : VK_LMENU;
+    default:
+        return vk;
+    }
+}
+
 InputHandlerResult HandleMouseMoveViewportOffset(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM& lParam) {
     PROFILE_SCOPE("HandleMouseMoveViewportOffset");
 
@@ -1345,20 +1369,24 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
         const auto& rebind = rebindCfg->keyRebinds.rebinds[i];
 
         if (rebind.enabled && rebind.fromKey != 0 && rebind.toKey != 0 && matchesFromKey(vkCode, rawVkCode, rebind.fromKey)) {
-            DWORD outputVK;
-            UINT outputScanCode;
+            // Base output (affects the game keybind / key message VK+scan)
+            const DWORD triggerVK =
+                NormalizeModifierVkFromConfig(rebind.toKey, (rebind.useCustomOutput ? rebind.customOutputScanCode : 0));
 
-            if (rebind.useCustomOutput) {
-                outputVK = (rebind.customOutputVK != 0) ? rebind.customOutputVK : rebind.toKey;
-                outputScanCode = ResolveOutputScanCode(outputVK, rebind.customOutputScanCode);
-            } else {
-                outputVK = rebind.toKey;
-                outputScanCode = GetScanCodeWithExtendedFlag(rebind.toKey);
+            // Optional: override which VK is used for text/WM_CHAR behavior.
+            // When set, this does NOT change the trigger VK/scan (unless a custom scan code is also set).
+            const DWORD textVK = NormalizeModifierVkFromConfig(
+                (rebind.useCustomOutput && rebind.customOutputVK != 0) ? rebind.customOutputVK : triggerVK);
+
+            // Trigger scan code: derive from base VK unless explicitly overridden.
+            UINT outputScanCode = GetScanCodeWithExtendedFlag(triggerVK);
+            if (rebind.useCustomOutput && rebind.customOutputScanCode != 0) {
+                outputScanCode = ResolveOutputScanCode(triggerVK, rebind.customOutputScanCode);
             }
 
             // For mouse button output, synthesize the appropriate mouse message
-            if (outputVK == VK_LBUTTON || outputVK == VK_RBUTTON || outputVK == VK_MBUTTON || outputVK == VK_XBUTTON1 ||
-                outputVK == VK_XBUTTON2) {
+            if (triggerVK == VK_LBUTTON || triggerVK == VK_RBUTTON || triggerVK == VK_MBUTTON || triggerVK == VK_XBUTTON1 ||
+                triggerVK == VK_XBUTTON2) {
                 UINT newMsg = 0;
                 auto buildMouseKeyState = [&](DWORD buttonVk, bool buttonDown) -> WORD {
                     WORD mk = 0;
@@ -1389,19 +1417,19 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
                     }
                 }
 
-                WORD mkState = buildMouseKeyState(outputVK, isKeyDown);
+                WORD mkState = buildMouseKeyState(triggerVK, isKeyDown);
                 WPARAM newWParam = mkState;
 
-                if (outputVK == VK_LBUTTON) {
+                if (triggerVK == VK_LBUTTON) {
                     newMsg = isKeyDown ? WM_LBUTTONDOWN : WM_LBUTTONUP;
-                } else if (outputVK == VK_RBUTTON) {
+                } else if (triggerVK == VK_RBUTTON) {
                     newMsg = isKeyDown ? WM_RBUTTONDOWN : WM_RBUTTONUP;
-                } else if (outputVK == VK_MBUTTON) {
+                } else if (triggerVK == VK_MBUTTON) {
                     newMsg = isKeyDown ? WM_MBUTTONDOWN : WM_MBUTTONUP;
-                } else if (outputVK == VK_XBUTTON1) {
+                } else if (triggerVK == VK_XBUTTON1) {
                     newMsg = isKeyDown ? WM_XBUTTONDOWN : WM_XBUTTONUP;
                     newWParam = MAKEWPARAM(mkState, XBUTTON1);
-                } else if (outputVK == VK_XBUTTON2) {
+                } else if (triggerVK == VK_XBUTTON2) {
                     newMsg = isKeyDown ? WM_XBUTTONDOWN : WM_XBUTTONUP;
                     newWParam = MAKEWPARAM(mkState, XBUTTON2);
                 }
@@ -1411,7 +1439,19 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
 
             // For keyboard output from keyboard/mouse input
             const bool isSystemKeyMsg = (uMsg == WM_SYSKEYDOWN || uMsg == WM_SYSKEYUP);
-            UINT outputMsg = isKeyDown ? (isSystemKeyMsg ? WM_SYSKEYDOWN : WM_KEYDOWN) : (isSystemKeyMsg ? WM_SYSKEYUP : WM_KEYUP);
+            const bool outputIsAlt = (triggerVK == VK_MENU || triggerVK == VK_LMENU || triggerVK == VK_RMENU);
+            const bool useSysKey = isSystemKeyMsg || outputIsAlt;
+            UINT outputMsg = isKeyDown ? (useSysKey ? WM_SYSKEYDOWN : WM_KEYDOWN) : (useSysKey ? WM_SYSKEYUP : WM_KEYUP);
+
+            // Windows typically sends generic modifier VKs in wParam (VK_SHIFT/VK_CONTROL/VK_MENU)
+            // and uses scan code + extended-bit in lParam to distinguish left/right.
+            // Many games/toolkits expect that behavior.
+            const DWORD msgVk = [&]() -> DWORD {
+                if (triggerVK == VK_LSHIFT || triggerVK == VK_RSHIFT) return VK_SHIFT;
+                if (triggerVK == VK_LCONTROL || triggerVK == VK_RCONTROL) return VK_CONTROL;
+                if (triggerVK == VK_LMENU || triggerVK == VK_RMENU) return VK_MENU;
+                return triggerVK;
+            }();
 
             UINT repeatCount = 1;
             bool previousState = !isKeyDown;
@@ -1428,30 +1468,34 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
             LPARAM newLParam =
                 BuildKeyboardMessageLParam(outputScanCode, isKeyDown, isSystemKeyMsg, repeatCount, previousState, transitionState);
 
-            if (isMouseButton) {
-                PostMessage(hWnd, outputMsg, static_cast<WPARAM>(outputVK), newLParam);
-                return { true, 0 };
-            }
-
-            LRESULT keyResult = CallWindowProc(g_originalWndProc, hWnd, outputMsg, outputVK, newLParam);
+            // IMPORTANT:
+            // Do NOT PostMessage keyboard outputs when the source event is a mouse button.
+            // Posted keyboard messages will flow back through our subclassed WndProc and can cause
+            // rebind chaining (the output of one rebind triggering another rebind).
+            // Instead, call the original WndProc directly (same as the keyboard->keyboard path).
+            LRESULT keyResult = CallWindowProc(g_originalWndProc, hWnd, outputMsg, msgVk, newLParam);
 
             auto isModifierVk = [](DWORD vk) {
                 return vk == VK_CONTROL || vk == VK_LCONTROL || vk == VK_RCONTROL || vk == VK_SHIFT || vk == VK_LSHIFT || vk == VK_RSHIFT ||
                        vk == VK_MENU || vk == VK_LMENU || vk == VK_RMENU;
             };
 
-            const bool fromKeyIsNonChar = isModifierVk(rebind.fromKey) || rebind.fromKey == VK_LWIN || rebind.fromKey == VK_RWIN ||
-                                          (rebind.fromKey >= VK_F1 && rebind.fromKey <= VK_F24);
+            const bool fromKeyIsNonChar =
+                // Mouse inputs never produce WM_CHAR via TranslateMessage, so if the output is a character key
+                // we need to synthesize WM_CHAR ourselves.
+                isMouseButton ||
+                isModifierVk(rebind.fromKey) || rebind.fromKey == VK_LWIN || rebind.fromKey == VK_RWIN ||
+                (rebind.fromKey >= VK_F1 && rebind.fromKey <= VK_F24);
 
             if (isKeyDown && fromKeyIsNonChar) {
                 WCHAR outChar = 0;
 
                 // Some control keys should always generate WM_CHAR for expected text/edit behavior.
-                if (outputVK == VK_RETURN) {
+                if (textVK == VK_RETURN) {
                     outChar = L'\r';
-                } else if (outputVK == VK_TAB) {
+                } else if (textVK == VK_TAB) {
                     outChar = L'\t';
-                } else if (outputVK == VK_BACK) {
+                } else if (textVK == VK_BACK) {
                     outChar = L'\b';
                 } else {
                     BYTE ks[256] = {};
@@ -1472,7 +1516,7 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
                             ks[VK_RMENU] = 0;
                         }
 
-                        (void)TryTranslateVkToCharWithKeyboardState(outputVK, ks, outChar);
+                        (void)TryTranslateVkToCharWithKeyboardState(textVK, ks, outChar);
                     }
                 }
 
@@ -1516,7 +1560,8 @@ InputHandlerResult HandleCharRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
         }
 
         if (matched) {
-            DWORD outputVK = rebind.useCustomOutput ? rebind.customOutputVK : rebind.toKey;
+            DWORD outputVK = (rebind.useCustomOutput && rebind.customOutputVK != 0) ? rebind.customOutputVK : rebind.toKey;
+            outputVK = NormalizeModifierVkFromConfig(outputVK);
 
             WCHAR outputChar = 0;
             if (!TryTranslateVkToChar(outputVK, matchedShifted, outputChar) || outputChar == 0) {
