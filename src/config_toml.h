@@ -1,7 +1,11 @@
 #pragma once
 
 
+#ifdef CMAKE_BUILD
+#include <toml++/toml.hpp>
+#else
 #include "toml.hpp"
+#endif
 #include <string>
 
 #include "gui.h"

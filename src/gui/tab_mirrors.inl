@@ -1,13 +1,25 @@
 if (ImGui::BeginTabItem("Mirrors")) {
     g_currentlyEditingMirror = "";
-    g_imageDragMode.store(false);
-    g_windowOverlayDragMode.store(false);
+    wantMirrorDrag = true;
 
     SliderCtrlClickTip();
 
     static std::string selectedMirrorName = "";
 
     static std::string selectedGroupName = "";
+
+    // Sync GUI selection from render-thread selection (when user clicks a mirror in the viewport)
+    if (!g_selectedMirrorName.empty() && g_selectedMirrorName != selectedMirrorName) {
+        selectedMirrorName = g_selectedMirrorName;
+    }
+
+    // Handle scroll-to request from floating info panel "Edit" button
+    static std::string scrollToThisFrame = "";
+    if (!g_scrollToMirrorName.empty()) {
+        scrollToThisFrame = g_scrollToMirrorName;
+        selectedMirrorName = scrollToThisFrame;
+        g_scrollToMirrorName = "";
+    }
 
     int mirror_to_remove = -1;
     for (size_t i = 0; i < g_config.mirrors.size(); ++i) {
@@ -44,8 +56,19 @@ if (ImGui::BeginTabItem("Mirrors")) {
 
         std::string oldMirrorName = mirror.name;
 
+        // If this mirror was requested via scroll-to, force it open
+        if (scrollToThisFrame == mirror.name) {
+            ImGui::SetNextItemOpen(true, ImGuiCond_Always);
+        }
+
         bool node_open = ImGui::TreeNodeEx("##mirror_node", node_flags, "%s", mirror.name.c_str());
         if (ImGui::IsItemClicked(0)) { selectedMirrorName = mirror.name; }
+
+        // Scroll to this mirror if requested
+        if (scrollToThisFrame == mirror.name) {
+            ImGui::SetScrollHereY(0.0f);
+            scrollToThisFrame = "";
+        }
 
         if (node_open) {
             ImGui::Text("Name");

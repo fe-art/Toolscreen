@@ -1,5 +1,9 @@
 #include "version.h"
+#ifdef CMAKE_BUILD
+#include <nlohmann/json.hpp>
+#else
 #include "json.hpp"
+#endif
 #include "utils.h"
 #include <filesystem>
 #include <fstream>

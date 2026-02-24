@@ -11,6 +11,7 @@
 #include "window_overlay.h"
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <iostream>
 #include <shared_mutex>
@@ -145,6 +146,55 @@ bool s_isWindowOverlayDragging = false;
 POINT s_windowOverlayDragStart = { 0, 0 };
 int s_initialX = 0, s_initialY = 0;
 
+// Window overlay selection & corner resize state
+static std::string s_selectedWindowOverlayName = "";
+static bool s_windowOverlayDragDidMove = false;
+static bool s_isWindowOverlayCornerResizing = false;
+static int s_windowOverlayResizeCorner = -1;       // 0=TL, 1=TR, 2=BL, 3=BR
+static float s_windowOverlayResizeInitialScale = 1.0f;
+static float s_windowOverlayResizeInitialDiag = 0.0f;
+static POINT s_windowOverlayResizeAnchorScreen = { 0, 0 };
+static bool s_windowOverlayPrevLeftButton = false;
+// Crop mode: initial crop values when starting a crop resize
+static int s_windowOverlayCropInitialTop = 0;
+static int s_windowOverlayCropInitialBottom = 0;
+static int s_windowOverlayCropInitialLeft = 0;
+static int s_windowOverlayCropInitialRight = 0;
+static POINT s_windowOverlayCropStartMouse = { 0, 0 };
+static float s_windowOverlayCropScale = 1.0f;
+static int s_windowOverlayCropTexWidth = 0;   // texture dimensions for clamping
+static int s_windowOverlayCropTexHeight = 0;
+
+// Mirror drag state
+std::string s_hoveredMirrorName = "";
+std::string s_draggedMirrorName = "";
+bool s_isMirrorDragging = false;
+POINT s_mirrorLastMousePos = { 0, 0 };
+
+// Mirror selection & corner resize state
+static std::string s_selectedMirrorName = "";
+static bool s_mirrorDragDidMove = false;
+static bool s_isCornerResizing = false;
+static int s_resizeCorner = -1;           // 0=TL, 1=TR, 2=BL, 3=BR
+static float s_resizeInitialScale = 1.0f;
+static float s_resizeInitialScaleX = 1.0f;
+static float s_resizeInitialScaleY = 1.0f;
+static float s_resizeInitialDiag = 0.0f;
+static POINT s_resizeAnchorScreen = { 0, 0 };
+static bool s_prevLeftButton = false;
+
+// Capture zone resize/drag state
+static bool s_isCaptureZoneResizing = false;
+static int s_captureZoneResizeCorner = -1;       // 0=TL, 1=TR, 2=BL, 3=BR
+static int s_captureZoneResizeInitialW = 0;
+static int s_captureZoneResizeInitialH = 0;
+static float s_captureZoneResizeInitialDiag = 0.0f;
+static POINT s_captureZoneResizeAnchorScreen = { 0, 0 };
+static bool s_isCaptureZoneDragging = false;
+static int s_draggedCaptureZoneIndex = -1;
+static POINT s_captureZoneLastMousePos = { 0, 0 };
+
+// EyeZoom text rendering cache
 struct EyeZoomTextLabel {
     int number;
     float centerX;
@@ -374,10 +424,12 @@ static void CalculateWindowOverlayDimensionsUnsafe(const WindowOverlayConfig& ov
     if (it != g_windowOverlayCache.end() && it->second) {
         int texWidth = it->second->glTextureWidth;
         int texHeight = it->second->glTextureHeight;
-        int croppedWidth = texWidth - overlay.crop_left - overlay.crop_right;
-        int croppedHeight = texHeight - overlay.crop_top - overlay.crop_bottom;
-        outW = static_cast<int>(croppedWidth * overlay.scale);
-        outH = static_cast<int>(croppedHeight * overlay.scale);
+        // Apply cropping to get the visible dimensions (ensure at least 1px visible)
+        int croppedWidth = (std::max)(1, texWidth - overlay.crop_left - overlay.crop_right);
+        int croppedHeight = (std::max)(1, texHeight - overlay.crop_top - overlay.crop_bottom);
+        // Apply scale
+        outW = (std::max)(1, static_cast<int>(croppedWidth * overlay.scale));
+        outH = (std::max)(1, static_cast<int>(croppedHeight * overlay.scale));
     } else {
         outW = static_cast<int>(100 * overlay.scale);
         outH = static_cast<int>(100 * overlay.scale);
@@ -1299,7 +1351,7 @@ void InitializeGPUResources() {
     glGenBuffers(1, &g_debugVBO);
     glBindVertexArray(g_debugVAO);
     glBindBuffer(GL_ARRAY_BUFFER, g_debugVBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(float) * 4 * 2, nullptr, GL_DYNAMIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(float) * 2 * 48, nullptr, GL_DYNAMIC_DRAW);  // 48 verts × 2 floats (corner handles)
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
 
@@ -2661,31 +2713,185 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
                         // If we couldn't get both locks, hover detection is skipped this frame
                     }
 
-                    if (leftButtonDown && !s_isWindowOverlayDragging && !hoveredOverlay.empty()) {
-                        s_isWindowOverlayDragging = true;
-                        s_draggedWindowOverlayName = hoveredOverlay;
-                        s_lastMousePos = mousePos;
+                    // --- Corner hit-test helper (lambda) ---
+                    // Returns 0=TL, 1=TR, 2=BL, 3=BR, or -1 if no corner hit
+                    auto hitTestWindowOverlayCorners = [&](const std::string& overlayName, POINT mp, int handleRadius) -> int {
+                        std::unique_lock<std::mutex> lock(g_windowOverlayCacheMutex, std::try_to_lock);
+                        if (!lock.owns_lock()) return -1;
+                        // Find the overlay config to compute screen position
+                        const WindowOverlayConfig* confPtr = configSnap ? FindWindowOverlayConfigIn(overlayName, *configSnap) : nullptr;
+                        if (!confPtr) return -1;
+                        int dw, dh;
+                        CalculateWindowOverlayDimensionsUnsafe(*confPtr, dw, dh);
+                        int sx, sy;
+                        GetRelativeCoordsForImageWithViewport(confPtr->relativeTo, confPtr->x, confPtr->y, dw, dh,
+                                                              currentGeo.finalX, currentGeo.finalY, currentGeo.finalW,
+                                                              currentGeo.finalH, fullW, fullH, sx, sy);
+                        POINT corners[4] = {
+                            { sx, sy },           // TL
+                            { sx + dw, sy },      // TR
+                            { sx, sy + dh },      // BL
+                            { sx + dw, sy + dh }  // BR
+                        };
+                        for (int c = 0; c < 4; c++) {
+                            int dx = mp.x - corners[c].x;
+                            int dy = mp.y - corners[c].y;
+                            if (dx * dx + dy * dy <= handleRadius * handleRadius) return c;
+                        }
+                        return -1;
+                    };
 
-                        // Read initial position from snapshot for thread safety
-                        if (configSnap) {
-                            for (const auto& overlay : configSnap->windowOverlays) {
-                                if (overlay.name == s_draggedWindowOverlayName) {
-                                    s_initialX = overlay.x;
-                                    s_initialY = overlay.y;
+                    // Reset drag-moved flag on button press rising edge
+                    if (leftButtonDown && !s_windowOverlayPrevLeftButton) {
+                        s_windowOverlayDragDidMove = false;
+                    }
+
+                    // --- A) Corner resize start ---
+                    if (leftButtonDown && !s_isWindowOverlayDragging && !s_isWindowOverlayCornerResizing && !s_selectedWindowOverlayName.empty()) {
+                        int corner = hitTestWindowOverlayCorners(s_selectedWindowOverlayName, mousePos, 16);
+                        if (corner >= 0) {
+                            if (!g_windowOverlayCropMode) {
+                                // Scale mode
+                                s_isWindowOverlayCornerResizing = true;
+                                s_windowOverlayResizeCorner = corner;
+                                for (const auto& overlay : g_config.windowOverlays) {
+                                    if (overlay.name == s_selectedWindowOverlayName) {
+                                        s_windowOverlayResizeInitialScale = overlay.scale;
+                                        break;
+                                    }
+                                }
+                                // Anchor = opposite corner screen position
+                                {
+                                    std::unique_lock<std::mutex> lock(g_windowOverlayCacheMutex, std::try_to_lock);
+                                    if (lock.owns_lock()) {
+                                        const WindowOverlayConfig* confPtr = configSnap ? FindWindowOverlayConfigIn(s_selectedWindowOverlayName, *configSnap) : nullptr;
+                                        if (confPtr) {
+                                            int dw, dh;
+                                            CalculateWindowOverlayDimensionsUnsafe(*confPtr, dw, dh);
+                                            int sx, sy;
+                                            GetRelativeCoordsForImageWithViewport(confPtr->relativeTo, confPtr->x, confPtr->y, dw, dh,
+                                                                                  currentGeo.finalX, currentGeo.finalY, currentGeo.finalW,
+                                                                                  currentGeo.finalH, fullW, fullH, sx, sy);
+                                            POINT anchors[4] = {
+                                                { sx + dw, sy + dh }, // opposite of TL
+                                                { sx, sy + dh },      // opposite of TR
+                                                { sx + dw, sy },      // opposite of BL
+                                                { sx, sy }            // opposite of BR
+                                            };
+                                            s_windowOverlayResizeAnchorScreen = anchors[corner];
+                                        }
+                                    }
+                                }
+                                int adx = mousePos.x - s_windowOverlayResizeAnchorScreen.x;
+                                int ady = mousePos.y - s_windowOverlayResizeAnchorScreen.y;
+                                s_windowOverlayResizeInitialDiag = sqrtf((float)(adx * adx + ady * ady));
+                                if (s_windowOverlayResizeInitialDiag < 1.0f) s_windowOverlayResizeInitialDiag = 1.0f;
+                            } else {
+                                // Crop mode
+                                s_isWindowOverlayCornerResizing = true;
+                                s_windowOverlayResizeCorner = corner;
+                                s_windowOverlayCropStartMouse = mousePos;
+                                for (const auto& overlay : g_config.windowOverlays) {
+                                    if (overlay.name == s_selectedWindowOverlayName) {
+                                        s_windowOverlayCropInitialTop = overlay.crop_top;
+                                        s_windowOverlayCropInitialBottom = overlay.crop_bottom;
+                                        s_windowOverlayCropInitialLeft = overlay.crop_left;
+                                        s_windowOverlayCropInitialRight = overlay.crop_right;
+                                        s_windowOverlayCropScale = overlay.scale;
+                                        // Record texture dimensions for crop clamping
+                                        {
+                                            std::unique_lock<std::mutex> texLock(g_windowOverlayCacheMutex, std::try_to_lock);
+                                            if (texLock.owns_lock()) {
+                                                auto texIt = g_windowOverlayCache.find(overlay.name);
+                                                if (texIt != g_windowOverlayCache.end() && texIt->second) {
+                                                    s_windowOverlayCropTexWidth = texIt->second->glTextureWidth;
+                                                    s_windowOverlayCropTexHeight = texIt->second->glTextureHeight;
+                                                }
+                                            }
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // --- B) Corner resize update ---
+                    if (s_isWindowOverlayCornerResizing && leftButtonDown) {
+                        if (!g_windowOverlayCropMode) {
+                            // Scale mode: diagonal ratio
+                            int adx = mousePos.x - s_windowOverlayResizeAnchorScreen.x;
+                            int ady = mousePos.y - s_windowOverlayResizeAnchorScreen.y;
+                            float currentDiag = sqrtf((float)(adx * adx + ady * ady));
+                            float ratio = currentDiag / s_windowOverlayResizeInitialDiag;
+
+                            for (auto& overlay : g_config.windowOverlays) {
+                                if (overlay.name == s_selectedWindowOverlayName) {
+                                    overlay.scale = std::clamp(s_windowOverlayResizeInitialScale * ratio, 0.1f, 20.0f);
+                                    g_configIsDirty = true;
+                                    break;
+                                }
+                            }
+                        } else {
+                            // Crop mode: mouse delta -> texture pixels
+                            int dx = mousePos.x - s_windowOverlayCropStartMouse.x;
+                            int dy = mousePos.y - s_windowOverlayCropStartMouse.y;
+                            float scale = s_windowOverlayCropScale > 0.01f ? s_windowOverlayCropScale : 1.0f;
+
+                            for (auto& overlay : g_config.windowOverlays) {
+                                if (overlay.name == s_selectedWindowOverlayName) {
+                                    int texDX = static_cast<int>(dx / scale);
+                                    int texDY = static_cast<int>(dy / scale);
+                                    // Which edges to adjust depends on which corner is dragged
+                                    switch (s_windowOverlayResizeCorner) {
+                                        case 0: // TL: drag right = crop_left increases, drag down = crop_top increases
+                                            overlay.crop_left = (std::max)(0, s_windowOverlayCropInitialLeft + texDX);
+                                            overlay.crop_top = (std::max)(0, s_windowOverlayCropInitialTop + texDY);
+                                            break;
+                                        case 1: // TR: drag left = crop_right increases, drag down = crop_top increases
+                                            overlay.crop_right = (std::max)(0, s_windowOverlayCropInitialRight - texDX);
+                                            overlay.crop_top = (std::max)(0, s_windowOverlayCropInitialTop + texDY);
+                                            break;
+                                        case 2: // BL: drag right = crop_left increases, drag up = crop_bottom increases
+                                            overlay.crop_left = (std::max)(0, s_windowOverlayCropInitialLeft + texDX);
+                                            overlay.crop_bottom = (std::max)(0, s_windowOverlayCropInitialBottom - texDY);
+                                            break;
+                                        case 3: // BR: drag left = crop_right increases, drag up = crop_bottom increases
+                                            overlay.crop_right = (std::max)(0, s_windowOverlayCropInitialRight - texDX);
+                                            overlay.crop_bottom = (std::max)(0, s_windowOverlayCropInitialBottom - texDY);
+                                            break;
+                                    }
+                                    g_configIsDirty = true;
                                     break;
                                 }
                             }
                         }
                     }
-                    else if (leftButtonDown && s_isWindowOverlayDragging && !s_draggedWindowOverlayName.empty()) {
+
+                    // --- C) Corner resize end ---
+                    if (s_isWindowOverlayCornerResizing && !leftButtonDown) {
+                        s_isWindowOverlayCornerResizing = false;
+                        s_windowOverlayResizeCorner = -1;
+                        SaveConfigImmediate();
+                    }
+
+                    // --- D) Position drag start (only if not resizing, not already dragging) ---
+                    if (leftButtonDown && !s_isWindowOverlayDragging && !s_isWindowOverlayCornerResizing && !hoveredOverlay.empty()) {
+                        s_isWindowOverlayDragging = true;
+                        s_draggedWindowOverlayName = hoveredOverlay;
+                        s_lastMousePos = mousePos;
+                        s_windowOverlayDragDidMove = false;
+                    }
+
+                    // --- E) Position drag update ---
+                    if (leftButtonDown && s_isWindowOverlayDragging && !s_draggedWindowOverlayName.empty()) {
                         PROFILE_SCOPE_CAT("Overlay Drag Update", "Input Handling");
 
                         int deltaX = mousePos.x - s_lastMousePos.x;
                         int deltaY = mousePos.y - s_lastMousePos.y;
 
                         if (deltaX != 0 || deltaY != 0) {
-                            // Mutate g_config from game thread - safe because:
-                            // 1. Only this thread writes drag x/y (no concurrent x/y writers)
+                            s_windowOverlayDragDidMove = true;
                             for (auto& overlay : g_config.windowOverlays) {
                                 if (overlay.name == s_draggedWindowOverlayName) {
                                     overlay.x += deltaX;
@@ -2694,25 +2900,558 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
                                     break;
                                 }
                             }
-
                             s_lastMousePos = mousePos;
                         }
                     }
-                    else if (!leftButtonDown && s_isWindowOverlayDragging) {
+
+                    // --- F) Drag/click end ---
+                    if (!leftButtonDown && s_isWindowOverlayDragging) {
+                        if (!s_windowOverlayDragDidMove) {
+                            // Click without movement = select this overlay
+                            s_selectedWindowOverlayName = s_draggedWindowOverlayName;
+                        } else {
+                            SaveConfigImmediate();
+                        }
                         s_isWindowOverlayDragging = false;
                         s_draggedWindowOverlayName = "";
-                        SaveConfigImmediate();
                     }
 
+                    // --- G) Click-on-empty deselect ---
+                    if (s_windowOverlayPrevLeftButton && !leftButtonDown && !s_isWindowOverlayDragging && !s_isWindowOverlayCornerResizing &&
+                        hoveredOverlay.empty() && !s_windowOverlayDragDidMove) {
+                        s_selectedWindowOverlayName = "";
+                    }
+
+                    s_windowOverlayPrevLeftButton = leftButtonDown;
                     s_hoveredWindowOverlayName = hoveredOverlay;
+
+                    // --- H) Populate globals for floating panel ---
+                    if (!s_selectedWindowOverlayName.empty()) {
+                        g_selectedWindowOverlayName = s_selectedWindowOverlayName;
+                        std::unique_lock<std::mutex> lock(g_windowOverlayCacheMutex, std::try_to_lock);
+                        if (lock.owns_lock()) {
+                            const WindowOverlayConfig* confPtr = configSnap ? FindWindowOverlayConfigIn(s_selectedWindowOverlayName, *configSnap) : nullptr;
+                            if (confPtr) {
+                                int dw, dh;
+                                CalculateWindowOverlayDimensionsUnsafe(*confPtr, dw, dh);
+                                int sx, sy;
+                                GetRelativeCoordsForImageWithViewport(confPtr->relativeTo, confPtr->x, confPtr->y, dw, dh,
+                                                                      currentGeo.finalX, currentGeo.finalY, currentGeo.finalW,
+                                                                      currentGeo.finalH, fullW, fullH, sx, sy);
+                                g_selectedWindowOverlayScreenX = sx;
+                                g_selectedWindowOverlayScreenY = sy;
+                                g_selectedWindowOverlayScreenW = dw;
+                                g_selectedWindowOverlayScreenH = dh;
+                            }
+                        }
+                    } else {
+                        g_selectedWindowOverlayName = "";
+                    }
                 }
             }
         }
     } else {
-        if (s_isWindowOverlayDragging) {
+        // Clean up drag state when drag mode is disabled
+        if (s_isWindowOverlayDragging || !s_selectedWindowOverlayName.empty() || s_isWindowOverlayCornerResizing) {
             s_isWindowOverlayDragging = false;
             s_draggedWindowOverlayName = "";
             s_hoveredWindowOverlayName = "";
+            s_selectedWindowOverlayName = "";
+            s_isWindowOverlayCornerResizing = false;
+            s_windowOverlayResizeCorner = -1;
+            g_selectedWindowOverlayName = "";
+            g_windowOverlayCropMode = false;
+        }
+    }
+
+    // Handle mirror dragging when drag mode is active (BEFORE rendering)
+    // Dragging mirrors should only be possible while the GUI is open and the Mirrors tab is active.
+    if (g_showGui.load(std::memory_order_relaxed) && g_mirrorDragMode.load(std::memory_order_relaxed) && hasMirrors) {
+        PROFILE_SCOPE_CAT("Mirror Drag Mode", "Input Handling");
+
+        ImGuiIO& io = ImGui::GetIO();
+        if (io.WantCaptureMouse) {
+            s_hoveredMirrorName = "";
+        } else {
+            HWND hwnd = g_minecraftHwnd.load();
+            if (hwnd) {
+                POINT mousePos;
+                GetCursorPos(&mousePos);
+                ScreenToClient(hwnd, &mousePos);
+
+                bool leftButtonDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+
+                // Only do hover detection if not currently dragging
+                std::string hoveredMirror = s_hoveredMirrorName;
+
+                if (!s_isMirrorDragging) {
+                    // Try-lock to avoid stalling the game thread
+                    std::shared_lock<std::shared_mutex> mirrorLock(g_mirrorInstancesMutex, std::try_to_lock);
+                    if (mirrorLock.owns_lock()) {
+                        hoveredMirror = "";
+
+                        // Hit-test helper: check if mousePos is inside the mirror's cached screen rect
+                        auto hitTestMirrorInstance = [&](const std::string& mirrorName) -> bool {
+                            auto it = g_mirrorInstances.find(mirrorName);
+                            if (it == g_mirrorInstances.end()) return false;
+                            const auto& cache = it->second.cachedRenderState;
+                            if (!cache.isValid) return false;
+                            return mousePos.x >= cache.mirrorScreenX && mousePos.x < cache.mirrorScreenX + cache.mirrorScreenW &&
+                                   mousePos.y >= cache.mirrorScreenY && mousePos.y < cache.mirrorScreenY + cache.mirrorScreenH;
+                        };
+
+                        // Check direct mirrors
+                        for (const auto& mirrorName : modeToRender->mirrorIds) {
+                            if (hitTestMirrorInstance(mirrorName)) {
+                                hoveredMirror = mirrorName;
+                                break;
+                            }
+                        }
+
+                        // Check mirrors from groups (if not already found)
+                        if (hoveredMirror.empty()) {
+                            const auto& groups = configSnap ? configSnap->mirrorGroups : g_config.mirrorGroups;
+                            for (const auto& groupName : modeToRender->mirrorGroupIds) {
+                                for (const auto& group : groups) {
+                                    if (group.name == groupName) {
+                                        for (const auto& item : group.mirrors) {
+                                            if (!item.enabled) continue;
+                                            if (hitTestMirrorInstance(item.mirrorId)) {
+                                                hoveredMirror = item.mirrorId;
+                                                break;
+                                            }
+                                        }
+                                        break;
+                                    }
+                                }
+                                if (!hoveredMirror.empty()) break;
+                            }
+                        }
+                    }
+                    // If lock not acquired, keep previous hover state
+                }
+
+                // --- Corner hit-test helper (lambda) ---
+                // Returns 0=TL, 1=TR, 2=BL, 3=BR, or -1 if no corner hit
+                auto hitTestCorners = [&](const std::string& mirrorName, POINT mp, int handleRadius) -> int {
+                    std::shared_lock<std::shared_mutex> lock(g_mirrorInstancesMutex, std::try_to_lock);
+                    if (!lock.owns_lock()) return -1;
+                    auto it = g_mirrorInstances.find(mirrorName);
+                    if (it == g_mirrorInstances.end()) return -1;
+                    const auto& cache = it->second.cachedRenderState;
+                    if (!cache.isValid) return -1;
+                    int sx = cache.mirrorScreenX, sy = cache.mirrorScreenY;
+                    int sw = cache.mirrorScreenW, sh = cache.mirrorScreenH;
+                    POINT corners[4] = {
+                        { sx, sy },              // TL
+                        { sx + sw, sy },         // TR
+                        { sx, sy + sh },         // BL
+                        { sx + sw, sy + sh }     // BR
+                    };
+                    for (int c = 0; c < 4; c++) {
+                        int dx = mp.x - corners[c].x;
+                        int dy = mp.y - corners[c].y;
+                        if (dx * dx + dy * dy <= handleRadius * handleRadius) return c;
+                    }
+                    return -1;
+                };
+
+                // Reset drag-moved flag on button press rising edge
+                if (leftButtonDown && !s_prevLeftButton) {
+                    s_mirrorDragDidMove = false;
+                }
+
+                // === Capture zone corner hit-test helper ===
+                // Returns {zoneIndex, corner} or {-1, -1}
+                auto hitTestCaptureZoneCorners = [&](const std::string& mirrorName, POINT mp, int handleRadius) -> std::pair<int, int> {
+                    const MirrorConfig* conf = nullptr;
+                    for (const auto& m : g_config.mirrors) {
+                        if (m.name == mirrorName) { conf = &m; break; }
+                    }
+                    if (!conf || conf->input.empty()) return { -1, -1 };
+
+                    GameViewportGeometry geo;
+                    {
+                        std::lock_guard<std::mutex> lock(g_geometryMutex);
+                        geo = g_lastFrameGeometry;
+                    }
+                    float xScale = geo.gameW > 0 ? (float)geo.finalW / geo.gameW : 1.0f;
+                    float yScale = geo.gameH > 0 ? (float)geo.finalH / geo.gameH : 1.0f;
+
+                    for (int zi = 0; zi < (int)conf->input.size(); zi++) {
+                        const auto& r = conf->input[zi];
+                        int capX, capY;
+                        GetRelativeCoords(r.relativeTo, r.x, r.y, conf->captureWidth, conf->captureHeight, geo.gameW, geo.gameH, capX, capY);
+                        int sx = geo.finalX + (int)(capX * xScale);
+                        int sy = geo.finalY + (int)(capY * yScale);
+                        int sw = (int)(conf->captureWidth * xScale);
+                        int sh = (int)(conf->captureHeight * yScale);
+
+                        POINT corners[4] = {
+                            { (LONG)sx, (LONG)sy },
+                            { (LONG)(sx + sw), (LONG)sy },
+                            { (LONG)sx, (LONG)(sy + sh) },
+                            { (LONG)(sx + sw), (LONG)(sy + sh) }
+                        };
+                        for (int c = 0; c < 4; c++) {
+                            int dx = mp.x - corners[c].x;
+                            int dy = mp.y - corners[c].y;
+                            if (dx * dx + dy * dy <= handleRadius * handleRadius) return { zi, c };
+                        }
+                    }
+                    return { -1, -1 };
+                };
+
+                // === Capture zone body hit-test helper ===
+                // Returns zone index or -1
+                auto hitTestCaptureZoneBody = [&](const std::string& mirrorName, POINT mp) -> int {
+                    const MirrorConfig* conf = nullptr;
+                    for (const auto& m : g_config.mirrors) {
+                        if (m.name == mirrorName) { conf = &m; break; }
+                    }
+                    if (!conf || conf->input.empty()) return -1;
+
+                    GameViewportGeometry geo;
+                    {
+                        std::lock_guard<std::mutex> lock(g_geometryMutex);
+                        geo = g_lastFrameGeometry;
+                    }
+                    float xScale = geo.gameW > 0 ? (float)geo.finalW / geo.gameW : 1.0f;
+                    float yScale = geo.gameH > 0 ? (float)geo.finalH / geo.gameH : 1.0f;
+
+                    for (int zi = 0; zi < (int)conf->input.size(); zi++) {
+                        const auto& r = conf->input[zi];
+                        int capX, capY;
+                        GetRelativeCoords(r.relativeTo, r.x, r.y, conf->captureWidth, conf->captureHeight, geo.gameW, geo.gameH, capX, capY);
+                        int sx = geo.finalX + (int)(capX * xScale);
+                        int sy = geo.finalY + (int)(capY * yScale);
+                        int sw = (int)(conf->captureWidth * xScale);
+                        int sh = (int)(conf->captureHeight * yScale);
+
+                        if (mp.x >= sx && mp.x < sx + sw && mp.y >= sy && mp.y < sy + sh) return zi;
+                    }
+                    return -1;
+                };
+
+                // --- CZ-A) Capture zone corner resize start ---
+                if (leftButtonDown && !s_prevLeftButton && !s_isMirrorDragging && !s_isCornerResizing &&
+                    !s_isCaptureZoneResizing && !s_isCaptureZoneDragging && !s_selectedMirrorName.empty()) {
+                    auto [zi, corner] = hitTestCaptureZoneCorners(s_selectedMirrorName, mousePos, 16);
+                    if (zi >= 0 && corner >= 0) {
+                        s_isCaptureZoneResizing = true;
+                        s_captureZoneResizeCorner = corner;
+                        // Record initial capture dimensions
+                        for (const auto& mirror : g_config.mirrors) {
+                            if (mirror.name == s_selectedMirrorName) {
+                                s_captureZoneResizeInitialW = mirror.captureWidth;
+                                s_captureZoneResizeInitialH = mirror.captureHeight;
+                                break;
+                            }
+                        }
+                        // Compute anchor (opposite corner) and initial diagonal
+                        GameViewportGeometry geo;
+                        {
+                            std::lock_guard<std::mutex> lock(g_geometryMutex);
+                            geo = g_lastFrameGeometry;
+                        }
+                        float xScale = geo.gameW > 0 ? (float)geo.finalW / geo.gameW : 1.0f;
+                        float yScale = geo.gameH > 0 ? (float)geo.finalH / geo.gameH : 1.0f;
+                        const MirrorConfig* conf = nullptr;
+                        for (const auto& m : g_config.mirrors) {
+                            if (m.name == s_selectedMirrorName) { conf = &m; break; }
+                        }
+                        if (conf && zi < (int)conf->input.size()) {
+                            const auto& r = conf->input[zi];
+                            int capX, capY;
+                            GetRelativeCoords(r.relativeTo, r.x, r.y, conf->captureWidth, conf->captureHeight, geo.gameW, geo.gameH, capX, capY);
+                            int sx = geo.finalX + (int)(capX * xScale);
+                            int sy = geo.finalY + (int)(capY * yScale);
+                            int sw = (int)(conf->captureWidth * xScale);
+                            int sh = (int)(conf->captureHeight * yScale);
+                            POINT anchors[4] = {
+                                { (LONG)(sx + sw), (LONG)(sy + sh) }, // opposite of TL
+                                { (LONG)sx, (LONG)(sy + sh) },       // opposite of TR
+                                { (LONG)(sx + sw), (LONG)sy },       // opposite of BL
+                                { (LONG)sx, (LONG)sy }               // opposite of BR
+                            };
+                            s_captureZoneResizeAnchorScreen = anchors[corner];
+                        }
+                        int adx = mousePos.x - s_captureZoneResizeAnchorScreen.x;
+                        int ady = mousePos.y - s_captureZoneResizeAnchorScreen.y;
+                        s_captureZoneResizeInitialDiag = sqrtf((float)(adx * adx + ady * ady));
+                        if (s_captureZoneResizeInitialDiag < 1.0f) s_captureZoneResizeInitialDiag = 1.0f;
+                    }
+                }
+
+                // --- CZ-B) Capture zone corner resize update ---
+                if (s_isCaptureZoneResizing && leftButtonDown) {
+                    int adx = mousePos.x - s_captureZoneResizeAnchorScreen.x;
+                    int ady = mousePos.y - s_captureZoneResizeAnchorScreen.y;
+                    float currentDiag = sqrtf((float)(adx * adx + ady * ady));
+                    float ratio = currentDiag / s_captureZoneResizeInitialDiag;
+
+                    for (auto& mirror : g_config.mirrors) {
+                        if (mirror.name == s_selectedMirrorName) {
+                            mirror.captureWidth = std::clamp((int)(s_captureZoneResizeInitialW * ratio), 4, 2000);
+                            mirror.captureHeight = std::clamp((int)(s_captureZoneResizeInitialH * ratio), 4, 2000);
+                            g_configIsDirty = true;
+                            UpdateMirrorInputRegions(mirror.name, mirror.input);
+                            break;
+                        }
+                    }
+                }
+
+                // --- CZ-C) Capture zone corner resize end ---
+                if (s_isCaptureZoneResizing && !leftButtonDown) {
+                    s_isCaptureZoneResizing = false;
+                    s_captureZoneResizeCorner = -1;
+                    SaveConfigImmediate();
+                }
+
+                // --- CZ-D) Capture zone body drag start ---
+                if (leftButtonDown && !s_prevLeftButton && !s_isMirrorDragging && !s_isCornerResizing &&
+                    !s_isCaptureZoneResizing && !s_isCaptureZoneDragging && !s_selectedMirrorName.empty()) {
+                    int zi = hitTestCaptureZoneBody(s_selectedMirrorName, mousePos);
+                    if (zi >= 0) {
+                        s_isCaptureZoneDragging = true;
+                        s_draggedCaptureZoneIndex = zi;
+                        s_captureZoneLastMousePos = mousePos;
+                    }
+                }
+
+                // --- CZ-E) Capture zone body drag update ---
+                if (s_isCaptureZoneDragging && leftButtonDown) {
+                    int deltaX = mousePos.x - s_captureZoneLastMousePos.x;
+                    int deltaY = mousePos.y - s_captureZoneLastMousePos.y;
+                    if (deltaX != 0 || deltaY != 0) {
+                        for (auto& mirror : g_config.mirrors) {
+                            if (mirror.name == s_selectedMirrorName && s_draggedCaptureZoneIndex < (int)mirror.input.size()) {
+                                auto& zone = mirror.input[s_draggedCaptureZoneIndex];
+                                int configDX, configDY;
+                                ScreenDeltaToMirrorConfigDelta(zone.relativeTo, deltaX, deltaY,
+                                                              currentGeo.gameW, currentGeo.gameH,
+                                                              currentGeo.finalW, currentGeo.finalH,
+                                                              configDX, configDY);
+                                zone.x += configDX;
+                                zone.y += configDY;
+                                g_configIsDirty = true;
+                                UpdateMirrorInputRegions(mirror.name, mirror.input);
+                                break;
+                            }
+                        }
+                        s_captureZoneLastMousePos = mousePos;
+                    }
+                }
+
+                // --- CZ-F) Capture zone body drag end ---
+                if (s_isCaptureZoneDragging && !leftButtonDown) {
+                    s_isCaptureZoneDragging = false;
+                    s_draggedCaptureZoneIndex = -1;
+                    SaveConfigImmediate();
+                }
+
+                // --- A) Corner resize start ---
+                // Skip output resize for grouped mirrors (their output config is overridden by group)
+                {
+                bool selectedIsDirect = false;
+                for (const auto& mid : modeToRender->mirrorIds) {
+                    if (mid == s_selectedMirrorName) { selectedIsDirect = true; break; }
+                }
+                if (leftButtonDown && !s_isMirrorDragging && !s_isCornerResizing && !s_isCaptureZoneResizing && !s_isCaptureZoneDragging && !s_selectedMirrorName.empty() && selectedIsDirect) {
+                    int corner = hitTestCorners(s_selectedMirrorName, mousePos, 16);
+                    if (corner >= 0) {
+                        s_isCornerResizing = true;
+                        s_resizeCorner = corner;
+                        // Record initial scale values
+                        for (const auto& mirror : g_config.mirrors) {
+                            if (mirror.name == s_selectedMirrorName) {
+                                s_resizeInitialScale = mirror.output.scale;
+                                s_resizeInitialScaleX = mirror.output.scaleX;
+                                s_resizeInitialScaleY = mirror.output.scaleY;
+                                break;
+                            }
+                        }
+                        // Anchor = opposite corner screen position
+                        {
+                            std::shared_lock<std::shared_mutex> lock(g_mirrorInstancesMutex, std::try_to_lock);
+                            if (lock.owns_lock()) {
+                                auto it = g_mirrorInstances.find(s_selectedMirrorName);
+                                if (it != g_mirrorInstances.end() && it->second.cachedRenderState.isValid) {
+                                    const auto& cache = it->second.cachedRenderState;
+                                    int sx = cache.mirrorScreenX, sy = cache.mirrorScreenY;
+                                    int sw = cache.mirrorScreenW, sh = cache.mirrorScreenH;
+                                    // Opposite corner
+                                    POINT anchors[4] = {
+                                        { sx + sw, sy + sh }, // opposite of TL
+                                        { sx, sy + sh },      // opposite of TR
+                                        { sx + sw, sy },      // opposite of BL
+                                        { sx, sy }            // opposite of BR
+                                    };
+                                    s_resizeAnchorScreen = anchors[corner];
+                                }
+                            }
+                        }
+                        // Compute initial diagonal distance
+                        int adx = mousePos.x - s_resizeAnchorScreen.x;
+                        int ady = mousePos.y - s_resizeAnchorScreen.y;
+                        s_resizeInitialDiag = sqrtf((float)(adx * adx + ady * ady));
+                        if (s_resizeInitialDiag < 1.0f) s_resizeInitialDiag = 1.0f;
+                    }
+                }
+                } // end selectedIsDirect scope
+
+                // --- B) Corner resize update ---
+                if (s_isCornerResizing && leftButtonDown) {
+                    int adx = mousePos.x - s_resizeAnchorScreen.x;
+                    int ady = mousePos.y - s_resizeAnchorScreen.y;
+                    float currentDiag = sqrtf((float)(adx * adx + ady * ady));
+                    float ratio = currentDiag / s_resizeInitialDiag;
+
+                    for (auto& mirror : g_config.mirrors) {
+                        if (mirror.name == s_selectedMirrorName) {
+                            if (mirror.output.separateScale) {
+                                mirror.output.scaleX = std::clamp(s_resizeInitialScaleX * ratio, 0.1f, 20.0f);
+                                mirror.output.scaleY = std::clamp(s_resizeInitialScaleY * ratio, 0.1f, 20.0f);
+                            } else {
+                                mirror.output.scale = std::clamp(s_resizeInitialScale * ratio, 0.1f, 20.0f);
+                            }
+                            g_configIsDirty = true;
+                            UpdateMirrorOutputPosition(mirror.name, mirror.output.x, mirror.output.y,
+                                                       mirror.output.scale, mirror.output.separateScale,
+                                                       mirror.output.scaleX, mirror.output.scaleY,
+                                                       mirror.output.relativeTo);
+                            break;
+                        }
+                    }
+                }
+
+                // --- C) Corner resize end ---
+                if (s_isCornerResizing && !leftButtonDown) {
+                    s_isCornerResizing = false;
+                    s_resizeCorner = -1;
+                    SaveConfigImmediate();
+                }
+
+                // --- D) Position drag start / grouped mirror select ---
+                if (leftButtonDown && !s_prevLeftButton && !s_isMirrorDragging && !s_isCornerResizing &&
+                    !s_isCaptureZoneResizing && !s_isCaptureZoneDragging && !hoveredMirror.empty()) {
+                    // Check if the hovered mirror is direct (in mirrorIds) or grouped
+                    bool isDirect = false;
+                    for (const auto& mid : modeToRender->mirrorIds) {
+                        if (mid == hoveredMirror) { isDirect = true; break; }
+                    }
+
+                    if (isDirect) {
+                        // Direct mirror: start drag (click-to-select happens on release in F)
+                        s_isMirrorDragging = true;
+                        s_draggedMirrorName = hoveredMirror;
+                        s_mirrorLastMousePos = mousePos;
+                        s_mirrorDragDidMove = false;
+                    } else {
+                        // Grouped mirror: immediate click-to-select (no drag/resize supported)
+                        s_selectedMirrorName = hoveredMirror;
+                    }
+                }
+
+                // --- E) Position drag update ---
+                if (leftButtonDown && s_isMirrorDragging && !s_draggedMirrorName.empty()) {
+                    int deltaX = mousePos.x - s_mirrorLastMousePos.x;
+                    int deltaY = mousePos.y - s_mirrorLastMousePos.y;
+
+                    if (deltaX != 0 || deltaY != 0) {
+                        s_mirrorDragDidMove = true;
+                        for (auto& mirror : g_config.mirrors) {
+                            if (mirror.name == s_draggedMirrorName) {
+                                int configDX, configDY;
+                                ScreenDeltaToMirrorConfigDelta(mirror.output.relativeTo, deltaX, deltaY,
+                                                              currentGeo.gameW, currentGeo.gameH,
+                                                              currentGeo.finalW, currentGeo.finalH,
+                                                              configDX, configDY);
+                                mirror.output.x += configDX;
+                                mirror.output.y += configDY;
+                                g_configIsDirty = true;
+                                UpdateMirrorOutputPosition(mirror.name, mirror.output.x, mirror.output.y,
+                                                           mirror.output.scale, mirror.output.separateScale,
+                                                           mirror.output.scaleX, mirror.output.scaleY,
+                                                           mirror.output.relativeTo);
+                                break;
+                            }
+                        }
+                        s_mirrorLastMousePos = mousePos;
+                    }
+                }
+
+                // --- F) Drag/click end ---
+                if (!leftButtonDown && s_isMirrorDragging) {
+                    if (!s_mirrorDragDidMove) {
+                        // Click without movement = select this mirror
+                        s_selectedMirrorName = s_draggedMirrorName;
+                    } else {
+                        SaveConfigImmediate();
+                    }
+                    s_isMirrorDragging = false;
+                    s_draggedMirrorName = "";
+                }
+
+                // --- G) Click-on-empty deselect ---
+                if (s_prevLeftButton && !leftButtonDown && !s_isMirrorDragging && !s_isCornerResizing &&
+                    !s_isCaptureZoneResizing && !s_isCaptureZoneDragging &&
+                    hoveredMirror.empty() && !s_mirrorDragDidMove) {
+                    s_selectedMirrorName = "";
+                }
+
+                s_prevLeftButton = leftButtonDown;
+                s_hoveredMirrorName = hoveredMirror;
+            }
+        }
+
+        // --- H) g_currentlyEditingMirror priority: dragging > selected > hovered ---
+        // Placed OUTSIDE the WantCaptureMouse check so debug borders persist
+        // even when the mouse is over ImGui (e.g., the selection info panel).
+        if (s_isMirrorDragging) {
+            g_currentlyEditingMirror = s_draggedMirrorName;
+        } else if (!s_selectedMirrorName.empty()) {
+            g_currentlyEditingMirror = s_selectedMirrorName;
+        } else if (!s_hoveredMirrorName.empty()) {
+            g_currentlyEditingMirror = s_hoveredMirrorName;
+        } else {
+            g_currentlyEditingMirror = "";
+        }
+
+        // --- I) Populate g_selectedMirrorName globals for floating panel ---
+        if (!s_selectedMirrorName.empty()) {
+            g_selectedMirrorName = s_selectedMirrorName;
+            std::shared_lock<std::shared_mutex> lock(g_mirrorInstancesMutex, std::try_to_lock);
+            if (lock.owns_lock()) {
+                auto it = g_mirrorInstances.find(s_selectedMirrorName);
+                if (it != g_mirrorInstances.end() && it->second.cachedRenderState.isValid) {
+                    const auto& cache = it->second.cachedRenderState;
+                    g_selectedMirrorScreenX = cache.mirrorScreenX;
+                    g_selectedMirrorScreenY = cache.mirrorScreenY;
+                    g_selectedMirrorScreenW = cache.mirrorScreenW;
+                    g_selectedMirrorScreenH = cache.mirrorScreenH;
+                    g_selectedMirrorOutW = cache.outW;
+                    g_selectedMirrorOutH = cache.outH;
+                }
+            }
+        } else {
+            g_selectedMirrorName = "";
+        }
+    } else {
+        // Clean up drag state when drag mode is disabled
+        if (s_isMirrorDragging || !s_selectedMirrorName.empty() || s_isCornerResizing ||
+            s_isCaptureZoneResizing || s_isCaptureZoneDragging) {
+            s_isMirrorDragging = false;
+            s_draggedMirrorName = "";
+            s_hoveredMirrorName = "";
+            s_selectedMirrorName = "";
+            s_isCornerResizing = false;
+            s_resizeCorner = -1;
+            s_isCaptureZoneResizing = false;
+            s_captureZoneResizeCorner = -1;
+            s_isCaptureZoneDragging = false;
+            s_draggedCaptureZoneIndex = -1;
+            g_selectedMirrorName = "";
         }
     }
 
@@ -2749,6 +3488,14 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
     // Submit lightweight request - render thread looks up active elements from g_config
     // This moves collection + rendering work off the main thread, reducing SwapBuffers hook time
 
+    if (!(g_renderThreadRunning.load() && wantAsyncOverlayThisFrame)) {
+        static int s_skipDebug = 0;
+        if (s_skipDebug++ < 60) {
+            Log("[WO-DBG] SKIP async overlay: rtRunning=" + std::to_string(g_renderThreadRunning.load()) +
+                " wantOverlay=" + std::to_string(wantOverlayElements) + " wantImGui=" + std::to_string(wantAnyImGui) +
+                " wantToast=" + std::to_string(wantWelcomeToast));
+        }
+    }
     if (g_renderThreadRunning.load() && wantAsyncOverlayThisFrame) {
         PROFILE_SCOPE_CAT("Async Overlay Submit/Blit", "Rendering");
 
@@ -2924,7 +3671,378 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
             RenderDebugBordersForMirror(conf, { 1.0f, 0.0f, 0.0f }, { 0.0f, 1.0f, 0.0f }, s.va);
         }
     }
+
+    // Render corner resize handles on selected mirror (only for direct/non-grouped mirrors)
+    bool selectedMirrorIsDirect = false;
+    for (const auto& mid : modeToRender->mirrorIds) {
+        if (mid == s_selectedMirrorName) { selectedMirrorIsDirect = true; break; }
+    }
+    if (g_showGui && g_mirrorDragMode.load(std::memory_order_relaxed) && !s_selectedMirrorName.empty() && selectedMirrorIsDirect) {
+        PROFILE_SCOPE_CAT("Corner Handles", "Rendering");
+        std::shared_lock<std::shared_mutex> lock(g_mirrorInstancesMutex, std::try_to_lock);
+        if (lock.owns_lock()) {
+            auto it = g_mirrorInstances.find(s_selectedMirrorName);
+            if (it != g_mirrorInstances.end() && it->second.cachedRenderState.isValid) {
+                const auto& cache = it->second.cachedRenderState;
+                const int fullW = GetCachedScreenWidth();
+                const int fullH = GetCachedScreenHeight();
+                const int handleRadius = 8; // 8px radius = 16x16 squares
+
+                int sx = cache.mirrorScreenX, sy = cache.mirrorScreenY;
+                int sw = cache.mirrorScreenW, sh = cache.mirrorScreenH;
+
+                // 4 corners in window coordinates
+                POINT corners[4] = {
+                    { sx, sy },              // TL
+                    { sx + sw, sy },         // TR
+                    { sx, sy + sh },         // BL
+                    { sx + sw, sy + sh }     // BR
+                };
+
+                // Determine which corner is hovered (for highlight)
+                HWND hwnd = g_minecraftHwnd.load();
+                int hoveredCorner = -1;
+                if (hwnd) {
+                    POINT mp;
+                    GetCursorPos(&mp);
+                    ScreenToClient(hwnd, &mp);
+                    for (int c = 0; c < 4; c++) {
+                        int dx = mp.x - corners[c].x;
+                        int dy = mp.y - corners[c].y;
+                        if (dx * dx + dy * dy <= 16 * 16) { hoveredCorner = c; break; }
+                    }
+                }
+
+                glUseProgram(g_solidColorProgram);
+                glEnable(GL_BLEND);
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                glBindVertexArray(g_debugVAO);
+                glBindBuffer(GL_ARRAY_BUFFER, g_debugVBO);
+
+                // Build vertex data for all 4 handle quads (each = 2 triangles = 6 verts × 2 floats)
+                float verts[48]; // 4 corners × 6 verts × 2 floats
+                int vi = 0;
+                for (int c = 0; c < 4; c++) {
+                    // Convert window coords to NDC
+                    int cy_gl = fullH - corners[c].y; // flip Y for OpenGL
+                    float x1 = ((float)(corners[c].x - handleRadius) / fullW) * 2.0f - 1.0f;
+                    float y1 = ((float)(cy_gl - handleRadius) / fullH) * 2.0f - 1.0f;
+                    float x2 = ((float)(corners[c].x + handleRadius) / fullW) * 2.0f - 1.0f;
+                    float y2 = ((float)(cy_gl + handleRadius) / fullH) * 2.0f - 1.0f;
+                    // Triangle 1
+                    verts[vi++] = x1; verts[vi++] = y1;
+                    verts[vi++] = x2; verts[vi++] = y1;
+                    verts[vi++] = x2; verts[vi++] = y2;
+                    // Triangle 2
+                    verts[vi++] = x1; verts[vi++] = y1;
+                    verts[vi++] = x2; verts[vi++] = y2;
+                    verts[vi++] = x1; verts[vi++] = y2;
+                }
+
+                glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
+
+                // Draw each corner with appropriate color
+                for (int c = 0; c < 4; c++) {
+                    if (s_isCornerResizing && s_resizeCorner == c) {
+                        glUniform4f(g_solidColorShaderLocs.color, 1.0f, 1.0f, 1.0f, 0.9f); // white during resize
+                    } else if (hoveredCorner == c) {
+                        glUniform4f(g_solidColorShaderLocs.color, 1.0f, 0.6f, 0.0f, 0.9f); // bright orange hover
+                    } else {
+                        glUniform4f(g_solidColorShaderLocs.color, 0.9f, 0.5f, 0.0f, 0.8f); // orange default
+                    }
+                    glDrawArrays(GL_TRIANGLES, c * 6, 6);
+                }
+
+                glDisable(GL_BLEND);
+                glBindVertexArray(s.va);
+            }
+        }
+    }
+
+    // Render corner resize handles on capture zones of selected mirror
+    if (g_showGui && g_mirrorDragMode.load(std::memory_order_relaxed) && !s_selectedMirrorName.empty()) {
+        PROFILE_SCOPE_CAT("Capture Zone Corner Handles", "Rendering");
+
+        const MirrorConfig* conf = nullptr;
+        for (const auto& m : g_config.mirrors) {
+            if (m.name == s_selectedMirrorName) { conf = &m; break; }
+        }
+        if (conf && !conf->input.empty()) {
+            GameViewportGeometry geo;
+            {
+                std::lock_guard<std::mutex> lock(g_geometryMutex);
+                geo = g_lastFrameGeometry;
+            }
+            float xScale = geo.gameW > 0 ? (float)geo.finalW / geo.gameW : 1.0f;
+            float yScale = geo.gameH > 0 ? (float)geo.finalH / geo.gameH : 1.0f;
+            const int fullW = GetCachedScreenWidth();
+            const int fullH = GetCachedScreenHeight();
+            const int handleRadius = 8;
+
+            // Determine which capture zone corner is hovered
+            HWND hwnd = g_minecraftHwnd.load();
+            int hoveredZone = -1, hoveredCorner = -1;
+            if (hwnd) {
+                POINT mp;
+                GetCursorPos(&mp);
+                ScreenToClient(hwnd, &mp);
+                for (int zi = 0; zi < (int)conf->input.size(); zi++) {
+                    const auto& r = conf->input[zi];
+                    int capX, capY;
+                    GetRelativeCoords(r.relativeTo, r.x, r.y, conf->captureWidth, conf->captureHeight, geo.gameW, geo.gameH, capX, capY);
+                    int sx = geo.finalX + (int)(capX * xScale);
+                    int sy = geo.finalY + (int)(capY * yScale);
+                    int sw = (int)(conf->captureWidth * xScale);
+                    int sh = (int)(conf->captureHeight * yScale);
+                    POINT corners[4] = {
+                        { (LONG)sx, (LONG)sy },
+                        { (LONG)(sx + sw), (LONG)sy },
+                        { (LONG)sx, (LONG)(sy + sh) },
+                        { (LONG)(sx + sw), (LONG)(sy + sh) }
+                    };
+                    for (int c = 0; c < 4; c++) {
+                        int dx = mp.x - corners[c].x;
+                        int dy = mp.y - corners[c].y;
+                        if (dx * dx + dy * dy <= 16 * 16) { hoveredZone = zi; hoveredCorner = c; break; }
+                    }
+                    if (hoveredCorner >= 0) break;
+                }
+            }
+
+            glUseProgram(g_solidColorProgram);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glBindVertexArray(g_debugVAO);
+            glBindBuffer(GL_ARRAY_BUFFER, g_debugVBO);
+
+            for (int zi = 0; zi < (int)conf->input.size(); zi++) {
+                const auto& r = conf->input[zi];
+                int capX, capY;
+                GetRelativeCoords(r.relativeTo, r.x, r.y, conf->captureWidth, conf->captureHeight, geo.gameW, geo.gameH, capX, capY);
+                int sx = geo.finalX + (int)(capX * xScale);
+                int sy = geo.finalY + (int)(capY * yScale);
+                int sw = (int)(conf->captureWidth * xScale);
+                int sh = (int)(conf->captureHeight * yScale);
+
+                POINT corners[4] = {
+                    { (LONG)sx, (LONG)sy },
+                    { (LONG)(sx + sw), (LONG)sy },
+                    { (LONG)sx, (LONG)(sy + sh) },
+                    { (LONG)(sx + sw), (LONG)(sy + sh) }
+                };
+
+                float verts[48]; // 4 corners x 6 verts x 2 floats
+                int vi = 0;
+                for (int c = 0; c < 4; c++) {
+                    int cy_gl = fullH - corners[c].y;
+                    float x1 = ((float)(corners[c].x - handleRadius) / fullW) * 2.0f - 1.0f;
+                    float y1 = ((float)(cy_gl - handleRadius) / fullH) * 2.0f - 1.0f;
+                    float x2 = ((float)(corners[c].x + handleRadius) / fullW) * 2.0f - 1.0f;
+                    float y2 = ((float)(cy_gl + handleRadius) / fullH) * 2.0f - 1.0f;
+                    verts[vi++] = x1; verts[vi++] = y1;
+                    verts[vi++] = x2; verts[vi++] = y1;
+                    verts[vi++] = x2; verts[vi++] = y2;
+                    verts[vi++] = x1; verts[vi++] = y1;
+                    verts[vi++] = x2; verts[vi++] = y2;
+                    verts[vi++] = x1; verts[vi++] = y2;
+                }
+
+                glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
+
+                for (int c = 0; c < 4; c++) {
+                    if (s_isCaptureZoneResizing && s_captureZoneResizeCorner == c) {
+                        glUniform4f(g_solidColorShaderLocs.color, 1.0f, 1.0f, 1.0f, 0.9f); // white during resize
+                    } else if (hoveredZone == zi && hoveredCorner == c) {
+                        glUniform4f(g_solidColorShaderLocs.color, 1.0f, 0.2f, 0.2f, 0.9f); // bright red hover
+                    } else {
+                        glUniform4f(g_solidColorShaderLocs.color, 0.7f, 0.0f, 0.0f, 0.8f); // dark red default
+                    }
+                    glDrawArrays(GL_TRIANGLES, c * 6, 6);
+                }
+            }
+
+            glDisable(GL_BLEND);
+            glBindVertexArray(s.va);
+        }
+    }
+
+    // Render corner resize handles on selected window overlay
+    if (g_showGui && g_windowOverlayDragMode.load(std::memory_order_relaxed) && !s_selectedWindowOverlayName.empty()) {
+        PROFILE_SCOPE_CAT("Window Overlay Corner Handles", "Rendering");
+        const int sx = g_selectedWindowOverlayScreenX;
+        const int sy = g_selectedWindowOverlayScreenY;
+        const int sw = g_selectedWindowOverlayScreenW;
+        const int sh = g_selectedWindowOverlayScreenH;
+
+        if (sw > 0 && sh > 0) {
+            const int fullW = GetCachedScreenWidth();
+            const int fullH = GetCachedScreenHeight();
+            const int handleRadius = 8;
+
+            POINT corners[4] = {
+                { (LONG)sx, (LONG)sy },                      // TL
+                { (LONG)(sx + sw), (LONG)sy },               // TR
+                { (LONG)sx, (LONG)(sy + sh) },               // BL
+                { (LONG)(sx + sw), (LONG)(sy + sh) }         // BR
+            };
+
+            // Determine which corner is hovered
+            HWND hwnd = g_minecraftHwnd.load();
+            int hoveredCorner = -1;
+            if (hwnd) {
+                POINT mp;
+                GetCursorPos(&mp);
+                ScreenToClient(hwnd, &mp);
+                for (int c = 0; c < 4; c++) {
+                    int dx = mp.x - corners[c].x;
+                    int dy = mp.y - corners[c].y;
+                    if (dx * dx + dy * dy <= 16 * 16) { hoveredCorner = c; break; }
+                }
+            }
+
+            glUseProgram(g_solidColorProgram);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glBindVertexArray(g_debugVAO);
+            glBindBuffer(GL_ARRAY_BUFFER, g_debugVBO);
+
+            float verts[48];
+            int vi = 0;
+            for (int c = 0; c < 4; c++) {
+                int cy_gl = fullH - corners[c].y;
+                float x1 = ((float)(corners[c].x - handleRadius) / fullW) * 2.0f - 1.0f;
+                float y1 = ((float)(cy_gl - handleRadius) / fullH) * 2.0f - 1.0f;
+                float x2 = ((float)(corners[c].x + handleRadius) / fullW) * 2.0f - 1.0f;
+                float y2 = ((float)(cy_gl + handleRadius) / fullH) * 2.0f - 1.0f;
+                verts[vi++] = x1; verts[vi++] = y1;
+                verts[vi++] = x2; verts[vi++] = y1;
+                verts[vi++] = x2; verts[vi++] = y2;
+                verts[vi++] = x1; verts[vi++] = y1;
+                verts[vi++] = x2; verts[vi++] = y2;
+                verts[vi++] = x1; verts[vi++] = y2;
+            }
+
+            glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
+
+            for (int c = 0; c < 4; c++) {
+                if (s_isWindowOverlayCornerResizing && s_windowOverlayResizeCorner == c) {
+                    glUniform4f(g_solidColorShaderLocs.color, 1.0f, 1.0f, 1.0f, 0.9f); // white during resize
+                } else if (hoveredCorner == c) {
+                    if (g_windowOverlayCropMode) {
+                        glUniform4f(g_solidColorShaderLocs.color, 0.0f, 1.0f, 1.0f, 0.9f); // bright cyan hover (crop)
+                    } else {
+                        glUniform4f(g_solidColorShaderLocs.color, 0.4f, 0.6f, 1.0f, 0.9f); // bright blue hover
+                    }
+                } else {
+                    if (g_windowOverlayCropMode) {
+                        glUniform4f(g_solidColorShaderLocs.color, 0.0f, 0.8f, 0.8f, 0.8f); // cyan default (crop)
+                    } else {
+                        glUniform4f(g_solidColorShaderLocs.color, 0.2f, 0.4f, 0.9f, 0.8f); // blue default
+                    }
+                }
+                glDrawArrays(GL_TRIANGLES, c * 6, 6);
+            }
+
+            glDisable(GL_BLEND);
+            glBindVertexArray(s.va);
+        }
+    }
 }
+void RenderMirrorSelectionInfoPanel() {
+    if (g_selectedMirrorName.empty()) return;
+    if (!g_mirrorDragMode.load(std::memory_order_relaxed)) return;
+
+    const int screenX = g_selectedMirrorScreenX;
+    const int screenY = g_selectedMirrorScreenY;
+    const int screenW = g_selectedMirrorScreenW;
+    const int screenH = g_selectedMirrorScreenH;
+    const int outW = g_selectedMirrorOutW;
+    const int outH = g_selectedMirrorOutH;
+
+    if (screenW <= 0 || screenH <= 0) return;
+
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                                   ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                                   ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
+
+    ImGui::SetNextWindowBgAlpha(0.85f);
+
+    // Position 8px to the right of the selected mirror; fall back to left if no room
+    float panelX = (float)(screenX + screenW + 8);
+    float panelY = (float)screenY;
+    ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+    // Estimate panel width (~160px) to check if it fits on the right
+    if (panelX + 160.0f > displaySize.x) {
+        panelX = (float)(screenX - 168);
+        if (panelX < 0) panelX = 0;
+    }
+    ImGui::SetNextWindowPos(ImVec2(panelX, panelY));
+
+    if (ImGui::Begin("##MirrorInfoPanel", nullptr, flags)) {
+        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "%s", g_selectedMirrorName.c_str());
+        ImGui::Separator();
+        ImGui::Text("%d x %d px", outW, outH);
+        if (ImGui::Button("Edit")) {
+            g_scrollToMirrorName = g_selectedMirrorName;
+        }
+    }
+    ImGui::End();
+}
+
+void RenderWindowOverlaySelectionInfoPanel() {
+    if (g_selectedWindowOverlayName.empty()) return;
+    if (!g_windowOverlayDragMode.load(std::memory_order_relaxed)) return;
+
+    const int screenX = g_selectedWindowOverlayScreenX;
+    const int screenY = g_selectedWindowOverlayScreenY;
+    const int screenW = g_selectedWindowOverlayScreenW;
+    const int screenH = g_selectedWindowOverlayScreenH;
+
+    if (screenW <= 0 || screenH <= 0) return;
+
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                                   ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                                   ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
+
+    ImGui::SetNextWindowBgAlpha(0.85f);
+
+    // Position 8px to the right of the selected overlay; fall back to left if no room
+    float panelX = (float)(screenX + screenW + 8);
+    float panelY = (float)screenY;
+    ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+    if (panelX + 160.0f > displaySize.x) {
+        panelX = (float)(screenX - 168);
+        if (panelX < 0) panelX = 0;
+    }
+    ImGui::SetNextWindowPos(ImVec2(panelX, panelY));
+
+    if (ImGui::Begin("##WindowOverlayInfoPanel", nullptr, flags)) {
+        ImGui::TextColored(ImVec4(0.4f, 1.0f, 1.0f, 1.0f), "%s", g_selectedWindowOverlayName.c_str());
+        ImGui::Separator();
+        ImGui::Text("X: %d  Y: %d", screenX, screenY);
+
+        // Crop toggle button
+        if (g_windowOverlayCropMode) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.5f, 0.5f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.0f, 0.6f, 0.6f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.0f, 0.7f, 0.7f, 1.0f));
+            if (ImGui::Button("Crop (ON)")) {
+                g_windowOverlayCropMode = false;
+            }
+            ImGui::PopStyleColor(3);
+        } else {
+            if (ImGui::Button("Crop")) {
+                g_windowOverlayCropMode = true;
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Edit")) {
+            g_scrollToWindowOverlayName = g_selectedWindowOverlayName;
+        }
+    }
+    ImGui::End();
+}
+
 void RenderDebugBordersForMirror(const MirrorConfig* conf, Color captureColor, Color outputColor, GLint originalVAO) {
     if (!conf || !g_glInitialized.load(std::memory_order_acquire)) return;
 
@@ -2971,28 +4089,33 @@ void RenderDebugBordersForMirror(const MirrorConfig* conf, Color captureColor, C
     auto instIt = g_mirrorInstances.find(conf->name);
     if (instIt != g_mirrorInstances.end()) {
         const MirrorInstance& inst = instIt->second;
-        int finalScreenX, finalScreenY_win;
-        CalculateFinalScreenPos(conf, inst, geo.gameW, geo.gameH, geo.finalX, geo.finalY, geo.finalW, geo.finalH, fullW, fullH,
-                                finalScreenX, finalScreenY_win);
-        float scaleX = conf->output.separateScale ? conf->output.scaleX : conf->output.scale;
-        float scaleY = conf->output.separateScale ? conf->output.scaleY : conf->output.scale;
-        int outW = static_cast<int>(inst.fbo_w * scaleX);
-        int outH = static_cast<int>(inst.fbo_h * scaleY);
+        const auto& cache = inst.cachedRenderState;
+        if (cache.isValid && cache.mirrorScreenW > 0 && cache.mirrorScreenH > 0) {
+            // Use cached screen position (includes group expansion) instead of recalculating
+            // from individual mirror config which doesn't reflect group output overrides
+            int finalScreenX = cache.mirrorScreenX;
+            int finalScreenY_win = cache.mirrorScreenY;
+            int outW = cache.mirrorScreenW;
+            int outH = cache.mirrorScreenH;
 
-        int padding = (inst.fbo_w - conf->captureWidth) / 2;
-        int paddingScaledX = static_cast<int>(padding * scaleX);
-        int paddingScaledY = static_cast<int>(padding * scaleY);
+            // Calculate padding to show debug box for content area only (excluding border)
+            float scaleX = inst.fbo_w > 0 ? static_cast<float>(outW) / inst.fbo_w : 1.0f;
+            float scaleY = inst.fbo_h > 0 ? static_cast<float>(outH) / inst.fbo_h : 1.0f;
+            int padding = (inst.fbo_w - conf->captureWidth) / 2;
+            int paddingScaledX = static_cast<int>(padding * scaleX);
+            int paddingScaledY = static_cast<int>(padding * scaleY);
 
-        int finalScreenY_gl = fullH - finalScreenY_win - outH;
+            int finalScreenY_gl = fullH - finalScreenY_win - outH;
 
-        glUniform4f(g_solidColorShaderLocs.color, outputColor.r, outputColor.g, outputColor.b, 1.0f);
-        float x1 = (static_cast<float>(finalScreenX + paddingScaledX) / fullW) * 2.0f - 1.0f;
-        float y1 = (static_cast<float>(finalScreenY_gl + paddingScaledY) / fullH) * 2.0f - 1.0f;
-        float x2 = (static_cast<float>(finalScreenX + outW - paddingScaledX) / fullW) * 2.0f - 1.0f;
-        float y2 = (static_cast<float>(finalScreenY_gl + outH - paddingScaledY) / fullH) * 2.0f - 1.0f;
-        float v[] = { x1, y1, x2, y1, x2, y2, x1, y2 };
-        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(v), v);
-        glDrawArrays(GL_LINE_LOOP, 0, 4);
+            glUniform4f(g_solidColorShaderLocs.color, outputColor.r, outputColor.g, outputColor.b, 1.0f);
+            float x1 = (static_cast<float>(finalScreenX + paddingScaledX) / fullW) * 2.0f - 1.0f;
+            float y1 = (static_cast<float>(finalScreenY_gl + paddingScaledY) / fullH) * 2.0f - 1.0f;
+            float x2 = (static_cast<float>(finalScreenX + outW - paddingScaledX) / fullW) * 2.0f - 1.0f;
+            float y2 = (static_cast<float>(finalScreenY_gl + outH - paddingScaledY) / fullH) * 2.0f - 1.0f;
+            float v[] = { x1, y1, x2, y1, x2, y2, x1, y2 };
+            glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(v), v);
+            glDrawArrays(GL_LINE_LOOP, 0, 4);
+        }
     }
 
     glBindVertexArray(originalVAO);

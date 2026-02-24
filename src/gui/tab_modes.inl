@@ -2,8 +2,6 @@ if (ImGui::BeginTabItem("Modes")) {
     g_currentlyEditingMirror = "";
     int mode_to_remove = -1;
 
-    g_imageDragMode.store(false);
-    g_windowOverlayDragMode.store(false);
 
     bool resolutionSupported = IsResolutionChangeSupported(g_gameVersion);
     if (!resolutionSupported) {

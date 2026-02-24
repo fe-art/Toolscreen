@@ -1,8 +1,6 @@
 if (IsResolutionChangeSupported(g_gameVersion)) {
     if (ImGui::BeginTabItem("Hotkeys")) {
         g_currentlyEditingMirror = "";
-        g_imageDragMode.store(false);
-        g_windowOverlayDragMode.store(false);
 
         if (!g_isStateOutputAvailable.load(std::memory_order_acquire)) {
             ImGui::Spacing();

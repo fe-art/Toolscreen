@@ -1,8 +1,8 @@
 if (ImGui::BeginTabItem("Images")) {
     g_currentlyEditingMirror = "";
 
-    g_imageDragMode.store(true);
-    g_windowOverlayDragMode.store(false);
+    // Enable image drag mode when Images tab is active
+    wantImageDrag = true;
 
     SliderCtrlClickTip();
 

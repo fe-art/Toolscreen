@@ -1,7 +1,5 @@
             if (ImGui::BeginTabItem("Mouse")) {
                 g_currentlyEditingMirror = "";
-                g_imageDragMode.store(false);
-                g_windowOverlayDragMode.store(false);
 
                 ImGui::SeparatorText("Mouse Settings");
 

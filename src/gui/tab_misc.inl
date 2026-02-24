@@ -1,7 +1,5 @@
 if (ImGui::BeginTabItem("Misc")) {
     g_currentlyEditingMirror = "";
-    g_imageDragMode.store(false);
-    g_windowOverlayDragMode.store(false);
 
     ImGui::SeparatorText("About");
 
