@@ -1346,10 +1346,10 @@ if (ImGui::BeginTabItem("Inputs")) {
                                 lastScan = it.first;
                             }
 
-                            // Sort by display name for the dropdown.
+                            // Sort by numeric scan code (ascending).
                             std::sort(s_knownScanCodes.begin(), s_knownScanCodes.end(), [](const auto& a, const auto& b) {
-                                if (a.second == b.second) return a.first < b.first;
-                                return a.second < b.second;
+                                if (a.first == b.first) return a.second < b.second;
+                                return a.first < b.first;
                             });
 
                             s_knownScanCodesBuilt = true;
