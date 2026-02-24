@@ -1739,6 +1739,12 @@ InputHandlerResult HandleCharRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 
 LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     PROFILE_SCOPE("SubclassedWndProc");
+
+    const HWND expectedHwnd = g_subclassedHwnd.load();
+    if (expectedHwnd != NULL && hWnd != expectedHwnd) {
+        return DefWindowProc(hWnd, uMsg, wParam, lParam);
+    }
+
     if (g_showGui.load() && s_forcedShowCursor && g_gameVersion >= GameVersion(1, 13, 0)) {
         EnsureSystemCursorVisible();
         static HCURSOR s_arrowCursor = LoadCursorW(NULL, IDC_ARROW);
