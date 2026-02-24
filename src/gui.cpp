@@ -74,6 +74,13 @@ static std::atomic<LPARAM> g_bindingInputEventLParam{ 0 };
 static std::atomic<bool> g_bindingInputEventIsMouse{ false };
 
 void RegisterBindingInputEvent(UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    // Ignore Toolscreen-injected keyboard events (used for modifier-output rebinds).
+    // These should not count as user binding input.
+    static constexpr ULONG_PTR kToolscreenInjectedExtraInfo = (ULONG_PTR)0x5453434E; // 'TSCN'
+    if ((uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) && GetMessageExtraInfo() == kToolscreenInjectedExtraInfo) {
+        return;
+    }
+
     DWORD vk = 0;
     bool isMouseButton = false;
 

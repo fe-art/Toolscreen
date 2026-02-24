@@ -221,6 +221,7 @@ constexpr float EYEZOOM_TEXT_COLOR_B = 0.0f;
 constexpr bool KEY_REBIND_ENABLED = true;
 constexpr bool KEY_REBIND_USE_CUSTOM_OUTPUT = false;
 constexpr DWORD KEY_REBIND_CUSTOM_OUTPUT_VK = 0;
+constexpr DWORD KEY_REBIND_CUSTOM_OUTPUT_UNICODE = 0;
 constexpr DWORD KEY_REBIND_CUSTOM_OUTPUT_SCANCODE = 0;
 
 // ============================================================================

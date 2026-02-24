@@ -445,6 +445,9 @@ struct KeyRebind {
     // Optional: Custom output settings (when useCustomOutput is true)
     bool useCustomOutput = false;   // If true, use custom VK/scancode instead of auto-calculated
     DWORD customOutputVK = 0;       // Custom virtual key code to output
+    // Optional: Explicit Unicode codepoint for text (WM_CHAR) output. If non-zero, this takes precedence
+    // over customOutputVK for text output only (it does NOT affect the game keybind/scan trigger).
+    DWORD customOutputUnicode = 0;  // Unicode scalar value (0 = disabled). Supports >0xFFFF via surrogate pairs.
     DWORD customOutputScanCode = 0; // Custom scan code to output
 };
 struct KeyRebindsConfig {

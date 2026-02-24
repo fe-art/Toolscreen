@@ -1366,7 +1366,70 @@ void KeyRebindToToml(const KeyRebind& cfg, toml::table& out) {
     out.insert("enabled", cfg.enabled);
     out.insert("useCustomOutput", cfg.useCustomOutput);
     out.insert("customOutputVK", static_cast<int64_t>(cfg.customOutputVK));
+    out.insert("customOutputUnicode", static_cast<int64_t>(cfg.customOutputUnicode));
     out.insert("customOutputScanCode", static_cast<int64_t>(cfg.customOutputScanCode));
+}
+
+static bool TryParseUnicodeCodepointString(const std::string& in, uint32_t& outCp) {
+    auto isSpace = [](unsigned char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; };
+    std::string s = in;
+    while (!s.empty() && isSpace((unsigned char)s.front())) s.erase(s.begin());
+    while (!s.empty() && isSpace((unsigned char)s.back())) s.pop_back();
+    if (s.empty()) return false;
+
+    // Accept "U+XXXX", "\\uXXXX", "0xXXXX", or plain hex.
+    auto startsWithI = [&](const char* pfx) {
+        size_t n = std::char_traits<char>::length(pfx);
+        if (s.size() < n) return false;
+        for (size_t i = 0; i < n; ++i) {
+            char a = s[i];
+            char b = pfx[i];
+            if (a >= 'a' && a <= 'z') a = (char)(a - 'a' + 'A');
+            if (b >= 'a' && b <= 'z') b = (char)(b - 'a' + 'A');
+            if (a != b) return false;
+        }
+        return true;
+    };
+
+    std::string hex = s;
+    if (startsWithI("U+")) hex = s.substr(2);
+    else if (startsWithI("\\\\U")) hex = s.substr(2);
+    else if (startsWithI("\\\\u")) hex = s.substr(2);
+    else if (startsWithI("0X")) hex = s.substr(2);
+
+    // Strip optional surrounding braces like "{00F8}".
+    if (!hex.empty() && hex.front() == '{' && hex.back() == '}') hex = hex.substr(1, hex.size() - 2);
+
+    // If it's a single UTF-8 character (e.g. "ø"), accept it.
+    // Convert to UTF-16 and decode first scalar.
+    {
+        std::wstring w = Utf8ToWide(s);
+        if (!w.empty()) {
+            uint32_t cp = 0;
+            if (w.size() >= 2 && w[0] >= 0xD800 && w[0] <= 0xDBFF && w[1] >= 0xDC00 && w[1] <= 0xDFFF) {
+                cp = 0x10000u + (((uint32_t)w[0] - 0xD800u) << 10) + ((uint32_t)w[1] - 0xDC00u);
+            } else {
+                cp = (uint32_t)w[0];
+            }
+            if (cp != 0 && cp <= 0x10FFFFu && !(cp >= 0xD800u && cp <= 0xDFFFu)) {
+                outCp = cp;
+                return true;
+            }
+        }
+    }
+
+    // Hex parse
+    try {
+        size_t idx = 0;
+        unsigned long v = std::stoul(hex, &idx, 16);
+        if (idx == 0) return false;
+        if (v == 0 || v > 0x10FFFFul) return false;
+        if (v >= 0xD800ul && v <= 0xDFFFul) return false; // surrogates invalid
+        outCp = (uint32_t)v;
+        return true;
+    } catch (...) {
+        return false;
+    }
 }
 
 void KeyRebindFromToml(const toml::table& tbl, KeyRebind& cfg) {
@@ -1375,6 +1438,20 @@ void KeyRebindFromToml(const toml::table& tbl, KeyRebind& cfg) {
     cfg.enabled = GetOr(tbl, "enabled", ConfigDefaults::KEY_REBIND_ENABLED);
     cfg.useCustomOutput = GetOr(tbl, "useCustomOutput", ConfigDefaults::KEY_REBIND_USE_CUSTOM_OUTPUT);
     cfg.customOutputVK = static_cast<DWORD>(GetOr<int64_t>(tbl, "customOutputVK", ConfigDefaults::KEY_REBIND_CUSTOM_OUTPUT_VK));
+    cfg.customOutputUnicode = ConfigDefaults::KEY_REBIND_CUSTOM_OUTPUT_UNICODE;
+    if (auto u = tbl["customOutputUnicode"]) {
+        if (auto v = u.value<int64_t>()) {
+            uint64_t vv = (uint64_t)*v;
+            if (vv <= 0x10FFFFull && vv != 0 && !(vv >= 0xD800ull && vv <= 0xDFFFull)) {
+                cfg.customOutputUnicode = (DWORD)vv;
+            }
+        } else if (auto s = u.value<std::string>()) {
+            uint32_t cp = 0;
+            if (TryParseUnicodeCodepointString(*s, cp)) {
+                cfg.customOutputUnicode = (DWORD)cp;
+            }
+        }
+    }
     cfg.customOutputScanCode =
         static_cast<DWORD>(GetOr<int64_t>(tbl, "customOutputScanCode", ConfigDefaults::KEY_REBIND_CUSTOM_OUTPUT_SCANCODE));
 }

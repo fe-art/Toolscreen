@@ -1310,8 +1310,59 @@ static bool TryTranslateVkToCharWithKeyboardState(DWORD vkCode, const BYTE keybo
     return false;
 }
 
+static bool IsValidUnicodeScalar(uint32_t cp) {
+    if (cp == 0) return false;
+    if (cp > 0x10FFFFu) return false;
+    // UTF-16 surrogate range is not a scalar value
+    if (cp >= 0xD800u && cp <= 0xDFFFu) return false;
+    return true;
+}
+
+static LRESULT SendUnicodeScalarAsCharMessage(HWND hWnd, UINT charMsg, uint32_t cp, LPARAM lParam) {
+    if (!IsValidUnicodeScalar(cp)) return 0;
+
+    // WM_CHAR uses UTF-16 code units in wParam.
+    if (cp <= 0xFFFFu) {
+        return CallWindowProc(g_originalWndProc, hWnd, charMsg, (WPARAM)(WCHAR)cp, lParam);
+    }
+
+    // Encode surrogate pair
+    uint32_t v = cp - 0x10000u;
+    WCHAR high = (WCHAR)(0xD800u + (v >> 10));
+    WCHAR low = (WCHAR)(0xDC00u + (v & 0x3FFu));
+    (void)CallWindowProc(g_originalWndProc, hWnd, charMsg, (WPARAM)high, lParam);
+    return CallWindowProc(g_originalWndProc, hWnd, charMsg, (WPARAM)low, lParam);
+}
+
+// Tag for SendInput-synthesized events originating from Toolscreen.
+// This lets us avoid re-processing our own injected keyboard events (rebind chaining/loops).
+// NOTE: For keyboard messages, GetMessageExtraInfo() will return the dwExtraInfo set in SendInput().
+static constexpr ULONG_PTR kToolscreenInjectedExtraInfo = (ULONG_PTR)0x5453434E; // 'TSCN'
+
+static bool SendSynthKeyByScanCode(UINT scanCodeWithFlags, bool keyDown) {
+    INPUT in{};
+    in.type = INPUT_KEYBOARD;
+    in.ki.wVk = 0;
+    in.ki.wScan = (WORD)(scanCodeWithFlags & 0xFF);
+    DWORD flags = KEYEVENTF_SCANCODE;
+    if ((scanCodeWithFlags & 0xFF00) != 0) flags |= KEYEVENTF_EXTENDEDKEY;
+    if (!keyDown) flags |= KEYEVENTF_KEYUP;
+    in.ki.dwFlags = flags;
+    in.ki.time = 0;
+    in.ki.dwExtraInfo = kToolscreenInjectedExtraInfo;
+    return ::SendInput(1, &in, sizeof(INPUT)) == 1;
+}
+
 InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     PROFILE_SCOPE("HandleKeyRebinding");
+
+    // Don't re-process our own injected keyboard events.
+    // These should flow to the game normally and should not trigger rebind chaining.
+    if (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN || uMsg == WM_KEYUP || uMsg == WM_SYSKEYUP) {
+        if (GetMessageExtraInfo() == kToolscreenInjectedExtraInfo) {
+            return { false, 0 };
+        }
+    }
 
     // Determine the virtual key code based on message type
     DWORD rawVkCode = 0;
@@ -1374,6 +1425,8 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
         if (vkCode == 0) vkCode = rawVkCode;
     }
 
+    const bool isAutoRepeatKeyDown = (!isMouseButton && isKeyDown && (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) && ((lParam & (1LL << 30)) != 0));
+
     // Use config snapshot for thread-safe access to key rebinds
     auto rebindCfg = GetConfigSnapshot();
     if (!rebindCfg || !rebindCfg->keyRebinds.enabled) { return { false, 0 }; }
@@ -1403,14 +1456,23 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
         const auto& rebind = rebindCfg->keyRebinds.rebinds[i];
 
         if (rebind.enabled && rebind.fromKey != 0 && rebind.toKey != 0 && matchesFromKey(vkCode, rawVkCode, rebind.fromKey)) {
+            auto isModifierVk = [](DWORD vk) {
+                return vk == VK_CONTROL || vk == VK_LCONTROL || vk == VK_RCONTROL || vk == VK_SHIFT || vk == VK_LSHIFT || vk == VK_RSHIFT ||
+                       vk == VK_MENU || vk == VK_LMENU || vk == VK_RMENU || vk == VK_LWIN || vk == VK_RWIN;
+            };
+
             // Base output (affects the game keybind / key message VK+scan)
             const DWORD triggerVK =
                 NormalizeModifierVkFromConfig(rebind.toKey, (rebind.useCustomOutput ? rebind.customOutputScanCode : 0));
 
             // Optional: override which VK is used for text/WM_CHAR behavior.
             // When set, this does NOT change the trigger VK/scan (unless a custom scan code is also set).
-            const DWORD textVK = NormalizeModifierVkFromConfig(
-                (rebind.useCustomOutput && rebind.customOutputVK != 0) ? rebind.customOutputVK : triggerVK);
+            // IMPORTANT: If the trigger output is a modifier, force text output to match it.
+            // This guarantees a single output behavior (no separate "typed" output) for modifiers.
+            const DWORD textVK = isModifierVk(triggerVK)
+                                     ? triggerVK
+                                     : NormalizeModifierVkFromConfig(
+                                           (rebind.useCustomOutput && rebind.customOutputVK != 0) ? rebind.customOutputVK : triggerVK);
 
             // Trigger scan code: derive from base VK unless explicitly overridden.
             UINT outputScanCode = GetScanCodeWithExtendedFlag(triggerVK);
@@ -1477,6 +1539,22 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
             const bool useSysKey = isSystemKeyMsg || outputIsAlt;
             UINT outputMsg = isKeyDown ? (useSysKey ? WM_SYSKEYDOWN : WM_KEYDOWN) : (useSysKey ? WM_SYSKEYUP : WM_KEYUP);
 
+            // IMPORTANT:
+            // If the output is a modifier key, we must synthesize it via SendInput so the OS/game keyboard state
+            // reflects it being held. Calling the WndProc directly does NOT update the message-queue key state,
+            // so other keys won't be affected (no capitalization, GetKeyState/GetAsyncKeyState checks fail, etc.).
+            if (isModifierVk(triggerVK)) {
+                // Avoid spamming repeated modifier downs while the source key is held.
+                if (isAutoRepeatKeyDown) {
+                    return { true, 0 };
+                }
+
+                (void)SendSynthKeyByScanCode(outputScanCode, isKeyDown);
+                // We consumed the original message; the injected modifier will be delivered through the normal
+                // input pipeline (and bypass our rebind handler due to dwExtraInfo tagging).
+                return { true, 0 };
+            }
+
             // Windows typically sends generic modifier VKs in wParam (VK_SHIFT/VK_CONTROL/VK_MENU)
             // and uses scan code + extended-bit in lParam to distinguish left/right.
             // Many games/toolkits expect that behavior.
@@ -1509,11 +1587,6 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
             // Instead, call the original WndProc directly (same as the keyboard->keyboard path).
             LRESULT keyResult = CallWindowProc(g_originalWndProc, hWnd, outputMsg, msgVk, newLParam);
 
-            auto isModifierVk = [](DWORD vk) {
-                return vk == VK_CONTROL || vk == VK_LCONTROL || vk == VK_RCONTROL || vk == VK_SHIFT || vk == VK_LSHIFT || vk == VK_RSHIFT ||
-                       vk == VK_MENU || vk == VK_LMENU || vk == VK_RMENU;
-            };
-
             const bool fromKeyIsNonChar =
                 // Mouse inputs never produce WM_CHAR via TranslateMessage, so if the output is a character key
                 // we need to synthesize WM_CHAR ourselves.
@@ -1522,6 +1595,20 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
                 (rebind.fromKey >= VK_F1 && rebind.fromKey <= VK_F24);
 
             if (isKeyDown && fromKeyIsNonChar) {
+                const uint32_t configuredUnicodeText =
+                    // If output is a modifier, always disable unicode text override (single-output rule).
+                    (isModifierVk(triggerVK) ? 0u
+                                            : ((rebind.useCustomOutput && rebind.customOutputUnicode != 0)
+                                                   ? (uint32_t)rebind.customOutputUnicode
+                                                   : 0u));
+
+                // Highest priority: explicit Unicode text output.
+                if (configuredUnicodeText != 0) {
+                    const UINT charMsg = isSystemKeyMsg ? WM_SYSCHAR : WM_CHAR;
+                    SendUnicodeScalarAsCharMessage(hWnd, charMsg, configuredUnicodeText, newLParam);
+                    return { true, keyResult };
+                }
+
                 WCHAR outChar = 0;
 
                 // Some control keys should always generate WM_CHAR for expected text/edit behavior.
@@ -1577,6 +1664,11 @@ InputHandlerResult HandleCharRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
     for (const auto& rebind : charRebindCfg->keyRebinds.rebinds) {
         if (!rebind.enabled || rebind.fromKey == 0 || rebind.toKey == 0) continue;
 
+        auto isModifierVk = [](DWORD vk) {
+            return vk == VK_CONTROL || vk == VK_LCONTROL || vk == VK_RCONTROL || vk == VK_SHIFT || vk == VK_LSHIFT || vk == VK_RSHIFT ||
+                   vk == VK_MENU || vk == VK_LMENU || vk == VK_RMENU || vk == VK_LWIN || vk == VK_RWIN;
+        };
+
         WCHAR fromUnshifted = 0;
         WCHAR fromShifted = 0;
         bool hasFromUnshifted = TryTranslateVkToChar(rebind.fromKey, false, fromUnshifted);
@@ -1594,13 +1686,46 @@ InputHandlerResult HandleCharRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
         }
 
         if (matched) {
+            // Single-output rule for modifier outputs:
+            // If the base output is a modifier key, never emit a replacement WM_CHAR.
+            // (Modifiers should affect key state, not generate text.)
+            const DWORD baseOutVK = NormalizeModifierVkFromConfig(rebind.toKey, (rebind.useCustomOutput ? rebind.customOutputScanCode : 0));
+            if (isModifierVk(baseOutVK)) {
+                Log("[REBIND WM_CHAR] Consuming char code " + std::to_string(static_cast<unsigned int>(inputChar)) +
+                    " (base output is modifier VK=" + std::to_string((unsigned int)baseOutVK) + ")");
+                return { true, 0 };
+            }
+
+            // If an explicit Unicode text output is configured, use it.
+            if (rebind.useCustomOutput && rebind.customOutputUnicode != 0) {
+                LRESULT r = SendUnicodeScalarAsCharMessage(hWnd, uMsg, (uint32_t)rebind.customOutputUnicode, lParam);
+                return { true, r };
+            }
+
             DWORD outputVK = (rebind.useCustomOutput && rebind.customOutputVK != 0) ? rebind.customOutputVK : rebind.toKey;
             outputVK = NormalizeModifierVkFromConfig(outputVK);
 
+            // Some keys are expected to produce WM_CHAR even though ToUnicodeEx may not map them.
             WCHAR outputChar = 0;
-            if (!TryTranslateVkToChar(outputVK, matchedShifted, outputChar) || outputChar == 0) {
-                // Fallback: try unshifted mapping if shifted equivalent doesn't exist
-                if (!TryTranslateVkToChar(outputVK, false, outputChar) || outputChar == 0) { continue; }
+            if (outputVK == VK_RETURN) {
+                outputChar = L'\r';
+            } else if (outputVK == VK_TAB) {
+                outputChar = L'\t';
+            } else if (outputVK == VK_BACK) {
+                outputChar = L'\b';
+            } else {
+                if (!TryTranslateVkToChar(outputVK, matchedShifted, outputChar) || outputChar == 0) {
+                    // Fallback: try unshifted mapping if shifted equivalent doesn't exist.
+                    (void)TryTranslateVkToChar(outputVK, false, outputChar);
+                }
+            }
+
+            // If the output key has no character representation (e.g. Shift/Ctrl/Alt, arrows, function keys),
+            // swallow the original WM_CHAR so rebinding a character key to a modifier doesn't still type the original key.
+            if (outputChar == 0) {
+                Log("[REBIND WM_CHAR] Consuming char code " + std::to_string(static_cast<unsigned int>(inputChar)) +
+                    " (output VK has no WM_CHAR)");
+                return { true, 0 };
             }
 
             Log("[REBIND WM_CHAR] Remapping char code " + std::to_string(static_cast<unsigned int>(inputChar)) + " -> " +
