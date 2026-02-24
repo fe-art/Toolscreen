@@ -17,9 +17,15 @@
 #include <fstream>
 
 // ImGui includes for render thread
+#ifdef CMAKE_BUILD
+#include <backends/imgui_impl_opengl3.h>
+#include <backends/imgui_impl_win32.h>
+#include <imgui.h>
+#else
 #include "include/imgui/backends/imgui_impl_opengl3.h"
 #include "include/imgui/backends/imgui_impl_win32.h"
 #include "include/imgui/imgui.h"
+#endif
 
 // For GetCachedScreenHeight
 #include "logic_thread.h"
@@ -2752,78 +2758,97 @@ static void RT_RenderWindowOverlays(const std::vector<const WindowOverlayConfig*
     glUniform1i(rt_imageRenderShaderLocs.enableColorKey, 0);
     glUniform1f(rt_imageRenderShaderLocs.opacity, modeOpacity);
 
-    std::unique_lock<std::mutex> cacheLock(g_windowOverlayCacheMutex, std::try_to_lock);
-    if (!cacheLock.owns_lock()) {
+    // Pre-resolve cache entries under a brief lock, then render without holding it.
+    // This prevents blinking caused by try_to_lock contention with the game thread
+    // (hover detection, resize, hit-test) and the capture thread.
+    struct ResolvedEntry {
+        WindowOverlayCacheEntry* entry;
+        const WindowOverlayConfig* conf;
+    };
+    std::vector<ResolvedEntry> resolvedEntries;
+    resolvedEntries.reserve(overlays.size());
+
+    {
+        std::unique_lock<std::mutex> cacheLock(g_windowOverlayCacheMutex, std::try_to_lock);
+        if (!cacheLock.owns_lock()) {
+            // Retry with a short blocking wait to avoid dropping the frame entirely.
+            // The contending locks are brief (map lookups, buffer swaps), so this rarely blocks long.
+            cacheLock = std::unique_lock<std::mutex>(g_windowOverlayCacheMutex);
+        }
+
+        for (const WindowOverlayConfig* conf : overlays) {
+            if (!conf) continue;
+            if (excludeOnlyOnMyScreen && conf->onlyOnMyScreen) continue;
+
+            const float effectiveOpacity = conf->opacity * modeOpacity;
+            const bool hasBg = conf->background.enabled && conf->background.opacity > 0.0f;
+            const bool hasBorder = conf->border.enabled && conf->border.width > 0;
+            if (effectiveOpacity <= 0.0f && !hasBg && !hasBorder) continue;
+
+            auto it = g_windowOverlayCache.find(conf->name);
+            if (it == g_windowOverlayCache.end() || !it->second) continue;
+
+            WindowOverlayCacheEntry& entry = *it->second;
+
+            // Swap new frame data from capture thread (entry's own swap mutex protects buffers)
+            if (entry.hasNewFrame.load(std::memory_order_acquire)) {
+                std::lock_guard<std::mutex> lock(entry.swapMutex);
+                entry.readyBuffer.swap(entry.backBuffer);
+                entry.hasNewFrame.store(false, std::memory_order_release);
+            }
+
+            // Upload texture data while we still hold the cache lock
+            WindowOverlayRenderData* renderData = entry.backBuffer.get();
+            if (renderData && renderData->pixelData && renderData->width > 0 && renderData->height > 0) {
+                if (renderData != entry.lastUploadedRenderData) {
+                    if (entry.glTextureId == 0) {
+                        glGenTextures(1, &entry.glTextureId);
+                        glBindTexture(GL_TEXTURE_2D, entry.glTextureId);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                        entry.filterInitialized = false;
+                    }
+
+                    glBindTexture(GL_TEXTURE_2D, entry.glTextureId);
+
+                    if (entry.glTextureWidth != renderData->width || entry.glTextureHeight != renderData->height) {
+                        entry.glTextureWidth = renderData->width;
+                        entry.glTextureHeight = renderData->height;
+                        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, renderData->width, renderData->height, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                                     renderData->pixelData);
+                    } else {
+                        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, renderData->width, renderData->height, GL_RGBA, GL_UNSIGNED_BYTE,
+                                        renderData->pixelData);
+                    }
+
+                    entry.lastUploadedRenderData = renderData;
+                }
+            }
+
+            if (entry.glTextureId == 0) continue;
+
+            resolvedEntries.push_back({ &entry, conf });
+        }
+    } // Cache lock released here - all rendering below is lock-free
+
+    if (resolvedEntries.empty()) {
+        static int s_resolveDebug = 0;
+        if (s_resolveDebug++ < 60) {
+            Log("[WO-DBG] resolvedEntries EMPTY but overlays.size()=" + std::to_string(overlays.size()));
+        }
         glDisable(GL_BLEND);
-        return; // Skip if can't get lock
+        return;
     }
 
     const std::string focusedName = GetFocusedWindowOverlayName();
 
-    for (const WindowOverlayConfig* conf : overlays) {
-        if (!conf) continue;
-        if (excludeOnlyOnMyScreen && conf->onlyOnMyScreen) continue;
-
+    for (const auto& resolved : resolvedEntries) {
+        WindowOverlayCacheEntry& entry = *resolved.entry;
+        const WindowOverlayConfig* conf = resolved.conf;
         const std::string& overlayId = conf->name;
-
-        // Skip fully invisible overlays (opacity==0 and no visible background/border).
         const float effectiveOpacity = conf->opacity * modeOpacity;
         const bool hasBg = conf->background.enabled && conf->background.opacity > 0.0f;
         const bool hasBorder = conf->border.enabled && conf->border.width > 0;
-        if (effectiveOpacity <= 0.0f && !hasBg && !hasBorder) { continue; }
-
-        auto it = g_windowOverlayCache.find(overlayId);
-        if (it == g_windowOverlayCache.end() || !it->second) continue;
-
-        WindowOverlayCacheEntry& entry = *it->second;
-
-        // Check if capture thread has a new frame ready
-        if (entry.hasNewFrame.load(std::memory_order_acquire)) {
-            // Swap readyBuffer with backBuffer under lock - this gives us exclusive access to backBuffer
-            {
-                std::lock_guard<std::mutex> lock(entry.swapMutex);
-                entry.readyBuffer.swap(entry.backBuffer);
-            }
-            entry.hasNewFrame.store(false, std::memory_order_release);
-        }
-
-        // Now read from backBuffer - it's safe, capture thread won't touch it
-        WindowOverlayRenderData* renderData = entry.backBuffer.get();
-        if (renderData && renderData->pixelData && renderData->width > 0 && renderData->height > 0) {
-            // Check if this is actually new data we haven't uploaded yet
-            if (renderData != entry.lastUploadedRenderData) {
-                // Create texture if it doesn't exist
-                if (entry.glTextureId == 0) {
-                    glGenTextures(1, &entry.glTextureId);
-                    glBindTexture(GL_TEXTURE_2D, entry.glTextureId);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                    // Force filter refresh on first draw.
-                    entry.filterInitialized = false;
-                }
-
-                // Upload the pixel data to the texture
-                glBindTexture(GL_TEXTURE_2D, entry.glTextureId);
-
-                // Check if we need to reallocate (size changed)
-                if (entry.glTextureWidth != renderData->width || entry.glTextureHeight != renderData->height) {
-                    entry.glTextureWidth = renderData->width;
-                    entry.glTextureHeight = renderData->height;
-                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, renderData->width, renderData->height, 0, GL_RGBA, GL_UNSIGNED_BYTE,
-                                 renderData->pixelData);
-                } else {
-                    // Same size, just update the data
-                    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, renderData->width, renderData->height, GL_RGBA, GL_UNSIGNED_BYTE,
-                                    renderData->pixelData);
-                }
-
-                // Track which data we uploaded
-                entry.lastUploadedRenderData = renderData;
-            }
-        }
-
-        // Skip if no valid texture
-        if (entry.glTextureId == 0) continue;
 
         // Calculate dimensions
         int croppedW = entry.glTextureWidth - conf->crop_left - conf->crop_right;
@@ -2926,6 +2951,76 @@ static void RT_RenderWindowOverlays(const std::vector<const WindowOverlayConfig*
                           nx1, ny1, tu1, tv2, nx2, ny2, tu2, tv1, nx1, ny2, tu1, tv1 };
         glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
         glDrawArrays(GL_TRIANGLES, 0, 6);
+
+        // Crop preview: render ghosted crop edges at half opacity when crop mode is active
+        if (g_windowOverlayCropMode && conf->name == g_selectedWindowOverlayName &&
+            (conf->crop_top > 0 || conf->crop_bottom > 0 || conf->crop_left > 0 || conf->crop_right > 0)) {
+            const float ghostOpacity = 0.3f * effectiveOpacity;
+            glUniform1f(rt_imageRenderShaderLocs.opacity, ghostOpacity);
+
+            float texW = (float)entry.glTextureWidth;
+            float texH = (float)entry.glTextureHeight;
+            float scale = conf->scale;
+
+            // Left crop strip
+            if (conf->crop_left > 0) {
+                float stripW = conf->crop_left * scale;
+                float sNx1 = ((float)(screenX - (int)stripW) / fullW) * 2.0f - 1.0f;
+                float sNx2 = nx1;
+                float sTu1 = 0.0f;
+                float sTu2 = (float)conf->crop_left / texW;
+                int sY_gl = fullH - screenY - displayH;
+                float sNy1 = ((float)sY_gl / fullH) * 2.0f - 1.0f;
+                float sNy2 = ((float)(sY_gl + displayH) / fullH) * 2.0f - 1.0f;
+                float sv[] = { sNx1, sNy1, sTu1, tv2, sNx2, sNy1, sTu2, tv2, sNx2, sNy2, sTu2, tv1,
+                               sNx1, sNy1, sTu1, tv2, sNx2, sNy2, sTu2, tv1, sNx1, sNy2, sTu1, tv1 };
+                glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(sv), sv);
+                glDrawArrays(GL_TRIANGLES, 0, 6);
+            }
+            // Right crop strip
+            if (conf->crop_right > 0) {
+                float stripW = conf->crop_right * scale;
+                float sNx1 = nx2;
+                float sNx2 = ((float)(screenX + displayW + (int)stripW) / fullW) * 2.0f - 1.0f;
+                float sTu1 = (float)(entry.glTextureWidth - conf->crop_right) / texW;
+                float sTu2 = 1.0f;
+                int sY_gl = fullH - screenY - displayH;
+                float sNy1 = ((float)sY_gl / fullH) * 2.0f - 1.0f;
+                float sNy2 = ((float)(sY_gl + displayH) / fullH) * 2.0f - 1.0f;
+                float sv[] = { sNx1, sNy1, sTu1, tv2, sNx2, sNy1, sTu2, tv2, sNx2, sNy2, sTu2, tv1,
+                               sNx1, sNy1, sTu1, tv2, sNx2, sNy2, sTu2, tv1, sNx1, sNy2, sTu1, tv1 };
+                glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(sv), sv);
+                glDrawArrays(GL_TRIANGLES, 0, 6);
+            }
+            // Top crop strip
+            if (conf->crop_top > 0) {
+                float stripH = static_cast<float>(conf->crop_top) * scale;
+                float sNy1 = (static_cast<float>(fullH - screenY) / fullH) * 2.0f - 1.0f;
+                float sNy2 = (static_cast<float>(fullH - screenY) + stripH) / fullH * 2.0f - 1.0f;
+                float sTv1 = 0.0f;
+                float sTv2 = (float)conf->crop_top / texH;
+                float sv[] = { nx1, sNy1, tu1, sTv2, nx2, sNy1, tu2, sTv2, nx2, sNy2, tu2, sTv1,
+                               nx1, sNy1, tu1, sTv2, nx2, sNy2, tu2, sTv1, nx1, sNy2, tu1, sTv1 };
+                glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(sv), sv);
+                glDrawArrays(GL_TRIANGLES, 0, 6);
+            }
+            // Bottom crop strip
+            if (conf->crop_bottom > 0) {
+                float stripH = static_cast<float>(conf->crop_bottom) * scale;
+                float sY_gl_f = static_cast<float>(fullH - (screenY + displayH)) - stripH;
+                float sNy1 = (sY_gl_f / fullH) * 2.0f - 1.0f;
+                float sNy2 = ((sY_gl_f + stripH) / fullH) * 2.0f - 1.0f;
+                float sTv1 = (float)(entry.glTextureHeight - conf->crop_bottom) / texH;
+                float sTv2 = 1.0f;
+                float sv[] = { nx1, sNy1, tu1, sTv2, nx2, sNy1, tu2, sTv2, nx2, sNy2, tu2, sTv1,
+                               nx1, sNy1, tu1, sTv2, nx2, sNy2, tu2, sTv1, nx1, sNy2, tu1, sTv1 };
+                glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(sv), sv);
+                glDrawArrays(GL_TRIANGLES, 0, 6);
+            }
+
+            // Restore opacity for next overlays
+            glUniform1f(rt_imageRenderShaderLocs.opacity, modeOpacity);
+        }
 
         // Render border if enabled (matching RenderWindowOverlaysGL behavior in window_overlay.cpp)
         if (hasBorder) {
@@ -3823,6 +3918,12 @@ static void RenderThreadFunc(void* gameGLContext) {
             }
 
             // Render window overlays using local shaders
+            static int s_woDebugCounter = 0;
+            if (activeWindowOverlays.empty() && s_woDebugCounter++ < 120) {
+                Log("[WO-DBG] activeWindowOverlays EMPTY frame=" + std::to_string(request.frameNumber) +
+                    " mode=" + request.modeId + " cfgPtr=" + std::to_string(reinterpret_cast<uintptr_t>(&cfg)) +
+                    " woVisible=" + std::to_string(g_windowOverlaysVisible.load()));
+            }
             if (!activeWindowOverlays.empty()) {
                 PROFILE_SCOPE_CAT("RT Window Overlay Render", "Render Thread");
                 RT_RenderWindowOverlays(activeWindowOverlays, request.fullW, request.fullH, request.toX, request.toY, request.toW,
@@ -4047,7 +4148,11 @@ static void RenderThreadFunc(void* gameGLContext) {
                 RenderCachedTextureGridLabels();
 
                 // Render main settings GUI if visible
-                if (request.shouldRenderGui) { RenderSettingsGUI(); }
+                if (request.shouldRenderGui) {
+                    RenderSettingsGUI();
+                    RenderMirrorSelectionInfoPanel();
+                    RenderWindowOverlaySelectionInfoPanel();
+                }
 
                 // Render performance overlay
                 RenderPerformanceOverlay(request.showPerformanceOverlay);

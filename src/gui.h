@@ -613,6 +613,16 @@ extern std::atomic<bool> g_showGui;
 extern std::atomic<bool> g_imageOverlaysVisible;
 extern std::atomic<bool> g_windowOverlaysVisible;
 extern std::string g_currentlyEditingMirror;
+extern std::string g_selectedMirrorName;
+extern int g_selectedMirrorOutW, g_selectedMirrorOutH;
+extern int g_selectedMirrorScreenX, g_selectedMirrorScreenY;
+extern int g_selectedMirrorScreenW, g_selectedMirrorScreenH;
+extern std::string g_scrollToMirrorName;
+extern std::string g_selectedWindowOverlayName;
+extern int g_selectedWindowOverlayScreenX, g_selectedWindowOverlayScreenY;
+extern int g_selectedWindowOverlayScreenW, g_selectedWindowOverlayScreenH;
+extern std::string g_scrollToWindowOverlayName;
+extern bool g_windowOverlayCropMode;
 extern std::atomic<HWND> g_minecraftHwnd;
 extern std::wstring g_toolscreenPath;
 extern std::string g_currentModeId;
@@ -735,6 +745,10 @@ extern std::string g_draggedImageName;
 extern std::mutex g_imageDragMutex;
 
 extern std::atomic<bool> g_windowOverlayDragMode;
+
+extern std::atomic<bool> g_mirrorDragMode;
+
+extern std::atomic<bool> g_overlayEditorMode;
 
 extern std::string g_gameStateBuffers[2];
 extern std::atomic<int> g_currentGameStateIndex;

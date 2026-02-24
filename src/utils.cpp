@@ -2112,6 +2112,43 @@ void CalculateFinalScreenPos(const MirrorConfig* conf, const MirrorInstance& ins
     outScreenY = finalY + static_cast<int>(gamePosY * yScale);
 }
 
+void ScreenDeltaToMirrorConfigDelta(const std::string& relativeTo, int screenDeltaX, int screenDeltaY,
+                                    int gameW, int gameH, int finalW, int finalH,
+                                    int& outDeltaX, int& outDeltaY) {
+    // Strip "Screen" or "Viewport" suffix to get the base anchor name
+    std::string anchor = relativeTo;
+    bool isViewport = false;
+    if (anchor.length() > 8 && anchor.substr(anchor.length() - 8) == "Viewport") {
+        anchor = anchor.substr(0, anchor.length() - 8);
+        isViewport = true;
+    } else if (anchor.length() > 6 && anchor.substr(anchor.length() - 6) == "Screen") {
+        anchor = anchor.substr(0, anchor.length() - 6);
+    }
+
+    // For viewport-relative anchors, scale screen pixels to game-space pixels
+    int dx = screenDeltaX;
+    int dy = screenDeltaY;
+    if (isViewport && finalW > 0 && finalH > 0) {
+        dx = static_cast<int>(screenDeltaX * static_cast<float>(gameW) / finalW);
+        dy = static_cast<int>(screenDeltaY * static_cast<float>(gameH) / finalH);
+    }
+
+    // Invert sign based on anchor direction
+    // topRight: X measures from right edge, so dragging right decreases offset
+    // bottomLeft: Y measures from bottom edge, so dragging down decreases offset
+    // bottomRight: both axes inverted
+    // pieLeft/pieRight: X measures from right edge (gameW - pieX + offsetX), Y from bottom (gameH - pieY + offsetY)
+    if (anchor == "topRight" || anchor == "bottomRight" || anchor == "pieLeft" || anchor == "pieRight") {
+        dx = -dx;
+    }
+    if (anchor == "bottomLeft" || anchor == "bottomRight" || anchor == "pieLeft" || anchor == "pieRight") {
+        dy = -dy;
+    }
+
+    outDeltaX = dx;
+    outDeltaY = dy;
+}
+
 void ScreenshotToClipboard(int width, int height) {
     PROFILE_SCOPE_CAT("Screenshot to Clipboard", "System");
     Log("Taking screenshot...");

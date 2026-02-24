@@ -2,9 +2,7 @@
     g_currentlyEditingMirror = "";
 
     // Enable image drag mode when Images tab is active
-    g_imageDragMode.store(true);
-    // Disable window overlay drag mode in Images tab
-    g_windowOverlayDragMode.store(false);
+    wantImageDrag = true;
 
     SliderCtrlClickTip();
 

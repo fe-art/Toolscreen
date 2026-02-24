@@ -1,7 +1,5 @@
 if (ImGui::BeginTabItem("Inputs")) {
     g_currentlyEditingMirror = "";
-    g_imageDragMode.store(false);
-    g_windowOverlayDragMode.store(false);
 
     // Sub-tabs for Mouse and Keyboard
     if (ImGui::BeginTabBar("InputsSubTabs")) {

@@ -7,7 +7,11 @@
 // Uses tomlplusplus library for TOML parsing and generation.
 // ============================================================================
 
+#ifdef CMAKE_BUILD
+#include <toml++/toml.hpp>
+#else
 #include "toml.hpp"
+#endif
 #include <string>
 
 // Need full Color definition for ColorFromTomlArray return type and default parameter

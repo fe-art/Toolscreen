@@ -379,9 +379,14 @@ InputHandlerResult HandleGuiToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
             }
         }
         g_currentlyEditingMirror = "";
+        g_selectedMirrorName = "";
+        g_selectedWindowOverlayName = "";
+        g_windowOverlayCropMode = false;
 
+        g_overlayEditorMode.store(false);
         g_imageDragMode.store(false);
         g_windowOverlayDragMode.store(false);
+        g_mirrorDragMode.store(false);
 
         // Clear image overlay drag state
         extern std::string s_hoveredImageName;
@@ -398,6 +403,14 @@ InputHandlerResult HandleGuiToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         s_hoveredWindowOverlayName = "";
         s_draggedWindowOverlayName = "";
         s_isWindowOverlayDragging = false;
+
+        // Clear mirror drag state
+        extern std::string s_hoveredMirrorName;
+        extern std::string s_draggedMirrorName;
+        extern bool s_isMirrorDragging;
+        s_hoveredMirrorName = "";
+        s_draggedMirrorName = "";
+        s_isMirrorDragging = false;
     } else if (!isEscape) {
         g_showGui = true;
         const bool wasCursorVisible = IsCursorVisible();
@@ -845,19 +858,6 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
     if (!cfgSnap) { return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) }; }
     const Config& cfg = *cfgSnap;
 
-    // Resolve rebind target so hotkeys can match rebound keys
-    DWORD rebindTargetVk = 0;
-    if (cfg.keyRebinds.enabled) {
-        for (const auto& rebind : cfg.keyRebinds.rebinds) {
-            if (rebind.enabled && rebind.fromKey != 0 && rebind.toKey != 0 &&
-                (vkCode == rebind.fromKey || rawVkCode == rebind.fromKey)) {
-                rebindTargetVk = (rebind.useCustomOutput && rebind.customOutputVK != 0)
-                    ? rebind.customOutputVK : rebind.toKey;
-                break;
-            }
-        }
-    }
-
     bool s_enableHotkeyDebug = cfg.debug.showHotkeyDebug;
 
     if (s_enableHotkeyDebug) {
@@ -899,12 +899,7 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
 
         // Check Alt secondary mode hotkeys first
         for (const auto& alt : hotkey.altSecondaryModes) {
-            bool matched = CheckHotkeyMatch(alt.keys, vkCode, hotkey.conditions.exclusions, hotkey.triggerOnRelease);
-            bool matchedViaRebind = !matched && rebindTargetVk && CheckHotkeyMatch(alt.keys, rebindTargetVk, hotkey.conditions.exclusions, hotkey.triggerOnRelease);
-            if (matched || matchedViaRebind) {
-                // When matched via rebind target, always block original key from game
-                // (the original key is being rebinded away, and its target matched a hotkey)
-                bool blockKey = hotkey.blockKeyFromGame || matchedViaRebind;
+            if (CheckHotkeyMatch(alt.keys, vkCode, hotkey.conditions.exclusions, hotkey.triggerOnRelease)) {
                 std::string hotkeyId = GetKeyComboString(alt.keys);
 
                 // Handle trigger-on-release invalidation tracking
@@ -918,7 +913,7 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                         g_triggerOnReleasePending.insert(hotkeyId);
                         if (s_enableHotkeyDebug) { Log("[Hotkey] Alt trigger-on-release hotkey pressed, added to pending: " + hotkeyId); }
                         // Pass through the key-down event to the game so modifier keys work with other combos
-                        if (blockKey) return { true, 0 };
+                        if (hotkey.blockKeyFromGame) return { true, 0 };
                         return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
                     } else {
                         // Key released - check if invalidated
@@ -932,7 +927,7 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
 
                         if (wasInvalidated) {
                             if (s_enableHotkeyDebug) { Log("[Hotkey] Alt trigger-on-release hotkey invalidated: " + hotkeyId); }
-                            if (blockKey) return { true, 0 };
+                            if (hotkey.blockKeyFromGame) return { true, 0 };
                             return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
                         }
                     }
@@ -947,7 +942,7 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                         std::chrono::duration_cast<std::chrono::milliseconds>(now - g_hotkeyTimestamps[hotkeyId]).count() <
                             hotkey.debounce) {
                         if (s_enableHotkeyDebug) { Log("[Hotkey] Alt hotkey matched but debounced: " + hotkeyId); }
-                        if (blockKey) return { true, 0 };
+                        if (hotkey.blockKeyFromGame) return { true, 0 };
                         return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
                     }
                     g_hotkeyTimestamps[hotkeyId] = now;
@@ -960,74 +955,68 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
 
                     if (!newSecMode.empty()) { SwitchToMode(newSecMode, "alt hotkey"); }
                 }
-                if (blockKey) return { true, 0 };
+                if (hotkey.blockKeyFromGame) return { true, 0 };
                 return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
             }
         }
 
         // Check Main hotkey
-        {
-            bool matched = CheckHotkeyMatch(hotkey.keys, vkCode, hotkey.conditions.exclusions, hotkey.triggerOnRelease);
-            bool matchedViaRebind = !matched && rebindTargetVk && CheckHotkeyMatch(hotkey.keys, rebindTargetVk, hotkey.conditions.exclusions, hotkey.triggerOnRelease);
-            if (matched || matchedViaRebind) {
-                // When matched via rebind target, always block original key from game
-                // (the original key is being rebinded away, and its target matched a hotkey)
-                bool blockKey = hotkey.blockKeyFromGame || matchedViaRebind;
-                std::string hotkeyId = GetKeyComboString(hotkey.keys);
+        if (CheckHotkeyMatch(hotkey.keys, vkCode, hotkey.conditions.exclusions, hotkey.triggerOnRelease)) {
+            std::string hotkeyId = GetKeyComboString(hotkey.keys);
 
-                // Handle trigger-on-release invalidation tracking
-                if (hotkey.triggerOnRelease) {
-                    if (isKeyDown) {
-                        // Key pressed - add to pending set and invalidate OTHER pending hotkeys
+            // Handle trigger-on-release invalidation tracking
+            if (hotkey.triggerOnRelease) {
+                if (isKeyDown) {
+                    // Key pressed - add to pending set and invalidate OTHER pending hotkeys
+                    std::lock_guard<std::mutex> lock(g_triggerOnReleaseMutex);
+                    // Invalidate all other pending trigger-on-release hotkeys
+                    for (const auto& pendingHotkeyId : g_triggerOnReleasePending) {
+                        if (pendingHotkeyId != hotkeyId) { g_triggerOnReleaseInvalidated.insert(pendingHotkeyId); }
+                    }
+                    // Add this hotkey to pending
+                    g_triggerOnReleasePending.insert(hotkeyId);
+                    if (s_enableHotkeyDebug) { Log("[Hotkey] Trigger-on-release hotkey pressed, added to pending: " + hotkeyId); }
+                    // Pass through the key-down event to the game so modifier keys work with other combos
+                    if (hotkey.blockKeyFromGame) return { true, 0 };
+                    return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
+                } else {
+                    // Key released - check if invalidated
+                    bool wasInvalidated = false;
+                    {
                         std::lock_guard<std::mutex> lock(g_triggerOnReleaseMutex);
-                        // Invalidate all other pending trigger-on-release hotkeys
-                        for (const auto& pendingHotkeyId : g_triggerOnReleasePending) {
-                            if (pendingHotkeyId != hotkeyId) { g_triggerOnReleaseInvalidated.insert(pendingHotkeyId); }
-                        }
-                        // Add this hotkey to pending
-                        g_triggerOnReleasePending.insert(hotkeyId);
-                        if (s_enableHotkeyDebug) { Log("[Hotkey] Trigger-on-release hotkey pressed, added to pending: " + hotkeyId); }
-                        // Pass through the key-down event to the game so modifier keys work with other combos
-                        if (blockKey) return { true, 0 };
-                        return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
-                    } else {
-                        // Key released - check if invalidated
-                        bool wasInvalidated = false;
-                        {
-                            std::lock_guard<std::mutex> lock(g_triggerOnReleaseMutex);
-                            wasInvalidated = g_triggerOnReleaseInvalidated.count(hotkeyId) > 0;
-                            // Clean up tracking sets
-                            g_triggerOnReleasePending.erase(hotkeyId);
-                            g_triggerOnReleaseInvalidated.erase(hotkeyId);
-                        }
-
-                        if (wasInvalidated) {
-                            if (s_enableHotkeyDebug) {
-                                Log("[Hotkey] Trigger-on-release hotkey invalidated (another key was pressed): " + hotkeyId);
-                            }
-                            if (blockKey) return { true, 0 };
-                            return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
-                        }
-                        // Fall through to trigger the hotkey
+                        wasInvalidated = g_triggerOnReleaseInvalidated.count(hotkeyId) > 0;
+                        // Clean up tracking sets
+                        g_triggerOnReleasePending.erase(hotkeyId);
+                        g_triggerOnReleaseInvalidated.erase(hotkeyId);
                     }
+
+                    if (wasInvalidated) {
+                        if (s_enableHotkeyDebug) {
+                            Log("[Hotkey] Trigger-on-release hotkey invalidated (another key was pressed): " + hotkeyId);
+                        }
+                        if (hotkey.blockKeyFromGame) return { true, 0 };
+                        return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
+                    }
+                    // Fall through to trigger the hotkey
                 }
+            }
 
-                // Check if this hotkey should trigger based on triggerOnRelease setting
-                // When triggerOnRelease is true, only fire on key UP; when false (default), only fire on key DOWN
-                if (hotkey.triggerOnRelease != isKeyDown) {
-                    auto now = std::chrono::steady_clock::now();
-                    // Lock-free debouncing - race is acceptable (worst case: occasional double-trigger)
-                    if (g_hotkeyTimestamps.count(hotkeyId) &&
-                        std::chrono::duration_cast<std::chrono::milliseconds>(now - g_hotkeyTimestamps[hotkeyId]).count() < hotkey.debounce) {
-                        if (s_enableHotkeyDebug) { Log("[Hotkey] Main hotkey matched but debounced: " + hotkeyId); }
-                        if (blockKey) return { true, 0 };
-                        return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
-                    }
-                    g_hotkeyTimestamps[hotkeyId] = now;
+            // Check if this hotkey should trigger based on triggerOnRelease setting
+            // When triggerOnRelease is true, only fire on key UP; when false (default), only fire on key DOWN
+            if (hotkey.triggerOnRelease != isKeyDown) {
+                auto now = std::chrono::steady_clock::now();
+                // Lock-free debouncing - race is acceptable (worst case: occasional double-trigger)
+                if (g_hotkeyTimestamps.count(hotkeyId) &&
+                    std::chrono::duration_cast<std::chrono::milliseconds>(now - g_hotkeyTimestamps[hotkeyId]).count() < hotkey.debounce) {
+                    if (s_enableHotkeyDebug) { Log("[Hotkey] Main hotkey matched but debounced: " + hotkeyId); }
+                    if (hotkey.blockKeyFromGame) return { true, 0 };
+                    return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
+                }
+                g_hotkeyTimestamps[hotkeyId] = now;
 
-                    // Lock-free read of current mode ID from double-buffer
-                    std::string current = g_modeIdBuffers[g_currentModeIdIndex.load(std::memory_order_acquire)];
-                    std::string targetMode;
+                // Lock-free read of current mode ID from double-buffer
+                std::string current = g_modeIdBuffers[g_currentModeIdIndex.load(std::memory_order_acquire)];
+                std::string targetMode;
 
                 if (EqualsIgnoreCase(current, currentSecMode)) {
                     targetMode = cfg.defaultMode;
@@ -1035,15 +1024,14 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                     targetMode = currentSecMode;
                 }
 
-                    if (s_enableHotkeyDebug) {
-                        Log("[Hotkey] ✓✓✓ MAIN HOTKEY TRIGGERED: " + hotkeyId + " (current: " + current + " -> target: " + targetMode + ")");
-                    }
-
-                    if (!targetMode.empty()) { SwitchToMode(targetMode, "main hotkey"); }
+                if (s_enableHotkeyDebug) {
+                    Log("[Hotkey] ✓✓✓ MAIN HOTKEY TRIGGERED: " + hotkeyId + " (current: " + current + " -> target: " + targetMode + ")");
                 }
-                if (blockKey) return { true, 0 };
-                return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
+
+                if (!targetMode.empty()) { SwitchToMode(targetMode, "main hotkey"); }
             }
+            if (hotkey.blockKeyFromGame) return { true, 0 };
+            return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
         }
     }
 
@@ -1067,44 +1055,56 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
         // Sensitivity hotkeys only trigger on key down (no triggerOnRelease support)
         if (!isKeyDown) { continue; }
 
-        {
-            bool matched = CheckHotkeyMatch(sensHotkey.keys, vkCode, sensHotkey.conditions.exclusions, false);
-            bool matchedViaRebind = !matched && rebindTargetVk && CheckHotkeyMatch(sensHotkey.keys, rebindTargetVk, sensHotkey.conditions.exclusions, false);
-            if (matched || matchedViaRebind) {
-                // Sensitivity hotkeys have no blockKeyFromGame setting; only block when matched via rebind
-                bool blockKey = matchedViaRebind;
-                std::string hotkeyId = "sens_" + GetKeyComboString(sensHotkey.keys);
+        if (CheckHotkeyMatch(sensHotkey.keys, vkCode, sensHotkey.conditions.exclusions, false)) {
+            std::string hotkeyId = "sens_" + GetKeyComboString(sensHotkey.keys);
 
-                auto now = std::chrono::steady_clock::now();
-                // Debouncing
-                if (g_hotkeyTimestamps.count(hotkeyId) &&
-                    std::chrono::duration_cast<std::chrono::milliseconds>(now - g_hotkeyTimestamps[hotkeyId]).count() < sensHotkey.debounce) {
-                    if (s_enableHotkeyDebug) { Log("[Hotkey] Sensitivity hotkey matched but debounced: " + hotkeyId); }
-                    if (blockKey) return { true, 0 };
+            auto now = std::chrono::steady_clock::now();
+            // Debouncing
+            if (g_hotkeyTimestamps.count(hotkeyId) &&
+                std::chrono::duration_cast<std::chrono::milliseconds>(now - g_hotkeyTimestamps[hotkeyId]).count() < sensHotkey.debounce) {
+                if (s_enableHotkeyDebug) { Log("[Hotkey] Sensitivity hotkey matched but debounced: " + hotkeyId); }
+                return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
+            }
+            g_hotkeyTimestamps[hotkeyId] = now;
+
+            // Toggle logic: if this hotkey has toggle enabled and it's the currently active override, clear it
+            if (sensHotkey.toggle) {
+                extern TempSensitivityOverride g_tempSensitivityOverride;
+                extern std::mutex g_tempSensitivityMutex;
+                std::lock_guard<std::mutex> lock(g_tempSensitivityMutex);
+
+                if (g_tempSensitivityOverride.active && g_tempSensitivityOverride.activeSensHotkeyIndex == static_cast<int>(sensIdx)) {
+                    // Toggle OFF - clear the override
+                    g_tempSensitivityOverride.active = false;
+                    g_tempSensitivityOverride.sensitivityX = 1.0f;
+                    g_tempSensitivityOverride.sensitivityY = 1.0f;
+                    g_tempSensitivityOverride.activeSensHotkeyIndex = -1;
+
+                    if (s_enableHotkeyDebug) { Log("[Hotkey] ✓✓✓ SENSITIVITY HOTKEY TOGGLED OFF: " + hotkeyId); }
+
                     return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
                 }
-                g_hotkeyTimestamps[hotkeyId] = now;
 
-                // Toggle logic: if this hotkey has toggle enabled and it's the currently active override, clear it
-                if (sensHotkey.toggle) {
+                // Toggle ON - apply the override
+                g_tempSensitivityOverride.active = true;
+                if (sensHotkey.separateXY) {
+                    g_tempSensitivityOverride.sensitivityX = sensHotkey.sensitivityX;
+                    g_tempSensitivityOverride.sensitivityY = sensHotkey.sensitivityY;
+                } else {
+                    g_tempSensitivityOverride.sensitivityX = sensHotkey.sensitivity;
+                    g_tempSensitivityOverride.sensitivityY = sensHotkey.sensitivity;
+                }
+                g_tempSensitivityOverride.activeSensHotkeyIndex = static_cast<int>(sensIdx);
+
+                if (s_enableHotkeyDebug) {
+                    Log("[Hotkey] ✓✓✓ SENSITIVITY HOTKEY TOGGLED ON: " + hotkeyId + " -> sens=" + std::to_string(sensHotkey.sensitivity));
+                }
+            } else {
+                // Non-toggle: apply the override (one-shot, no toggle tracking)
+                {
                     extern TempSensitivityOverride g_tempSensitivityOverride;
                     extern std::mutex g_tempSensitivityMutex;
                     std::lock_guard<std::mutex> lock(g_tempSensitivityMutex);
-
-                    if (g_tempSensitivityOverride.active && g_tempSensitivityOverride.activeSensHotkeyIndex == static_cast<int>(sensIdx)) {
-                        // Toggle OFF - clear the override
-                        g_tempSensitivityOverride.active = false;
-                        g_tempSensitivityOverride.sensitivityX = 1.0f;
-                        g_tempSensitivityOverride.sensitivityY = 1.0f;
-                        g_tempSensitivityOverride.activeSensHotkeyIndex = -1;
-
-                        if (s_enableHotkeyDebug) { Log("[Hotkey] ✓✓✓ SENSITIVITY HOTKEY TOGGLED OFF: " + hotkeyId); }
-
-                        if (blockKey) return { true, 0 };
-                        return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
-                    }
-
-                    // Toggle ON - apply the override
                     g_tempSensitivityOverride.active = true;
                     if (sensHotkey.separateXY) {
                         g_tempSensitivityOverride.sensitivityX = sensHotkey.sensitivityX;
@@ -1113,36 +1113,15 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                         g_tempSensitivityOverride.sensitivityX = sensHotkey.sensitivity;
                         g_tempSensitivityOverride.sensitivityY = sensHotkey.sensitivity;
                     }
-                    g_tempSensitivityOverride.activeSensHotkeyIndex = static_cast<int>(sensIdx);
-
-                    if (s_enableHotkeyDebug) {
-                        Log("[Hotkey] ✓✓✓ SENSITIVITY HOTKEY TOGGLED ON: " + hotkeyId + " -> sens=" + std::to_string(sensHotkey.sensitivity));
-                    }
-                } else {
-                    // Non-toggle: apply the override (one-shot, no toggle tracking)
-                    {
-                        extern TempSensitivityOverride g_tempSensitivityOverride;
-                        extern std::mutex g_tempSensitivityMutex;
-                        std::lock_guard<std::mutex> lock(g_tempSensitivityMutex);
-                        g_tempSensitivityOverride.active = true;
-                        if (sensHotkey.separateXY) {
-                            g_tempSensitivityOverride.sensitivityX = sensHotkey.sensitivityX;
-                            g_tempSensitivityOverride.sensitivityY = sensHotkey.sensitivityY;
-                        } else {
-                            g_tempSensitivityOverride.sensitivityX = sensHotkey.sensitivity;
-                            g_tempSensitivityOverride.sensitivityY = sensHotkey.sensitivity;
-                        }
-                        g_tempSensitivityOverride.activeSensHotkeyIndex = -1; // Non-toggle, no index tracking
-                    }
-
-                    if (s_enableHotkeyDebug) {
-                        Log("[Hotkey] ✓✓✓ SENSITIVITY HOTKEY TRIGGERED: " + hotkeyId + " -> sens=" + std::to_string(sensHotkey.sensitivity));
-                    }
+                    g_tempSensitivityOverride.activeSensHotkeyIndex = -1; // Non-toggle, no index tracking
                 }
 
-                if (blockKey) return { true, 0 };
-                return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
+                if (s_enableHotkeyDebug) {
+                    Log("[Hotkey] ✓✓✓ SENSITIVITY HOTKEY TRIGGERED: " + hotkeyId + " -> sens=" + std::to_string(sensHotkey.sensitivity));
+                }
             }
+
+            return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
         }
     }
 

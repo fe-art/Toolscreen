@@ -1,9 +1,7 @@
 // Only show Hotkeys tab if resolution changing is supported (1.13+)
 if (IsResolutionChangeSupported(g_gameVersion)) {
     if (ImGui::BeginTabItem("Hotkeys")) {
-        g_currentlyEditingMirror = ""; // Disable image drag mode in other tabs
-        g_imageDragMode.store(false);
-        g_windowOverlayDragMode.store(false);
+        g_currentlyEditingMirror = "";
 
         if (!g_isStateOutputAvailable.load(std::memory_order_acquire)) {
             ImGui::Spacing();

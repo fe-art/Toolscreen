@@ -210,11 +210,9 @@ extern std::mutex g_geometryMutex;
 extern std::atomic<GLuint> g_cachedGameTextureId;
 
 // Window overlay drag state (shared with window_overlay.cpp)
-enum class ResizeCorner;
 extern std::string s_hoveredWindowOverlayName;
 extern std::string s_draggedWindowOverlayName;
 extern bool s_isWindowOverlayDragging;
-extern bool s_isWindowOverlayResizing;
 
 void InitializeShaders();
 void CleanupShaders();
@@ -250,6 +248,8 @@ void RenderMode(const ModeConfig* modeToRender, const GLState& s, int current_ga
 void RenderModeWithOpacity(const ModeConfig* modeToRender, const GLState& s, int current_gameW, int current_gameH, float opacity,
                            bool skipBackgroundClear = false);
 void RenderDebugBordersForMirror(const MirrorConfig* conf, Color captureColor, Color outputColor, GLint originalVAO);
+void RenderMirrorSelectionInfoPanel();
+void RenderWindowOverlaySelectionInfoPanel();
 void handleEyeZoomMode(const GLState& s, float opacity = 1.0f, int animatedViewportX = -1);
 void InitializeOverlayTextFont(const std::string& fontPath, float baseFontSize, float scaleFactor);
 void SetOverlayTextFontSize(int sizePixels);

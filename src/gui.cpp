@@ -2758,8 +2758,12 @@ void RenderSettingsGUI() {
                 SetCursor(NULL);
             }
             g_currentlyEditingMirror = "";
+            g_selectedMirrorName = "";
+            g_selectedWindowOverlayName = "";
+            g_windowOverlayCropMode = false;
             g_imageDragMode.store(false);
             g_windowOverlayDragMode.store(false);
+            g_mirrorDragMode.store(false);
             extern std::string s_hoveredImageName;
             extern std::string s_draggedImageName;
             extern bool s_isDragging;
@@ -2772,6 +2776,12 @@ void RenderSettingsGUI() {
             s_hoveredWindowOverlayName = "";
             s_draggedWindowOverlayName = "";
             s_isWindowOverlayDragging = false;
+            extern std::string s_hoveredMirrorName;
+            extern std::string s_draggedMirrorName;
+            extern bool s_isMirrorDragging;
+            s_hoveredMirrorName = "";
+            s_draggedMirrorName = "";
+            s_isMirrorDragging = false;
         }
 
         // Screenshot button at top right (before everything else, so it's always in the same spot)
@@ -2812,13 +2822,25 @@ void RenderSettingsGUI() {
             }
         }
 
+        if (!g_config.basicModeEnabled) {
+            ImGui::SameLine(ImGui::GetWindowWidth() - 120.0f);
+            bool editorOn = g_overlayEditorMode.load(std::memory_order_relaxed);
+            if (ImGui::Checkbox("Editor", &editorOn)) {
+                g_overlayEditorMode.store(editorOn, std::memory_order_relaxed);
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Enable drag/resize for all overlay types simultaneously");
+            }
+        }
+
         ImGui::Separator();
 
-        // Drag modes must only be enabled by the currently active tab.
-        // Without this reset, leaving a tab could leave drag mode enabled and allow overlays to be moved while the user
-        // is in a different tab (or after other GUI transitions).
-        g_imageDragMode.store(false, std::memory_order_relaxed);
-        g_windowOverlayDragMode.store(false, std::memory_order_relaxed);
+        // Drag modes are computed locally, then written to atomics ONCE after all tabs run.
+        // Writing them here then overwriting in the tab would race with the game thread
+        // (game thread can read `false` between the reset and the tab re-enabling it).
+        bool wantImageDrag = false;
+        bool wantWindowOverlayDrag = false;
+        bool wantMirrorDrag = false;
 
         if (g_config.basicModeEnabled) {
             // --- BASIC MODE: Only General and Other tabs ---
@@ -2880,10 +2902,28 @@ void RenderSettingsGUI() {
             }
         }
 
+        // Editor toggle: force all drag modes on so all overlay types are interactive
+        if (g_overlayEditorMode.load(std::memory_order_relaxed)) {
+            wantImageDrag = true;
+            wantMirrorDrag = true;
+            wantWindowOverlayDrag = true;
+        }
+
+        // Write drag mode atomics ONCE after all tabs and editor mode have been evaluated.
+        // This avoids a race where the game thread reads `false` between a reset and a re-enable.
+        g_imageDragMode.store(wantImageDrag, std::memory_order_relaxed);
+        g_windowOverlayDragMode.store(wantWindowOverlayDrag, std::memory_order_relaxed);
+        g_mirrorDragMode.store(wantMirrorDrag, std::memory_order_relaxed);
+
     } else {
         g_currentlyEditingMirror = "";
+        g_selectedMirrorName = "";
+        g_selectedWindowOverlayName = "";
+        g_windowOverlayCropMode = false;
+        g_overlayEditorMode.store(false, std::memory_order_relaxed);
         g_imageDragMode.store(false, std::memory_order_relaxed);
         g_windowOverlayDragMode.store(false, std::memory_order_relaxed);
+        g_mirrorDragMode.store(false, std::memory_order_relaxed);
     }
     ImGui::End();
 

@@ -2,8 +2,6 @@
     g_currentlyEditingMirror = "";
     int mode_to_remove = -1;
 
-    g_imageDragMode.store(false);
-    g_windowOverlayDragMode.store(false);
 
     // Check if resolution changing is supported
     bool resolutionSupported = IsResolutionChangeSupported(g_gameVersion);

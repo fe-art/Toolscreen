@@ -409,6 +409,11 @@ inline bool IsViewportRelativeAnchor(const std::string& relativeTo) {
 void CalculateFinalScreenPos(const MirrorConfig* conf, const MirrorInstance& inst, int gameW, int gameH, int finalX, int finalY, int finalW,
                              int finalH, int fullW, int fullH, int& outScreenX, int& outScreenY);
 
+// Convert a screen-space drag delta to a mirror config delta, accounting for anchor sign inversion and viewport scaling
+void ScreenDeltaToMirrorConfigDelta(const std::string& relativeTo, int screenDeltaX, int screenDeltaY,
+                                    int gameW, int gameH, int finalW, int finalH,
+                                    int& outDeltaX, int& outDeltaY);
+
 void ScreenshotToClipboard(int width, int height);
 
 DWORD WINAPI FileMonitorThread(LPVOID lpParam);

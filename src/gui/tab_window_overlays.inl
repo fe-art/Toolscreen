@@ -1,11 +1,16 @@
 if (ImGui::BeginTabItem("Window Overlays")) {
-    g_currentlyEditingMirror = ""; // Disable image drag mode in other tabs
-    g_imageDragMode.store(false);
+    g_currentlyEditingMirror = "";
 
     // Enable window overlay drag mode when Window Overlays tab is active
-    g_windowOverlayDragMode.store(true);
+    wantWindowOverlayDrag = true;
 
     SliderCtrlClickTip();
+
+    // Sync selection from render thread
+    static std::string selectedOverlayName;
+    if (!g_selectedWindowOverlayName.empty()) {
+        selectedOverlayName = g_selectedWindowOverlayName;
+    }
 
     int windowOverlay_to_remove = -1;
     for (size_t i = 0; i < g_config.windowOverlays.size(); ++i) {
@@ -39,7 +44,18 @@ if (ImGui::BeginTabItem("Window Overlays")) {
         // Capture old name at frame start, before any ImGui input modifies it
         std::string oldOverlayName = overlay.name;
 
+        // Handle scroll-to from info panel "Edit" button
+        bool forceOpen = (!g_scrollToWindowOverlayName.empty() && g_scrollToWindowOverlayName == overlay.name);
+        if (forceOpen) {
+            ImGui::SetNextItemOpen(true);
+        }
+
         bool node_open = ImGui::TreeNodeEx("##overlay_node", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", overlay.name.c_str());
+
+        if (forceOpen) {
+            ImGui::SetScrollHereY(0.3f);
+            g_scrollToWindowOverlayName = "";
+        }
 
         if (node_open) {
 
@@ -429,5 +445,10 @@ if (ImGui::BeginTabItem("Window Overlays")) {
     ImGui::EndTabItem();
 } else {
     // Ensure we can't drag window overlays while this tab is not active.
-    g_windowOverlayDragMode.store(false);
+    // Exception: Editor mode keeps drag enabled across all tabs.
+    if (!g_overlayEditorMode.load(std::memory_order_relaxed)) {
+        g_windowOverlayDragMode.store(false);
+        g_selectedWindowOverlayName = "";
+        g_windowOverlayCropMode = false;
+    }
 }

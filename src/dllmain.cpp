@@ -39,7 +39,9 @@
 #pragma comment(lib, "Comdlg32.lib")
 #pragma comment(lib, "Msimg32.lib")
 #pragma comment(lib, "opengl32.lib")
+#ifndef CMAKE_BUILD
 #pragma comment(lib, "libglew32.lib")
+#endif
 #pragma comment(lib, "DbgHelp.lib")
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -131,6 +133,16 @@ std::atomic<bool> g_showGui{ false };
 std::atomic<bool> g_imageOverlaysVisible{ true };
 std::atomic<bool> g_windowOverlaysVisible{ true };
 std::string g_currentlyEditingMirror;
+std::string g_selectedMirrorName;
+int g_selectedMirrorOutW = 0, g_selectedMirrorOutH = 0;
+int g_selectedMirrorScreenX = 0, g_selectedMirrorScreenY = 0;
+int g_selectedMirrorScreenW = 0, g_selectedMirrorScreenH = 0;
+std::string g_scrollToMirrorName;
+std::string g_selectedWindowOverlayName;
+int g_selectedWindowOverlayScreenX = 0, g_selectedWindowOverlayScreenY = 0;
+int g_selectedWindowOverlayScreenW = 0, g_selectedWindowOverlayScreenH = 0;
+std::string g_scrollToWindowOverlayName;
+bool g_windowOverlayCropMode = false;
 std::atomic<HWND> g_minecraftHwnd{ NULL };
 std::wstring g_toolscreenPath;
 std::string g_currentModeId = "";
@@ -173,6 +185,10 @@ std::string g_draggedImageName = "";
 std::mutex g_imageDragMutex;
 
 std::atomic<bool> g_windowOverlayDragMode{ false };
+
+std::atomic<bool> g_mirrorDragMode{ false };
+
+std::atomic<bool> g_overlayEditorMode{ false };
 
 std::ofstream logFile;
 std::mutex g_logFileMutex;
