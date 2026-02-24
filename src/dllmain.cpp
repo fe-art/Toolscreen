@@ -2481,10 +2481,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             std::wstring logsDir = g_toolscreenPath + L"\\logs";
             CreateDirectoryW(logsDir.c_str(), NULL);
 
-            // Path to latest.log
-            std::wstring latestLogPath = logsDir + L"\\latest.log";
+            // PID suffix so multiple instances don't fight over the same log file
+            std::wstring latestLogPath = logsDir + L"\\latest_" + std::to_wstring(GetCurrentProcessId()) + L".log";
 
-            // If latest.log exists, rename it to timestamped filename
+            // If previous log exists, rename it to timestamped filename
             if (GetFileAttributesW(latestLogPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
                 // Get file last write time (not creation time - creation time stays the same
                 // across sessions, causing archived logs to have incorrect/stale dates)
@@ -2546,9 +2546,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                     }
                 }
             }
-            // Note: If latest.log doesn't exist, that's fine - this is normal for first run
+            // If log doesn't exist, that's fine - normal for first run
 
-            // Open new latest.log
+            // Open new log file
             {
                 std::lock_guard<std::mutex> lock(g_logFileMutex);
                 // IMPORTANT (Windows/Unicode): open via std::filesystem::path so wide Win32 APIs are used.
