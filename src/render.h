@@ -201,7 +201,7 @@ extern std::mutex g_backgroundTexturesMutex;
 extern std::vector<GLuint> g_texturesToDelete;
 extern std::mutex g_texturesToDeleteMutex;
 extern std::atomic<bool> g_hasTexturesToDelete;
-extern bool g_glInitialized;
+extern std::atomic<bool> g_glInitialized;
 extern std::atomic<bool> g_isGameFocused;
 extern GameViewportGeometry g_lastFrameGeometry;
 extern std::mutex g_geometryMutex;

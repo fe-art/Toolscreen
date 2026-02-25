@@ -3933,41 +3933,52 @@ static void RenderThreadFunc(void* gameGLContext) {
                     int viewportX = (request.eyeZoomAnimatedViewportX >= 0) ? request.eyeZoomAnimatedViewportX : targetViewportX;
 
                     // Calculate dimensions and position - must match RT_RenderEyeZoom logic
-                    int zoomOutputWidth, zoomX;
+                    int zoomOutputWidth;
                     // Use request value, NOT global atomic - ensures text and boxes use identical transition state
                     bool isTransitioningFromEyeZoom = request.isTransitioningFromEyeZoom;
                     bool isTransitioningToEyeZoom = (viewportX < targetViewportX && !isTransitioningFromEyeZoom);
 
-                    if (zoomConfig.slideZoomIn) {
-                        // SLIDE MODE: Full size, sliding X position
-                        zoomOutputWidth = targetViewportX - (2 * zoomConfig.horizontalMargin);
-                        int finalZoomX = zoomConfig.horizontalMargin;
-                        int offScreenX = -zoomOutputWidth;
-
-                        if (isTransitioningToEyeZoom && targetViewportX > 0) {
-                            // Sliding IN
-                            float progress = (float)viewportX / (float)targetViewportX;
-                            zoomX = offScreenX + (int)((finalZoomX - offScreenX) * progress);
-                        } else if (isTransitioningFromEyeZoom && targetViewportX > 0) {
-                            // Sliding OUT
-                            float progress = (float)viewportX / (float)targetViewportX;
-                            zoomX = offScreenX + (int)((finalZoomX - offScreenX) * progress);
-                        } else {
-                            zoomX = finalZoomX;
-                        }
+                    // Legacy/stable EyeZoom width in pixels (used by slide mode and custom-position mode)
+                    int stableZoomOutputWidth = targetViewportX - (2 * zoomConfig.horizontalMargin);
+                    if (stableZoomOutputWidth <= 1) {
+                        zoomOutputWidth = 0;
                     } else {
-                        // GROW MODE: Growing size, fixed X position
-                        zoomOutputWidth = viewportX - (2 * zoomConfig.horizontalMargin);
-                        zoomX = zoomConfig.horizontalMargin;
+                        zoomOutputWidth = zoomConfig.slideZoomIn ? stableZoomOutputWidth : (viewportX - (2 * zoomConfig.horizontalMargin));
                     }
 
                     if (viewportX > 0 && zoomOutputWidth > 20) {
+
+                        // Final resting X position: legacy left margin, or custom user position
+                        int finalZoomX = zoomConfig.useCustomPosition ? zoomConfig.positionX : zoomConfig.horizontalMargin;
+                        int zoomX = finalZoomX;
+
+                        if (zoomConfig.slideZoomIn) {
+                            // SLIDE MODE: Zoom is always at full target size, but slides in/out from the left
+                            int offScreenX = -zoomOutputWidth;
+
+                            if ((isTransitioningToEyeZoom || isTransitioningFromEyeZoom) && targetViewportX > 0) {
+                                float progress = (float)viewportX / (float)targetViewportX;
+                                zoomX = offScreenX + (int)((finalZoomX - offScreenX) * progress);
+                            }
+                        }
 
                         int zoomOutputHeight = request.fullH - (2 * zoomConfig.verticalMargin);
                         int minHeight = (int)(0.2f * request.fullH);
                         if (zoomOutputHeight < minHeight) zoomOutputHeight = minHeight;
 
-                        int zoomY = zoomConfig.verticalMargin;
+                        int zoomY = zoomConfig.useCustomPosition ? zoomConfig.positionY : zoomConfig.verticalMargin;
+
+                        // Clamp custom placement to keep EyeZoom fully on-screen when not actively sliding.
+                        if (zoomConfig.useCustomPosition) {
+                            int maxZoomX = (std::max)(0, request.fullW - zoomOutputWidth);
+                            int maxZoomY = (std::max)(0, request.fullH - zoomOutputHeight);
+
+                            bool isSlidingNow = zoomConfig.slideZoomIn && (isTransitioningToEyeZoom || isTransitioningFromEyeZoom);
+                            if (!isSlidingNow) {
+                                zoomX = (std::max)(0, (std::min)(zoomX, maxZoomX));
+                            }
+                            zoomY = (std::max)(0, (std::min)(zoomY, maxZoomY));
+                        }
 
                         // Calculate per-box width based on the actual output width
                         float pixelWidthOnScreen = zoomOutputWidth / (float)zoomConfig.cloneWidth;

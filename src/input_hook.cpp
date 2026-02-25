@@ -39,7 +39,7 @@ extern std::string g_currentlyEditingMirror;
 extern std::atomic<bool> g_imageDragMode;
 extern std::atomic<bool> g_windowOverlayDragMode;
 extern std::atomic<HCURSOR> g_specialCursorHandle;
-// g_glInitialized is declared in render.h as bool (not atomic)
+// g_glInitialized is declared in render.h as atomic bool
 extern std::atomic<bool> g_gameWindowActive;
 
 // Hotkey state
@@ -366,7 +366,7 @@ InputHandlerResult HandleGuiToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     }
     g_lastGuiToggleTimeMs.store(nowMs, std::memory_order_relaxed);
 
-    if (!g_glInitialized) {
+    if (!g_glInitialized.load(std::memory_order_acquire)) {
         Log("GUI toggle ignored - OpenGL not initialized yet");
         return { true, 1 };
     }

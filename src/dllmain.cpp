@@ -1525,7 +1525,7 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
         // This allows debugging why game texture caching might be failing
         {
             bool showTextureGrid = frameCfg.debug.showTextureGrid;
-            if (showTextureGrid && g_glInitialized && g_solidColorProgram != 0) {
+            if (showTextureGrid && g_glInitialized.load(std::memory_order_acquire) && g_solidColorProgram != 0) {
                 PROFILE_SCOPE_CAT("Texture Grid Overlay", "Debug");
                 ModeViewportInfo viewport = GetCurrentModeViewport();
                 RenderTextureGridOverlay(true, viewport.width, viewport.height);
@@ -1958,6 +1958,7 @@ void main() {
         // return owglSwapBuffers(hDc); // disable here to use NSight for debugging
 
         if (g_configLoadFailed.load()) {
+            Log("Configuration load failed");
             g_safeToCapture.store(false, std::memory_order_release);
             HandleConfigLoadFailed(hDc, next);
             return next(hDc);
@@ -2091,7 +2092,8 @@ void main() {
 
             const bool anyOtherCustomOutput = frameCfg.debug.fakeCursor || g_screenshotRequested.load(std::memory_order_relaxed);
 
-            const bool canSkipCustomRender = isFull && !needsDualRendering && !IsModeTransitionActive() && modeSizesFullscreen &&
+            const bool canSkipCustomRender = g_glInitialized.load(std::memory_order_acquire) && isFull && !needsDualRendering &&
+                                             !IsModeTransitionActive() && modeSizesFullscreen &&
                                              stretchIsFullscreen && !borderVisible && !anyModeOverlaysConfigured &&
                                              !anyImGuiOrDebugOverlay && !anyOtherCustomOutput;
 
@@ -2164,12 +2166,12 @@ void main() {
             }
         }
 
-        if (!g_glInitialized) {
+        if (!g_glInitialized.load(std::memory_order_acquire)) {
             PROFILE_SCOPE_CAT("GPU Resource Init Check", "SwapBuffers");
             Log("[RENDER] Conditions met for GPU resource initialization.");
             InitializeGPUResources();
 
-            if (!g_glInitialized) {
+            if (!g_glInitialized.load(std::memory_order_acquire)) {
                 Log("FATAL: GPU resource initialization failed. Aborting custom render for this frame.");
                 g_safeToCapture.store(false, std::memory_order_release);
                 return next(hDc);

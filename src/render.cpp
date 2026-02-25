@@ -135,7 +135,7 @@ std::mutex g_backgroundTexturesMutex;
 std::vector<GLuint> g_texturesToDelete;
 std::mutex g_texturesToDeleteMutex;
 std::atomic<bool> g_hasTexturesToDelete{ false };
-bool g_glInitialized = false;
+std::atomic<bool> g_glInitialized{ false };
 std::atomic<bool> g_isGameFocused{ true };
 GameViewportGeometry g_lastFrameGeometry;
 std::mutex g_geometryMutex;
@@ -1182,7 +1182,7 @@ void CleanupGPUResources() {
     } catch (...) { Log("CleanupGPUResources: Exception during shader cleanup"); }
 
     g_sceneW = g_sceneH = 0;
-    g_glInitialized = false;
+    g_glInitialized.store(false, std::memory_order_release);
     Log("CleanupGPUResources: Cleanup complete.");
 }
 void UploadDecodedImageToGPU(const DecodedImageData& imgData) {
@@ -1476,7 +1476,7 @@ void InitializeGPUResources() {
     glBindBuffer(GL_ARRAY_BUFFER, last_array_buffer);
     glBindFramebuffer(GL_FRAMEBUFFER, last_framebuffer);
 
-    g_glInitialized = true;
+    g_glInitialized.store(true, std::memory_order_release);
     LogCategory("init", "--- GPU resources initialized successfully. ---");
 }
 
@@ -3267,7 +3267,7 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
     }
 }
 void RenderDebugBordersForMirror(const MirrorConfig* conf, Color captureColor, Color outputColor, GLint originalVAO) {
-    if (!conf || !g_glInitialized) return;
+    if (!conf || !g_glInitialized.load(std::memory_order_acquire)) return;
 
     const int fullW = GetCachedScreenWidth();
     const int fullH = GetCachedScreenHeight();
@@ -3392,13 +3392,14 @@ void RenderTextureGridOverlay(bool showTextureGrid, int modeWidth, int modeHeigh
     // Log initialization state for debugging
     static bool loggedOnce = false;
     if (!loggedOnce) {
-        Log("RenderTextureGridOverlay called - g_glInitialized: " + std::to_string(g_glInitialized) +
+        Log("RenderTextureGridOverlay called - g_glInitialized: " +
+            std::to_string(g_glInitialized.load(std::memory_order_acquire) ? 1 : 0) +
             ", g_solidColorProgram: " + std::to_string(g_solidColorProgram));
         loggedOnce = true;
     }
 
     // Early exit if GPU resources aren't initialized yet
-    if (!g_glInitialized || g_solidColorProgram == 0) { return; }
+    if (!g_glInitialized.load(std::memory_order_acquire) || g_solidColorProgram == 0) { return; }
 
     const int MAX_TEXTURE_ID = 100; // Check texture IDs from 1 to 100
     const int TILE_SIZE = 48;       // Size of each texture tile in pixels
