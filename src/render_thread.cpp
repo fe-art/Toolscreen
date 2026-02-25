@@ -1837,58 +1837,53 @@ static void RT_RenderEyeZoom(GLuint gameTexture, int requestViewportX, int fullW
     // Use the passed-in requestViewportX parameter - this already accounts for hideAnimationsInGame
     // (caller passes -1 when skipAnimation is true, meaning use target position)
     int viewportX = (requestViewportX >= 0) ? requestViewportX : targetViewportX;
-
-    if (viewportX <= 0) return; // No space for EyeZoom on the left
-
-    // Calculate zoom output dimensions
-    int zoomOutputWidth, zoomX;
     bool isTransitioningToEyeZoom = (viewportX < targetViewportX && !isTransitioningFromEyeZoom);
 
-    if (zoomConfig.slideZoomIn) {
-        // SLIDE MODE: Zoom is always at full target size, but slides in/out from the left
-        // Calculate full size based on target position
-        zoomOutputWidth = targetViewportX - (2 * zoomConfig.horizontalMargin);
+    // Legacy/stable EyeZoom width in pixels (used by slide mode and custom-position mode)
+    int stableZoomOutputWidth = targetViewportX - (2 * zoomConfig.horizontalMargin);
+    if (stableZoomOutputWidth <= 1) return;
 
-        // Calculate slide position based on transition progress
-        // When stable: zoomX = horizontalMargin (final position)
-        // When transitioning TO: slide in from left (starts off-screen)
-        // When transitioning FROM: slide out to left (ends off-screen)
-        int finalZoomX = zoomConfig.horizontalMargin;
-        int offScreenX = -zoomOutputWidth;
-
-        if (isTransitioningToEyeZoom && targetViewportX > 0) {
-            // Sliding IN: Calculate progress (0 = start, 1 = destination reached)
-            float progress = (float)viewportX / (float)targetViewportX;
-            // Slide from off-screen left to final position
-            zoomX = offScreenX + (int)((finalZoomX - offScreenX) * progress);
-        } else if (isTransitioningFromEyeZoom && targetViewportX > 0) {
-            // Sliding OUT: Progress goes from 1 (fully visible) to 0 (off-screen)
-            float progress = (float)viewportX / (float)targetViewportX;
-            // Slide from final position to off-screen left
-            zoomX = offScreenX + (int)((finalZoomX - offScreenX) * progress);
-        } else {
-            zoomX = finalZoomX;
-        }
-    } else {
-        // GROW MODE (default): Zoom grows with the viewport
-        // Horizontal margin applies to both sides:
-        // - Left side: gap between screen edge and zoom section = horizontalMargin
-        // - Right side: gap between zoom section and game viewport = horizontalMargin
-        // During transitions (both in and out), the zoom section shrinks/grows to maintain these margins
-        zoomOutputWidth = viewportX - (2 * zoomConfig.horizontalMargin);
-        zoomX = zoomConfig.horizontalMargin;
-    }
+    // Calculate zoom output dimensions
+    int zoomOutputWidth = zoomConfig.slideZoomIn ? stableZoomOutputWidth : (viewportX - (2 * zoomConfig.horizontalMargin));
 
     // Don't render if there's not enough space (would overlap game or be too small)
     if (zoomOutputWidth <= 1) {
         return; // Need at least some minimum width to be useful
     }
 
+    // Final resting X position: legacy left margin, or custom user position
+    int finalZoomX = zoomConfig.useCustomPosition ? zoomConfig.positionX : zoomConfig.horizontalMargin;
+    int zoomX = finalZoomX;
+
+    if (zoomConfig.slideZoomIn) {
+        // SLIDE MODE: Zoom is always at full target size, but slides in/out from the left
+        int offScreenX = -zoomOutputWidth;
+
+        if ((isTransitioningToEyeZoom || isTransitioningFromEyeZoom) && targetViewportX > 0) {
+            // Shared slide math for IN and OUT using viewport progress
+            float progress = (float)viewportX / (float)targetViewportX;
+            zoomX = offScreenX + (int)((finalZoomX - offScreenX) * progress);
+        }
+    }
+
     int zoomOutputHeight = fullH - (2 * zoomConfig.verticalMargin);
     int minHeight = (int)(0.2f * fullH);
     if (zoomOutputHeight < minHeight) zoomOutputHeight = minHeight;
 
-    int zoomY = zoomConfig.verticalMargin;
+    int zoomY = zoomConfig.useCustomPosition ? zoomConfig.positionY : zoomConfig.verticalMargin;
+
+    // Clamp custom placement to keep EyeZoom fully on-screen when not actively sliding.
+    if (zoomConfig.useCustomPosition) {
+        int maxZoomX = (std::max)(0, fullW - zoomOutputWidth);
+        int maxZoomY = (std::max)(0, fullH - zoomOutputHeight);
+
+        bool isSlidingNow = zoomConfig.slideZoomIn && (isTransitioningToEyeZoom || isTransitioningFromEyeZoom);
+        if (!isSlidingNow) {
+            zoomX = (std::max)(0, (std::min)(zoomX, maxZoomX));
+        }
+        zoomY = (std::max)(0, (std::min)(zoomY, maxZoomY));
+    }
+
     int zoomY_gl = fullH - zoomY - zoomOutputHeight;
 
     // Get current draw framebuffer (the FBO we're rendering to)

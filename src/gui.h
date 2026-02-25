@@ -410,6 +410,9 @@ struct EyeZoomConfig {
     int windowHeight = 16384;
     int horizontalMargin = 0;   // Horizontal margin on both sides of the eyezoom stretch output
     int verticalMargin = 0;     // Vertical margin on top and bottom of the eyezoom stretch output
+    bool useCustomPosition = false; // If true, place the EyeZoom clone at custom screen coordinates
+    int positionX = 0;              // Custom top-left X position for the EyeZoom clone output (screen coordinates)
+    int positionY = 0;              // Custom top-left Y position for the EyeZoom clone output (screen coordinates)
     // When autoFontSize=true, the renderer will auto-fit the text to the current box size.
     // When autoFontSize=false, textFontSize is used as-is and bypasses auto-fit clamps.
     bool autoFontSize = true;

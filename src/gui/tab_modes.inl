@@ -428,6 +428,53 @@
                 ImGui::Columns(1);
 
                 ImGui::Separator();
+                ImGui::Text("Placement");
+                if (ImGui::Checkbox("Use Custom Position", &g_config.eyezoom.useCustomPosition)) { g_configIsDirty = true; }
+                ImGui::SameLine();
+                HelpMarker("When enabled, EyeZoom clone output can be moved anywhere on screen using X/Y position instead of being fixed to the left-middle area.");
+
+                if (g_config.eyezoom.useCustomPosition) {
+                    int estimatedZoomWidth = eyezoomTargetFinalX - (2 * g_config.eyezoom.horizontalMargin);
+                    if (estimatedZoomWidth < 1) estimatedZoomWidth = 1;
+
+                    int estimatedZoomHeight = monitorHeight - (2 * g_config.eyezoom.verticalMargin);
+                    int minZoomHeight = (int)(0.2f * monitorHeight);
+                    if (estimatedZoomHeight < minZoomHeight) estimatedZoomHeight = minZoomHeight;
+                    if (estimatedZoomHeight > monitorHeight) estimatedZoomHeight = monitorHeight;
+
+                    int maxPosX = (std::max)(0, screenWidth - estimatedZoomWidth);
+                    int maxPosY = (std::max)(0, monitorHeight - estimatedZoomHeight);
+
+                    if (g_config.eyezoom.positionX < 0) {
+                        g_config.eyezoom.positionX = 0;
+                        g_configIsDirty = true;
+                    }
+                    if (g_config.eyezoom.positionX > maxPosX) {
+                        g_config.eyezoom.positionX = maxPosX;
+                        g_configIsDirty = true;
+                    }
+                    if (g_config.eyezoom.positionY < 0) {
+                        g_config.eyezoom.positionY = 0;
+                        g_configIsDirty = true;
+                    }
+                    if (g_config.eyezoom.positionY > maxPosY) {
+                        g_config.eyezoom.positionY = maxPosY;
+                        g_configIsDirty = true;
+                    }
+
+                    ImGui::Columns(2, "eyezoom_position_cols", false);
+                    ImGui::SetColumnWidth(0, 150);
+                    ImGui::Text("Position X");
+                    ImGui::NextColumn();
+                    if (Spinner("##EyeZoomPositionX", &g_config.eyezoom.positionX, 10, 0, maxPosX)) g_configIsDirty = true;
+                    ImGui::NextColumn();
+                    ImGui::Text("Position Y");
+                    ImGui::NextColumn();
+                    if (Spinner("##EyeZoomPositionY", &g_config.eyezoom.positionY, 10, 0, maxPosY)) g_configIsDirty = true;
+                    ImGui::Columns(1);
+                }
+
+                ImGui::Separator();
                 ImGui::Text("Color Settings");
                 // Grid Color 1 with opacity
                 {

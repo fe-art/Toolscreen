@@ -11,6 +11,7 @@
 #include "render.h"
 #include "render_thread.h"
 #include "resource.h"
+#include "json.hpp"
 #include "stb_image.h"
 #include "utils.h"
 #include "virtual_camera.h"
@@ -32,9 +33,11 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <winhttp.h>
 #include <windowsx.h>
 
 #pragma comment(lib, "Shlwapi.lib")
+#pragma comment(lib, "Winhttp.lib")
 
 // Forward declarations
 bool Spinner(const char* id_label, int* v, int step = 1, int min_val = INT_MIN, int max_val = INT_MAX, float inputWidth = 80.0f,
@@ -66,6 +69,197 @@ static std::map<std::string, ImagePickerResult> g_imagePickerResults;
 static std::map<std::string, std::future<ImagePickerResult>> g_imagePickerFutures;
 static std::map<std::string, std::string> g_imageErrorMessages;                        // Persistent error messages for display
 static std::map<std::string, std::chrono::steady_clock::time_point> g_imageErrorTimes; // Error message expiry
+
+struct SupporterRoleEntry {
+    std::string name;
+    Color color = { 1.0f, 1.0f, 1.0f, 1.0f };
+    std::vector<std::string> members;
+};
+
+static std::shared_mutex g_supportersMutex;
+static std::vector<SupporterRoleEntry> g_supporterRoles;
+static std::atomic<bool> g_supportersLoaded{ false };
+static std::atomic<bool> g_supportersFetchEverFailed{ false };
+static std::atomic<bool> g_supportersFetchStarted{ false };
+
+static bool HttpGetToString(const std::wstring& url, std::string& outBody, std::string& outError) {
+    URL_COMPONENTS urlComp{};
+    urlComp.dwStructSize = sizeof(urlComp);
+    urlComp.dwSchemeLength = (DWORD)-1;
+    urlComp.dwHostNameLength = (DWORD)-1;
+    urlComp.dwUrlPathLength = (DWORD)-1;
+    urlComp.dwExtraInfoLength = (DWORD)-1;
+
+    if (!WinHttpCrackUrl(url.c_str(), 0, 0, &urlComp)) {
+        outError = "WinHttpCrackUrl failed";
+        return false;
+    }
+
+    std::wstring host(urlComp.lpszHostName, urlComp.dwHostNameLength);
+    std::wstring path(urlComp.lpszUrlPath ? std::wstring(urlComp.lpszUrlPath, urlComp.dwUrlPathLength) : L"/");
+    if (urlComp.lpszExtraInfo && urlComp.dwExtraInfoLength > 0) { path.append(urlComp.lpszExtraInfo, urlComp.dwExtraInfoLength); }
+
+    HINTERNET hSession = WinHttpOpen(L"Toolscreen/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME,
+                                     WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) {
+        outError = "WinHttpOpen failed";
+        return false;
+    }
+
+    WinHttpSetTimeouts(hSession, 5000, 5000, 10000, 10000);
+
+    HINTERNET hConnect = WinHttpConnect(hSession, host.c_str(), urlComp.nPort, 0);
+    if (!hConnect) {
+        WinHttpCloseHandle(hSession);
+        outError = "WinHttpConnect failed";
+        return false;
+    }
+
+    DWORD requestFlags = 0;
+    if (urlComp.nScheme == INTERNET_SCHEME_HTTPS) { requestFlags |= WINHTTP_FLAG_SECURE; }
+
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                            requestFlags);
+    if (!hRequest) {
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        outError = "WinHttpOpenRequest failed";
+        return false;
+    }
+
+    bool ok = false;
+    do {
+        if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) {
+            outError = "WinHttpSendRequest failed";
+            break;
+        }
+
+        if (!WinHttpReceiveResponse(hRequest, nullptr)) {
+            outError = "WinHttpReceiveResponse failed";
+            break;
+        }
+
+        DWORD statusCode = 0;
+        DWORD statusCodeSize = sizeof(statusCode);
+        if (!WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &statusCode,
+                                 &statusCodeSize, WINHTTP_NO_HEADER_INDEX)) {
+            outError = "WinHttpQueryHeaders(status) failed";
+            break;
+        }
+
+        if (statusCode != 200) {
+            outError = "HTTP status " + std::to_string(statusCode);
+            break;
+        }
+
+        outBody.clear();
+        while (true) {
+            DWORD bytesAvailable = 0;
+            if (!WinHttpQueryDataAvailable(hRequest, &bytesAvailable)) {
+                outError = "WinHttpQueryDataAvailable failed";
+                break;
+            }
+            if (bytesAvailable == 0) {
+                ok = true;
+                break;
+            }
+
+            std::string chunk;
+            chunk.resize(bytesAvailable);
+            DWORD bytesRead = 0;
+            if (!WinHttpReadData(hRequest, chunk.data(), bytesAvailable, &bytesRead)) {
+                outError = "WinHttpReadData failed";
+                break;
+            }
+            chunk.resize(bytesRead);
+            outBody += chunk;
+        }
+    } while (false);
+
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
+    return ok;
+}
+
+static bool ParseSupportersJson(const std::string& body, std::vector<SupporterRoleEntry>& outRoles, std::string& outError) {
+    outRoles.clear();
+
+    nlohmann::json parsed;
+    try {
+        parsed = nlohmann::json::parse(body);
+    } catch (const std::exception& e) {
+        outError = std::string("JSON parse failed: ") + e.what();
+        return false;
+    }
+
+    if (!parsed.is_array()) {
+        outError = "JSON root must be an array";
+        return false;
+    }
+
+    for (const auto& roleJson : parsed) {
+        if (!roleJson.is_object()) continue;
+
+        SupporterRoleEntry role;
+        role.name = roleJson.value("name", "");
+
+        const std::string colorString = roleJson.value("color", "#FFFFFF");
+        ParseColorString(colorString, role.color);
+
+        if (roleJson.contains("members") && roleJson["members"].is_array()) {
+            for (const auto& member : roleJson["members"]) {
+                if (member.is_string()) { role.members.push_back(member.get<std::string>()); }
+            }
+        }
+
+        if (!role.name.empty()) { outRoles.push_back(std::move(role)); }
+    }
+
+    return true;
+}
+
+static void StartSupportersFetchThreadOnce() {
+    bool expected = false;
+    if (!g_supportersFetchStarted.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) { return; }
+
+    std::thread([]() {
+        static const std::wstring kMembershipUrl =
+            L"https://raw.githubusercontent.com/jojoe77777/toolscreen-meta/refs/heads/main/membership.json";
+        static constexpr int kMinRetryDelaySeconds = 30;
+        static constexpr int kMaxRetryDelaySeconds = 3600;
+
+        int retryDelaySeconds = kMinRetryDelaySeconds;
+        while (true) {
+            std::string body;
+            std::string fetchError;
+
+            if (HttpGetToString(kMembershipUrl, body, fetchError)) {
+                std::vector<SupporterRoleEntry> parsedRoles;
+                std::string parseError;
+                if (ParseSupportersJson(body, parsedRoles, parseError)) {
+                    {
+                        std::unique_lock<std::shared_mutex> writeLock(g_supportersMutex);
+                        g_supporterRoles = std::move(parsedRoles);
+                    }
+
+                    g_supportersLoaded.store(true, std::memory_order_release);
+                    g_supportersFetchEverFailed.store(false, std::memory_order_release);
+                    Log("Loaded supporters metadata.");
+                    return;
+                }
+
+                fetchError = parseError;
+            }
+
+            g_supportersFetchEverFailed.store(true, std::memory_order_release);
+            Log("Supporters metadata fetch failed; retrying in " + std::to_string(retryDelaySeconds) + "s. Reason: " + fetchError);
+
+            std::this_thread::sleep_for(std::chrono::seconds(retryDelaySeconds));
+            retryDelaySeconds = (std::min)(retryDelaySeconds * 2, kMaxRetryDelaySeconds);
+        }
+    }).detach();
+}
 
 // Last key/mouse-down input event observed by WndProc, used for precise key binding capture.
 static std::atomic<uint64_t> g_bindingInputEventSequence{ 0 };
@@ -2839,6 +3033,11 @@ void RenderSettingsGUI() {
                 // =====================================================================
 #include "gui/tab_basic_other.inl"
 
+                // =====================================================================
+                // BASIC SUPPORTERS TAB
+                // =====================================================================
+#include "gui/tab_supporters.inl"
+
                 ImGui::EndTabBar();
             }
         } else {
@@ -2882,6 +3081,11 @@ void RenderSettingsGUI() {
                 // MISC TAB - Extracted to gui/tab_misc.inl
                 // =====================================================================
 #include "gui/tab_misc.inl"
+
+                // =====================================================================
+                // SUPPORTERS TAB
+                // =====================================================================
+#include "gui/tab_supporters.inl"
 
                 ImGui::EndTabBar();
             }
@@ -2963,6 +3167,8 @@ void InitializeImGuiContext(HWND hwnd) {
         // Initialize larger font for overlay text labels
         InitializeOverlayTextFont(usePath, 16.0f, scaleFactor);
     }
+
+    StartSupportersFetchThreadOnce();
 }
 
 bool IsGuiHotkeyPressed(WPARAM wParam) { return CheckHotkeyMatch(g_config.guiHotkey, wParam); }

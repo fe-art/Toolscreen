@@ -1655,8 +1655,17 @@ void handleEyeZoomMode(const GLState& s, float opacity, int animatedViewportX) {
     int minHeight = (int)(0.2f * fullH);
     if (zoomOutputHeight < minHeight) { zoomOutputHeight = minHeight; }
 
-    int zoomX = zoomConfig.horizontalMargin; // Left margin
-    int zoomY = zoomConfig.verticalMargin;   // Top margin
+    int zoomX = zoomConfig.useCustomPosition ? zoomConfig.positionX : zoomConfig.horizontalMargin;
+    int zoomY = zoomConfig.useCustomPosition ? zoomConfig.positionY : zoomConfig.verticalMargin;
+
+    // Clamp custom placement to keep EyeZoom fully on-screen.
+    if (zoomConfig.useCustomPosition) {
+        int maxZoomX = (std::max)(0, fullW - zoomOutputWidth);
+        int maxZoomY = (std::max)(0, fullH - zoomOutputHeight);
+        zoomX = (std::max)(0, (std::min)(zoomX, maxZoomX));
+        zoomY = (std::max)(0, (std::min)(zoomY, maxZoomY));
+    }
+
     int zoomY_gl = fullH - zoomY - zoomOutputHeight;
 
     // Get game texture dimensions from config (e.g., 384x16384)

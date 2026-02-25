@@ -1301,6 +1301,9 @@ void EyeZoomConfigToToml(const EyeZoomConfig& cfg, toml::table& out) {
     out.insert("windowHeight", cfg.windowHeight);
     out.insert("horizontalMargin", cfg.horizontalMargin);
     out.insert("verticalMargin", cfg.verticalMargin);
+    out.insert("useCustomPosition", cfg.useCustomPosition);
+    out.insert("positionX", cfg.positionX);
+    out.insert("positionY", cfg.positionY);
     out.insert("autoFontSize", cfg.autoFontSize);
     out.insert("textFontSize", cfg.textFontSize);
     out.insert("textFontPath", cfg.textFontPath);
@@ -1343,6 +1346,9 @@ void EyeZoomConfigFromToml(const toml::table& tbl, EyeZoomConfig& cfg) {
     cfg.windowHeight = GetOr(tbl, "windowHeight", ConfigDefaults::EYEZOOM_WINDOW_HEIGHT);
     cfg.horizontalMargin = GetOr(tbl, "horizontalMargin", ConfigDefaults::EYEZOOM_HORIZONTAL_MARGIN);
     cfg.verticalMargin = GetOr(tbl, "verticalMargin", ConfigDefaults::EYEZOOM_VERTICAL_MARGIN);
+    cfg.useCustomPosition = GetOr(tbl, "useCustomPosition", ConfigDefaults::EYEZOOM_USE_CUSTOM_POSITION);
+    cfg.positionX = GetOr(tbl, "positionX", ConfigDefaults::EYEZOOM_POSITION_X);
+    cfg.positionY = GetOr(tbl, "positionY", ConfigDefaults::EYEZOOM_POSITION_Y);
     cfg.autoFontSize = GetOr(tbl, "autoFontSize", ConfigDefaults::EYEZOOM_AUTO_FONT_SIZE);
     cfg.textFontSize = GetOr(tbl, "textFontSize", ConfigDefaults::EYEZOOM_TEXT_FONT_SIZE);
     cfg.textFontPath = GetStringOr(tbl, "textFontPath", ConfigDefaults::EYEZOOM_TEXT_FONT_PATH);
