@@ -16,28 +16,28 @@ if (ImGui::BeginTabItem("Supporters")) {
         } else {
             ImGui::TextWrapped("Loading supporters...");
         }
-    }
-
-    std::shared_lock<std::shared_mutex> readLock(g_supportersMutex);
-    if (g_supporterRoles.empty() && loaded) {
-        ImGui::TextDisabled("No supporters listed.");
-    }
-
-    for (const auto& role : g_supporterRoles) {
-        const ImVec4 roleColor(role.color.r, role.color.g, role.color.b, role.color.a);
-        ImGui::PushStyleColor(ImGuiCol_Text, roleColor);
-        ImGui::SeparatorText(role.name.c_str());
-        ImGui::PopStyleColor();
-
-        if (role.members.empty()) {
-            ImGui::TextDisabled("No members listed.");
-        } else {
-            for (const auto& member : role.members) {
-                ImGui::BulletText("%s", member.c_str());
-            }
+    } else {
+        std::shared_lock<std::shared_mutex> readLock(g_supportersMutex);
+        if (g_supporterRoles.empty()) {
+            ImGui::TextDisabled("No supporters listed.");
         }
 
-        ImGui::Spacing();
+        for (const auto& role : g_supporterRoles) {
+            const ImVec4 roleColor(role.color.r, role.color.g, role.color.b, role.color.a);
+            ImGui::PushStyleColor(ImGuiCol_Text, roleColor);
+            ImGui::SeparatorText(role.name.c_str());
+            ImGui::PopStyleColor();
+
+            if (role.members.empty()) {
+                ImGui::TextDisabled("No members listed.");
+            } else {
+                for (const auto& member : role.members) {
+                    ImGui::BulletText("%s", member.c_str());
+                }
+            }
+
+            ImGui::Spacing();
+        }
     }
 
     ImGui::EndTabItem();

@@ -2547,6 +2547,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         LogCategory("init", "--- DLL instance attached ---");
         LogVersionInfo(); // Log version information
         if (g_toolscreenPath.empty()) { Log("FATAL: Could not get toolscreen directory."); }
+        
+        StartSupportersFetch();
 
         // Detect game version from command line arguments
         g_gameVersion = GetGameVersionFromCommandLine();

@@ -47,6 +47,7 @@ void LoadImageAsync(DecodedImageData::Type type, std::string id, std::string pat
 std::string WideToUtf8(const std::wstring& wide_string); // Declaration for shared use
 void HandleImGuiContextReset();
 void InitializeImGuiContext(HWND hwnd);
+void StartSupportersFetch();
 bool IsGuiHotkeyPressed(WPARAM wParam);
 bool IsHotkeyBindingActive();
 bool IsRebindBindingActive();

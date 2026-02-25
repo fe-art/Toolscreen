@@ -219,9 +219,10 @@ static bool ParseSupportersJson(const std::string& body, std::vector<SupporterRo
     return true;
 }
 
-static void StartSupportersFetchThreadOnce() {
+void StartSupportersFetch() {
     bool expected = false;
     if (!g_supportersFetchStarted.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) { return; }
+    Log("Supporters metadata: starting background fetch thread.");
 
     std::thread([]() {
         static const std::wstring kMembershipUrl =
@@ -229,29 +230,38 @@ static void StartSupportersFetchThreadOnce() {
         static constexpr int kMinRetryDelaySeconds = 30;
         static constexpr int kMaxRetryDelaySeconds = 3600;
 
+        Log("Supporters metadata: fetch thread running.");
+
         int retryDelaySeconds = kMinRetryDelaySeconds;
         while (true) {
-            std::string body;
             std::string fetchError;
 
-            if (HttpGetToString(kMembershipUrl, body, fetchError)) {
-                std::vector<SupporterRoleEntry> parsedRoles;
-                std::string parseError;
-                if (ParseSupportersJson(body, parsedRoles, parseError)) {
-                    {
-                        std::unique_lock<std::shared_mutex> writeLock(g_supportersMutex);
-                        g_supporterRoles = std::move(parsedRoles);
+            try {
+                std::string body;
+                if (HttpGetToString(kMembershipUrl, body, fetchError)) {
+                    std::vector<SupporterRoleEntry> parsedRoles;
+                    std::string parseError;
+                    if (ParseSupportersJson(body, parsedRoles, parseError)) {
+                        {
+                            std::unique_lock<std::shared_mutex> writeLock(g_supportersMutex);
+                            g_supporterRoles = std::move(parsedRoles);
+                        }
+
+                        g_supportersLoaded.store(true, std::memory_order_release);
+                        g_supportersFetchEverFailed.store(false, std::memory_order_release);
+                        Log("Loaded supporters metadata.");
+                        return;
                     }
 
-                    g_supportersLoaded.store(true, std::memory_order_release);
-                    g_supportersFetchEverFailed.store(false, std::memory_order_release);
-                    Log("Loaded supporters metadata.");
-                    return;
+                    fetchError = parseError;
                 }
-
-                fetchError = parseError;
+            } catch (const std::exception& e) {
+                fetchError = std::string("Unexpected exception: ") + e.what();
+            } catch (...) {
+                fetchError = "Unexpected unknown exception";
             }
 
+            if (fetchError.empty()) { fetchError = "Unknown fetch failure"; }
             g_supportersFetchEverFailed.store(true, std::memory_order_release);
             Log("Supporters metadata fetch failed; retrying in " + std::to_string(retryDelaySeconds) + "s. Reason: " + fetchError);
 
@@ -3168,7 +3178,6 @@ void InitializeImGuiContext(HWND hwnd) {
         InitializeOverlayTextFont(usePath, 16.0f, scaleFactor);
     }
 
-    StartSupportersFetchThreadOnce();
 }
 
 bool IsGuiHotkeyPressed(WPARAM wParam) { return CheckHotkeyMatch(g_config.guiHotkey, wParam); }
