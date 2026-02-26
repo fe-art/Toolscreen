@@ -38,13 +38,12 @@ extern std::mutex g_pendingDimensionChangeMutex;
 
 extern GameVersion g_gameVersion;
 
-// Forward declarations for functions in dllmain.cpp
 void ApplyWindowsMouseSpeed();
 
 // Double-buffered viewport cache for lock-free access by hkglViewport
 CachedModeViewport g_viewportModeCache[2];
 std::atomic<int> g_viewportModeCacheIndex{ 0 };
-static std::string s_lastCachedModeId; // Track which mode ID is cached
+static std::string s_lastCachedModeId;
 
 static bool s_wasInWorld = false;
 static int s_lastAppliedWindowsMouseSpeed = -1;
@@ -53,8 +52,6 @@ static std::string s_previousGameStateForReset = "init";
 static std::atomic<int> s_cachedScreenWidth{ 0 };
 static std::atomic<int> s_cachedScreenHeight{ 0 };
 
-// Screen-metrics refresh coordination
-// - Dirty flag is set by window-move/resize messages to force immediate refresh.
 // - Periodic refresh is a safety net in case move messages are missed.
 // - If another thread detects a size change and updates the cache, it requests
 //   an expression-dimension recalculation which MUST occur on the logic thread.
@@ -68,13 +65,11 @@ static void ComputeScreenMetricsForGameWindow(int& outW, int& outH) {
 
     HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
     if (!GetMonitorSizeForWindow(hwnd, outW, outH)) {
-        // Fallback to primary monitor.
         outW = GetSystemMetrics(SM_CXSCREEN);
         outH = GetSystemMetrics(SM_CYSCREEN);
     }
 }
 
-// Returns true if the cached width/height changed.
 static bool RefreshCachedScreenMetricsIfNeeded(bool requestRecalcOnChange) {
     constexpr ULONGLONG kPeriodicRefreshMs = 250; // fast enough to catch monitor moves, cheap enough for render thread callers
     ULONGLONG now = GetTickCount64();
@@ -108,13 +103,10 @@ void InvalidateCachedScreenMetrics() {
     s_screenMetricsDirty.store(true, std::memory_order_relaxed);
 }
 
-// Tracked for UpdateActiveMirrorConfigs - detect when active mirrors change
 static std::vector<std::string> s_lastActiveMirrorIds;
 static std::string s_lastMirrorConfigModeId;
 static uint64_t s_lastMirrorConfigSnapshotVersion = 0;
 
-// Update mirror capture configs when active mirrors change (mode switch or config edit)
-// This was previously done on every frame in RenderModeInternal - now only when needed
 void UpdateActiveMirrorConfigs() {
     PROFILE_SCOPE_CAT("LT Mirror Configs", "Logic Thread");
 
@@ -123,8 +115,6 @@ void UpdateActiveMirrorConfigs() {
     if (!cfgSnap) return;
     const Config& cfg = *cfgSnap;
 
-    // If neither mode nor config snapshot changed, skip all work.
-    // This avoids rebuilding mirror lists 60 times/sec when nothing is changing.
     const uint64_t snapVer = g_configSnapshotVersion.load(std::memory_order_acquire);
 
     // Get current mode ID from double-buffer (lock-free)
@@ -136,7 +126,6 @@ void UpdateActiveMirrorConfigs() {
     const ModeConfig* mode = GetModeFromSnapshot(cfg, currentModeId);
     if (!mode) { return; }
 
-    // Collect all mirror IDs from both direct mirrors and mirror groups
     std::vector<std::string> currentMirrorIds = mode->mirrorIds;
     for (const auto& groupName : mode->mirrorGroupIds) {
         for (const auto& group : cfg.mirrorGroups) {
@@ -151,9 +140,7 @@ void UpdateActiveMirrorConfigs() {
         }
     }
 
-    // Only update if the list of active mirrors changed
     if (currentMirrorIds != s_lastActiveMirrorIds) {
-        // Collect MirrorConfig objects for UpdateMirrorCaptureConfigs
         std::vector<MirrorConfig> activeMirrorsForCapture;
         activeMirrorsForCapture.reserve(currentMirrorIds.size());
         for (const auto& mirrorId : currentMirrorIds) {
@@ -161,16 +148,12 @@ void UpdateActiveMirrorConfigs() {
                 if (mirror.name == mirrorId) {
                     MirrorConfig activeMirror = mirror;
 
-                    // Check if this mirror is part of a group in the current mode
-                    // If so, apply the group's output settings (position + per-item sizing)
                     for (const auto& groupName : mode->mirrorGroupIds) {
                         for (const auto& group : cfg.mirrorGroups) {
                             if (group.name == groupName) {
-                                // Check if this mirror is in this group
                                 for (const auto& item : group.mirrors) {
-                                    if (!item.enabled) continue; // Skip disabled items
+                                    if (!item.enabled) continue;
                                     if (item.mirrorId == mirrorId) {
-                                        // Calculate group position - use relative percentages if enabled
                                         int groupX = group.output.x;
                                         int groupY = group.output.y;
                                         if (group.output.useRelativePosition) {
@@ -179,14 +162,12 @@ void UpdateActiveMirrorConfigs() {
                                             groupX = static_cast<int>(group.output.relativeX * screenW);
                                             groupY = static_cast<int>(group.output.relativeY * screenH);
                                         }
-                                        // Position from group + per-item offset
                                         activeMirror.output.x = groupX + item.offsetX;
                                         activeMirror.output.y = groupY + item.offsetY;
                                         activeMirror.output.relativeTo = group.output.relativeTo;
                                         activeMirror.output.useRelativePosition = group.output.useRelativePosition;
                                         activeMirror.output.relativeX = group.output.relativeX;
                                         activeMirror.output.relativeY = group.output.relativeY;
-                                        // Per-item sizing (multiply mirror scale by item percentages)
                                         if (item.widthPercent != 1.0f || item.heightPercent != 1.0f) {
                                             activeMirror.output.separateScale = true;
                                             float baseScaleX = mirror.output.separateScale ? mirror.output.scaleX : mirror.output.scale;
@@ -211,7 +192,6 @@ void UpdateActiveMirrorConfigs() {
         s_lastActiveMirrorIds = currentMirrorIds;
     }
 
-    // Remember what we processed this tick.
     s_lastMirrorConfigModeId = currentModeId;
     s_lastMirrorConfigSnapshotVersion = snapVer;
 }
@@ -219,9 +199,7 @@ void UpdateActiveMirrorConfigs() {
 void UpdateCachedScreenMetrics() {
     PROFILE_SCOPE_CAT("LT Screen Metrics", "Logic Thread");
 
-    // Store previous values to detect changes.
     // Note: other threads may refresh the cache (to avoid returning stale values),
-    // so we also honor an explicit "recalc requested" flag.
     int prevWidth = s_cachedScreenWidth.load(std::memory_order_relaxed);
     int prevHeight = s_cachedScreenHeight.load(std::memory_order_relaxed);
 
@@ -232,18 +210,14 @@ void UpdateCachedScreenMetrics() {
     int newHeight = s_cachedScreenHeight.load(std::memory_order_relaxed);
 
     // Recalculate expression-based dimensions if screen size changed or if another thread requested it.
-    // Only do this when we already had non-zero values once (prevents doing work during early startup).
     if (prevWidth != 0 && prevHeight != 0 && (changed || recalcRequested || prevWidth != newWidth || prevHeight != newHeight)) {
         RecalculateExpressionDimensions();
-        // RecalculateExpressionDimensions mutates g_config.modes in-place (width/height/stretch fields).
         // Publish updated snapshot so reader threads see the recalculated dimensions.
         PublishConfigSnapshot();
     }
 }
 
 int GetCachedScreenWidth() {
-    // Refresh opportunistically so we don't return stale monitor dimensions after a window move.
-    // This is throttled (see RefreshCachedScreenMetricsIfNeeded).
     RefreshCachedScreenMetricsIfNeeded(/*requestRecalcOnChange=*/true);
 
     int w = s_cachedScreenWidth.load(std::memory_order_relaxed);
@@ -283,7 +257,6 @@ void UpdateCachedViewportMode() {
     // Read current mode ID from double-buffer (lock-free)
     std::string currentModeId = g_modeIdBuffers[g_currentModeIdIndex.load(std::memory_order_acquire)];
 
-    // Always update cache when GUI is open (user may be editing width/height/x/y)
     // Also force periodic refresh every 60 ticks (~1 second) as a safety net
     static int s_ticksSinceRefresh = 0;
     bool guiOpen = g_showGui.load(std::memory_order_relaxed);
@@ -295,10 +268,9 @@ void UpdateCachedViewportMode() {
 
     // Get mode data via config snapshot (thread-safe, lock-free)
     auto cfgSnap = GetConfigSnapshot();
-    if (!cfgSnap) return; // Config not yet published
+    if (!cfgSnap) return;
     const ModeConfig* mode = GetModeFromSnapshot(*cfgSnap, currentModeId);
 
-    // Write to inactive buffer
     int nextIndex = 1 - g_viewportModeCacheIndex.load(std::memory_order_relaxed);
     CachedModeViewport& cache = g_viewportModeCache[nextIndex];
 
@@ -350,14 +322,12 @@ void CheckWorldExitReset() {
     std::string currentGameState = g_gameStateBuffers[g_currentGameStateIndex.load(std::memory_order_acquire)];
     bool isInWorld = (currentGameState.find("inworld") != std::string::npos);
 
-    // Transitioning from "in world" to "not in world" - reset all secondary modes
     if (s_wasInWorld && !isInWorld) {
         auto cfgSnap = GetConfigSnapshot();
         if (cfgSnap) {
             const Config& cfg = *cfgSnap;
             for (size_t i = 0; i < cfg.hotkeys.size(); ++i) {
                 const auto& hotkey = cfg.hotkeys[i];
-                // Only reset if this hotkey has a secondary mode configured
                 if (!hotkey.secondaryMode.empty() && GetHotkeySecondaryMode(i) != hotkey.secondaryMode) {
                     SetHotkeySecondaryMode(i, hotkey.secondaryMode);
                     Log("[Hotkey] Reset secondary mode for hotkey to: " + hotkey.secondaryMode);
@@ -384,23 +354,18 @@ void ProcessPendingModeSwitch() {
     if (!g_pendingModeSwitch.pending) { return; }
 
     if (g_pendingModeSwitch.isPreview && !g_pendingModeSwitch.previewFromModeId.empty()) {
-        // Preview mode: first switch to the "from" mode instantly (with Cut transition)
         Log("[GUI] Processing preview mode switch: " + g_pendingModeSwitch.previewFromModeId + " -> " + g_pendingModeSwitch.modeId);
 
         std::string fromModeId = g_pendingModeSwitch.previewFromModeId;
         std::string toModeId = g_pendingModeSwitch.modeId;
 
-        // Switch to "from" mode instantly using forceCut (no g_config mutation needed)
         SwitchToMode(fromModeId, "Preview (instant)", /*forceCut=*/true);
 
-        // Now switch to target mode with its configured transition
         SwitchToMode(toModeId, "Preview (animated)");
     } else {
-        // Normal mode switch
         LogCategory("gui", "[GUI] Processing deferred mode switch to: " + g_pendingModeSwitch.modeId +
                                " (source: " + g_pendingModeSwitch.source + ")");
 
-        // Use forceCut parameter instead of temporarily mutating g_config.modes
         // This avoids cross-thread mutation of g_config from the logic thread
         SwitchToMode(g_pendingModeSwitch.modeId, g_pendingModeSwitch.source,
                      /*forceCut=*/g_pendingModeSwitch.forceInstant);
@@ -421,13 +386,8 @@ void ProcessPendingDimensionChange() {
     std::lock_guard<std::mutex> lock(g_pendingDimensionChangeMutex);
     if (!g_pendingDimensionChange.pending) { return; }
 
-    // Find the mode and apply dimension changes
     ModeConfig* mode = GetModeMutable(g_pendingDimensionChange.modeId);
     if (mode) {
-        // NOTE: The GUI spinners represent an explicit switch to absolute pixel sizing.
-        // If a mode was previously driven by an expression (e.g. Thin/Wide defaults) or
-        // by percentage sizing, changing the spinner should disable that and persist the
-        // new numeric value.
         if (g_pendingDimensionChange.newWidth > 0) {
             mode->width = g_pendingDimensionChange.newWidth;
             mode->widthExpr.clear();
@@ -439,18 +399,14 @@ void ProcessPendingDimensionChange() {
             mode->relativeHeight = -1.0f;
         }
 
-        // If no relative sizing remains, clear the flag (keeps UI/serialization consistent).
         const bool hasRelativeWidth = (mode->relativeWidth >= 0.0f && mode->relativeWidth <= 1.0f);
         const bool hasRelativeHeight = (mode->relativeHeight >= 0.0f && mode->relativeHeight <= 1.0f);
         if (!hasRelativeWidth && !hasRelativeHeight) { mode->useRelativeSize = false; }
 
-        // Preemptive mode always copies EyeZoom resolution.
-        // If EyeZoom was edited (or if Preemptive somehow got edited), resync Preemptive now.
         ModeConfig* eyezoomMode = GetModeMutable("EyeZoom");
         ModeConfig* preemptiveMode = GetModeMutable("Preemptive");
         bool preemptiveWasResynced = false;
         if (eyezoomMode && preemptiveMode) {
-            // Force Preemptive to absolute sizing.
             if (!preemptiveMode->widthExpr.empty() || !preemptiveMode->heightExpr.empty() || preemptiveMode->useRelativeSize ||
                 preemptiveMode->relativeWidth >= 0.0f || preemptiveMode->relativeHeight >= 0.0f) {
                 preemptiveMode->widthExpr.clear();
@@ -471,13 +427,11 @@ void ProcessPendingDimensionChange() {
             }
         }
 
-        // Post WM_SIZE if requested and this is the current mode
         if (g_pendingDimensionChange.sendWmSize && g_currentModeId == g_pendingDimensionChange.modeId) {
             HWND hwnd = g_minecraftHwnd.load();
             if (hwnd) { PostMessage(hwnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(mode->width, mode->height)); }
         }
 
-        // Special case: changing EyeZoom dimensions also changes Preemptive (it mirrors EyeZoom resolution).
         if (g_pendingDimensionChange.sendWmSize && g_currentModeId == "Preemptive" && g_pendingDimensionChange.modeId == "EyeZoom" &&
             preemptiveMode) {
             HWND hwnd = g_minecraftHwnd.load();
@@ -499,15 +453,12 @@ void ProcessPendingDimensionChange() {
 void CheckGameStateReset() {
     PROFILE_SCOPE_CAT("LT Game State Reset", "Logic Thread");
 
-    // Only perform mode switching if resolution changes are supported
     if (!IsResolutionChangeSupported(g_gameVersion)) { return; }
 
     // Get current game state from lock-free buffer
     std::string localGameState = g_gameStateBuffers[g_currentGameStateIndex.load(std::memory_order_acquire)];
 
-    // Check if transitioning from non-wall/title/waiting to wall/title/waiting
     if (isWallTitleOrWaiting(localGameState) && !isWallTitleOrWaiting(s_previousGameStateForReset)) {
-        // Reset all hotkey secondary modes to default
         auto cfgSnap = GetConfigSnapshot();
         if (cfgSnap) {
             const Config& cfg = *cfgSnap;
@@ -542,26 +493,22 @@ static void CheckAutoBorderless() {
 static void LogicThreadFunc() {
     LogCategory("init", "[LogicThread] Started");
 
-    // Target ~60Hz tick rate (approximately 16.67ms per tick)
     const auto tickInterval = std::chrono::milliseconds(16);
 
     while (!g_logicThreadShouldStop.load()) {
         PROFILE_SCOPE_CAT("Logic Thread Tick", "Logic Thread");
         auto tickStart = std::chrono::steady_clock::now();
 
-        // Skip all logic if shutting down
         if (g_isShuttingDown.load()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             continue;
         }
 
-        // Skip if config not loaded yet
         if (!g_configLoaded.load()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             continue;
         }
 
-        // Run all logic checks
         UpdateCachedScreenMetrics();
         UpdateCachedViewportMode();
         UpdateActiveMirrorConfigs();
@@ -573,7 +520,6 @@ static void LogicThreadFunc() {
         CheckGameStateReset();
         CheckAutoBorderless();
 
-        // Sleep for remaining time in tick
         auto tickEnd = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(tickEnd - tickStart);
         if (elapsed < tickInterval) { std::this_thread::sleep_for(tickInterval - elapsed); }
@@ -608,3 +554,5 @@ void StopLogicThread() {
     g_logicThreadRunning.store(false);
     Log("[LogicThread] Logic thread stopped");
 }
+
+

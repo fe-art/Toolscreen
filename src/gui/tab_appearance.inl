@@ -5,12 +5,10 @@
 
                 ImGui::SeparatorText("Color Scheme");
 
-                // Preset themes
                 ImGui::Text("Preset Themes:");
                 ImGui::SameLine();
                 HelpMarker("Select a preset theme or customize individual colors below.");
 
-                // Row 1: ImGui defaults
                 if (ImGui::Button("Dark")) {
                     ImGui::StyleColorsDark();
                     g_config.appearance.theme = "Dark";
@@ -32,7 +30,6 @@
                 if (ImGui::Button("Dracula")) {
                     ImGuiStyle& style = ImGui::GetStyle();
                     ImGui::StyleColorsDark();
-                    // Dracula theme colors
                     style.Colors[ImGuiCol_WindowBg] = ImVec4(0.16f, 0.16f, 0.21f, 1.00f);
                     style.Colors[ImGuiCol_ChildBg] = ImVec4(0.16f, 0.16f, 0.21f, 1.00f);
                     style.Colors[ImGuiCol_PopupBg] = ImVec4(0.16f, 0.16f, 0.21f, 0.94f);
@@ -62,11 +59,9 @@
                     SaveTheme();
                 }
 
-                // Row 2: More themes
                 if (ImGui::Button("Nord")) {
                     ImGuiStyle& style = ImGui::GetStyle();
                     ImGui::StyleColorsDark();
-                    // Nord theme colors
                     style.Colors[ImGuiCol_WindowBg] = ImVec4(0.18f, 0.20f, 0.25f, 1.00f);
                     style.Colors[ImGuiCol_ChildBg] = ImVec4(0.18f, 0.20f, 0.25f, 1.00f);
                     style.Colors[ImGuiCol_PopupBg] = ImVec4(0.18f, 0.20f, 0.25f, 0.94f);
@@ -99,7 +94,6 @@
                 if (ImGui::Button("Solarized")) {
                     ImGuiStyle& style = ImGui::GetStyle();
                     ImGui::StyleColorsDark();
-                    // Solarized Dark theme colors
                     style.Colors[ImGuiCol_WindowBg] = ImVec4(0.00f, 0.17f, 0.21f, 1.00f);
                     style.Colors[ImGuiCol_ChildBg] = ImVec4(0.00f, 0.17f, 0.21f, 1.00f);
                     style.Colors[ImGuiCol_PopupBg] = ImVec4(0.00f, 0.17f, 0.21f, 0.94f);
@@ -132,7 +126,6 @@
                 if (ImGui::Button("Monokai")) {
                     ImGuiStyle& style = ImGui::GetStyle();
                     ImGui::StyleColorsDark();
-                    // Monokai theme colors
                     style.Colors[ImGuiCol_WindowBg] = ImVec4(0.15f, 0.15f, 0.13f, 1.00f);
                     style.Colors[ImGuiCol_ChildBg] = ImVec4(0.15f, 0.15f, 0.13f, 1.00f);
                     style.Colors[ImGuiCol_PopupBg] = ImVec4(0.15f, 0.15f, 0.13f, 0.94f);
@@ -165,7 +158,6 @@
                 if (ImGui::Button("Catppuccin")) {
                     ImGuiStyle& style = ImGui::GetStyle();
                     ImGui::StyleColorsDark();
-                    // Catppuccin Mocha theme colors
                     style.Colors[ImGuiCol_WindowBg] = ImVec4(0.12f, 0.12f, 0.18f, 1.00f);
                     style.Colors[ImGuiCol_ChildBg] = ImVec4(0.12f, 0.12f, 0.18f, 1.00f);
                     style.Colors[ImGuiCol_PopupBg] = ImVec4(0.12f, 0.12f, 0.18f, 0.94f);
@@ -195,11 +187,9 @@
                     SaveTheme();
                 }
 
-                // Row 3: More themes
                 if (ImGui::Button("One Dark")) {
                     ImGuiStyle& style = ImGui::GetStyle();
                     ImGui::StyleColorsDark();
-                    // One Dark theme colors
                     style.Colors[ImGuiCol_WindowBg] = ImVec4(0.16f, 0.18f, 0.21f, 1.00f);
                     style.Colors[ImGuiCol_ChildBg] = ImVec4(0.16f, 0.18f, 0.21f, 1.00f);
                     style.Colors[ImGuiCol_PopupBg] = ImVec4(0.16f, 0.18f, 0.21f, 0.94f);
@@ -232,7 +222,6 @@
                 if (ImGui::Button("Gruvbox")) {
                     ImGuiStyle& style = ImGui::GetStyle();
                     ImGui::StyleColorsDark();
-                    // Gruvbox Dark theme colors
                     style.Colors[ImGuiCol_WindowBg] = ImVec4(0.16f, 0.15f, 0.13f, 1.00f);
                     style.Colors[ImGuiCol_ChildBg] = ImVec4(0.16f, 0.15f, 0.13f, 1.00f);
                     style.Colors[ImGuiCol_PopupBg] = ImVec4(0.16f, 0.15f, 0.13f, 0.94f);
@@ -265,7 +254,6 @@
                 if (ImGui::Button("Tokyo Night")) {
                     ImGuiStyle& style = ImGui::GetStyle();
                     ImGui::StyleColorsDark();
-                    // Tokyo Night theme colors
                     style.Colors[ImGuiCol_WindowBg] = ImVec4(0.10f, 0.11f, 0.17f, 1.00f);
                     style.Colors[ImGuiCol_ChildBg] = ImVec4(0.10f, 0.11f, 0.17f, 1.00f);
                     style.Colors[ImGuiCol_PopupBg] = ImVec4(0.10f, 0.11f, 0.17f, 0.94f);
@@ -295,11 +283,9 @@
                     SaveTheme();
                 }
 
-                // Row 4: Simple color themes
                 if (ImGui::Button("Purple")) {
                     ImGuiStyle& style = ImGui::GetStyle();
                     ImGui::StyleColorsDark();
-                    // Purple accent theme
                     style.Colors[ImGuiCol_WindowBg] = ImVec4(0.10f, 0.08f, 0.14f, 1.00f);
                     style.Colors[ImGuiCol_ChildBg] = ImVec4(0.10f, 0.08f, 0.14f, 1.00f);
                     style.Colors[ImGuiCol_PopupBg] = ImVec4(0.10f, 0.08f, 0.14f, 0.94f);
@@ -328,7 +314,6 @@
                 if (ImGui::Button("Pink")) {
                     ImGuiStyle& style = ImGui::GetStyle();
                     ImGui::StyleColorsDark();
-                    // Pink accent theme
                     style.Colors[ImGuiCol_WindowBg] = ImVec4(0.12f, 0.08f, 0.10f, 1.00f);
                     style.Colors[ImGuiCol_ChildBg] = ImVec4(0.12f, 0.08f, 0.10f, 1.00f);
                     style.Colors[ImGuiCol_PopupBg] = ImVec4(0.12f, 0.08f, 0.10f, 0.94f);
@@ -357,7 +342,6 @@
                 if (ImGui::Button("Blue")) {
                     ImGuiStyle& style = ImGui::GetStyle();
                     ImGui::StyleColorsDark();
-                    // Blue accent theme
                     style.Colors[ImGuiCol_WindowBg] = ImVec4(0.08f, 0.10f, 0.14f, 1.00f);
                     style.Colors[ImGuiCol_ChildBg] = ImVec4(0.08f, 0.10f, 0.14f, 1.00f);
                     style.Colors[ImGuiCol_PopupBg] = ImVec4(0.08f, 0.10f, 0.14f, 0.94f);
@@ -386,7 +370,6 @@
                 if (ImGui::Button("Teal")) {
                     ImGuiStyle& style = ImGui::GetStyle();
                     ImGui::StyleColorsDark();
-                    // Teal accent theme
                     style.Colors[ImGuiCol_WindowBg] = ImVec4(0.08f, 0.12f, 0.12f, 1.00f);
                     style.Colors[ImGuiCol_ChildBg] = ImVec4(0.08f, 0.12f, 0.12f, 1.00f);
                     style.Colors[ImGuiCol_PopupBg] = ImVec4(0.08f, 0.12f, 0.12f, 0.94f);
@@ -415,7 +398,6 @@
                 if (ImGui::Button("Red")) {
                     ImGuiStyle& style = ImGui::GetStyle();
                     ImGui::StyleColorsDark();
-                    // Red accent theme
                     style.Colors[ImGuiCol_WindowBg] = ImVec4(0.12f, 0.08f, 0.08f, 1.00f);
                     style.Colors[ImGuiCol_ChildBg] = ImVec4(0.12f, 0.08f, 0.08f, 1.00f);
                     style.Colors[ImGuiCol_PopupBg] = ImVec4(0.12f, 0.08f, 0.08f, 0.94f);
@@ -444,7 +426,6 @@
                 if (ImGui::Button("Green")) {
                     ImGuiStyle& style = ImGui::GetStyle();
                     ImGui::StyleColorsDark();
-                    // Green accent theme
                     style.Colors[ImGuiCol_WindowBg] = ImVec4(0.08f, 0.12f, 0.08f, 1.00f);
                     style.Colors[ImGuiCol_ChildBg] = ImVec4(0.08f, 0.12f, 0.08f, 1.00f);
                     style.Colors[ImGuiCol_PopupBg] = ImVec4(0.08f, 0.12f, 0.08f, 0.94f);
@@ -474,19 +455,15 @@
                 ImGui::Separator();
                 ImGui::Spacing();
 
-                // Custom color editing section
                 ImGui::Text("Custom Colors:");
                 ImGui::SameLine();
                 HelpMarker("Click on a color to open the color picker. Changes are applied immediately.");
 
                 ImGui::Spacing();
 
-                // Get the current style for editing
                 ImGuiStyle& style = ImGui::GetStyle();
 
-                // Show colors in a scrollable child region
                 if (ImGui::BeginChild("ColorList", ImVec2(0, 400), true)) {
-                    // Organize colors into logical groups
                     if (ImGui::CollapsingHeader("Window", ImGuiTreeNodeFlags_DefaultOpen)) {
                         ImGui::Indent();
                         if (ImGui::ColorEdit4("Window Background##Col", (float*)&style.Colors[ImGuiCol_WindowBg])) {
@@ -752,7 +729,6 @@
 
                 ImGui::Spacing();
 
-                // Reset button
                 if (ImGui::Button("Reset to Default (Dark)")) {
                     ImGui::StyleColorsDark();
                     g_config.appearance.theme = "Dark";
@@ -765,3 +741,5 @@
 
                 ImGui::EndTabItem();
             }
+
+

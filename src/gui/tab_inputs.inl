@@ -3,11 +3,7 @@ if (ImGui::BeginTabItem("Inputs")) {
     g_imageDragMode.store(false);
     g_windowOverlayDragMode.store(false);
 
-    // Sub-tabs for Mouse and Keyboard
     if (ImGui::BeginTabBar("InputsSubTabs")) {
-        // =====================================================================
-        // MOUSE SUB-TAB
-        // =====================================================================
         if (ImGui::BeginTabItem("Mouse")) {
             SliderCtrlClickTip();
 
@@ -57,29 +53,23 @@ if (ImGui::BeginTabItem("Inputs")) {
                 ImGui::Text("Configure cursors for different game states:");
                 ImGui::Spacing();
 
-                // Available cursor options
                 struct CursorOption {
                     std::string key;
                     std::string name;
                     std::string description;
                 };
 
-                // Build cursor list dynamically from detected cursors
                 static std::vector<CursorOption> availableCursors;
                 static bool cursorListInitialized = false;
 
                 if (!cursorListInitialized) {
-                    // Initialize cursor definitions first
                     CursorTextures::InitializeCursorDefinitions();
 
-                    // Get all available cursor names
                     auto cursorNames = CursorTextures::GetAvailableCursorNames();
 
-                    // Build display list from available cursors
                     for (const auto& cursorName : cursorNames) {
                         std::string displayName = cursorName;
 
-                        // Create user-friendly name (capitalize first letter, replace underscores/hyphens with spaces)
                         if (!displayName.empty()) {
                             displayName[0] = std::toupper(displayName[0]);
                             for (auto& c : displayName) {
@@ -88,7 +78,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                         }
 
                         std::string description;
-                        // Determine description based on cursor name
                         if (cursorName.find("Cross") != std::string::npos) {
                             description = "Crosshair cursor";
                         } else if (cursorName.find("Arrow") != std::string::npos) {
@@ -103,7 +92,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                     cursorListInitialized = true;
                 }
 
-                // Fixed 3 cursor configurations
                 struct CursorConfigUI {
                     const char* name;
                     CursorConfig* config;
@@ -120,7 +108,6 @@ if (ImGui::BeginTabItem("Inputs")) {
 
                     ImGui::SeparatorText(cursorUI.name);
 
-                    // Find current cursor display name
                     const char* currentCursorName = cursorConfig.cursorName.c_str();
                     std::string currentDescription = "";
                     for (const auto& option : availableCursors) {
@@ -131,12 +118,10 @@ if (ImGui::BeginTabItem("Inputs")) {
                         }
                     }
 
-                    // Cursor dropdown
                     ImGui::Text("Cursor:");
                     ImGui::SameLine();
                     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.35f);
                     if (ImGui::BeginCombo("##cursor", currentCursorName)) {
-                        // Display each cursor option with name and description
                         for (const auto& option : availableCursors) {
                             ImGui::PushID(option.key.c_str());
 
@@ -148,7 +133,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                                 // Schedule cursor reload (will happen outside GUI rendering to avoid deadlock)
                                 g_cursorsNeedReload = true;
 
-                                // Apply cursor immediately via SetCursor (loads on-demand if needed)
                                 std::wstring cursorPath;
                                 UINT loadType = IMAGE_CURSOR;
                                 CursorTextures::GetCursorPathByName(option.key, cursorPath, loadType);
@@ -158,7 +142,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                                 if (cursorData && cursorData->hCursor) { SetCursor(cursorData->hCursor); }
                             }
 
-                            // Show description on hover
                             if (ImGui::IsItemHovered()) {
                                 ImGui::BeginTooltip();
                                 ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.6f, 1.0f), "%s", option.name.c_str());
@@ -174,22 +157,19 @@ if (ImGui::BeginTabItem("Inputs")) {
                         ImGui::EndCombo();
                     }
 
-                    // Show current cursor description on hover
                     if (!currentDescription.empty() && ImGui::IsItemHovered()) {
                         ImGui::BeginTooltip();
                         ImGui::TextUnformatted(currentDescription.c_str());
                         ImGui::EndTooltip();
                     }
 
-                    // Cursor size slider on the same line
                     ImGui::SameLine();
                     ImGui::Spacing();
                     ImGui::SameLine();
                     ImGui::Text("Size:");
                     ImGui::SameLine();
 
-                    // Slider takes remaining width
-                    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.8f); // Leave space for help marker
+                    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.8f);
                     int sliderValue = cursorConfig.cursorSize;
                     if (ImGui::SliderInt("##cursorSize", &sliderValue, 8, 144, "%d px", ImGuiSliderFlags_AlwaysClamp)) {
                         int newSize = sliderValue;
@@ -197,7 +177,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                             cursorConfig.cursorSize = newSize;
                             g_configIsDirty = true;
 
-                            // Apply cursor immediately via SetCursor (loads on-demand if needed)
                             std::wstring cursorPath;
                             UINT loadType = IMAGE_CURSOR;
                             CursorTextures::GetCursorPathByName(cursorConfig.cursorName, cursorPath, loadType);
@@ -237,13 +216,9 @@ if (ImGui::BeginTabItem("Inputs")) {
             ImGui::EndTabItem();
         }
 
-        // =====================================================================
-        // KEYBOARD SUB-TAB
-        // =====================================================================
         if (ImGui::BeginTabItem("Keyboard")) {
             SliderCtrlClickTip();
 
-            // --- Key Repeat Rate Settings ---
             ImGui::SeparatorText("Key Repeat Rate");
 
             ImGui::Text("Key Repeat Start Delay:");
@@ -274,12 +249,10 @@ if (ImGui::BeginTabItem("Inputs")) {
 
             ImGui::Spacing();
 
-            // --- Key Rebinding Section ---
             ImGui::SeparatorText("Key Rebinding");
             ImGui::TextWrapped("Intercept keyboard inputs and remap them before they reach the game.");
             ImGui::Spacing();
 
-            // Master toggle
             if (ImGui::Checkbox("Enable Key Rebinding", &g_config.keyRebinds.enabled)) {
                 g_configIsDirty = true;
                 std::lock_guard<std::mutex> hotkeyLock(g_hotkeyMainKeysMutex);
@@ -324,13 +297,11 @@ if (ImGui::BeginTabItem("Inputs")) {
                     return scan;
                 };
 
-                // Shared binding state (used by both the list view and the layout popup)
-                static int s_rebindFromKeyToBind = -1;          // Index of rebind being bound (from key)
-                static int s_rebindOutputVKToBind = -1;         // Index of rebind being bound (base output VK)
-                static int s_rebindTextOverrideVKToBind = -1;   // Index of rebind being bound (text override VK)
-                static int s_rebindOutputScanToBind = -1;       // Index of rebind being bound (trigger scan code)
+                static int s_rebindFromKeyToBind = -1;
+                static int s_rebindOutputVKToBind = -1;
+                static int s_rebindTextOverrideVKToBind = -1;
+                static int s_rebindOutputScanToBind = -1;
 
-                // Inline binding state for the keyboard layout editor (so binding happens without closing/reopening the layout)
                 enum class LayoutBindTarget {
                     None,
                     TypesVk,
@@ -340,11 +311,9 @@ if (ImGui::BeginTabItem("Inputs")) {
                 static int s_layoutBindIndex = -1;
                 static uint64_t s_layoutBindLastSeq = 0;
 
-                // Unicode prompt state for keyboard layout editor
                 static int s_layoutUnicodeEditIndex = -1;
                 static std::string s_layoutUnicodeEditText;
 
-                // Per-rebind edit buffer for Unicode text output (so the user can type e.g. "ø" or "U+00F8").
                 static std::vector<std::string> s_rebindUnicodeTextEdit;
 
                 auto isValidUnicodeScalar = [](uint32_t cp) -> bool {
@@ -381,7 +350,6 @@ if (ImGui::BeginTabItem("Inputs")) {
 
                 auto codepointToDisplay = [&](uint32_t cp) -> std::string {
                     if (!isValidUnicodeScalar(cp)) return std::string("[None]");
-                    // Avoid rendering control characters as-is.
                     if (cp < 0x20u || cp == 0x7Fu) return formatCodepointUPlus(cp);
                     std::string s = codepointToUtf8(cp);
                     if (s.empty()) return formatCodepointUPlus(cp);
@@ -408,7 +376,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                         return true;
                     };
 
-                    // Explicit formats first
                     std::string hex;
                     if (startsWithI("U+")) hex = s.substr(2);
                     else if (startsWithI("\\\\u") || startsWithI("\\\\U")) hex = s.substr(2);
@@ -428,7 +395,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                         }
                     }
 
-                    // Single-character (or first codepoint) input (UTF-8)
                     std::wstring w = Utf8ToWide(s);
                     if (!w.empty()) {
                         uint32_t cp = 0;
@@ -443,7 +409,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                         }
                     }
 
-                    // Plain hex without prefix
                     try {
                         size_t idx = 0;
                         unsigned long v = std::stoul(s, &idx, 16);
@@ -462,11 +427,7 @@ if (ImGui::BeginTabItem("Inputs")) {
                     }
                 };
 
-                // ---------------------------------------------------------------------
-                // Keyboard layout visualization
-                // ---------------------------------------------------------------------
                 static bool s_keyboardLayoutOpen = false;
-                // Larger default so the layout is readable without fiddling.
                 static float s_keyboardLayoutScale = 1.45f;
 
                 if (ImGui::Button("Open Keyboard Layout")) { s_keyboardLayoutOpen = true; }
@@ -479,8 +440,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                            "This is a visualization only.");
 
                 if (s_keyboardLayoutOpen) {
-                    // Default to a moderately large modal so the keyboard + mouse are visible without taking over the screen.
-                    // Use the work area size (excludes taskbar/docking) and clamp to a sensible minimum.
                     const ImGuiViewport* vp = ImGui::GetMainViewport();
                     ImVec2 target = vp ? vp->WorkSize : ImVec2(1400.0f, 800.0f);
                     target.x *= 0.70f;
@@ -493,7 +452,6 @@ if (ImGui::BeginTabItem("Inputs")) {
 
                 auto scanCodeToDisplayName = [&](DWORD scan, DWORD fallbackVk) -> std::string {
                     if (scan == 0) {
-                        // For mouse outputs we store scan=0; display the VK name instead.
                         if (fallbackVk == VK_LBUTTON || fallbackVk == VK_RBUTTON || fallbackVk == VK_MBUTTON || fallbackVk == VK_XBUTTON1 ||
                             fallbackVk == VK_XBUTTON2) {
                             return VkToString(fallbackVk);
@@ -505,13 +463,12 @@ if (ImGui::BeginTabItem("Inputs")) {
                     if (scanDisplayVK != 0) { return VkToString(scanDisplayVK); }
 
                     LONG keyNameLParam = static_cast<LONG>((scan & 0xFF) << 16);
-                    if ((scan & 0xFF00) != 0) { keyNameLParam |= (1 << 24); } // extended key bit
+                    if ((scan & 0xFF00) != 0) { keyNameLParam |= (1 << 24); }
                     char keyName[64] = {};
                     if (GetKeyNameTextA(keyNameLParam, keyName, sizeof(keyName)) > 0) { return std::string(keyName); }
                     return std::string("[Unknown]");
                 };
 
-                // Center the modal and force an opaque background.
                 {
                     const ImGuiViewport* vp = ImGui::GetMainViewport();
                     const ImVec2 center = vp ? ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f)
@@ -522,8 +479,6 @@ if (ImGui::BeginTabItem("Inputs")) {
 
                 ImGui::PushStyleColor(ImGuiCol_PopupBg, IM_COL32(18, 19, 22, 255));
                 if (ImGui::BeginPopupModal("Keyboard Layout", &s_keyboardLayoutOpen, ImGuiWindowFlags_NoScrollbar)) {
-                    // While this modal is open, treat it like a binding interaction so the global ESC-to-close-GUI
-                    // hotkey doesn't close the whole settings UI.
                     MarkRebindBindingActive();
 
                     const bool anyRebindBindUiActive = (s_rebindFromKeyToBind != -1) || (s_rebindOutputVKToBind != -1) ||
@@ -535,7 +490,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                         ImGui::CloseCurrentPopup();
                     }
 
-                    // View controls (inside the popup, not on the main config page)
                     {
                         float scalePct = s_keyboardLayoutScale * 100.0f;
                         ImGui::TextUnformatted("Scale:");
@@ -559,8 +513,8 @@ if (ImGui::BeginTabItem("Inputs")) {
 
                     struct KeyCell {
                         DWORD vk;
-                        const char* labelOverride; // optional
-                        float w;                   // width in units
+                        const char* labelOverride;
+                        float w;
                     };
 
                     auto Spacer = [](float wUnits) -> KeyCell { return KeyCell{ 0, nullptr, wUnits }; };
@@ -568,49 +522,38 @@ if (ImGui::BeginTabItem("Inputs")) {
                         return KeyCell{ vk, overrideLabel, wUnits };
                     };
 
-                    // A reasonably complete 104-key ANSI-ish layout (approximate; single-height keys).
                     const std::vector<std::vector<KeyCell>> rows = {
-                        // Function row
-                                                // NOTE: The first spacer is intentionally 1.0u so that F1 centers above the '2' key
-                                                // and the right edge of F12 aligns with Backspace/Backslash/Enter/RShift/RCtrl.
                                                 { Key(VK_ESCAPE), Spacer(1.0f), Key(VK_F1), Key(VK_F2), Key(VK_F3), Key(VK_F4), Spacer(0.5f), Key(VK_F5),
                           Key(VK_F6), Key(VK_F7), Key(VK_F8), Spacer(0.5f), Key(VK_F9), Key(VK_F10), Key(VK_F11), Key(VK_F12),
                                                     Spacer(0.5f), Key(VK_SNAPSHOT, 1.25f, "PRTSC"), Key(VK_SCROLL, 1.25f, "SCRLK"), Key(VK_PAUSE, 1.25f, "PAUSE") },
 
-                        // Number row + nav + numpad
                         { Key(VK_OEM_3, 1.0f, "`") , Key('1'), Key('2'), Key('3'), Key('4'), Key('5'), Key('6'), Key('7'), Key('8'), Key('9'),
                           Key('0'), Key(VK_OEM_MINUS, 1.0f, "-"), Key(VK_OEM_PLUS, 1.0f, "="), Key(VK_BACK, 2.0f, "BACK"), Spacer(0.5f),
                                                     Key(VK_INSERT, 1.25f, "INS"), Key(VK_HOME, 1.25f, "HOME"), Key(VK_PRIOR, 1.25f, "PGUP"), Spacer(0.5f),
                                                     Key(VK_NUMLOCK, 1.25f, "NUMLK"), Key(VK_DIVIDE, 1.25f, "/"), Key(VK_MULTIPLY, 1.25f, "*"), Key(VK_SUBTRACT, 1.25f, "-") },
 
-                        // Q row
                         { Key(VK_TAB, 1.5f, "TAB"), Key('Q'), Key('W'), Key('E'), Key('R'), Key('T'), Key('Y'), Key('U'), Key('I'), Key('O'), Key('P'),
                           Key(VK_OEM_4, 1.0f, "["), Key(VK_OEM_6, 1.0f, "]"), Key(VK_OEM_5, 1.5f, "\\"), Spacer(0.5f),
                                                     Key(VK_DELETE, 1.25f, "DEL"), Key(VK_END, 1.25f, "END"), Key(VK_NEXT, 1.25f, "PGDN"), Spacer(0.5f),
                                                     Key(VK_NUMPAD7, 1.25f, "NUM7"), Key(VK_NUMPAD8, 1.25f, "NUM8"), Key(VK_NUMPAD9, 1.25f, "NUM9"), Key(VK_ADD, 1.25f, "+") },
 
-                        // A row
                         { Key(VK_CAPITAL, 1.75f, "CAPS"), Key('A'), Key('S'), Key('D'), Key('F'), Key('G'), Key('H'), Key('J'), Key('K'), Key('L'),
                           Key(VK_OEM_1, 1.0f, ";"), Key(VK_OEM_7, 1.0f, "'"), Key(VK_RETURN, 2.25f, "ENTER"), Spacer(0.5f),
-                                                    // Keep the same implicit gaps as other rows by using 3 separate spacers (INS/HOME/PGUP column widths).
                                                                                                         Spacer(1.25f), Spacer(1.25f), Spacer(1.25f), Spacer(0.5f),
                                                                                                         Key(VK_NUMPAD4, 1.25f, "NUM4"), Key(VK_NUMPAD5, 1.25f, "NUM5"), Key(VK_NUMPAD6, 1.25f, "NUM6"),
                                                     Spacer(1.25f) },
 
-                        // Z row + arrows + numpad
                         { Key(VK_LSHIFT, 2.25f, "LSHIFT"), Key('Z'), Key('X'), Key('C'), Key('V'), Key('B'), Key('N'), Key('M'),
                           Key(VK_OEM_COMMA, 1.0f, ","), Key(VK_OEM_PERIOD, 1.0f, "."), Key(VK_OEM_2, 1.0f, "/"), Key(VK_RSHIFT, 2.75f, "RSHIFT"),
                                                     Spacer(0.5f), Spacer(1.25f), Key(VK_UP, 1.25f, "UP"), Spacer(1.25f), Spacer(0.5f),
                                                     Key(VK_NUMPAD1, 1.25f, "NUM1"), Key(VK_NUMPAD2, 1.25f, "NUM2"), Key(VK_NUMPAD3, 1.25f, "NUM3"), Key(VK_RETURN, 1.25f, "ENTER") },
 
-                        // Bottom row
                                                 { Key(VK_LCONTROL, 1.25f, "LCTRL"), Key(VK_LWIN, 1.25f, "LWIN"), Key(VK_LMENU, 1.25f, "LALT"),
                                                     Key(VK_SPACE, 6.25f, "SPACE"), Key(VK_RMENU, 1.25f, "RALT"), Key(VK_RWIN, 1.25f, "RWIN"), Key(VK_APPS, 1.25f, "APPS"),
                                                     Key(VK_RCONTROL, 1.25f, "RCTRL"), Spacer(0.5f), Key(VK_LEFT, 1.25f, "LEFT"), Key(VK_DOWN, 1.25f, "DOWN"), Key(VK_RIGHT, 1.25f, "RIGHT"),
                                                     Spacer(0.5f), Key(VK_NUMPAD0, 2.5f, "NUM0"), Key(VK_DECIMAL, 1.25f, "NUM."), Spacer(1.25f) },
                     };
 
-                    // Resolve a rebind by fromKey. Prefer enabled + fully-configured entries.
                     auto findRebindForKey = [&](DWORD fromVk) -> const KeyRebind* {
                         const KeyRebind* first = nullptr;
                         const KeyRebind* enabledAny = nullptr;
@@ -636,29 +579,19 @@ if (ImGui::BeginTabItem("Inputs")) {
                         return first;
                     };
 
-                    // Slightly squarer keycaps (closer to real keyboards).
-                    // IMPORTANT: round to whole pixels to keep row edges perfectly aligned.
                     auto roundPx = [](float v) -> float { return (float)(int)(v + 0.5f); };
 
-                    // -----------------------------------------------------------------
-                    // Keyboard layout tuning (edit these constants)
-                    // -----------------------------------------------------------------
-                    // Overall scale multiplier (in addition to the UI slider).
                     constexpr float kKeyboardScaleMult = 1.0f;
-                    // Key sizing.
-                    constexpr float kKeyHeightMul = 1.55f;     // key height = frameHeight * mul * scale
-                    constexpr float kKeyUnitMul = 0.92f;       // base 1.0u width = keyH * mul (before quantization)
-                    // Spacing.
-                    constexpr float kKeyGapMul = 1.00f;        // gap derived from ImGui style spacing
-                    constexpr float kKeyCapInsetXMul = 0.55f;  // visual margin inside pitch rect (x)
-                    constexpr float kKeyCapInsetYMul = 0.45f;  // visual margin inside pitch rect (y)
-                    // Rounding.
-                    constexpr float kKeyRoundingPx = 5.0f;     // corner radius (before scale)
+                    constexpr float kKeyHeightMul = 1.55f;
+                    constexpr float kKeyUnitMul = 0.92f;
+                    constexpr float kKeyGapMul = 1.00f;
+                    constexpr float kKeyCapInsetXMul = 0.55f;
+                    constexpr float kKeyCapInsetYMul = 0.45f;
+                    constexpr float kKeyRoundingPx = 5.0f;
 
                     const float keyboardScale = s_keyboardLayoutScale * kKeyboardScaleMult;
 
                     const float keyH = roundPx(ImGui::GetFrameHeight() * kKeyHeightMul * keyboardScale);
-                    // Quantize unit to a multiple of 4 pixels so all 0.25-unit keys become exact integers.
                     float unit = roundPx(keyH * kKeyUnitMul);
                     unit = (float)(((int)(unit + 2.0f) / 4) * 4);
                     if (unit < 20.0f) unit = 20.0f;
@@ -667,14 +600,10 @@ if (ImGui::BeginTabItem("Inputs")) {
                     const float rounding = roundPx(kKeyRoundingPx * keyboardScale);
                     ImDrawList* dl = ImGui::GetWindowDrawList();
 
-                    // Use a unit-based pitch horizontally (no accumulated "gap" per key) so that the right edges of
-                    // F12/Backspace/Backslash/Enter/RShift/RCtrl land on the exact same pixel column.
-                    // Visual spacing is created by drawing keycaps inset inside their pitch rectangles.
                     const float pitchX = unit;
                     const float keyPadX = roundPx(gap * kKeyCapInsetXMul);
                     const float keyPadY = roundPx(gap * kKeyCapInsetYMul);
 
-                    // Pre-compute keyboard width so we can place the mouse panel to the right.
                     float keyboardMaxRowW = 0.0f;
                     for (const auto& row : rows) {
                         float w = 0.0f;
@@ -688,7 +617,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                     const ImVec2 layoutStartScreen = ImGui::GetCursorScreenPos();
                     const float keyboardTotalH = (float)rows.size() * (keyH + gap);
 
-                    // Keyboard base plate (behind keycaps)
                     {
                         const float platePad = 10.0f * keyboardScale;
                         const float plateRound = 10.0f * keyboardScale;
@@ -696,12 +624,9 @@ if (ImGui::BeginTabItem("Inputs")) {
                         const ImVec2 plateMax =
                             ImVec2(layoutStartScreen.x + keyboardMaxRowW + platePad, layoutStartScreen.y + keyboardTotalH - gap + platePad);
 
-                        // Shadow
                         dl->AddRectFilled(ImVec2(plateMin.x + 5, plateMin.y + 6), ImVec2(plateMax.x + 5, plateMax.y + 6),
                                           IM_COL32(0, 0, 0, 130), plateRound);
 
-                        // Plate fill (rounded). We avoid AddRectFilledMultiColor here because it doesn't support rounded corners,
-                        // which caused square corners to show through the rounded border.
                         const ImU32 plateTop = IM_COL32(35, 38, 46, 255);
                         const ImU32 plateBot = IM_COL32(18, 20, 26, 255);
                         dl->AddRectFilled(plateMin, plateMax, plateBot, plateRound);
@@ -709,17 +634,13 @@ if (ImGui::BeginTabItem("Inputs")) {
                         const ImVec2 plateMid = ImVec2(plateMax.x, plateMin.y + (plateMax.y - plateMin.y) * plateSplit);
                         dl->AddRectFilled(plateMin, plateMid, plateTop, plateRound, ImDrawFlags_RoundCornersTop);
                         dl->AddRect(plateMin, plateMax, IM_COL32(10, 10, 12, 255), plateRound);
-                        // Small highlight line
                         dl->AddLine(ImVec2(plateMin.x + 6, plateMin.y + 6), ImVec2(plateMax.x - 6, plateMin.y + 6), IM_COL32(255, 255, 255, 25),
                                     1.0f);
                     }
 
-                    // Context menu state for right-click editing
                     static DWORD s_layoutContextVk = 0;
                     static int s_layoutContextPreferredIndex = -1;
 
-                    // IMPORTANT: Popup identifiers are relative to the current ID stack.
-                    // We compute the popup ID here (outside per-key PushID scopes) and open it by ID from nested stacks.
                     const ImGuiID rebindPopupId = ImGui::GetID("Rebind Config##layout");
                     auto openRebindContextFor = [&](DWORD vk) {
                         s_layoutContextVk = vk;
@@ -787,7 +708,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                         };
 
                         KeyTheme theme = themeForVk(vk);
-                        // Make the bottom tone slightly lighter overall.
                         theme.bottom = adjust(theme.bottom, 10);
                         if (hovered) {
                             theme.top = adjust(theme.top, 12);
@@ -802,27 +722,21 @@ if (ImGui::BeginTabItem("Inputs")) {
                         const float shadow = 2.0f * keyboardScale;
                         const ImVec2 pressOff = active ? ImVec2(0.0f, 1.2f * keyboardScale) : ImVec2(0, 0);
 
-                        // Shadow
                         dl->AddRectFilled(ImVec2(pMin.x + shadow, pMin.y + shadow), ImVec2(pMax.x + shadow, pMax.y + shadow),
                                           IM_COL32(0, 0, 0, 90), rounding);
 
                         const ImVec2 kMin = ImVec2(pMin.x + pressOff.x, pMin.y + pressOff.y);
                         const ImVec2 kMax = ImVec2(pMax.x + pressOff.x, pMax.y + pressOff.y);
 
-                        // Keycap fill (rounded). Avoid AddRectFilledMultiColor to prevent square corners showing through.
                         dl->AddRectFilled(kMin, kMax, theme.bottom, rounding);
-                        // Push the darker portion lower on the keycap.
                         const float split = 0.70f;
                         const ImVec2 kMid = ImVec2(kMax.x, kMin.y + (kMax.y - kMin.y) * split);
                         dl->AddRectFilled(kMin, kMid, theme.top, rounding, ImDrawFlags_RoundCornersTop);
 
-                        // Inner highlight
                         dl->AddLine(ImVec2(kMin.x + 2, kMin.y + 2), ImVec2(kMax.x - 2, kMin.y + 2), IM_COL32(255, 255, 255, 35), 1.0f);
 
-                        // Border
                         dl->AddRect(kMin, kMax, theme.border, rounding, 0, 1.0f);
 
-                        // Rebind outline + tint
                         if (rb && rb->fromKey != 0 && rb->toKey != 0) {
                             const ImU32 outline = rb->enabled ? IM_COL32(0, 220, 110, 255) : IM_COL32(255, 170, 0, 255);
                             dl->AddRect(kMin, kMax, outline, rounding, 0, 3.0f);
@@ -833,7 +747,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                         const float padX = 6.0f * keyboardScale;
                         const float padY = 4.0f * keyboardScale;
 
-                        // Centered label (auto-scale to fit if needed)
                         ImFont* fLabel = ImGui::GetFont();
                         float labelFontSize = ImGui::GetFontSize();
                         ImVec2 labelSz = fLabel->CalcTextSizeA(labelFontSize, FLT_MAX, 0.0f, label);
@@ -849,7 +762,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                         if (labelPos.x < kMin.x + padX) labelPos.x = kMin.x + padX;
                         dl->AddText(fLabel, labelFontSize, labelPos, theme.text, label);
 
-                        // Rebind summary under the physical label: "B & C"
                         if (rb && rb->fromKey != 0 && rb->toKey != 0) {
                             const bool isNoOp = [&]() -> bool {
                                 if (rb->toKey != vk) return false;
@@ -875,7 +787,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                                 const std::string triggersOut = scanCodeToDisplayName(outScan, triggerVK);
                                 const std::string summary = typesOut + " & " + triggersOut;
 
-                                // Only render the 2nd line when we have enough height to avoid overlap.
                                 const float minHForSecondLine = ImGui::GetFontSize() * 2.05f;
                                 if (size.y >= minHForSecondLine) {
                                     ImFont* f = ImGui::GetFont();
@@ -908,7 +819,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                         }
                     };
 
-                    // Capture anchors for double-height numpad keys.
                     bool haveNumpadPlusAnchor = false;
                     ImVec2 numpadPlusAnchorMin = ImVec2(0, 0);
                     ImVec2 numpadPlusAnchorMax = ImVec2(0, 0);
@@ -926,17 +836,14 @@ if (ImGui::BeginTabItem("Inputs")) {
                             const KeyCell& kc = rows[rowIdx][colIdx];
                             const float keyW = kc.w * pitchX;
 
-                            // Snap to pixels so row edges line up cleanly (avoids 1px drift from float accumulation).
                             ImGui::SetCursorPos(ImVec2(snapPx(xCursor), snapPx(yCursor)));
                             if (kc.vk == 0) {
-                                // Spacer
                                 ImGui::Dummy(ImVec2(keyW, keyH));
                                 xCursor += keyW;
                                 xCursor = snapPx(xCursor);
                                 continue;
                             }
 
-                            // Numpad '+' should be double-height (spans Q-row and A-row). We draw it once later.
                             if (kc.vk == VK_ADD && rowIdx == 2) {
                                 const ImVec2 aMin = ImGui::GetCursorScreenPos();
                                 ImGui::Dummy(ImVec2(keyW, keyH));
@@ -949,7 +856,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                                 continue;
                             }
 
-                            // Numpad 'Enter' should be double-height (spans Z-row and bottom row). We draw it once later.
                             if (kc.vk == VK_RETURN && rowIdx == 4 && kc.w < 1.6f) {
                                 const ImVec2 aMin = ImGui::GetCursorScreenPos();
                                 ImGui::Dummy(ImVec2(keyW, keyH));
@@ -992,10 +898,8 @@ if (ImGui::BeginTabItem("Inputs")) {
                             xCursor = snapPx(xCursor);
                         }
 
-                        // no cursor advance: absolute positioning
                     }
 
-                    // Draw double-height numpad keys (after normal pass, so they appear on top).
                     auto drawTallKey = [&](DWORD vk, const char* label, const ImVec2& anchorMin, const ImVec2& anchorMax) {
                         const float w = anchorMax.x - anchorMin.x;
                         const float h = keyH * 2.0f + gap;
@@ -1037,19 +941,14 @@ if (ImGui::BeginTabItem("Inputs")) {
                         drawTallKey(VK_RETURN, "ENTER", numpadEnterAnchorMin, numpadEnterAnchorMax);
                     }
 
-                    // -----------------------------------------------------------------
-                    // Mouse (to the right of the keyboard)
-                    // -----------------------------------------------------------------
                     const float mousePanelX = layoutStart.x + keyboardMaxRowW + unit * 0.9f;
                     const float mousePanelY = layoutStart.y;
                     ImGui::SetCursorPos(ImVec2(mousePanelX, mousePanelY));
 
-                    // No header text here (keeps the mouse diagram compact).
                     const float mouseHeaderH = 0.0f;
 
                     float mouseDiagramTotalH = mouseHeaderH;
 
-                    // Mouse diagram (mouse-shaped buttons)
                     {
                         const float mouseW = unit * 3.6f;
                         const float mouseH = (keyboardTotalH - mouseHeaderH - gap);
@@ -1075,7 +974,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                             const bool hovered = ImGui::IsItemHovered();
                             const bool active = ImGui::IsItemActive();
 
-                            // Reuse key theming for mouse buttons.
                             struct KeyTheme {
                                 ImU32 top;
                                 ImU32 bottom;
@@ -1095,7 +993,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                             };
                             KeyTheme theme{ IM_COL32(88, 90, 108, 255), IM_COL32(44, 46, 60, 255), IM_COL32(18, 18, 20, 255),
                                             IM_COL32(245, 245, 245, 255) };
-                            // Lighter bottom tone to match keycaps.
                             theme.bottom = adjust(theme.bottom, 10);
                             if (hovered) {
                                 theme.top = adjust(theme.top, 12);
@@ -1106,20 +1003,15 @@ if (ImGui::BeginTabItem("Inputs")) {
                                 theme.bottom = adjust(theme.bottom, -16);
                             }
 
-                            // Fill (rounded) + top tone (rounded top corners only where applicable)
                             dl->AddRectFilled(segMin, segMax, theme.bottom, segR, segFlags);
-                            // Push the darker portion lower.
                             const ImVec2 segMid = ImVec2(segMax.x, segMin.y + (segMax.y - segMin.y) * 0.72f);
                             ImDrawFlags topFlags = segFlags;
-                            // Only round top corners for the overlay.
                             if (segFlags == ImDrawFlags_RoundCornersAll) {
                                 topFlags = ImDrawFlags_RoundCornersTop;
                             } else {
-                                // Keep only top-related flags.
                                 topFlags &= (ImDrawFlags_RoundCornersTopLeft | ImDrawFlags_RoundCornersTopRight);
                             }
                             dl->AddRectFilled(segMin, segMid, theme.top, segR, topFlags);
-                            // No top highlight line here: it can show as a stray 1px line against the rounded mouse body.
                             dl->AddRect(segMin, segMax, theme.border, segR, segFlags, 1.0f);
 
                             const KeyRebind* rb = findRebindForKey(vk);
@@ -1128,14 +1020,12 @@ if (ImGui::BeginTabItem("Inputs")) {
                                 dl->AddRect(segMin, segMax, outline, segR, segFlags, 3.0f);
                             }
 
-                            // Label
                             ImFont* f = ImGui::GetFont();
                             const float fs = ImGui::GetFontSize() * 0.85f;
                             const ImVec2 tsz = f->CalcTextSizeA(fs, FLT_MAX, 0.0f, label);
                             const ImVec2 tpos = ImVec2(segMin.x + (segMax.x - segMin.x - tsz.x) * 0.5f, segMin.y + (segMax.y - segMin.y - tsz.y) * 0.5f);
                             dl->AddText(f, fs, tpos, theme.text, label);
 
-                            // Tooltip + context
                             if (ImGui::IsItemHovered()) {
                                 ImGui::BeginTooltip();
                                 ImGui::Text("Input: %s (%u)", VkToString(vk).c_str(), (unsigned)vk);
@@ -1149,7 +1039,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                             }
                         };
 
-                        // Segment rectangles
                         const ImVec2 leftMin = innerMin;
                         const ImVec2 leftMax = ImVec2(midX, splitY);
                         const ImVec2 rightMin = ImVec2(midX, innerMin.y);
@@ -1170,29 +1059,24 @@ if (ImGui::BeginTabItem("Inputs")) {
                         const ImVec2 side2Min = ImVec2(sideX0, sideY0 + sideH + sideGap);
                         const ImVec2 side2Max = ImVec2(sideX0 + sideW, sideY0 + sideH + sideGap + sideH);
 
-                        // Divider lines
                         dl->AddLine(ImVec2(midX, innerMin.y + 2), ImVec2(midX, splitY - 2), IM_COL32(10, 10, 12, 255), 1.0f);
                         dl->AddLine(ImVec2(innerMin.x + 2, splitY), ImVec2(innerMax.x - 2, splitY), IM_COL32(10, 10, 12, 255), 1.0f);
 
-                        // Left button
                         ImGui::SetCursorScreenPos(leftMin);
                         ImGui::InvisibleButton("##mouse_left", ImVec2(leftMax.x - leftMin.x, leftMax.y - leftMin.y),
                                               ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
                         drawMouseSegment(VK_LBUTTON, "M1", leftMin, leftMax, bodyR * 0.75f, ImDrawFlags_RoundCornersTopLeft);
 
-                        // Right button
                         ImGui::SetCursorScreenPos(rightMin);
                         ImGui::InvisibleButton("##mouse_right", ImVec2(rightMax.x - rightMin.x, rightMax.y - rightMin.y),
                                               ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
                         drawMouseSegment(VK_RBUTTON, "M2", rightMin, rightMax, bodyR * 0.75f, ImDrawFlags_RoundCornersTopRight);
 
-                        // Wheel / middle
                         ImGui::SetCursorScreenPos(wheelMin);
                         ImGui::InvisibleButton("##mouse_mid", ImVec2(wheelMax.x - wheelMin.x, wheelMax.y - wheelMin.y),
                                               ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
                         drawMouseSegment(VK_MBUTTON, "M3", wheelMin, wheelMax, 6.0f * keyboardScale, ImDrawFlags_RoundCornersAll);
 
-                        // Side buttons (typically on left side)
                         ImGui::SetCursorScreenPos(side1Min);
                         ImGui::InvisibleButton("##mouse_x1", ImVec2(side1Max.x - side1Min.x, side1Max.y - side1Min.y),
                                               ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
@@ -1204,21 +1088,16 @@ if (ImGui::BeginTabItem("Inputs")) {
                         drawMouseSegment(VK_XBUTTON2, "M5", side2Min, side2Max, 6.0f * keyboardScale, ImDrawFlags_RoundCornersAll);
                     }
 
-                    // Right-click context menu
                     ImGui::SetNextWindowPos(ImGui::GetMousePos(), ImGuiCond_Appearing);
                     if (ImGui::BeginPopup("Rebind Config##layout")) {
                         // Also block global ESC-to-close-GUI while editing inside this popup.
                         MarkRebindBindingActive();
 
-                        // -----------------------------------------------------------------
-                        // Simplified inline editor (single rebind per key in this popup)
-                        // -----------------------------------------------------------------
                         syncUnicodeEditBuffers();
 
                         auto isNoOpRebindForKey = [&](const KeyRebind& r, DWORD originalVk) -> bool {
                             if (r.fromKey != originalVk) return false;
                             if (r.toKey != originalVk) return false;
-                            // Redundant customOutputVK that equals base output doesn't change behavior.
                             if (r.customOutputVK != 0 && r.customOutputVK != r.toKey) return false;
                             if (r.customOutputUnicode != 0) return false;
                             if (r.customOutputScanCode != 0) return false;
@@ -1277,8 +1156,7 @@ if (ImGui::BeginTabItem("Inputs")) {
                             return first;
                         };
 
-                        // IMPORTANT: do not create a rebind on right-click.
-                        // Create the entry only when the user actually changes something.
+                        // Do not create a rebind on right-click.
                         int idx = s_layoutContextPreferredIndex;
                         if (idx < 0 || idx >= (int)g_config.keyRebinds.rebinds.size() || g_config.keyRebinds.rebinds[idx].fromKey != s_layoutContextVk) {
                             idx = findBestRebindIndexForKey(s_layoutContextVk);
@@ -1316,8 +1194,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                             return scanCodeToDisplayName(displayScan, triggerVk);
                         };
 
-                        // Build a stable list of "known" scan codes by enumerating VKs and converting to scan codes.
-                        // This covers typical keyboard keys (including extended keys) and is suitable for a dropdown.
                         static std::vector<std::pair<DWORD, std::string>> s_knownScanCodes;
                         static bool s_knownScanCodesBuilt = false;
                         if (!s_knownScanCodesBuilt) {
@@ -1327,11 +1203,9 @@ if (ImGui::BeginTabItem("Inputs")) {
                                 DWORD scan = getScanCodeWithExtendedFlag(vk);
                                 if (scan == 0) continue;
 
-                                // Prefer readable VK names; this is just for display.
                                 tmp.emplace_back(scan, VkToString(vk));
                             }
 
-                            // De-duplicate by scan code (keep the first name in scan order).
                             std::sort(tmp.begin(), tmp.end(), [](const auto& a, const auto& b) {
                                 if (a.first == b.first) return a.second < b.second;
                                 return a.first < b.first;
@@ -1346,7 +1220,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                                 lastScan = it.first;
                             }
 
-                            // Sort by numeric scan code (ascending).
                             std::sort(s_knownScanCodes.begin(), s_knownScanCodes.end(), [](const auto& a, const auto& b) {
                                 if (a.first == b.first) return a.second < b.second;
                                 return a.first < b.first;
@@ -1366,13 +1239,11 @@ if (ImGui::BeginTabItem("Inputs")) {
 
                             const unsigned low = (unsigned)(scan & 0xFF);
                             if ((scan & 0xFF00) != 0) {
-                                // Extended flag uses 0xE000 in our representation.
                                 return std::string("E0 ") + hex2(low);
                             }
                             return hex2(low);
                         };
 
-                        // Inline binding capture
                         if (s_layoutBindTarget != LayoutBindTarget::None && s_layoutBindIndex >= 0 &&
                             s_layoutBindIndex < (int)g_config.keyRebinds.rebinds.size()) {
                             MarkRebindBindingActive();
@@ -1382,7 +1253,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                             bool capturedIsMouse = false;
                             if (ConsumeBindingInputEventSince(s_layoutBindLastSeq, capturedVk, capturedLParam, capturedIsMouse)) {
                                 if (capturedVk == VK_ESCAPE) {
-                                    // Cancel inline binding. If the underlying rebind is a no-op, prune it.
                                     auto& r = g_config.keyRebinds.rebinds[s_layoutBindIndex];
                                     int maybeErase = isNoOpRebindForKey(r, r.fromKey) ? s_layoutBindIndex : -1;
                                     s_layoutBindTarget = LayoutBindTarget::None;
@@ -1401,7 +1271,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                                             s_rebindUnicodeTextEdit[s_layoutBindIndex].clear();
                                         }
 
-                                        // Don't keep redundant overrides.
                                         if (r.customOutputVK == r.toKey) {
                                             r.customOutputVK = 0;
                                             if (r.customOutputScanCode == 0) r.useCustomOutput = false;
@@ -1412,7 +1281,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                                         g_configIsDirty = true;
                                     }
 
-                                    // If the edit resulted in a no-op, prune the entry.
                                     if (isNoOpRebindForKey(r, r.fromKey)) {
                                         int eraseIdx = s_layoutBindIndex;
                                         s_layoutBindTarget = LayoutBindTarget::None;
@@ -1428,7 +1296,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                             }
                         }
 
-                        // Unicode prompt
                         if (s_layoutUnicodeEditIndex != -1) {
                             MarkRebindBindingActive();
                             ImGui::OpenPopup("Custom Unicode##layout");
@@ -1475,7 +1342,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                             }
                             ImGui::SameLine();
                             if (ImGui::Button("Cancel", ImVec2(120, 0))) {
-                                // Cancel prompt. If the underlying rebind is a no-op, prune it.
                                 if (s_layoutUnicodeEditIndex >= 0 && s_layoutUnicodeEditIndex < (int)g_config.keyRebinds.rebinds.size()) {
                                     auto& r = g_config.keyRebinds.rebinds[s_layoutUnicodeEditIndex];
                                     int maybeErase = isNoOpRebindForKey(r, r.fromKey) ? s_layoutUnicodeEditIndex : -1;
@@ -1491,7 +1357,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                             ImGui::EndPopup();
                         }
 
-                        // Render (even if there is no rebind yet)
                         KeyRebind* rbPtr = (idx >= 0 && idx < (int)g_config.keyRebinds.rebinds.size()) ? &g_config.keyRebinds.rebinds[idx] : nullptr;
                         const std::string typesValue = typesValueFor(rbPtr, s_layoutContextVk);
                         const std::string triggersValue = triggersValueFor(rbPtr, s_layoutContextVk);
@@ -1520,7 +1385,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                             s_layoutContextPreferredIndex = idx;
                             if (idx >= 0) {
                                 s_layoutUnicodeEditIndex = idx;
-                                // Seed edit text from current value
                                 const auto& r = g_config.keyRebinds.rebinds[idx];
                                 s_layoutUnicodeEditText = (r.customOutputUnicode != 0) ? formatCodepointUPlus((uint32_t)r.customOutputUnicode) : std::string();
                                 MarkRebindBindingActive();
@@ -1545,13 +1409,11 @@ if (ImGui::BeginTabItem("Inputs")) {
                             }
                         }
 
-                        // Dropdown for scan-code selection (alternative to "press key").
                         ImGui::SameLine();
                         {
                             idx = (idx >= 0) ? idx : findBestRebindIndexForKey(s_layoutContextVk);
                             KeyRebind* r = (idx >= 0 && idx < (int)g_config.keyRebinds.rebinds.size()) ? &g_config.keyRebinds.rebinds[idx] : nullptr;
 
-                            // Preview: current scan override (or derived from output VK if none).
                             DWORD curTriggerVk = r ? r->toKey : s_layoutContextVk;
                             if (curTriggerVk == 0) curTriggerVk = s_layoutContextVk;
                             DWORD curScan = (r && r->useCustomOutput && r->customOutputScanCode != 0) ? r->customOutputScanCode
@@ -1560,7 +1422,6 @@ if (ImGui::BeginTabItem("Inputs")) {
 
                             ImGui::SetNextItemWidth(240.0f);
                             if (ImGui::BeginCombo("##triggers_scan_combo", preview.c_str())) {
-                                // Default option: clear scan override.
                                 bool isDefault = !(r && r->useCustomOutput && r->customOutputScanCode != 0);
                                 if (ImGui::Selectable("Default (Same as Types)", isDefault)) {
                                     idx = createRebindForKeyIfMissing(s_layoutContextVk);
@@ -1576,7 +1437,6 @@ if (ImGui::BeginTabItem("Inputs")) {
 
                                 for (const auto& it : s_knownScanCodes) {
                                     const DWORD scan = it.first;
-                                    // Map back to a VK for wParam consistency where possible.
                                     DWORD vkFromScan = MapVirtualKey(scan, MAPVK_VSC_TO_VK_EX);
                                     if (vkFromScan == 0) vkFromScan = curTriggerVk;
                                     const std::string name = scanCodeToDisplayName(scan, vkFromScan);
@@ -1591,7 +1451,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                                             rr.useCustomOutput = true;
                                             rr.customOutputScanCode = scan;
 
-                                            // Keep VK aligned with scan if we can resolve it.
                                             DWORD mapped = MapVirtualKey(scan, MAPVK_VSC_TO_VK_EX);
                                             if (mapped != 0) rr.toKey = mapped;
 
@@ -1635,13 +1494,9 @@ if (ImGui::BeginTabItem("Inputs")) {
                         ImGui::EndPopup();
                     }
 
-                    // Ensure the child cursor ends below the larger of keyboard/mouse regions.
                     const float totalH = (keyboardTotalH > mouseDiagramTotalH) ? keyboardTotalH : mouseDiagramTotalH;
                     ImGui::SetCursorPos(ImVec2(layoutStart.x, layoutStart.y + totalH + gap));
 
-                    // -----------------------------------------------------------------
-                    // Rebind list (read-only) below the keyboard
-                    // -----------------------------------------------------------------
                     {
                         ImGui::Spacing();
                         ImGui::SeparatorText("Rebinds");
@@ -1681,14 +1536,13 @@ if (ImGui::BeginTabItem("Inputs")) {
                     }
 
                     ImGui::EndChild();
-                    ImGui::PopStyleColor(); // ImGuiCol_ChildBg
+                    ImGui::PopStyleColor();
 
                     ImGui::EndPopup();
                 }
 
-                ImGui::PopStyleColor(); // ImGuiCol_PopupBg
+                ImGui::PopStyleColor();
 
-                // Rebind binding popup (for from key)
                 bool is_rebind_from_binding = (s_rebindFromKeyToBind != -1);
                 if (is_rebind_from_binding) { MarkRebindBindingActive(); }
                 if (is_rebind_from_binding) { ImGui::OpenPopup("Bind From Key"); }
@@ -1709,7 +1563,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                             s_rebindFromKeyToBind = -1;
                             ImGui::CloseCurrentPopup();
                         } else {
-                            // Allow binding modifier keys (L/R Ctrl/Shift/Alt) for key rebinding.
                             // Only disallow Windows keys.
                             if (capturedVk != VK_LWIN && capturedVk != VK_RWIN) {
                                 if (s_rebindFromKeyToBind != -1 && s_rebindFromKeyToBind < (int)g_config.keyRebinds.rebinds.size()) {
@@ -1729,7 +1582,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                     ImGui::EndPopup();
                 }
 
-                // Output VK binding popup
                 bool is_vk_binding = (s_rebindOutputVKToBind != -1);
                 if (is_vk_binding) { MarkRebindBindingActive(); }
                 if (is_vk_binding) { ImGui::OpenPopup("Bind Output VK"); }
@@ -1750,12 +1602,10 @@ if (ImGui::BeginTabItem("Inputs")) {
                             s_rebindOutputVKToBind = -1;
                             ImGui::CloseCurrentPopup();
                         } else {
-                            // Allow modifier keys here as well (useful when the desired output is a modifier).
                             if (capturedVk != VK_LWIN && capturedVk != VK_RWIN) {
                                 if (s_rebindOutputVKToBind >= 0 && s_rebindOutputVKToBind < (int)g_config.keyRebinds.rebinds.size()) {
                                     auto& rebind = g_config.keyRebinds.rebinds[s_rebindOutputVKToBind];
                                     rebind.toKey = capturedVk;
-                                    // Base output affects BOTH text + trigger by default.
                                     // Do not touch custom text override here.
                                     g_configIsDirty = true;
                                     (void)capturedLParam;
@@ -1770,7 +1620,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                     ImGui::EndPopup();
                 }
 
-                // Text Override VK binding popup
                 bool is_text_vk_binding = (s_rebindTextOverrideVKToBind != -1);
                 if (is_text_vk_binding) { MarkRebindBindingActive(); }
                 if (is_text_vk_binding) { ImGui::OpenPopup("Bind Text Override VK"); }
@@ -1811,7 +1660,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                     ImGui::EndPopup();
                 }
 
-                // Output Scan Code binding popup
                 bool is_scan_binding = (s_rebindOutputScanToBind != -1);
                 if (is_scan_binding) { MarkRebindBindingActive(); }
                 if (is_scan_binding) { ImGui::OpenPopup("Bind Output Scan"); }
@@ -1832,15 +1680,12 @@ if (ImGui::BeginTabItem("Inputs")) {
                             s_rebindOutputScanToBind = -1;
                             ImGui::CloseCurrentPopup();
                         } else {
-                            // Allow modifier keys when capturing scan codes too.
                             if (capturedVk != VK_LWIN && capturedVk != VK_RWIN) {
                                 if (s_rebindOutputScanToBind >= 0 && s_rebindOutputScanToBind < (int)g_config.keyRebinds.rebinds.size()) {
                                     auto& rebind = g_config.keyRebinds.rebinds[s_rebindOutputScanToBind];
 
                                 if (capturedVk == VK_LBUTTON || capturedVk == VK_RBUTTON || capturedVk == VK_MBUTTON ||
                                     capturedVk == VK_XBUTTON1 || capturedVk == VK_XBUTTON2) {
-                                    // Mouse outputs have no meaningful scan code. Treat this as setting the base output
-                                    // so by default it affects both text + trigger. (Text can still be overridden separately.)
                                     rebind.toKey = capturedVk;
                                     rebind.customOutputScanCode = 0;
                                 } else {
@@ -1872,7 +1717,6 @@ if (ImGui::BeginTabItem("Inputs")) {
                     ImGui::EndPopup();
                 }
 
-                // Rebinds are configured via the keyboard layout visualizer.
                 ImGui::Spacing();
                 ImGui::TextDisabled("Configure key rebinds in the Keyboard Layout window (right-click keys). ");
             }
@@ -1885,3 +1729,5 @@ if (ImGui::BeginTabItem("Inputs")) {
 
     ImGui::EndTabItem();
 }
+
+

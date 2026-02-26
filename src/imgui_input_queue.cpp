@@ -4,7 +4,7 @@
 
 #include <array>
 
-#include <windowsx.h> // GET_X_LPARAM(), GET_Y_LPARAM(), GET_WHEEL_DELTA_WPARAM(), GET_XBUTTON_WPARAM()
+#include <windowsx.h>
 
 // Forward declaration (defined in imgui_impl_win32.cpp, not exposed in the header)
 ImGuiKey ImGui_ImplWin32_KeyEventToImGuiKey(WPARAM wParam, LPARAM lParam);
@@ -53,24 +53,20 @@ struct Event {
     EventType type{};
     ModState mods{};
 
-    // Mouse
     int mouseX = 0;
     int mouseY = 0;
-    int mouseButton = 0; // 0..4
+    int mouseButton = 0;
     bool mouseDown = false;
     float wheelX = 0.0f;
     float wheelY = 0.0f;
 
-    // Keyboard
     ImGuiKey key = ImGuiKey_None;
     bool keyDown = false;
     int nativeKeycode = 0;
     int nativeScancode = -1;
 
-    // Text
     ImWchar16 ch = 0;
 
-    // Focus
     bool focused = false;
 };
 
@@ -158,11 +154,9 @@ static inline bool TryEnqueueMousePosFromScreenLParam(HWND hWnd, LPARAM lParam) 
     return TryPush(e);
 }
 
-} // namespace
+}
 
 bool ImGuiInputQueue_EnqueueWin32Message(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    // We intentionally accept and queue messages even if there's currently no ImGui context;
-    // consumer will safely drain and discard if needed.
 
     Event e;
     e.mods = GetMods();
@@ -195,7 +189,6 @@ bool ImGuiInputQueue_EnqueueWin32Message(HWND hWnd, UINT msg, WPARAM wParam, LPA
         e.mouseDown = (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONDBLCLK || msg == WM_RBUTTONDOWN || msg == WM_RBUTTONDBLCLK ||
                        msg == WM_MBUTTONDOWN || msg == WM_MBUTTONDBLCLK || msg == WM_XBUTTONDOWN || msg == WM_XBUTTONDBLCLK);
 
-        // Ensure position is up-to-date at click time.
         {
             Event pos;
             pos.type = EventType::MousePos;
@@ -212,7 +205,6 @@ bool ImGuiInputQueue_EnqueueWin32Message(HWND hWnd, UINT msg, WPARAM wParam, LPA
     }
 
     case WM_MOUSEWHEEL: {
-        // WM_MOUSEWHEEL uses screen coords in lParam.
         TryEnqueueMousePosFromScreenLParam(hWnd, lParam);
 
         const float wheelY = (float)GET_WHEEL_DELTA_WPARAM(wParam) / (float)WHEEL_DELTA;
@@ -290,7 +282,6 @@ void ImGuiInputQueue_EnqueueFocus(bool focused) {
 }
 
 void ImGuiInputQueue_Clear() {
-    // Drain by moving read to write.
     const uint32_t w = s_write.load(std::memory_order_acquire);
     s_read.store(w, std::memory_order_release);
 }
@@ -304,7 +295,6 @@ void ImGuiInputQueue_ResetMouseCapture(HWND hWnd) {
 
 void ImGuiInputQueue_DrainToImGui() {
     if (!ImGui::GetCurrentContext()) {
-        // No context available: discard events to avoid unbounded buildup.
         ImGuiInputQueue_Clear();
         return;
     }
@@ -356,3 +346,5 @@ void ImGuiInputQueue_PublishCaptureState() {
     g_imguiWantCaptureKeyboard.store(io.WantCaptureKeyboard, std::memory_order_release);
     g_imguiAnyItemActive.store(ImGui::IsAnyItemActive(), std::memory_order_release);
 }
+
+

@@ -16,14 +16,9 @@
 
 #pragma comment(lib, "Version.lib")
 
-// -----------------------------------------------------------------------------
-// Externs from dllmain.cpp (hook targets, trampolines, detours)
-// -----------------------------------------------------------------------------
 
-// Core config + logging live in utils.* / gui.*
 extern Config g_config;
 
-// wglSwapBuffers
 typedef BOOL(WINAPI* WGLSWAPBUFFERS)(HDC);
 extern WGLSWAPBUFFERS owglSwapBuffers;
 extern WGLSWAPBUFFERS g_owglSwapBuffersThirdParty;
@@ -43,7 +38,6 @@ extern void WINAPI hkglViewport(GLint x, GLint y, GLsizei width, GLsizei height)
 extern void WINAPI hkglViewport_Driver(GLint x, GLint y, GLsizei width, GLsizei height);
 extern void WINAPI hkglViewport_ThirdParty(GLint x, GLint y, GLsizei width, GLsizei height);
 
-// user32 input hooks
 typedef BOOL(WINAPI* SETCURSORPOSPROC)(int, int);
 extern SETCURSORPOSPROC oSetCursorPos;
 extern SETCURSORPOSPROC g_oSetCursorPosThirdParty;
@@ -72,7 +66,6 @@ extern std::atomic<void*> g_getRawInputDataThirdPartyHookTarget;
 extern UINT WINAPI hkGetRawInputData(HRAWINPUT hRawInput, UINT uiCommand, LPVOID pData, PUINT pcbSize, UINT cbSizeHeader);
 extern UINT WINAPI hkGetRawInputData_ThirdParty(HRAWINPUT hRawInput, UINT uiCommand, LPVOID pData, PUINT pcbSize, UINT cbSizeHeader);
 
-// glfwSetInputMode
 typedef void (*GLFWSETINPUTMODE)(void* window, int mode, int value);
 extern GLFWSETINPUTMODE oglfwSetInputMode;
 extern GLFWSETINPUTMODE g_oglfwSetInputModeThirdParty;
@@ -80,7 +73,6 @@ extern std::atomic<void*> g_glfwSetInputModeThirdPartyHookTarget;
 extern void hkglfwSetInputMode(void* window, int mode, int value);
 extern void hkglfwSetInputMode_ThirdParty(void* window, int mode, int value);
 
-// -----------------------------------------------------------------------------
 
 namespace {
 
@@ -128,7 +120,6 @@ static std::wstring GetFileVersionStringValue(const std::wstring& filePath, cons
         }
     }
 
-    // Fallback: en-US Unicode (0409, 04B0)
     {
         wchar_t subBlock[256];
         swprintf_s(subBlock, L"\\StringFileInfo\\040904B0\\%s", key);
@@ -325,8 +316,6 @@ static void LogIatHookChainDetails(const char* apiName, HMODULE importingModule,
                     HookChain::DescribeAddressWithOwner(thunkTarget) + " expectedExport=" + HookChain::DescribeAddressWithOwner(expectedExport));
 }
 
-// Best-effort IAT scan: locate the imported function pointer for a given module+function.
-// Returns the current thunk value (the actual call target used by the importing module), or nullptr.
 static void* FindIatImportedFunctionTarget(HMODULE importingModule, const char* importedDllNameLower, const char* funcName) {
     if (!importingModule || !importedDllNameLower || !funcName) return nullptr;
 
@@ -637,7 +626,7 @@ static void RefreshThirdPartyWglSwapBuffersIatHookChain() {
     }
 }
 
-} // namespace
+}
 
 namespace HookChain {
 
@@ -694,4 +683,6 @@ void RefreshAllThirdPartyHookChains() {
     RefreshThirdPartyGlfwSetInputModeHookChain();
 }
 
-} // namespace HookChain
+}
+
+

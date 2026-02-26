@@ -1,7 +1,6 @@
 #include "imgui_cache.h"
 #include <cstring>
 
-// Global cache instance
 ImGuiDrawDataCache g_imguiCache;
 
 ImGuiDrawDataCache::ImGuiDrawDataCache() {
@@ -13,7 +12,6 @@ ImGuiDrawDataCache::~ImGuiDrawDataCache() {
 }
 
 void ImGuiDrawDataCache::Clear() {
-    // Free all owned draw lists
     for (ImDrawList* list : m_ownedDrawLists) {
         IM_DELETE(list);
     }
@@ -27,30 +25,23 @@ ImDrawList* ImGuiDrawDataCache::CloneDrawList(const ImDrawList* src) {
     
     ImDrawList* dst = IM_NEW(ImDrawList)(src->_Data);
     
-    // Copy command buffer - contains all draw commands
     dst->CmdBuffer.resize(src->CmdBuffer.Size);
     if (src->CmdBuffer.Size > 0) {
         memcpy(dst->CmdBuffer.Data, src->CmdBuffer.Data, src->CmdBuffer.Size * sizeof(ImDrawCmd));
     }
     
-    // Copy index buffer - contains triangle indices
     dst->IdxBuffer.resize(src->IdxBuffer.Size);
     if (src->IdxBuffer.Size > 0) {
         memcpy(dst->IdxBuffer.Data, src->IdxBuffer.Data, src->IdxBuffer.Size * sizeof(ImDrawIdx));
     }
     
-    // Copy vertex buffer - contains vertex positions, UVs, colors
     dst->VtxBuffer.resize(src->VtxBuffer.Size);
     if (src->VtxBuffer.Size > 0) {
         memcpy(dst->VtxBuffer.Data, src->VtxBuffer.Data, src->VtxBuffer.Size * sizeof(ImDrawVert));
     }
     
-    // Copy flags - affects rendering behavior
     dst->Flags = src->Flags;
     
-    // Note: We only copy the essential buffers needed for rendering.
-    // Internal state like _VtxWritePtr, _ClipRectStack etc. are not needed
-    // since we're not building new commands, just rendering cached ones.
     
     return dst;
 }
@@ -62,10 +53,8 @@ void ImGuiDrawDataCache::CacheFromCurrent() {
         return;
     }
     
-    // Clear previous cache
     Clear();
     
-    // Copy scalar members
     m_cachedDrawData.Valid = src->Valid;
     m_cachedDrawData.CmdListsCount = src->CmdListsCount;
     m_cachedDrawData.TotalIdxCount = src->TotalIdxCount;
@@ -75,7 +64,6 @@ void ImGuiDrawDataCache::CacheFromCurrent() {
     m_cachedDrawData.FramebufferScale = src->FramebufferScale;
     m_cachedDrawData.OwnerViewport = src->OwnerViewport;
     
-    // Deep copy all draw lists
     m_ownedDrawLists.reserve(src->CmdListsCount);
     for (int i = 0; i < src->CmdListsCount; i++) {
         ImDrawList* cloned = CloneDrawList(src->CmdLists[i]);
@@ -85,7 +73,6 @@ void ImGuiDrawDataCache::CacheFromCurrent() {
         }
     }
     
-    // Update counts to match actual cloned lists
     m_cachedDrawData.CmdListsCount = static_cast<int>(m_cachedDrawData.CmdLists.Size);
     
     m_valid = true;
@@ -112,3 +99,5 @@ void ImGuiDrawDataCache::MarkUpdated() {
 void ImGuiDrawDataCache::Invalidate() {
     m_forceUpdate = true;
 }
+
+

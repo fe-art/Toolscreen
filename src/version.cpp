@@ -35,7 +35,7 @@ GameVersion ParseMinecraftVersionFromMMCPack(const std::wstring& mmcPackPath) {
     GameVersion result;
 
     try {
-        // IMPORTANT (Windows/Unicode): open via std::filesystem::path so wide Win32 APIs are used.
+        // Open via std::filesystem::path so wide Win32 APIs are used.
         std::ifstream file(std::filesystem::path(mmcPackPath), std::ios::binary);
         if (!file.is_open()) {
             Log("Failed to open mmc-pack.json at: " + WideToUtf8(mmcPackPath));
@@ -45,7 +45,6 @@ GameVersion ParseMinecraftVersionFromMMCPack(const std::wstring& mmcPackPath) {
         nlohmann::json jsonData = nlohmann::json::parse(file);
         file.close();
 
-        // Look for the component with "cachedName": "Minecraft"
         if (jsonData.contains("components") && jsonData["components"].is_array()) {
             for (const auto& component : jsonData["components"]) {
                 if (component.contains("cachedName") && component["cachedName"].is_string()) {
@@ -53,7 +52,6 @@ GameVersion ParseMinecraftVersionFromMMCPack(const std::wstring& mmcPackPath) {
                         if (component.contains("version") && component["version"].is_string()) {
                             std::string versionStr = component["version"].get<std::string>();
 
-                            // Parse the version string (e.g., "1.16.1")
                             std::regex versionRegex(R"((\d+)\.(\d+)(?:\.(\d+))?)");
                             std::smatch match;
 
@@ -88,18 +86,15 @@ GameVersion ParseMinecraftVersionFromMMCPack(const std::wstring& mmcPackPath) {
 GameVersion GetGameVersionFromCommandLine() {
     GameVersion result;
 
-    // First, check if INST_MC_DIR environment variable is set
     char instMcDir[MAX_PATH] = { 0 };
     size_t len = 0;
     if (getenv_s(&len, instMcDir, sizeof(instMcDir), "INST_MC_DIR") == 0 && len > 0) {
         Log(std::string("INST_MC_DIR environment variable found: ") + instMcDir);
 
-        // Convert to wide string and get parent directory
         int size_needed = MultiByteToWideChar(CP_UTF8, 0, instMcDir, -1, NULL, 0);
         std::wstring instMcDirW(size_needed - 1, 0);
         MultiByteToWideChar(CP_UTF8, 0, instMcDir, -1, &instMcDirW[0], size_needed);
 
-        // Get parent directory
         std::filesystem::path instPath(instMcDirW);
         std::filesystem::path parentPath = instPath.parent_path();
         std::filesystem::path mmcPackPath = parentPath / L"mmc-pack.json";
@@ -114,7 +109,6 @@ GameVersion GetGameVersionFromCommandLine() {
         }
     }
 
-    // Get the command line for the current process
     LPWSTR cmdLine = GetCommandLineW();
     if (!cmdLine) {
         Log("Failed to get command line");
@@ -124,8 +118,6 @@ GameVersion GetGameVersionFromCommandLine() {
     std::wstring cmdLineStr(cmdLine);
     Log(L"Command line: " + cmdLineStr);
 
-    // Look for --version flag followed by version number
-    // Example: --version 1.16.1 or --version=1.16.1
     std::wregex versionRegex(L"--version[=\\s]+(\\d+)\\.(\\d+)(?:\\.(\\d+))?");
     std::wsmatch match;
 
@@ -133,7 +125,6 @@ GameVersion GetGameVersionFromCommandLine() {
         try {
             result.major = std::stoi(match[1].str());
             result.minor = std::stoi(match[2].str());
-            // Patch version is optional, default to 0 if not present
             result.patch = (match.size() > 3 && match[3].matched) ? std::stoi(match[3].str()) : 0;
             result.valid = true;
 
@@ -154,14 +145,10 @@ bool IsVersionInRange(const GameVersion& version, const GameVersion& minVer, con
 }
 
 bool IsResolutionChangeSupported(const GameVersion& version) {
-    // Resolution changing (modes and hotkeys) is only supported for Minecraft 1.13+
-    // For versions below 1.13, we disable these features but keep overlays and cursors working
     if (!version.valid) {
-        // If no version is detected, assume it's supported for backward compatibility
         return true;
     }
 
-    // Check if version >= 1.13.0
     GameVersion minSupportedVersion(1, 13, 0);
     return version >= minSupportedVersion;
 }

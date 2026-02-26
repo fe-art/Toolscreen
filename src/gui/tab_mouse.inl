@@ -53,29 +53,23 @@
                     ImGui::Text("Configure cursors for different game states:");
                     ImGui::Spacing();
 
-                    // Available cursor options
                     struct CursorOption {
                         std::string key;
                         std::string name;
                         std::string description;
                     };
 
-                    // Build cursor list dynamically from detected cursors
                     static std::vector<CursorOption> availableCursors;
                     static bool cursorListInitialized = false;
 
                     if (!cursorListInitialized) {
-                        // Initialize cursor definitions first
                         CursorTextures::InitializeCursorDefinitions();
 
-                        // Get all available cursor names
                         auto cursorNames = CursorTextures::GetAvailableCursorNames();
 
-                        // Build display list from available cursors
                         for (const auto& cursorName : cursorNames) {
                             std::string displayName = cursorName;
 
-                            // Create user-friendly name (capitalize first letter, replace underscores/hyphens with spaces)
                             if (!displayName.empty()) {
                                 displayName[0] = std::toupper(displayName[0]);
                                 for (auto& c : displayName) {
@@ -84,7 +78,6 @@
                             }
 
                             std::string description;
-                            // Determine description based on cursor name
                             if (cursorName.find("Cross") != std::string::npos) {
                                 description = "Crosshair cursor";
                             } else if (cursorName.find("Arrow") != std::string::npos) {
@@ -99,7 +92,6 @@
                         cursorListInitialized = true;
                     }
 
-                    // Fixed 3 cursor configurations
                     struct CursorConfigUI {
                         const char* name;
                         CursorConfig* config;
@@ -116,7 +108,6 @@
 
                         ImGui::SeparatorText(cursorUI.name);
 
-                        // Find current cursor display name
                         const char* currentCursorName = cursorConfig.cursorName.c_str();
                         std::string currentDescription = "";
                         for (const auto& option : availableCursors) {
@@ -127,12 +118,10 @@
                             }
                         }
 
-                        // Cursor dropdown
                         ImGui::Text("Cursor:");
                         ImGui::SameLine();
                         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.35f);
                         if (ImGui::BeginCombo("##cursor", currentCursorName)) {
-                            // Display each cursor option with name and description
                             for (const auto& option : availableCursors) {
                                 ImGui::PushID(option.key.c_str());
 
@@ -144,7 +133,6 @@
                                     // Schedule cursor reload (will happen outside GUI rendering to avoid deadlock)
                                     g_cursorsNeedReload = true;
 
-                                    // Apply cursor immediately via SetCursor (loads on-demand if needed)
                                     std::wstring cursorPath;
                                     UINT loadType = IMAGE_CURSOR;
                                     CursorTextures::GetCursorPathByName(option.key, cursorPath, loadType);
@@ -154,7 +142,6 @@
                                     if (cursorData && cursorData->hCursor) { SetCursor(cursorData->hCursor); }
                                 }
 
-                                // Show description on hover
                                 if (ImGui::IsItemHovered()) {
                                     ImGui::BeginTooltip();
                                     ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.6f, 1.0f), "%s", option.name.c_str());
@@ -170,22 +157,19 @@
                             ImGui::EndCombo();
                         }
 
-                        // Show current cursor description on hover
                         if (!currentDescription.empty() && ImGui::IsItemHovered()) {
                             ImGui::BeginTooltip();
                             ImGui::TextUnformatted(currentDescription.c_str());
                             ImGui::EndTooltip();
                         }
 
-                        // Cursor size slider on the same line
                         ImGui::SameLine();
                         ImGui::Spacing();
                         ImGui::SameLine();
                         ImGui::Text("Size:");
                         ImGui::SameLine();
 
-                        // Slider takes remaining width
-                        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.8f); // Leave space for help marker
+                        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.8f);
                         int sliderValue = cursorConfig.cursorSize;
                         if (ImGui::SliderInt("##cursorSize", &sliderValue, 8, 144, "%d px", ImGuiSliderFlags_AlwaysClamp)) {
                             int newSize = sliderValue;
@@ -193,7 +177,6 @@
                                 cursorConfig.cursorSize = newSize;
                                 g_configIsDirty = true;
 
-                                // Apply cursor immediately via SetCursor (loads on-demand if needed)
                                 std::wstring cursorPath;
                                 UINT loadType = IMAGE_CURSOR;
                                 CursorTextures::GetCursorPathByName(cursorConfig.cursorName, cursorPath, loadType);
@@ -233,3 +216,5 @@
 
                 ImGui::EndTabItem();
             }
+
+

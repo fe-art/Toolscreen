@@ -1,5 +1,5 @@
 #include "profiler.h"
-#include "utils.h" // For Log()
+#include "utils.h"
 #include <algorithm>
 #include <functional>
 #include <sstream>
@@ -66,11 +66,9 @@ Profiler::ScopedTimer::~ScopedTimer() {
         ThreadRingBuffer& buffer = GetThreadBuffer();
         const char* parentName = nullptr;
         if (buffer.scopeStack.size() > 1) {
-            // Parent is second-to-last in the stack (current scope is last)
             parentName = buffer.scopeStack[buffer.scopeStack.size() - 2];
         }
 
-        // Pop scope stack
         if (!buffer.scopeStack.empty()) { buffer.scopeStack.pop_back(); }
 
         // Submit event with parent info - completely lock-free
@@ -84,10 +82,8 @@ void Profiler::SubmitEvent(const char* sectionName, const char* parentName, doub
 
     ThreadRingBuffer& buffer = GetThreadBuffer();
 
-    // SLOW SCOPE DETECTION: Log any scope that takes more than 100ms
     constexpr double SLOW_THRESHOLD_MS = 100.0;
     if (durationMs > SLOW_THRESHOLD_MS) {
-        // Build path from current scope stack for better context
         std::string pathStr = sectionName;
         Log("[SLOW PROFILER] " + pathStr + " took " + std::to_string(durationMs) + "ms (>" +
             std::to_string(static_cast<int>(SLOW_THRESHOLD_MS)) + "ms threshold)");
@@ -97,13 +93,11 @@ void Profiler::SubmitEvent(const char* sectionName, const char* parentName, doub
     size_t writePos = buffer.writeIndex.load(std::memory_order_relaxed);
     size_t nextWritePos = (writePos + 1) % RING_BUFFER_SIZE;
 
-    // Check if buffer is full (would overwrite unread data)
     if (nextWritePos == buffer.readIndex.load(std::memory_order_acquire)) {
         // Buffer full - drop this event (better than blocking)
         return;
     }
 
-    // Write event data
     TimingEvent& event = buffer.events[writePos];
     event.sectionName = sectionName;
     event.parentName = parentName;
@@ -133,7 +127,7 @@ void Profiler::StopProcessingThread() {
 void Profiler::ProcessingThreadMain() {
     while (m_processingThreadRunning.load()) {
         ProcessEvents();
-        std::this_thread::sleep_for(std::chrono::milliseconds(16)); // ~60Hz processing
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
 }
 
@@ -147,17 +141,14 @@ void Profiler::ProcessEvents() {
         // Skip invalidated buffers (thread has exited)
         if (!buffer->isValid.load(std::memory_order_acquire)) { continue; }
 
-        // Read all available events from this buffer
         size_t readPos = buffer->readIndex.load(std::memory_order_relaxed);
         size_t writePos = buffer->writeIndex.load(std::memory_order_acquire);
 
         while (readPos != writePos) {
             const TimingEvent& event = buffer->events[readPos];
 
-            // Process this event into our aggregated data
             auto& targetEntries = event.isRenderThread ? m_renderThreadEntries : m_otherThreadEntries;
 
-            // Use section name as key
             std::string pathKey = event.sectionName;
 
             auto& entry = targetEntries[pathKey];
@@ -167,15 +158,12 @@ void Profiler::ProcessEvents() {
             entry.depth = event.depth;
             entry.lastUpdateTime = std::chrono::steady_clock::now();
 
-            // Build parent-child relationships
             if (event.parentName != nullptr) {
                 std::string parentKey = event.parentName;
                 entry.parentPath = parentKey;
 
-                // Add this as a child of the parent
                 auto& parentEntry = targetEntries[parentKey];
                 parentEntry.displayName = event.parentName;
-                // Add to child paths if not already present
                 bool found = false;
                 for (const auto& child : parentEntry.childPaths) {
                     if (child == pathKey) {
@@ -186,20 +174,16 @@ void Profiler::ProcessEvents() {
                 if (!found) { parentEntry.childPaths.push_back(pathKey); }
             }
 
-            // Track max time
             if (event.durationMs > entry.maxTimeInLastSecond) { entry.maxTimeInLastSecond = event.durationMs; }
 
-            // Advance read position
             readPos = (readPos + 1) % RING_BUFFER_SIZE;
         }
 
-        // Publish read progress
         buffer->readIndex.store(readPos, std::memory_order_release);
     }
 }
 
 void Profiler::CalculateHierarchy(std::unordered_map<std::string, ProfileEntry>& entries, double totalTime) {
-    // Calculate self time (total time minus children's time)
     for (auto& [path, entry] : entries) {
         double childrenTime = 0.0;
         for (const auto& childPath : entry.childPaths) {
@@ -207,14 +191,12 @@ void Profiler::CalculateHierarchy(std::unordered_map<std::string, ProfileEntry>&
             if (it != entries.end()) { childrenTime += it->second.totalTime; }
         }
         entry.selfTime = entry.totalTime - childrenTime;
-        if (entry.selfTime < 0.0) entry.selfTime = 0.0; // Clamp to 0
+        if (entry.selfTime < 0.0) entry.selfTime = 0.0;
     }
 
-    // Calculate percentages
     for (auto& [path, entry] : entries) {
         entry.totalPercentage = totalTime > 0.0 ? (entry.totalTime / totalTime) * 100.0 : 0.0;
 
-        // Parent percentage
         if (!entry.parentPath.empty()) {
             auto it = entries.find(entry.parentPath);
             if (it != entries.end() && it->second.totalTime > 0.0) {
@@ -230,7 +212,6 @@ void Profiler::BuildDisplayTree(const std::unordered_map<std::string, ProfileEnt
                                 std::vector<std::pair<std::string, ProfileEntry>>& output) {
     output.clear();
 
-    // Build a map of parent -> children for quick lookup
     std::unordered_map<std::string, std::vector<std::string>> childrenMap;
     std::vector<std::string> rootEntries;
 
@@ -242,7 +223,6 @@ void Profiler::BuildDisplayTree(const std::unordered_map<std::string, ProfileEnt
         }
     }
 
-    // Sort children by rolling average time (descending) within each parent
     auto sortByTime = [&entries](std::vector<std::string>& names) {
         std::sort(names.begin(), names.end(), [&entries](const std::string& a, const std::string& b) {
             auto itA = entries.find(a);
@@ -253,19 +233,15 @@ void Profiler::BuildDisplayTree(const std::unordered_map<std::string, ProfileEnt
         });
     };
 
-    // Sort root entries by time
     sortByTime(rootEntries);
 
-    // Sort all children groups by time
     for (auto& [parent, children] : childrenMap) { sortByTime(children); }
 
-    // Recursive function to add entry and its children in order
     std::function<void(const std::string&)> addEntryWithChildren = [&](const std::string& path) {
         auto it = entries.find(path);
         if (it != entries.end()) {
             output.emplace_back(path, it->second);
 
-            // Add all children recursively
             auto childIt = childrenMap.find(path);
             if (childIt != childrenMap.end()) {
                 for (const auto& childPath : childIt->second) { addEntryWithChildren(childPath); }
@@ -273,7 +249,6 @@ void Profiler::BuildDisplayTree(const std::unordered_map<std::string, ProfileEnt
         }
     };
 
-    // Start with root entries and recursively add children
     for (const auto& rootPath : rootEntries) { addEntryWithChildren(rootPath); }
 }
 
@@ -282,26 +257,21 @@ void Profiler::EndFrame() {
 
     auto currentTime = std::chrono::steady_clock::now();
 
-    // Process any pending events
     ProcessEvents();
 
-    // Calculate totals
     m_totalRenderTime = 0.0;
     m_totalOtherTime = 0.0;
 
     for (const auto& [path, entry] : m_renderThreadEntries) { m_totalRenderTime += entry.totalTime; }
     for (const auto& [path, entry] : m_otherThreadEntries) { m_totalOtherTime += entry.totalTime; }
 
-    // Calculate hierarchy (self time, percentages)
     CalculateHierarchy(m_renderThreadEntries, m_totalRenderTime);
     CalculateHierarchy(m_otherThreadEntries, m_totalOtherTime);
 
-    // Accumulate for rolling average
     m_accumulatedRenderTime += m_totalRenderTime;
     m_accumulatedOtherTime += m_totalOtherTime;
     m_frameCountForAveraging++;
 
-    // Accumulate per-entry data
     auto accumulateEntries = [this](std::unordered_map<std::string, ProfileEntry>& entries) {
         for (auto& [path, entry] : entries) {
             entry.accumulatedTime += entry.totalTime;
@@ -313,7 +283,6 @@ void Profiler::EndFrame() {
     accumulateEntries(m_renderThreadEntries);
     accumulateEntries(m_otherThreadEntries);
 
-    // Reset frame data for next frame
     for (auto& [path, entry] : m_renderThreadEntries) {
         entry.totalTime = 0.0;
         entry.selfTime = 0.0;
@@ -325,7 +294,6 @@ void Profiler::EndFrame() {
         entry.callCount = 0;
     }
 
-    // Remove stale entries that haven't been updated in 5 seconds
     constexpr auto STALE_THRESHOLD = std::chrono::seconds(5);
     auto removeStaleEntries = [&currentTime](std::unordered_map<std::string, ProfileEntry>& entries) {
         for (auto it = entries.begin(); it != entries.end();) {
@@ -340,7 +308,6 @@ void Profiler::EndFrame() {
     removeStaleEntries(m_renderThreadEntries);
     removeStaleEntries(m_otherThreadEntries);
 
-    // Update display cache
     auto timeSinceLastUpdate = std::chrono::duration_cast<std::chrono::milliseconds>(currentTime - m_lastUpdateTime);
     if (timeSinceLastUpdate.count() >= UPDATE_INTERVAL_MS) {
         double avgRenderTime = m_frameCountForAveraging > 0 ? m_accumulatedRenderTime / m_frameCountForAveraging : 0.0;
@@ -405,3 +372,5 @@ void Profiler::Clear() {
     m_accumulatedOtherTime = 0.0;
     m_frameCountForAveraging = 0;
 }
+
+

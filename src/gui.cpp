@@ -39,22 +39,17 @@
 #pragma comment(lib, "Shlwapi.lib")
 #pragma comment(lib, "Winhttp.lib")
 
-// Forward declarations
 bool Spinner(const char* id_label, int* v, int step = 1, int min_val = INT_MIN, int max_val = INT_MAX, float inputWidth = 80.0f,
              float margin = 0.0f);
 void ApplyKeyRepeatSettings();
 
 extern std::atomic<bool> g_gameWindowActive;
 
-// Spinner button hold configuration
-static constexpr float spinnerHoldDelay = 0.2f;     // Delay before repeat starts (in seconds)
-static constexpr float spinnerHoldInterval = 0.01f; // Interval between repeats (in seconds)
+static constexpr float spinnerHoldDelay = 0.2f;
+static constexpr float spinnerHoldInterval = 0.01f;
 
-// Track background save status
 static std::atomic<bool> s_isConfigSaving{ false };
 
-// IMAGE VALIDATION AND FILE PICKER HELPERS
-// State for async file picker results
 struct ImagePickerResult {
     bool completed = false;
     bool success = false;
@@ -62,13 +57,12 @@ struct ImagePickerResult {
     std::string error;
 };
 
-// Global state for file picker operations (keyed by unique identifier)
 static std::atomic<bool> g_wasCursorVisible{ true };
 static std::mutex g_imagePickerMutex;
 static std::map<std::string, ImagePickerResult> g_imagePickerResults;
 static std::map<std::string, std::future<ImagePickerResult>> g_imagePickerFutures;
-static std::map<std::string, std::string> g_imageErrorMessages;                        // Persistent error messages for display
-static std::map<std::string, std::chrono::steady_clock::time_point> g_imageErrorTimes; // Error message expiry
+static std::map<std::string, std::string> g_imageErrorMessages;
+static std::map<std::string, std::chrono::steady_clock::time_point> g_imageErrorTimes;
 
 struct SupporterRoleEntry {
     std::string name;
@@ -271,16 +265,13 @@ void StartSupportersFetch() {
     }).detach();
 }
 
-// Last key/mouse-down input event observed by WndProc, used for precise key binding capture.
 static std::atomic<uint64_t> g_bindingInputEventSequence{ 0 };
 static std::atomic<DWORD> g_bindingInputEventVk{ 0 };
 static std::atomic<LPARAM> g_bindingInputEventLParam{ 0 };
 static std::atomic<bool> g_bindingInputEventIsMouse{ false };
 
 void RegisterBindingInputEvent(UINT uMsg, WPARAM wParam, LPARAM lParam) {
-    // Ignore Toolscreen-injected keyboard events (used for modifier-output rebinds).
-    // These should not count as user binding input.
-    static constexpr ULONG_PTR kToolscreenInjectedExtraInfo = (ULONG_PTR)0x5453434E; // 'TSCN'
+    static constexpr ULONG_PTR kToolscreenInjectedExtraInfo = (ULONG_PTR)0x5453434E;
     if ((uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) && GetMessageExtraInfo() == kToolscreenInjectedExtraInfo) {
         return;
     }
@@ -298,9 +289,7 @@ void RegisterBindingInputEvent(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         DWORD resolvedVk = static_cast<DWORD>(keyWParam);
         if (mappedVk != 0) { resolvedVk = static_cast<DWORD>(mappedVk); }
 
-        // Normalize generic modifier VKs to left/right variants.
         // Windows typically reports VK_CONTROL/VK_MENU/VK_SHIFT in wParam for both sides.
-        // For binding UI (hotkeys/rebinds), we want deterministic L/R codes.
         const bool isExtended = (keyLParam & (1LL << 24)) != 0;
         const UINT scanOnly = static_cast<UINT>((keyLParam >> 16) & 0xFF);
         if (resolvedVk == VK_SHIFT) {
@@ -312,7 +301,6 @@ void RegisterBindingInputEvent(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             resolvedVk = isExtended ? VK_RMENU : VK_LMENU;
         }
 
-        // Ensure dedicated navigation keys keep their non-numpad VK when extended bit is present.
         if ((keyLParam & (1LL << 24)) != 0) {
             switch (scanCodeWithFlags & 0xFF) {
             case 0x4B:
@@ -356,7 +344,6 @@ void RegisterBindingInputEvent(UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN:
-        // Ignore auto-repeat keydown events while binding.
         if ((lParam & (1LL << 30)) != 0) return;
         vk = resolveVkFromKeyboardMessage(wParam, lParam);
         break;
@@ -401,8 +388,6 @@ bool ConsumeBindingInputEventSince(uint64_t& lastSeenSequence, DWORD& outVk, LPA
     return outVk != 0;
 }
 
-// Returns the initial directory for image pickers.
-// Prefer Downloads, then fallback to the provided initial directory.
 static std::wstring GetImagePickerInitialDirectory(const std::wstring& fallbackInitialDir) {
     PWSTR downloadsPath = nullptr;
     if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Downloads, KF_FLAG_DEFAULT, NULL, &downloadsPath)) && downloadsPath != nullptr) {
@@ -416,12 +401,9 @@ static std::wstring GetImagePickerInitialDirectory(const std::wstring& fallbackI
     return L"";
 }
 
-// Validates an image file by checking if stbi_info can read its header
-// Returns empty string on success, or error message on failure
 static std::string ValidateImageFile(const std::string& path, const std::wstring& toolscreenPath) {
     if (path.empty()) { return "Path is empty"; }
 
-    // Resolve relative paths
     std::wstring final_path;
     std::wstring image_wpath = Utf8ToWide(path);
     if (PathIsRelativeW(image_wpath.c_str()) && !toolscreenPath.empty()) {
@@ -430,33 +412,26 @@ static std::string ValidateImageFile(const std::string& path, const std::wstring
         final_path = image_wpath;
     }
 
-    // Check file exists
     if (!std::filesystem::exists(final_path)) { return "File does not exist"; }
 
     std::string path_utf8 = WideToUtf8(final_path);
 
-    // Use stbi_info to check if the file is a valid image without fully loading it
     int w, h, c;
     if (stbi_info(path_utf8.c_str(), &w, &h, &c) == 0) {
         const char* reason = stbi_failure_reason();
         return std::string("Invalid image: ") + (reason ? reason : "unknown format");
     }
 
-    // Basic sanity checks
     if (w <= 0 || h <= 0) { return "Invalid image dimensions"; }
 
     if (w > 16384 || h > 16384) { return "Image too large (max 16384x16384)"; }
 
-    return ""; // Success
+    return "";
 }
 
-// Opens a file picker dialog and validates the selected image
-// Returns ImagePickerResult with success/failure and path or error message
 static ImagePickerResult OpenImagePickerAndValidate(HWND ownerHwnd, const std::wstring& initialDir, const std::wstring& toolscreenPath) {
     ImagePickerResult result;
 
-    // Check if the owner window is valid and responsive to prevent freezes
-    // If the window is not focused or not responding, use NULL as owner
     HWND safeOwner = NULL;
     if (ownerHwnd != NULL && IsWindow(ownerHwnd)) {
         // Check if the window is in the foreground or is the current thread's window
@@ -464,8 +439,6 @@ static ImagePickerResult OpenImagePickerAndValidate(HWND ownerHwnd, const std::w
         DWORD windowThreadId = GetWindowThreadProcessId(ownerHwnd, NULL);
         DWORD currentThreadId = GetCurrentThreadId();
 
-        // Only use the owner if:
-        // 1. It's the foreground window, OR
         // 2. It belongs to the current thread (so we can interact with it)
         if (foreground == ownerHwnd || windowThreadId == currentThreadId) { safeOwner = ownerHwnd; }
     }
@@ -489,26 +462,23 @@ static ImagePickerResult OpenImagePickerAndValidate(HWND ownerHwnd, const std::w
     if (GetOpenFileNameW(&ofn) == TRUE) {
         result.path = WideToUtf8(ofn.lpstrFile);
 
-        // Validate the image before accepting it
         std::string error = ValidateImageFile(result.path, toolscreenPath);
         if (error.empty()) {
             result.success = true;
         } else {
             result.success = false;
             result.error = error;
-            result.path = ""; // Clear path on error
+            result.path = "";
         }
     } else {
-        // User cancelled - not an error, just no selection
         result.success = false;
-        result.error = ""; // No error message for cancellation
+        result.error = "";
     }
 
     result.completed = true;
     return result;
 }
 
-// Clears error message for a given key after timeout (5 seconds)
 static void ClearExpiredImageErrors() {
     auto now = std::chrono::steady_clock::now();
     std::vector<std::string> keysToRemove;
@@ -524,26 +494,22 @@ static void ClearExpiredImageErrors() {
     }
 }
 
-// Sets an error message for display
 static void SetImageError(const std::string& key, const std::string& error) {
     g_imageErrorMessages[key] = error;
     g_imageErrorTimes[key] = std::chrono::steady_clock::now();
 }
 
-// Gets error message for a key (or empty if none/expired)
 static std::string GetImageError(const std::string& key) {
     ClearExpiredImageErrors();
     auto it = g_imageErrorMessages.find(key);
     return (it != g_imageErrorMessages.end()) ? it->second : "";
 }
 
-// Clears error for a key
 static void ClearImageError(const std::string& key) {
     g_imageErrorMessages.erase(key);
     g_imageErrorTimes.erase(key);
 }
 
-// Helper to display a little (?) mark which shows a tooltip when hovered
 static void HelpMarker(const char* desc) {
     ImGui::TextDisabled("(?)");
     if (ImGui::BeginItemTooltip()) {
@@ -554,13 +520,11 @@ static void HelpMarker(const char* desc) {
     }
 }
 
-// Tip shown on tabs that contain sliders.
 static void SliderCtrlClickTip() {
     ImGui::TextDisabled("Tip: Ctrl+Click any slider to input a specific value.");
     ImGui::Spacing();
 }
 
-// Helper function to render transition settings in horizontal layout WITHOUT background column (for Fullscreen mode)
 static void RenderTransitionSettingsHorizontalNoBackground(ModeConfig& mode, const std::string& idSuffix) {
     ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(10, 5));
 
@@ -570,7 +534,6 @@ static void RenderTransitionSettingsHorizontalNoBackground(ModeConfig& mode, con
 
         ImGui::TableNextRow();
 
-        // --- GAME COLUMN ---
         ImGui::TableSetColumnIndex(0);
         ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.3f, 0.5f, 0.7f, 0.8f));
         ImGui::Text("Viewport Animation");
@@ -631,18 +594,15 @@ static void RenderTransitionSettingsHorizontalNoBackground(ModeConfig& mode, con
             }
         }
 
-        // Note: Overlays animate with game during Bounce transitions if relatively positioned
 
         ImGui::EndTable();
     }
 
     ImGui::PopStyleVar();
 
-    // Note: No preview button for Fullscreen mode (it's the "from" mode in transitions)
     ImGui::TextDisabled("Note: Fullscreen has no background. Transitions use the other mode's background.");
 }
 
-// Helper function to render transition settings in horizontal layout
 static void RenderTransitionSettingsHorizontal(ModeConfig& mode, const std::string& idSuffix) {
     ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(10, 5));
 
@@ -652,7 +612,6 @@ static void RenderTransitionSettingsHorizontal(ModeConfig& mode, const std::stri
 
         ImGui::TableNextRow();
 
-        // --- GAME COLUMN ---
         ImGui::TableSetColumnIndex(0);
         ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.3f, 0.5f, 0.7f, 0.8f));
         ImGui::Text("Viewport Animation");
@@ -712,7 +671,6 @@ static void RenderTransitionSettingsHorizontal(ModeConfig& mode, const std::stri
                                   "overlays move with the viewport but keep their original size.");
             }
 
-            // Skip axis animation options
             if (ImGui::Checkbox(("Skip X Animation##" + idSuffix).c_str(), &mode.skipAnimateX)) { g_configIsDirty = true; }
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("When enabled, the X axis (width) instantly jumps to target while Y animates.");
@@ -724,15 +682,12 @@ static void RenderTransitionSettingsHorizontal(ModeConfig& mode, const std::stri
             }
         }
 
-        // Note: Overlays animate with game during Bounce transitions if relatively positioned
-        // Background transitions are always instant (Cut)
 
         ImGui::EndTable();
     }
 
     ImGui::PopStyleVar();
 
-    // Preview button
     ImGui::Spacing();
     if (ImGui::Button(("Preview Transition##" + idSuffix).c_str())) {
         std::lock_guard<std::mutex> pendingLock(g_pendingModeSwitchMutex);
@@ -760,7 +715,7 @@ std::string GameTransitionTypeToString(GameTransitionType type) {
 
 GameTransitionType StringToGameTransitionType(const std::string& str) {
     if (str == "Cut") return GameTransitionType::Cut;
-    return GameTransitionType::Bounce; // Default to Bounce
+    return GameTransitionType::Bounce;
 }
 
 std::string OverlayTransitionTypeToString(OverlayTransitionType type) {
@@ -773,7 +728,7 @@ std::string OverlayTransitionTypeToString(OverlayTransitionType type) {
 }
 
 OverlayTransitionType StringToOverlayTransitionType(const std::string& str) {
-    return OverlayTransitionType::Cut; // Only Cut is supported
+    return OverlayTransitionType::Cut;
 }
 
 std::string BackgroundTransitionTypeToString(BackgroundTransitionType type) {
@@ -786,7 +741,7 @@ std::string BackgroundTransitionTypeToString(BackgroundTransitionType type) {
 }
 
 BackgroundTransitionType StringToBackgroundTransitionType(const std::string& str) {
-    return BackgroundTransitionType::Cut; // Only Cut is supported
+    return BackgroundTransitionType::Cut;
 }
 
 std::string& ToUpper(std::string& s) {
@@ -899,40 +854,31 @@ std::string VkToString(DWORD vk) {
 DWORD StringToVk(const std::string& keyStr) {
     std::string cleanKey = keyStr;
 
-    // Remove leading/trailing whitespace
     cleanKey.erase(0, cleanKey.find_first_not_of(" \t\r\n"));
     cleanKey.erase(cleanKey.find_last_not_of(" \t\r\n") + 1);
 
-    // Convert to uppercase for comparison
     ToUpper(cleanKey);
 
-    // Handle empty or whitespace-only strings
     if (cleanKey.empty()) return 0;
 
-    // clang-format off
-    // Extended key mapping with alternative names
     static std::map<std::string, DWORD> keyMap = {
-        // Mouse buttons
         {"MOUSE1", VK_LBUTTON}, {"LBUTTON", VK_LBUTTON}, {"LEFTMOUSE", VK_LBUTTON},
         {"MOUSE2", VK_RBUTTON}, {"RBUTTON", VK_RBUTTON}, {"RIGHTMOUSE", VK_RBUTTON},
         {"MOUSE3", VK_MBUTTON}, {"MBUTTON", VK_MBUTTON}, {"MIDDLEMOUSE", VK_MBUTTON},
         {"MOUSE4", VK_XBUTTON1}, {"XBUTTON1", VK_XBUTTON1}, {"MOUSE BUTTON 4", VK_XBUTTON1}, {"MOUSEBUTTON4", VK_XBUTTON1},
         {"MOUSE5", VK_XBUTTON2}, {"XBUTTON2", VK_XBUTTON2}, {"MOUSE BUTTON 5", VK_XBUTTON2}, {"MOUSEBUTTON5", VK_XBUTTON2},
         
-        // Modifier keys
         {"SHIFT", VK_SHIFT}, {"LSHIFT", VK_LSHIFT}, {"RSHIFT", VK_RSHIFT},
         {"CTRL", VK_CONTROL}, {"CONTROL", VK_CONTROL}, {"LCTRL", VK_LCONTROL}, {"RCTRL", VK_RCONTROL},
         {"LCONTROL", VK_LCONTROL}, {"RCONTROL", VK_RCONTROL},
         {"ALT", VK_MENU}, {"MENU", VK_MENU}, {"LALT", VK_LMENU}, {"RALT", VK_RMENU}, {"LMENU", VK_LMENU}, {"RMENU", VK_RMENU},
         {"WIN", VK_LWIN}, {"WINDOWS", VK_LWIN}, {"LWIN", VK_LWIN}, {"RWIN", VK_RWIN}, {"WINKEY", VK_LWIN}, {"WINDOWSKEY", VK_LWIN},
         
-        // Function keys
         {"F1", VK_F1}, {"F2", VK_F2}, {"F3", VK_F3}, {"F4", VK_F4}, {"F5", VK_F5}, {"F6", VK_F6},
         {"F7", VK_F7}, {"F8", VK_F8}, {"F9", VK_F9}, {"F10", VK_F10}, {"F11", VK_F11}, {"F12", VK_F12},
         {"F13", VK_F13}, {"F14", VK_F14}, {"F15", VK_F15}, {"F16", VK_F16}, {"F17", VK_F17}, {"F18", VK_F18},
         {"F19", VK_F19}, {"F20", VK_F20}, {"F21", VK_F21}, {"F22", VK_F22}, {"F23", VK_F23}, {"F24", VK_F24},
         
-        // Special keys with multiple names
         {"BACKSPACE", VK_BACK}, {"BACK", VK_BACK}, {"BKSP", VK_BACK},
         {"TAB", VK_TAB}, {"TABULATOR", VK_TAB},
         {"ENTER", VK_RETURN}, {"RETURN", VK_RETURN}, {"CR", VK_RETURN},
@@ -940,7 +886,6 @@ DWORD StringToVk(const std::string& keyStr) {
         {"ESCAPE", VK_ESCAPE}, {"ESC", VK_ESCAPE},
         {"SPACE", VK_SPACE}, {"SPACEBAR", VK_SPACE}, {"SPC", VK_SPACE},
         
-        // Navigation keys
         {"PAGE UP", VK_PRIOR}, {"PAGEUP", VK_PRIOR}, {"PGUP", VK_PRIOR}, {"PRIOR", VK_PRIOR},
         {"PAGE DOWN", VK_NEXT}, {"PAGEDOWN", VK_NEXT}, {"PGDN", VK_NEXT}, {"NEXT", VK_NEXT},
         {"END", VK_END}, {"HOME", VK_HOME},
@@ -952,7 +897,6 @@ DWORD StringToVk(const std::string& keyStr) {
         {"INSERT", VK_INSERT}, {"INS", VK_INSERT},
         {"DELETE", VK_DELETE}, {"DEL", VK_DELETE},
         
-        // Numpad keys
         {"NUMPAD 0", VK_NUMPAD0}, {"NUMPAD0", VK_NUMPAD0}, {"NUM 0", VK_NUMPAD0}, {"NUM0", VK_NUMPAD0},
         {"NUMPAD 1", VK_NUMPAD1}, {"NUMPAD1", VK_NUMPAD1}, {"NUM 1", VK_NUMPAD1}, {"NUM1", VK_NUMPAD1},
         {"NUMPAD 2", VK_NUMPAD2}, {"NUMPAD2", VK_NUMPAD2}, {"NUM 2", VK_NUMPAD2}, {"NUM2", VK_NUMPAD2},
@@ -970,7 +914,6 @@ DWORD StringToVk(const std::string& keyStr) {
         {"NUMPAD /", VK_DIVIDE}, {"NUMPAD/", VK_DIVIDE}, {"NUM /", VK_DIVIDE}, {"NUM/", VK_DIVIDE},
         {"NUMPAD SEP", VK_SEPARATOR}, {"NUMPADSEP", VK_SEPARATOR}, {"NUM SEP", VK_SEPARATOR}, {"NUMSEP", VK_SEPARATOR},
         
-        // Symbols and punctuation
         {";", VK_OEM_1}, {"SEMICOLON", VK_OEM_1},
         {"=", VK_OEM_PLUS}, {"EQUALS", VK_OEM_PLUS}, {"PLUS", VK_OEM_PLUS},
         {",", VK_OEM_COMMA}, {"COMMA", VK_OEM_COMMA},
@@ -987,32 +930,25 @@ DWORD StringToVk(const std::string& keyStr) {
         {"SCROLL LOCK", VK_SCROLL}, {"SCROLLLOCK", VK_SCROLL}, {"SCROLL", VK_SCROLL},
         {"NUM LOCK", VK_NUMLOCK}, {"NUMLOCK", VK_NUMLOCK},
         
-        // Other keys
         {"PRINT SCREEN", VK_SNAPSHOT}, {"PRINTSCREEN", VK_SNAPSHOT}, {"PRTSC", VK_SNAPSHOT}, {"SNAPSHOT", VK_SNAPSHOT},
         {"PAUSE", VK_PAUSE}, {"BREAK", VK_PAUSE}, {"PAUSE BREAK", VK_PAUSE}, {"PAUSEBREAK", VK_PAUSE},
         {"APPS", VK_APPS}, {"APPLICATION", VK_APPS}, {"CONTEXT", VK_APPS}, {"CONTEXTMENU", VK_APPS}
     };
-    // clang-format on
 
-    // Check direct mapping first
     if (keyMap.count(cleanKey)) { return keyMap[cleanKey]; }
 
-    // Handle single character keys
     if (cleanKey.length() == 1) {
         char c = cleanKey[0];
         if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) { return (DWORD)c; }
-        // For other single characters, use VkKeyScan
         return VkKeyScanA(c) & 0xFF;
     }
 
-    // Handle hex values (0x format or just hex)
     if (cleanKey.rfind("0X", 0) == 0 && cleanKey.length() > 2) {
         try {
             return std::stoul(cleanKey.substr(2), nullptr, 16);
         } catch (...) { return 0; }
     }
 
-    // Handle decimal values if it's all digits
     if (std::all_of(cleanKey.begin(), cleanKey.end(), ::isdigit)) {
         try {
             DWORD val = std::stoul(cleanKey);
@@ -1023,7 +959,6 @@ DWORD StringToVk(const std::string& keyStr) {
     return 0;
 }
 
-// Enhanced hotkey parsing function that handles various formats
 std::vector<DWORD> ParseHotkeyString(const std::string& hotkeyStr) {
     std::vector<DWORD> keys;
 
@@ -1031,49 +966,39 @@ std::vector<DWORD> ParseHotkeyString(const std::string& hotkeyStr) {
 
     std::string cleanStr = hotkeyStr;
 
-    // Remove leading/trailing whitespace
     cleanStr.erase(0, cleanStr.find_first_not_of(" \t\r\n"));
     cleanStr.erase(cleanStr.find_last_not_of(" \t\r\n") + 1);
 
     if (cleanStr.empty()) return keys;
 
-    // Define multiple possible separators
     std::vector<char> separators = { '+', '-', '_', ',', '|', '&' };
     char usedSeparator = '\0';
 
-    // Find which separator is used (prefer + if found)
     for (char sep : separators) {
         if (cleanStr.find(sep) != std::string::npos) {
             usedSeparator = sep;
-            if (sep == '+') break; // Prefer + separator
+            if (sep == '+') break;
         }
     }
 
-    // Split the string
     std::vector<std::string> keyParts;
     if (usedSeparator != '\0') {
-        // Split by separator
         std::stringstream ss(cleanStr);
         std::string keyPart;
         while (std::getline(ss, keyPart, usedSeparator)) { keyParts.push_back(keyPart); }
     } else {
-        // Check if it contains spaces and might be space-separated
         if (cleanStr.find(' ') != std::string::npos) {
-            // Try splitting by spaces, but be careful about key names with spaces
             std::stringstream ss(cleanStr);
             std::string word;
             std::string current_key;
 
             while (ss >> word) {
                 if (!current_key.empty()) {
-                    // Try to parse current accumulated key
                     DWORD testVk = StringToVk(current_key);
                     if (testVk != 0) {
-                        // Current key is valid, start new key with this word
                         keyParts.push_back(current_key);
                         current_key = word;
                     } else {
-                        // Current key not valid yet, add this word to it
                         current_key += " " + word;
                     }
                 } else {
@@ -1081,15 +1006,12 @@ std::vector<DWORD> ParseHotkeyString(const std::string& hotkeyStr) {
                 }
             }
 
-            // Add the last accumulated key
             if (!current_key.empty()) { keyParts.push_back(current_key); }
         } else {
-            // Single key
             keyParts.push_back(cleanStr);
         }
     }
 
-    // Parse each key part
     for (const std::string& keyPart : keyParts) {
         DWORD vk = StringToVk(keyPart);
         if (vk != 0) { keys.push_back(vk); }
@@ -1228,7 +1150,6 @@ void CopyToClipboard(HWND hwnd, const std::string& text) {
         return;
     }
 
-    // RAII wrapper for closing clipboard
     struct ClipboardGuard {
         ClipboardGuard() {}
         ~ClipboardGuard() { CloseClipboard(); }
@@ -1260,7 +1181,7 @@ void CopyToClipboard(HWND hwnd, const std::string& text) {
 
     if (!SetClipboardData(CF_UNICODETEXT, hg)) {
         Log("ERROR: SetClipboardData failed. Error code: " + std::to_string(GetLastError()));
-        GlobalFree(hg); // We own the memory if SetClipboardData fails
+        GlobalFree(hg);
     }
 }
 
@@ -1299,22 +1220,21 @@ error_case:
 void SaveConfig() {
     PROFILE_SCOPE_CAT("Config Save", "IO Operations");
 
-    // Throttle saves: only save if config is dirty AND at least 1 second has passed
     static auto s_lastSaveTime = std::chrono::steady_clock::now();
 
     auto currentTime = std::chrono::steady_clock::now();
     auto timeSinceLastSave = std::chrono::duration_cast<std::chrono::milliseconds>(currentTime - s_lastSaveTime).count();
 
     if (!g_configIsDirty.load()) {
-        return; // Nothing changed, skip save
+        return;
     }
 
     if (timeSinceLastSave < 1000) {
-        return; // Less than 1 second since last save, skip
+        return;
     }
 
     if (s_isConfigSaving.load()) {
-        return; // Save in progress, skip
+        return;
     }
 
     if (g_toolscreenPath.empty()) {
@@ -1338,7 +1258,6 @@ void SaveConfig() {
             _set_se_translator(SEHTranslator);
             try {
                 try {
-                    // IMPORTANT (Windows/Unicode): open via std::filesystem::path to support non-ANSI user profiles.
                     std::ofstream o(std::filesystem::path(configPath), std::ios::binary | std::ios::trunc);
                     if (!o.is_open()) {
                         Log("ERROR: Failed to open config file for writing.");
@@ -1360,16 +1279,13 @@ void SaveConfig() {
     }
 }
 
-// Force immediate save, bypassing throttle (for shutdown, GUI close, etc.)
 void SaveConfigImmediate() {
     PROFILE_SCOPE_CAT("Config Save (Immediate)", "IO Operations");
 
-    // Wait for any background save to complete to avoid file corruption
     if (s_isConfigSaving.load()) {
         Log("SaveConfigImmediate: Waiting for background save to complete...");
         auto startWait = std::chrono::steady_clock::now();
         while (s_isConfigSaving.load()) {
-            // Timeout after 3 seconds to prevent infinite hang on shutdown
             if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - startWait).count() > 3) {
                 Log("SaveConfigImmediate: Timed out waiting for background save. Proceeding anyway.");
                 break;
@@ -1379,7 +1295,7 @@ void SaveConfigImmediate() {
     }
 
     if (!g_configIsDirty) {
-        return; // Nothing changed, skip save
+        return;
     }
 
     if (g_toolscreenPath.empty()) {
@@ -1389,14 +1305,12 @@ void SaveConfigImmediate() {
     std::wstring configPath = g_toolscreenPath + L"\\config.toml";
     try {
         Log("SaveConfigImmediate: Starting config copy...");
-        // Convert config to TOML
         toml::table tbl;
         ConfigToToml(g_config, tbl);
 
         // Publish updated config snapshot for reader threads (RCU pattern)
         PublishConfigSnapshot();
 
-        // IMPORTANT (Windows/Unicode): open via std::filesystem::path to support non-ANSI user profiles.
         std::ofstream o(std::filesystem::path(configPath), std::ios::binary | std::ios::trunc);
         if (!o.is_open()) {
             Log("ERROR: Failed to open config file for writing.");
@@ -1408,13 +1322,11 @@ void SaveConfigImmediate() {
         Log("Configuration saved to file (immediate).");
         g_configIsDirty = false;
 
-        // Cursor config is now handled directly by fake_cursor.cpp
     } catch (const std::exception& e) { Log("ERROR: Failed to write config file: " + std::string(e.what())); } catch (...) {
         Log("ERROR: Unknown exception in SaveConfigImmediate");
     }
 }
 
-// Helper to apply a preset theme's colors
 static void ApplyPresetThemeColors(const std::string& themeName) {
     ImGuiStyle& style = ImGui::GetStyle();
 
@@ -1761,14 +1673,11 @@ static void ApplyPresetThemeColors(const std::string& themeName) {
     }
 }
 
-// Apply the saved appearance config (theme and custom colors) to ImGui
 void ApplyAppearanceConfig() {
     const std::string& theme = g_config.appearance.theme;
 
-    // Apply base theme - start with Dark as base for all themes
     ImGui::StyleColorsDark();
 
-    // Then apply the specific theme's colors
     if (theme == "Light") {
         ImGui::StyleColorsLight();
     } else if (theme == "Classic") {
@@ -1778,16 +1687,12 @@ void ApplyAppearanceConfig() {
                theme == "Blue" || theme == "Teal" || theme == "Red" || theme == "Green") {
         ApplyPresetThemeColors(theme);
     }
-    // else: stays with Dark theme colors
 
-    // Always set modal window dim color consistently
     ImGui::GetStyle().Colors[ImGuiCol_ModalWindowDimBg] = ImVec4(0.0f, 0.0f, 0.0f, 0.5f);
 
-    // Apply custom color overrides if theme is "Custom"
     if (theme == "Custom" && !g_config.appearance.customColors.empty()) {
         ImGuiStyle& style = ImGui::GetStyle();
 
-        // Map color names to ImGui color indices
         static const std::map<std::string, ImGuiCol_> colorNameToIdx = { { "WindowBg", ImGuiCol_WindowBg },
                                                                          { "ChildBg", ImGuiCol_ChildBg },
                                                                          { "PopupBg", ImGuiCol_PopupBg },
@@ -1833,7 +1738,6 @@ void ApplyAppearanceConfig() {
     Log("Applied appearance config: theme=" + theme);
 }
 
-// Save theme to separate theme.toml file
 void SaveTheme() {
     if (g_toolscreenPath.empty()) {
         Log("ERROR: Cannot save theme, toolscreen path is not available.");
@@ -1845,16 +1749,12 @@ void SaveTheme() {
         toml::table tbl;
         tbl.insert_or_assign("theme", g_config.appearance.theme);
 
-        // Persist custom palette alongside the theme name so edits survive restarts
-        // even if the main config save is throttled or theme.toml overrides config theme.
-        // Always write the table (even if empty) so "Reset" reliably clears saved overrides.
         toml::table colorsTbl;
         for (const auto& [name, color] : g_config.appearance.customColors) {
             colorsTbl.insert(name, ColorToTomlArray(color));
         }
         tbl.insert_or_assign("customColors", colorsTbl);
 
-        // IMPORTANT (Windows/Unicode): open via std::filesystem::path to support non-ANSI user profiles.
         std::ofstream o(std::filesystem::path(themePath), std::ios::binary | std::ios::trunc);
         if (!o.is_open()) {
             Log("ERROR: Failed to open theme.toml for writing.");
@@ -1866,7 +1766,6 @@ void SaveTheme() {
     } catch (const std::exception& e) { Log("ERROR: Failed to save theme: " + std::string(e.what())); }
 }
 
-// Load theme from separate theme.toml file
 void LoadTheme() {
     if (g_toolscreenPath.empty()) {
         Log("WARNING: Cannot load theme, toolscreen path is not available.");
@@ -1874,7 +1773,6 @@ void LoadTheme() {
     }
 
     std::wstring themePath = g_toolscreenPath + L"\\theme.toml";
-    // Check if file exists
     std::ifstream testFile(std::filesystem::path(themePath), std::ios::binary);
     if (!testFile.good()) {
         Log("theme.toml not found, using default theme.");
@@ -1899,7 +1797,6 @@ void LoadTheme() {
             Log("Loaded theme from theme.toml: " + themeName);
         }
 
-        // Optional: load custom palette from theme.toml (newer versions store it here).
         if (const toml::node* ccNode = tbl.get("customColors")) {
             if (const toml::table* colorsTbl = ccNode->as_table()) {
                 g_config.appearance.customColors.clear();
@@ -1914,8 +1811,6 @@ void LoadTheme() {
     } catch (const std::exception& e) { Log("ERROR: Failed to load theme: " + std::string(e.what())); }
 }
 
-// Helper functions to get default configurations for reset functionality
-// These now use the embedded default.toml resource for consistency
 std::vector<ModeConfig> GetDefaultModes() { return GetDefaultModesFromEmbedded(); }
 
 std::vector<MirrorConfig> GetDefaultMirrors() { return GetDefaultMirrorsFromEmbedded(); }
@@ -1925,7 +1820,6 @@ std::vector<MirrorGroupConfig> GetDefaultMirrorGroups() { return GetDefaultMirro
 std::vector<ImageConfig> GetDefaultImages() { return GetDefaultImagesFromEmbedded(); }
 
 std::vector<WindowOverlayConfig> GetDefaultWindowOverlays() {
-    // No default window overlays in embedded config
     return std::vector<WindowOverlayConfig>();
 }
 
@@ -1937,10 +1831,8 @@ void WriteDefaultConfig(const std::wstring& path) {
     int screenWidth = GetCachedScreenWidth();
     int screenHeight = GetCachedScreenHeight();
 
-    // Try to load the embedded default config
     Config defaultConfig;
     if (LoadEmbeddedDefaultConfig(defaultConfig)) {
-        // Apply dynamic screen-size adjustments
         for (auto& mode : defaultConfig.modes) {
             if (mode.id == "Fullscreen") {
                 mode.width = screenWidth;
@@ -1956,13 +1848,11 @@ void WriteDefaultConfig(const std::wstring& path) {
             }
         }
 
-        // Apply dynamic eyezoom margins
         int horizontalMargin = ((screenWidth / 2) - (384 / 2)) / 10;
         int verticalMargin = (screenHeight / 2) / 4;
         defaultConfig.eyezoom.horizontalMargin = horizontalMargin;
         defaultConfig.eyezoom.verticalMargin = verticalMargin;
 
-        // Apply dynamic Ninjabrain Bot path
         for (auto& image : defaultConfig.images) {
             if (image.name == "Ninjabrain Bot" && image.path.empty()) {
                 WCHAR tempPath[MAX_PATH];
@@ -1973,7 +1863,6 @@ void WriteDefaultConfig(const std::wstring& path) {
             }
         }
 
-        // Apply dynamic cursor size
         HDC hdc = GetDC(NULL);
         int dpi = GetDeviceCaps(hdc, LOGPIXELSY);
         ReleaseDC(NULL, hdc);
@@ -1988,7 +1877,6 @@ void WriteDefaultConfig(const std::wstring& path) {
             toml::table tbl;
             ConfigToToml(defaultConfig, tbl);
 
-            // IMPORTANT (Windows/Unicode): open via std::filesystem::path to support non-ANSI user profiles.
             std::ofstream o(std::filesystem::path(path), std::ios::binary | std::ios::trunc);
             o << tbl;
             o.close();
@@ -1996,13 +1884,11 @@ void WriteDefaultConfig(const std::wstring& path) {
                 std::to_string(screenHeight) + ").");
         } catch (const std::exception& e) { Log("ERROR: Failed to write default config file: " + std::string(e.what())); }
     } else {
-        // Fallback: if embedded config fails, create minimal config
         Log("WARNING: Could not load embedded default config, creating minimal fallback config");
         defaultConfig.configVersion = GetConfigVersion();
         defaultConfig.defaultMode = "Fullscreen";
         defaultConfig.guiHotkey = ConfigDefaults::GetDefaultGuiHotkey();
 
-        // Create minimal Fullscreen mode
         ModeConfig fullscreenMode;
         fullscreenMode.id = "Fullscreen";
         fullscreenMode.width = screenWidth;
@@ -2016,7 +1902,6 @@ void WriteDefaultConfig(const std::wstring& path) {
             toml::table tbl;
             ConfigToToml(defaultConfig, tbl);
 
-            // IMPORTANT (Windows/Unicode): open via std::filesystem::path to support non-ANSI user profiles.
             std::ofstream o(std::filesystem::path(path), std::ios::binary | std::ios::trunc);
             o << tbl;
             o.close();
@@ -2034,7 +1919,6 @@ void LoadConfig() {
 
     std::wstring configPath = g_toolscreenPath + L"\\config.toml";
 
-    // Check if config.toml exists
     if (!std::filesystem::exists(configPath)) {
         Log("config.toml not found. Writing a default config file.");
         WriteDefaultConfig(configPath);
@@ -2050,14 +1934,12 @@ void LoadConfig() {
         }
     }
 
-    // Create backup of existing config file
     BackupConfigFile();
 
     try {
-        g_config = Config(); // Initialize with struct defaults
+        g_config = Config();
         g_hotkeyTimestamps.clear();
 
-        // Load TOML config
         std::ifstream in(std::filesystem::path(configPath), std::ios::binary);
         if (!in.is_open()) {
             throw std::runtime_error("Failed to open config.toml for reading.");
@@ -2081,7 +1963,6 @@ void LoadConfig() {
         int screenWidth = GetCachedScreenWidth();
         int screenHeight = GetCachedScreenHeight();
 
-        // Helper to check if a mode exists
         auto modeExists = [&](const std::string& id) -> bool {
             for (const auto& mode : g_config.modes) {
                 if (EqualsIgnoreCase(mode.id, id)) return true;
@@ -2089,7 +1970,6 @@ void LoadConfig() {
             return false;
         };
 
-        // Ensure Fullscreen mode exists with current monitor resolution
         if (!modeExists("Fullscreen")) {
             ModeConfig fullscreenMode;
             fullscreenMode.id = "Fullscreen";
@@ -2104,10 +1984,7 @@ void LoadConfig() {
             g_config.modes.insert(g_config.modes.begin(), fullscreenMode);
             Log("Created missing Fullscreen mode");
         }
-        // NOTE: If Fullscreen mode already exists, we preserve its custom resolution.
-        // Users can set a custom resolution in the GUI, and it should persist across mode switches.
 
-        // Ensure EyeZoom mode exists
         if (!modeExists("EyeZoom")) {
             ModeConfig eyezoomMode;
             eyezoomMode.id = "EyeZoom";
@@ -2117,9 +1994,6 @@ void LoadConfig() {
             Log("Created missing EyeZoom mode");
         }
 
-        // Ensure Preemptive mode exists.
-        // This is a built-in mode that behaves like a normal mode (no EyeZoom clone rendering),
-        // but its resolution is always kept in sync with EyeZoom.
         {
             ModeConfig* eyezoomModePtr = nullptr;
             for (auto& m : g_config.modes) {
@@ -2131,13 +2005,11 @@ void LoadConfig() {
 
             if (!modeExists("Preemptive")) {
                 ModeConfig preemptiveMode;
-                // Copy mirrors/background/images/etc from EyeZoom so defaults match.
                 if (eyezoomModePtr) { preemptiveMode = *eyezoomModePtr; }
                 preemptiveMode.id = "Preemptive";
                 preemptiveMode.width = eyezoomModePtr ? eyezoomModePtr->width : 384;
                 preemptiveMode.height = eyezoomModePtr ? eyezoomModePtr->height : 16384;
 
-                // Force absolute sizing (this mode copies its resolution).
                 preemptiveMode.useRelativeSize = false;
                 preemptiveMode.widthExpr.clear();
                 preemptiveMode.heightExpr.clear();
@@ -2147,7 +2019,6 @@ void LoadConfig() {
                 g_config.modes.push_back(preemptiveMode);
                 Log("Created missing Preemptive mode");
             } else {
-                // Keep resolution synced + remove any expression/relative sizing.
                 ModeConfig* preemptiveModePtr = nullptr;
                 for (auto& m : g_config.modes) {
                     if (EqualsIgnoreCase(m.id, "Preemptive")) {
@@ -2187,7 +2058,6 @@ void LoadConfig() {
             }
         }
 
-        // Ensure Thin mode exists
         if (!modeExists("Thin")) {
             ModeConfig thinMode;
             thinMode.id = "Thin";
@@ -2200,7 +2070,6 @@ void LoadConfig() {
             Log("Created missing Thin mode");
         }
 
-        // Ensure Wide mode exists
         if (!modeExists("Wide")) {
             ModeConfig wideMode;
             wideMode.id = "Wide";
@@ -2213,8 +2082,6 @@ void LoadConfig() {
             Log("Created missing Wide mode");
         }
 
-        // Resolve relative sizes to pixel values for all modes
-        // This is necessary when loading configs that use percentage-based sizing
         for (auto& mode : g_config.modes) {
             bool widthIsRelative = mode.widthExpr.empty() && mode.relativeWidth >= 0.0f && mode.relativeWidth <= 1.0f;
             bool heightIsRelative = mode.heightExpr.empty() && mode.relativeHeight >= 0.0f && mode.relativeHeight <= 1.0f;
@@ -2251,7 +2118,6 @@ void LoadConfig() {
             " mirrors, " + std::to_string(g_config.images.size()) + " images, " + std::to_string(g_config.windowOverlays.size()) +
             " window overlays, " + std::to_string(g_config.hotkeys.size()) + " hotkeys.");
 
-        // Check and handle config version upgrades
         int loadedConfigVersion = g_config.configVersion;
         int currentConfigVersion = GetConfigVersion();
 
@@ -2259,32 +2125,9 @@ void LoadConfig() {
             Log("Config version upgrade detected: v" + std::to_string(loadedConfigVersion) + " -> v" +
                 std::to_string(currentConfigVersion));
 
-            // ================================================================
-            // CONFIG UPGRADE LOGIC
-            // ================================================================
-            // Add version-specific upgrade logic here as needed.
-            // Each upgrade should be idempotent and version-specific.
-            //
-            // Example for future upgrades:
-            // if (loadedConfigVersion < 2) {
-            //     // Upgrade from v1 to v2: Add new field with default value
-            //     for (auto& mode : g_config.modes) {
-            //         if (mode.newFieldFromV2.empty()) {
-            //             mode.newFieldFromV2 = "default_value";
-            //         }
-            //     }
-            //     Log("Applied config upgrade: v1 -> v2");
-            // }
-            // if (loadedConfigVersion < 3) {
-            //     // Upgrade from v2 to v3: Rename or restructure fields
-            //     // ... upgrade logic here ...
-            //     Log("Applied config upgrade: v2 -> v3");
-            // }
-            // ================================================================
 
-            // Update config version to current
             g_config.configVersion = currentConfigVersion;
-            g_configIsDirty = true; // Mark config as dirty to save the updated version
+            g_configIsDirty = true;
             Log("Config upgraded to version " + std::to_string(currentConfigVersion));
         } else if (loadedConfigVersion > currentConfigVersion) {
             Log("WARNING: Config version is newer than tool version (config: v" + std::to_string(loadedConfigVersion) + ", tool: v" +
@@ -2313,13 +2156,10 @@ void LoadConfig() {
             RebuildHotkeyMainKeys_Internal();
         }
 
-        // Invalidate config lookup caches to force rebuild with new config data
         InvalidateConfigLookupCaches();
 
-        // Set overlay text font size
         SetOverlayTextFontSize(g_config.eyezoom.textFontSize);
 
-        // Evaluate expression-based dimensions with current screen size
         RecalculateExpressionDimensions();
 
         // Publish initial config snapshot for reader threads (RCU pattern)
@@ -2388,13 +2228,11 @@ bool Spinner(const char* id_label, int* v, int step, int min_val, int max_val, f
     ImGuiID minus_id = ImGui::GetID("-btn");
     ImGuiID plus_id = ImGui::GetID("+btn");
 
-    // Minus button with repeat
     if (ImGui::Button("-", { button_size, button_size })) {
         *v -= step;
         value_changed = true;
     }
     if (ImGui::IsItemActive()) {
-        // Repeat while holding down
         float hold_time = storage->GetFloat(minus_id, 0.0f);
         hold_time += ImGui::GetIO().DeltaTime;
         storage->SetFloat(minus_id, hold_time);
@@ -2418,13 +2256,11 @@ bool Spinner(const char* id_label, int* v, int step, int min_val, int max_val, f
     if (ImGui::InputInt("##value", v, 0, 0)) { value_changed = true; }
     ImGui::SameLine(0, margin);
 
-    // Plus button with repeat
     if (ImGui::Button("+", { button_size, button_size })) {
         *v += step;
         value_changed = true;
     }
     if (ImGui::IsItemActive()) {
-        // Repeat while holding down
         float hold_time = storage->GetFloat(plus_id, 0.0f);
         hold_time += ImGui::GetIO().DeltaTime;
         storage->SetFloat(plus_id, hold_time);
@@ -2465,13 +2301,11 @@ bool SpinnerFloat(const char* id_label, float* v, float step = 0.1f, float min_v
     ImGuiID minus_id = ImGui::GetID("-btn");
     ImGuiID plus_id = ImGui::GetID("+btn");
 
-    // Minus button with repeat
     if (ImGui::Button("-", { button_size, button_size })) {
         *v -= step;
         value_changed = true;
     }
     if (ImGui::IsItemActive()) {
-        // Repeat while holding down
         float hold_time = storage->GetFloat(minus_id, 0.0f);
         hold_time += ImGui::GetIO().DeltaTime;
         storage->SetFloat(minus_id, hold_time);
@@ -2495,13 +2329,11 @@ bool SpinnerFloat(const char* id_label, float* v, float step = 0.1f, float min_v
     if (ImGui::InputFloat("##value", v, 0.0f, 0.0f, format)) { value_changed = true; }
     ImGui::SameLine();
 
-    // Plus button with repeat
     if (ImGui::Button("+", { button_size, button_size })) {
         *v += step;
         value_changed = true;
     }
     if (ImGui::IsItemActive()) {
-        // Repeat while holding down
         float hold_time = storage->GetFloat(plus_id, 0.0f);
         hold_time += ImGui::GetIO().DeltaTime;
         storage->SetFloat(plus_id, hold_time);
@@ -2556,7 +2388,6 @@ void RenderConfigErrorGUI() {
         bool show_feedback =
             std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - s_lastCopyTime).count() < 3;
 
-        // Center the buttons
         float button_width_copy = ImGui::CalcTextSize("Copy Debug Info").x + ImGui::GetStyle().FramePadding.x * 2.0f;
         float button_width_quit = ImGui::CalcTextSize("Quit").x + ImGui::GetStyle().FramePadding.x * 2.0f;
         float total_button_width = button_width_copy + button_width_quit + ImGui::GetStyle().ItemSpacing.x;
@@ -2609,12 +2440,11 @@ struct AltBindState {
 };
 
 static int s_mainHotkeyToBind = -1;
-static int s_sensHotkeyToBind = -1; // Sensitivity hotkey binding state
+static int s_sensHotkeyToBind = -1;
 static ExclusionBindState s_exclusionToBind = { -1, -1 };
 static AltBindState s_altHotkeyToBind = { -1, -1 };
 // Binding-active flags are read from the window thread (WndProc) to decide whether Escape should close the GUI.
 // The binding UI state variables above are mutated on the render thread; reading them cross-thread would be a data race.
-//
 // Instead, we expose thread-safe "binding active" signals as timestamps refreshed by the render thread while the binding UI
 // is present. The window thread treats binding as active for a short grace window after the last refresh.
 static constexpr uint64_t kBindingActiveGraceMs = 250;
@@ -2640,8 +2470,6 @@ bool IsRebindBindingActive() {
 }
 
 void ResetTransientBindingUiState() {
-    // Intentionally a no-op.
-    // (Kept for API compatibility with existing GUI code paths.)
 }
 
 void MarkRebindBindingActive() { s_lastRebindBindingMarkMs.store(NowMs_TickCount64(), std::memory_order_release); }
@@ -2679,7 +2507,6 @@ void RenderSettingsGUI() {
         return "Unknown";
     };
 
-    // Static state for tracking keys during binding
     static std::vector<DWORD> s_bindingKeys;
     static bool s_hadKeysPressed = false;
     static std::set<DWORD> s_preHeldKeys;
@@ -2688,11 +2515,9 @@ void RenderSettingsGUI() {
     static const std::vector<const char*> validGameStates = { "wall",    "inworld,cursor_free", "inworld,cursor_grabbed", "title",
                                                               "waiting", "generating" };
 
-    // GUI display states (subset of validGameStates, with "waiting" and "generating" combined)
     static const std::vector<const char*> guiGameStates = { "wall", "inworld,cursor_free", "inworld,cursor_grabbed", "title",
                                                             "generating" };
 
-    // User-friendly names for game states
     static const std::vector<std::pair<const char*, const char*>> gameStateDisplayNames = {
         { "wall", "Wall Screen" },
         { "inworld,cursor_free", "In World (Cursor Free)" },
@@ -2706,7 +2531,7 @@ void RenderSettingsGUI() {
         for (const auto& pair : gameStateDisplayNames) {
             if (gameState == pair.first) return pair.second;
         }
-        return gameState.c_str(); // Fallback to original name
+        return gameState.c_str();
     };
 
     bool is_binding = IsHotkeyBindingActive_UiState();
@@ -2740,34 +2565,27 @@ void RenderSettingsGUI() {
         static uint64_t s_lastBindingInputSeqHotkeyBind = 0;
         if (ImGui::IsWindowAppearing()) { s_lastBindingInputSeqHotkeyBind = GetLatestBindingInputSequence(); }
 
-        // Helper to finalize the binding
         auto finalize_bind = [&](const std::vector<DWORD>& keys) {
             if (s_mainHotkeyToBind != -1) {
                 if (s_mainHotkeyToBind == -999) {
-                    // Special case for GUI hotkey
                     g_config.guiHotkey = keys;
                 } else if (s_mainHotkeyToBind == -998) {
-                    // Special case for borderless toggle hotkey
                     g_config.borderlessHotkey = keys;
                 } else if (s_mainHotkeyToBind == -997) {
-                    // Special case for image overlay visibility toggle hotkey
                     g_config.imageOverlaysHotkey = keys;
                 } else if (s_mainHotkeyToBind == -996) {
-                    // Special case for window overlay visibility toggle hotkey
                     g_config.windowOverlaysHotkey = keys;
                 } else {
                     g_config.hotkeys[s_mainHotkeyToBind].keys = keys;
                 }
                 s_mainHotkeyToBind = -1;
             } else if (s_sensHotkeyToBind != -1) {
-                // Sensitivity hotkey binding
                 g_config.sensitivityHotkeys[s_sensHotkeyToBind].keys = keys;
                 s_sensHotkeyToBind = -1;
             } else if (s_altHotkeyToBind.hotkey_idx != -1) {
                 g_config.hotkeys[s_altHotkeyToBind.hotkey_idx].altSecondaryModes[s_altHotkeyToBind.alt_idx].keys = keys;
                 s_altHotkeyToBind = { -1, -1 };
             } else if (s_exclusionToBind.hotkey_idx != -1) {
-                // For exclusions, only use the last (main) key. Clearing isn't supported.
                 if (!keys.empty()) {
                     g_config.hotkeys[s_exclusionToBind.hotkey_idx].conditions.exclusions[s_exclusionToBind.exclusion_idx] = keys.back();
                 }
@@ -2775,7 +2593,6 @@ void RenderSettingsGUI() {
             }
             g_configIsDirty = true;
 
-            // Rebuild hotkey cache
             {
                 std::lock_guard<std::mutex> hotkeyLock(g_hotkeyMainKeysMutex);
                 RebuildHotkeyMainKeys_Internal();
@@ -2788,8 +2605,6 @@ void RenderSettingsGUI() {
             ImGui::CloseCurrentPopup();
         };
 
-        // Handle special controls using the event stream (no polling).
-        // This runs before polling-based key accumulation so Backspace/Delete can be used to clear.
         DWORD capturedVk = 0;
         LPARAM capturedLParam = 0;
         bool capturedIsMouse = false;
@@ -2820,7 +2635,6 @@ void RenderSettingsGUI() {
             }
         }
 
-        // Explicit buttons (usable even if Backspace/Delete are bound elsewhere).
         {
             const bool canClear = (s_exclusionToBind.hotkey_idx == -1);
             if (!canClear) { ImGui::BeginDisabled(); }
@@ -2858,7 +2672,6 @@ void RenderSettingsGUI() {
             }
         }
 
-        // Build list of currently pressed keys (excluding pre-held keys)
         std::vector<DWORD> currentlyPressed;
 
         const bool lctrlDown = (GetAsyncKeyState(VK_LCONTROL) & 0x8000) != 0;
@@ -2876,7 +2689,6 @@ void RenderSettingsGUI() {
         if ((lshiftDown || rshiftDown) && !shiftPreHeld) currentlyPressed.push_back(VK_SHIFT);
         if ((laltDown || raltDown) && !altPreHeld) currentlyPressed.push_back(VK_MENU);
 
-        // Check all other keys
         for (int vk = 1; vk < 0xFF; ++vk) {
             // Skip escape (used for cancel), generic modifiers, and Windows keys
             if (vk == VK_ESCAPE || vk == VK_CONTROL || vk == VK_SHIFT || vk == VK_MENU || vk == VK_LWIN || vk == VK_RWIN ||
@@ -2887,16 +2699,11 @@ void RenderSettingsGUI() {
             if (GetAsyncKeyState(vk) & 0x8000) { currentlyPressed.push_back(vk); }
         }
 
-        // Add any newly pressed keys to our binding (accumulate, don't replace)
-        // This allows the user to press keys sequentially (e.g., Alt then B)
         for (DWORD key : currentlyPressed) {
             if (std::find(s_bindingKeys.begin(), s_bindingKeys.end(), key) == s_bindingKeys.end()) {
-                // New key - add it in the right position
-                // Modifiers should be at the front, main key at the end
                 bool isModifier = (key == VK_CONTROL || key == VK_SHIFT || key == VK_MENU || key == VK_LCONTROL || key == VK_RCONTROL ||
                                    key == VK_LSHIFT || key == VK_RSHIFT || key == VK_LMENU || key == VK_RMENU);
                 if (isModifier) {
-                    // Insert modifiers before non-modifiers
                     auto insertPos = s_bindingKeys.begin();
                     for (auto it = s_bindingKeys.begin(); it != s_bindingKeys.end(); ++it) {
                         bool itIsModifier = (*it == VK_CONTROL || *it == VK_SHIFT || *it == VK_MENU || *it == VK_LCONTROL || *it == VK_RCONTROL ||
@@ -2909,7 +2716,6 @@ void RenderSettingsGUI() {
                     }
                     s_bindingKeys.insert(insertPos, key);
                 } else {
-                    // Non-modifiers go at the end
                     s_bindingKeys.push_back(key);
                 }
             }
@@ -2924,7 +2730,6 @@ void RenderSettingsGUI() {
             return;
         }
 
-        // Display current keys being held
         if (!s_bindingKeys.empty()) {
             std::string combo = GetKeyComboString(s_bindingKeys);
             ImGui::Text("Current: %s", combo.c_str());
@@ -2950,13 +2755,10 @@ void RenderSettingsGUI() {
         ImGui::SetNextWindowSize(ImVec2(850 * scaleFactor, 650 * scaleFactor), ImGuiCond_Always);
     }
 
-    // Create window title with version info
     std::string windowTitle = "Toolscreen v" + GetToolscreenVersionString() + " by jojoe77777";
 
-    // Use a bool for the close button in the title bar
     bool windowOpen = true;
     if (ImGui::Begin(windowTitle.c_str(), &windowOpen, ImGuiWindowFlags_NoCollapse)) {
-        // Handle close button click from title bar
         if (!windowOpen) {
             g_showGui = false;
             if (!g_wasCursorVisible.load()) {
@@ -2985,7 +2787,6 @@ void RenderSettingsGUI() {
             s_isWindowOverlayDragging = false;
         }
 
-        // Screenshot button at top right (before everything else, so it's always in the same spot)
         {
             static std::chrono::steady_clock::time_point s_lastScreenshotTime{};
             auto now = std::chrono::steady_clock::now();
@@ -2994,10 +2795,8 @@ void RenderSettingsGUI() {
             const char* buttonLabel = showCopied ? "Copied!" : "Screenshot";
             float buttonWidth = ImGui::CalcTextSize(buttonLabel).x + ImGui::GetStyle().FramePadding.x * 2.0f;
 
-            // Save cursor position to restore after
             ImVec2 savedCursor = ImGui::GetCursorPos();
 
-            // Position at top right, accounting for close button width (~25px) and some padding
             ImGui::SetCursorPos(ImVec2(ImGui::GetWindowWidth() - buttonWidth - ImGui::GetStyle().WindowPadding.x, 30.0f));
 
             if (ImGui::Button(buttonLabel)) {
@@ -3005,11 +2804,9 @@ void RenderSettingsGUI() {
                 s_lastScreenshotTime = std::chrono::steady_clock::now();
             }
 
-            // Restore cursor position
             ImGui::SetCursorPos(savedCursor);
         }
 
-        // --- BASIC/ADVANCED MODE TOGGLE ---
         {
             bool isAdvanced = !g_config.basicModeEnabled;
             if (ImGui::RadioButton("Basic", !isAdvanced)) {
@@ -3026,75 +2823,32 @@ void RenderSettingsGUI() {
         ImGui::Separator();
 
         // Drag modes must only be enabled by the currently active tab.
-        // Without this reset, leaving a tab could leave drag mode enabled and allow overlays to be moved while the user
-        // is in a different tab (or after other GUI transitions).
         g_imageDragMode.store(false, std::memory_order_relaxed);
         g_windowOverlayDragMode.store(false, std::memory_order_relaxed);
 
         if (g_config.basicModeEnabled) {
-            // --- BASIC MODE: Only General and Other tabs ---
             if (ImGui::BeginTabBar("BasicSettingsTabs")) {
-                // =====================================================================
-                // BASIC GENERAL TAB - Simplified mode selection with inline hotkeys
-                // =====================================================================
 #include "gui/tab_basic_general.inl"
-                // =====================================================================
-                // BASIC OTHER TAB - Miscellaneous settings
-                // =====================================================================
 #include "gui/tab_basic_other.inl"
 
-                // =====================================================================
-                // BASIC SUPPORTERS TAB
-                // =====================================================================
 #include "gui/tab_supporters.inl"
 
                 ImGui::EndTabBar();
             }
         } else {
-            // --- ADVANCED MODE: All tabs ---
             if (ImGui::BeginTabBar("SettingsTabs")) {
-                // =====================================================================
-                // MODES TAB - Extracted to gui/tab_modes.inl
-                // =====================================================================
 #include "gui/tab_modes.inl"
-                // =====================================================================
-                // MIRRORS TAB - Extracted to gui/tab_mirrors.inl
-                // =====================================================================
 #include "gui/tab_mirrors.inl"
-                // =====================================================================
-                // IMAGES TAB - Extracted to gui/tab_images.inl
-                // =====================================================================
 #include "gui/tab_images.inl"
-                // =====================================================================
-                // WINDOW OVERLAYS TAB - Extracted to gui/tab_window_overlays.inl
-                // =====================================================================
 #include "gui/tab_window_overlays.inl"
-                // =====================================================================
-                // HOTKEYS TAB - Extracted to gui/tab_hotkeys.inl
-                // =====================================================================
 #include "gui/tab_hotkeys.inl"
-                // =====================================================================
-                // INPUTS TAB - Contains Mouse and Keyboard sub-tabs
-                // =====================================================================
 #include "gui/tab_inputs.inl"
-                // =====================================================================
-                // SETTINGS TAB - Extracted to gui/tab_settings.inl
-                // =====================================================================
 #include "gui/tab_settings.inl"
 
-                // =====================================================================
-                // APPEARANCE TAB - GUI color scheme configuration
-                // =====================================================================
 #include "gui/tab_appearance.inl"
 
-                // =====================================================================
-                // MISC TAB - Extracted to gui/tab_misc.inl
-                // =====================================================================
 #include "gui/tab_misc.inl"
 
-                // =====================================================================
-                // SUPPORTERS TAB
-                // =====================================================================
 #include "gui/tab_supporters.inl"
 
                 ImGui::EndTabBar();
@@ -3108,12 +2862,9 @@ void RenderSettingsGUI() {
     }
     ImGui::End();
 
-    // Periodic save while GUI is open (throttled to 1 second)
     SaveConfig();
 
     // Ensure config snapshot is published for reader threads after GUI mutations.
-    // SaveConfig already publishes when it runs, but it's throttled to 1s.
-    // For structural changes (push_back/erase on vectors) we need immediate snapshot
     // update to prevent reader threads from seeing stale/freed vector data.
     if (g_configIsDirty.load()) { PublishConfigSnapshot(); }
 }
@@ -3144,8 +2895,6 @@ void InitializeImGuiContext(HWND hwnd) {
         std::string fontPath = g_config.fontPath;
         const float baseFontSize = 16.0f * scaleFactor;
 
-        // Some font files (or paths) can cause ImGui font loading/build to fail.
-        // If that happens, ignore the custom font and fall back to Arial.
         auto isStable = [](const std::string& p, float sz) -> bool {
             if (p.empty()) return false;
             ImFontAtlas testAtlas;
@@ -3167,14 +2916,13 @@ void InitializeImGuiContext(HWND hwnd) {
         }
 
         ImGui::StyleColorsDark();
-        LoadTheme();             // Load theme from theme.toml
-        ApplyAppearanceConfig(); // Apply saved theme
+        LoadTheme();
+        ApplyAppearanceConfig();
         ImGui::GetStyle().ScaleAllSizes(scaleFactor);
 
         ImGui_ImplWin32_Init(hwnd);
         ImGui_ImplOpenGL3_Init("#version 330");
 
-        // Initialize larger font for overlay text labels
         InitializeOverlayTextFont(usePath, 16.0f, scaleFactor);
     }
 
@@ -3182,20 +2930,12 @@ void InitializeImGuiContext(HWND hwnd) {
 
 bool IsGuiHotkeyPressed(WPARAM wParam) { return CheckHotkeyMatch(g_config.guiHotkey, wParam); }
 
-// Welcome toast state
 std::atomic<bool> g_welcomeToastVisible{ false };
 std::atomic<bool> g_configurePromptDismissedThisSession{ false };
 
 void RenderWelcomeToast(bool isFullscreen) {
-    // Semantics:
-    // - toast1 (windowed fullscreenPrompt) should ALWAYS show in windowed mode.
-    // - toast2 (fullscreen configurePrompt) should show in fullscreen UNTIL Ctrl+I is pressed for this session,
-    //   but it now auto-fades out after a short timeout.
     if (isFullscreen && g_configurePromptDismissedThisSession.load(std::memory_order_relaxed)) { return; }
 
-    // toast2 fade-out timing (fullscreen only)
-    // Hold fully opaque for N seconds, then fade out over M seconds.
-    // Reset timer whenever we ENTER fullscreen.
     static bool s_prevFullscreen = false;
     static std::chrono::steady_clock::time_point s_toast2StartTime{};
     static bool s_toast2FinishedThisFullscreen = false;
@@ -3205,14 +2945,12 @@ void RenderWelcomeToast(bool isFullscreen) {
         s_toast2FinishedThisFullscreen = false;
     }
     if (!isFullscreen) {
-        // Allow toast2 to show again on the next fullscreen entry.
         s_toast2FinishedThisFullscreen = false;
     }
     s_prevFullscreen = isFullscreen;
 
     float toastOpacity = 1.0f;
     if (isFullscreen) {
-        // If we've already faded out completely during this fullscreen entry, skip rendering.
         if (s_toast2FinishedThisFullscreen) { return; }
 
         constexpr float kToast2HoldSeconds = 10.0f;
@@ -3234,7 +2972,6 @@ void RenderWelcomeToast(bool isFullscreen) {
         }
     }
 
-    // Core-profile-safe rendering (Minecraft 1.17+): use shaders + VAO/VBO.
     static GLuint s_program = 0;
     static GLuint s_vao = 0;
     static GLuint s_vbo = 0;
@@ -3246,7 +2983,6 @@ void RenderWelcomeToast(bool isFullscreen) {
     static int s_toast1Width = 0, s_toast1Height = 0;
     static int s_toast2Width = 0, s_toast2Height = 0;
 
-    // Reset GL objects when context changes.
     static HGLRC s_lastCtx = NULL;
     HGLRC currentCtx = wglGetCurrentContext();
     if (currentCtx != s_lastCtx) {
@@ -3262,7 +2998,6 @@ void RenderWelcomeToast(bool isFullscreen) {
         s_toast2Width = s_toast2Height = 0;
     }
 
-    // Ensure shader program exists
     if (s_program == 0) {
         const char* vtxSrc = R"(#version 330 core
 layout(location = 0) in vec2 aPos;
@@ -3292,7 +3027,6 @@ void main() {
         }
     }
 
-    // Ensure VAO/VBO exist
     if (s_vao == 0) {
         glGenVertexArrays(1, &s_vao);
     }
@@ -3311,11 +3045,9 @@ void main() {
         glBindBuffer(GL_ARRAY_BUFFER, 0);
     }
 
-    // Ensure textures exist (lazy load from embedded resources)
     auto ensureToastTexture = [&](int resourceId, GLuint& outTexture, int& outW, int& outH) {
         if (outTexture != 0 && outW > 0 && outH > 0) { return; }
 
-        // Disable vertical flip for toast textures.
         stbi_set_flip_vertically_on_load_thread(0);
 
         HMODULE hModule = NULL;
@@ -3357,20 +3089,17 @@ void main() {
     ensureToastTexture(IDR_TOAST1_PNG, s_toast1Texture, s_toast1Width, s_toast1Height);
     ensureToastTexture(IDR_TOAST2_PNG, s_toast2Texture, s_toast2Width, s_toast2Height);
 
-    // Pick texture based on fullscreen state
     GLuint texture = isFullscreen ? s_toast2Texture : s_toast1Texture;
     int imgW = isFullscreen ? s_toast2Width : s_toast1Width;
     int imgH = isFullscreen ? s_toast2Height : s_toast1Height;
     if (s_program == 0 || s_vao == 0 || s_vbo == 0 || texture == 0 || imgW <= 0 || imgH <= 0) { return; }
 
-    // Viewport size
     GLint viewport[4];
     glGetIntegerv(GL_VIEWPORT, viewport);
     int vpW = viewport[2];
     int vpH = viewport[3];
     if (vpW <= 0 || vpH <= 0) { return; }
 
-    // Save GL state (minimal but robust)
     GLint savedProgram = 0, savedVAO = 0, savedVBO = 0, savedFBO = 0, savedTex = 0, savedActiveTex = 0;
     GLboolean savedBlend = GL_FALSE, savedDepthTest = GL_FALSE, savedScissor = GL_FALSE, savedStencil = GL_FALSE;
     GLint savedBlendSrcRGB = 0, savedBlendDstRGB = 0, savedBlendSrcA = 0, savedBlendDstA = 0;
@@ -3400,11 +3129,8 @@ void main() {
     glGetIntegerv(GL_UNPACK_SKIP_ROWS, &savedUnpackSkipRows);
     glGetIntegerv(GL_UNPACK_ALIGNMENT, &savedUnpackAlignment);
 
-    // Setup state
-    // IMPORTANT: Do NOT force framebuffer 0 here.
+    // Do NOT force framebuffer 0 here.
     // The render thread draws overlays into an offscreen FBO and then blits it; binding 0 would
-    // render the toast into the default framebuffer and it would never show up in the final output.
-    // Also avoid stomping the caller's viewport; use the currently-active viewport we queried above.
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_SCISSOR_TEST);
     glDisable(GL_STENCIL_TEST);
@@ -3412,12 +3138,10 @@ void main() {
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
-    // Scale based on viewport (baseline 1080p)
     float scaleFactor = (static_cast<float>(vpH) / 1080.0f) * 0.45f;
     float drawW = (float)imgW * scaleFactor;
     float drawH = (float)imgH * scaleFactor;
 
-    // Top-left placement in NDC
     float px1 = 0.0f, py1 = 0.0f;
     float px2 = drawW, py2 = drawH;
     float nx1 = (px1 / vpW) * 2.0f - 1.0f;
@@ -3434,18 +3158,15 @@ void main() {
         nx1, ny_top, 0.0f, 0.0f,
     };
 
-    // Draw
     glUseProgram(s_program);
     glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
     glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, texture);
-    // Apply opacity (toast2 fades out; toast1 remains fully opaque).
     glUniform1f(s_locOpacity, toastOpacity);
     glDrawArrays(GL_TRIANGLES, 0, 6);
 
-    // Restore state
     glUseProgram(savedProgram);
     glBindVertexArray(savedVAO);
     glBindBuffer(GL_ARRAY_BUFFER, savedVBO);
@@ -3519,18 +3240,15 @@ void RenderProfilerOverlay(bool showProfiler, bool showPerformanceOverlay) {
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoInputs |
                      ImGuiWindowFlags_AlwaysAutoResize);
 
-    // Apply configured scale
     ImGui::SetWindowFontScale(g_config.debug.profilerScale);
 
     ImGui::Text("Toolscreen Profiler (Hierarchical)");
     ImGui::Separator();
 
-    // Helper lambda to render a tree section
     auto renderTreeSection = [](const char* sectionTitle, const std::vector<std::pair<std::string, Profiler::ProfileEntry>>& entries,
                                 ImVec4 headerColor) {
         if (entries.empty()) return;
 
-        // Section header
         ImGui::PushStyleColor(ImGuiCol_Text, headerColor);
         ImGui::Text("%s", sectionTitle);
         ImGui::PopStyleColor();
@@ -3548,13 +3266,11 @@ void RenderProfilerOverlay(bool showProfiler, bool showPerformanceOverlay) {
                 ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex(0);
 
-                // Build indentation string with tree characters
                 std::string indent;
                 for (int d = 0; d < entry.depth; ++d) {
-                    indent += "  "; // 2 spaces per depth level
+                    indent += "  ";
                 }
 
-                // Determine if this is the last child at this depth
                 bool isLastAtDepth = true;
                 for (size_t j = i + 1; j < entries.size(); ++j) {
                     if (entries[j].second.depth == entry.depth) {
@@ -3565,7 +3281,6 @@ void RenderProfilerOverlay(bool showProfiler, bool showPerformanceOverlay) {
                     }
                 }
 
-                // Add tree connector
                 if (entry.depth > 0) {
                     if (isLastAtDepth) {
                         indent += "â””â”€ ";
@@ -3574,16 +3289,15 @@ void RenderProfilerOverlay(bool showProfiler, bool showPerformanceOverlay) {
                     }
                 }
 
-                // Color based on depth (special gray for Unspecified entries)
                 bool isUnspecified = (name == "[Unspecified]");
                 if (isUnspecified) {
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f)); // Dimmer gray for unspecified
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
                 } else if (entry.depth == 0) {
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 0.4f, 1.0f)); // Yellow for root
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 0.4f, 1.0f));
                 } else if (entry.depth == 1) {
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.9f, 1.0f, 1.0f)); // Light blue
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.9f, 1.0f, 1.0f));
                 } else {
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.8f, 0.8f, 1.0f)); // Gray
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.8f, 0.8f, 1.0f));
                 }
 
                 ImGui::Text("%s%s", indent.c_str(), name.c_str());
@@ -3675,14 +3389,13 @@ void HandleConfigLoadFailed(HDC hDc, BOOL (*oWglSwapBuffers)(HDC)) {
         }
 
         ImGui::StyleColorsDark();
-        LoadTheme();             // Load theme from theme.toml
-        ApplyAppearanceConfig(); // Apply saved theme
+        LoadTheme();
+        ApplyAppearanceConfig();
         ImGui::GetStyle().ScaleAllSizes(scaleFactor);
 
         ImGui_ImplWin32_Init(g_minecraftHwnd.load());
         ImGui_ImplOpenGL3_Init("#version 330");
 
-        // Initialize larger font for overlay text labels
         InitializeOverlayTextFont(usePath, 16.0f, scaleFactor);
     }
 
@@ -3694,9 +3407,7 @@ void HandleConfigLoadFailed(HDC hDc, BOOL (*oWglSwapBuffers)(HDC)) {
 
     ImGui::Render();
 
-    // COMPREHENSIVE OpenGL state protection for ImGui rendering
     {
-        // Save comprehensive OpenGL state
         GLint last_program;
         glGetIntegerv(GL_CURRENT_PROGRAM, &last_program);
         GLint last_vertex_array;
@@ -3725,17 +3436,14 @@ void HandleConfigLoadFailed(HDC hDc, BOOL (*oWglSwapBuffers)(HDC)) {
         GLint last_framebuffer;
         glGetIntegerv(GL_FRAMEBUFFER_BINDING, &last_framebuffer);
 
-        // Set pixel store parameters for ImGui
         glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
         glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
         glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
         glPixelStorei(GL_PACK_ALIGNMENT, 1);
 
-        // Render ImGui with protected state
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
-        // Restore ALL OpenGL state after ImGui
         glUseProgram(last_program);
         glBindVertexArray(last_vertex_array);
         glBindBuffer(GL_ARRAY_BUFFER, last_array_buffer);
@@ -3773,8 +3481,6 @@ void HandleConfigLoadFailed(HDC hDc, BOOL (*oWglSwapBuffers)(HDC)) {
 
 void RenderImGuiWithStateProtection(bool useFullProtection) {
     if (useFullProtection) {
-        // COMPREHENSIVE OpenGL state protection for ImGui rendering (full GUI)
-        // Save comprehensive OpenGL state
         GLint last_program;
         glGetIntegerv(GL_CURRENT_PROGRAM, &last_program);
         GLint last_vertex_array;
@@ -3803,17 +3509,14 @@ void RenderImGuiWithStateProtection(bool useFullProtection) {
         GLint last_framebuffer;
         glGetIntegerv(GL_FRAMEBUFFER_BINDING, &last_framebuffer);
 
-        // Set pixel store parameters for ImGui
         glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
         glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
         glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
         glPixelStorei(GL_PACK_ALIGNMENT, 1);
 
-        // Render ImGui with protected state
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
-        // Restore ALL OpenGL state after ImGui
         glUseProgram(last_program);
         glBindVertexArray(last_vertex_array);
         glBindBuffer(GL_ARRAY_BUFFER, last_array_buffer);
@@ -3847,8 +3550,6 @@ void RenderImGuiWithStateProtection(bool useFullProtection) {
             glDisable(GL_BLEND);
         }
     } else {
-        // Lightweight state protection for overlays only (performance/profiler)
-        // Save minimal critical OpenGL state
         GLint last_program;
         glGetIntegerv(GL_CURRENT_PROGRAM, &last_program);
         GLint last_vertex_array;
@@ -3857,10 +3558,8 @@ void RenderImGuiWithStateProtection(bool useFullProtection) {
         glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &last_array_buffer);
         GLboolean last_blend = glIsEnabled(GL_BLEND);
 
-        // Render ImGui with minimal state protection
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
-        // Restore minimal critical state
         glUseProgram(last_program);
         glBindVertexArray(last_vertex_array);
         glBindBuffer(GL_ARRAY_BUFFER, last_array_buffer);
@@ -3870,3 +3569,5 @@ void RenderImGuiWithStateProtection(bool useFullProtection) {
             glDisable(GL_BLEND);
     }
 }
+
+

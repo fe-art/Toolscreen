@@ -1,14 +1,11 @@
-﻿if (ImGui::BeginTabItem("Images")) {
+if (ImGui::BeginTabItem("Images")) {
     g_currentlyEditingMirror = "";
 
-    // Enable image drag mode when Images tab is active
     g_imageDragMode.store(true);
-    // Disable window overlay drag mode in Images tab
     g_windowOverlayDragMode.store(false);
 
     SliderCtrlClickTip();
 
-    // Show instructions
     ImGui::TextColored(ImVec4(0.7f, 0.9f, 0.7f, 1.0f),
                        "You can click and drag images in the game window to move them while this tab is open");
     ImGui::Separator();
@@ -18,7 +15,6 @@
         auto& img = g_config.images[i];
         ImGui::PushID(static_cast<int>(i));
 
-        // X button on the left
         std::string delete_img_label = "X##delete_image_" + std::to_string(i);
         if (ImGui::Button(delete_img_label.c_str(), ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()))) {
             std::string img_popup_id = "Delete Image?##" + std::to_string(i);
@@ -42,14 +38,12 @@
 
         ImGui::SameLine();
 
-        // Capture old name at frame start, before any ImGui input modifies it
         std::string oldImageName = img.name;
 
         bool node_open = ImGui::TreeNodeEx("##image_node", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", img.name.c_str());
 
         if (node_open) {
 
-            // Check for duplicate names
             bool hasDuplicate = HasDuplicateImageName(img.name, i);
             if (hasDuplicate) {
                 ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.6f, 0.2f, 0.2f, 1.0f));
@@ -58,10 +52,8 @@
             }
 
             if (ImGui::InputText("Name", &img.name)) {
-                // Check if the new name is a duplicate
                 if (!HasDuplicateImageName(img.name, i)) {
                     g_configIsDirty = true;
-                    // Update all mode references to the renamed image
                     if (oldImageName != img.name) {
                         for (auto& mode : g_config.modes) {
                             for (auto& imageId : mode.imageIds) {
@@ -70,7 +62,6 @@
                         }
                     }
                 } else {
-                    // Revert the change if it creates a duplicate
                     img.name = oldImageName;
                 }
             }
@@ -89,7 +80,6 @@
             }
             ImGui::SameLine();
             if (ImGui::Button(("Browse...##img_" + img.name).c_str())) {
-                // Use the validated image picker
                 ImagePickerResult result = OpenImagePickerAndValidate(g_minecraftHwnd.load(), g_toolscreenPath, g_toolscreenPath);
 
                 if (result.completed) {
@@ -105,18 +95,15 @@
             }
             ImGui::SameLine();
             if (ImGui::Button(("Validate##img_val_" + img.name).c_str())) {
-                // Validate manually-entered path
                 std::string error = ValidateImageFile(img.path, g_toolscreenPath);
                 if (error.empty()) {
                     ClearImageError(imgErrorKey);
-                    // Reload the image if it's valid
                     LoadImageAsync(DecodedImageData::UserImage, img.name, img.path, g_toolscreenPath);
                 } else {
                     SetImageError(imgErrorKey, error);
                 }
             }
 
-            // Show error message if any
             std::string imgError = GetImageError(imgErrorKey);
             if (!imgError.empty()) { ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", imgError.c_str()); }
 
@@ -195,7 +182,6 @@
             if (ImGui::Checkbox("Enable Color Key", &img.enableColorKey)) g_configIsDirty = true;
             ImGui::BeginDisabled(!img.enableColorKey);
 
-            // Multiple color keys UI
             int imgColorKeyToRemove = -1;
             for (size_t k = 0; k < img.colorKeys.size(); k++) {
                 ImGui::PushID(static_cast<int>(k));
@@ -215,13 +201,11 @@
                 ImGui::PopID();
             }
 
-            // Remove color key if requested
             if (imgColorKeyToRemove >= 0) {
                 img.colorKeys.erase(img.colorKeys.begin() + imgColorKeyToRemove);
                 g_configIsDirty = true;
             }
 
-            // Add new color key button
             if (ImGui::Button("+ Add Color Key")) {
                 ColorKeyConfig newKey;
                 newKey.color = { 0.0f, 0.0f, 0.0f };
@@ -265,7 +249,6 @@
     if (image_to_remove != -1) {
         std::string deletedImageName = g_config.images[image_to_remove].name;
         g_config.images.erase(g_config.images.begin() + image_to_remove);
-        // Remove deleted image from all modes
         for (auto& mode : g_config.modes) {
             auto it = std::find(mode.imageIds.begin(), mode.imageIds.end(), deletedImageName);
             while (it != mode.imageIds.end()) {
@@ -284,11 +267,9 @@
         g_config.images.push_back(newImg);
         g_configIsDirty = true;
 
-        // Automatically add to currently selected mode
         if (!g_currentModeId.empty()) {
             for (auto& mode : g_config.modes) {
                 if (mode.id == g_currentModeId) {
-                    // Check if not already added
                     if (std::find(mode.imageIds.begin(), mode.imageIds.end(), newImg.name) == mode.imageIds.end()) {
                         mode.imageIds.push_back(newImg.name);
                     }
@@ -319,3 +300,5 @@
 
     ImGui::EndTabItem();
 }
+
+

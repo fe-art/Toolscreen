@@ -1,19 +1,11 @@
 #pragma once
 
-// ============================================================================
-// CONFIG_TOML.H - TOML Serialization/Deserialization Declarations
-// ============================================================================
-// Functions to convert between Config structs and TOML format.
-// Uses tomlplusplus library for TOML parsing and generation.
-// ============================================================================
 
 #include "toml.hpp"
 #include <string>
 
-// Need full Color definition for ColorFromTomlArray return type and default parameter
 #include "gui.h"
 
-// Forward declarations of config structs (Color is fully declared via gui.h above)
 struct BackgroundConfig;
 struct MirrorCaptureConfig;
 struct MirrorRenderConfig;
@@ -40,9 +32,6 @@ struct KeyRebindsConfig;
 struct AppearanceConfig;
 struct Config;
 
-// ============================================================================
-// TOML Serialization Functions (Config -> TOML)
-// ============================================================================
 
 toml::array ColorToTomlArray(const Color& color);
 Color ColorFromTomlArray(const toml::array* arr, Color defaultColor);
@@ -72,11 +61,7 @@ void KeyRebindsConfigToToml(const KeyRebindsConfig& cfg, toml::table& out);
 void AppearanceConfigToToml(const AppearanceConfig& cfg, toml::table& out);
 void ConfigToToml(const Config& config, toml::table& out);
 
-// ============================================================================
-// TOML Deserialization Functions (TOML -> Config)
-// ============================================================================
 
-// Note: Color deserialization uses ColorFromTomlArray() directly
 void BackgroundConfigFromToml(const toml::table& tbl, BackgroundConfig& cfg);
 void MirrorCaptureConfigFromToml(const toml::table& tbl, MirrorCaptureConfig& cfg);
 void MirrorRenderConfigFromToml(const toml::table& tbl, MirrorRenderConfig& cfg);
@@ -103,43 +88,28 @@ void KeyRebindsConfigFromToml(const toml::table& tbl, KeyRebindsConfig& cfg);
 void AppearanceConfigFromToml(const toml::table& tbl, AppearanceConfig& cfg);
 void ConfigFromToml(const toml::table& tbl, Config& config);
 
-// ============================================================================
-// File I/O Helpers
-// ============================================================================
 
-// Save config to TOML file
 bool SaveConfigToTomlFile(const Config& config, const std::wstring& path);
 
-// Load config from TOML file
 bool LoadConfigFromTomlFile(const std::wstring& path, Config& config);
 
-// ============================================================================
-// Embedded Default Config Functions
-// ============================================================================
 
-// Get the raw embedded default.toml string from DLL resources
 std::string GetEmbeddedDefaultConfigString();
 
-// Load the full default config from embedded resource
 bool LoadEmbeddedDefaultConfig(Config& config);
 
-// Get default modes from embedded config (with screen-relative adjustments)
 std::vector<ModeConfig> GetDefaultModesFromEmbedded();
 
-// Get default mirrors from embedded config
 std::vector<MirrorConfig> GetDefaultMirrorsFromEmbedded();
 
-// Get default mirror groups from embedded config
 std::vector<MirrorGroupConfig> GetDefaultMirrorGroupsFromEmbedded();
 
-// Get default hotkeys from embedded config
 std::vector<HotkeyConfig> GetDefaultHotkeysFromEmbedded();
 
-// Get default images from embedded config
 std::vector<ImageConfig> GetDefaultImagesFromEmbedded();
 
-// Get default cursors from embedded config
 CursorsConfig GetDefaultCursorsFromEmbedded();
 
-// Get default EyeZoom config from embedded config
 EyeZoomConfig GetDefaultEyeZoomConfigFromEmbedded();
+
+

@@ -1,7 +1,6 @@
-// Only show Hotkeys tab if resolution changing is supported (1.13+)
 if (IsResolutionChangeSupported(g_gameVersion)) {
     if (ImGui::BeginTabItem("Hotkeys")) {
-        g_currentlyEditingMirror = ""; // Disable image drag mode in other tabs
+        g_currentlyEditingMirror = "";
         g_imageDragMode.store(false);
         g_windowOverlayDragMode.store(false);
 
@@ -15,7 +14,6 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
 
         SliderCtrlClickTip();
 
-        // GUI Hotkey Section
         ImGui::SeparatorText("GUI Hotkey");
         ImGui::PushID("gui_hotkey");
         std::string guiKeyStr = GetKeyComboString(g_config.guiHotkey);
@@ -26,7 +24,7 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
             const char* gui_button_label =
                 (s_mainHotkeyToBind == -999) ? "[Press Keys...]" : (guiKeyStr.empty() ? "[None]" : guiKeyStr.c_str());
             if (ImGui::Button(gui_button_label)) {
-                s_mainHotkeyToBind = -999; // Special ID for GUI hotkey
+                s_mainHotkeyToBind = -999;
                 s_altHotkeyToBind = { -1, -1 };
                 s_exclusionToBind = { -1, -1 };
                 MarkHotkeyBindingActive();
@@ -35,7 +33,6 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
         }
         ImGui::PopID();
 
-        // Borderless Hotkey Section
         ImGui::SeparatorText("Window Hotkeys");
         ImGui::PushID("borderless_hotkey");
         std::string borderlessKeyStr = GetKeyComboString(g_config.borderlessHotkey);
@@ -49,7 +46,7 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
             const char* borderlessButtonLabel =
                 isBindingBorderless ? "[Press Keys...]" : (borderlessKeyStr.empty() ? "[None]" : borderlessKeyStr.c_str());
             if (ImGui::Button(borderlessButtonLabel)) {
-                s_mainHotkeyToBind = -998; // Special ID for borderless toggle hotkey
+                s_mainHotkeyToBind = -998;
                 s_altHotkeyToBind = { -1, -1 };
                 s_exclusionToBind = { -1, -1 };
                 MarkHotkeyBindingActive();
@@ -63,7 +60,6 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
         }
         ImGui::PopID();
 
-        // Overlay visibility toggle hotkeys
         ImGui::PushID("overlay_visibility_hotkeys");
         {
             std::string imgOverlayKeyStr = GetKeyComboString(g_config.imageOverlaysHotkey);
@@ -141,7 +137,6 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
             std::string keyStr = GetKeyComboString(hotkey.keys);
             std::string node_label = "Hotkey: " + (keyStr.empty() ? "[None]" : keyStr);
 
-            // X button on the left
             if (ImGui::Button(("X##del_hotkey_" + std::to_string(i)).c_str(), ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()))) {
                 ImGui::OpenPopup(("Delete Hotkey?##" + std::to_string(i)).c_str());
             }
@@ -176,19 +171,17 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                 ImGui::SetNextItemWidth(150);
                 const char* modeDisplay = hotkey.secondaryMode.empty() ? "[None]" : hotkey.secondaryMode.c_str();
                 if (ImGui::BeginCombo("Mode", modeDisplay)) {
-                    // Add "[None]" option to clear mode
                     if (ImGui::Selectable("[None]", hotkey.secondaryMode.empty())) {
                         hotkey.secondaryMode = "";
                         SetHotkeySecondaryMode(i, "");
                         g_configIsDirty = true;
                     }
                     for (const auto& mode : g_config.modes) {
-                        // Don't allow selecting the default mode as target (it's the implicit toggle-back mode)
                         bool is_default_mode = EqualsIgnoreCase(mode.id, g_config.defaultMode);
                         if (is_default_mode) { ImGui::BeginDisabled(); }
                         if (ImGui::Selectable(mode.id.c_str(), false, is_default_mode ? ImGuiSelectableFlags_Disabled : 0)) {
                             hotkey.secondaryMode = mode.id;
-                            SetHotkeySecondaryMode(i, mode.id); // Update runtime state immediately
+                            SetHotkeySecondaryMode(i, mode.id);
                             g_configIsDirty = true;
                         }
                         if (is_default_mode) {
@@ -227,13 +220,11 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                     ImGui::SetNextItemWidth(150);
                     const char* altModeDisplay = alt.mode.empty() ? "[None]" : alt.mode.c_str();
                     if (ImGui::BeginCombo("Mode", altModeDisplay)) {
-                        // Add "[None]" option to clear alternative mode
                         if (ImGui::Selectable("[None]", alt.mode.empty())) {
                             alt.mode = "";
                             g_configIsDirty = true;
                         }
                         for (const auto& mode : g_config.modes) {
-                            // Don't allow selecting the default mode as target
                             bool is_default_mode = EqualsIgnoreCase(mode.id, g_config.defaultMode);
                             if (is_default_mode) { ImGui::BeginDisabled(); }
                             if (ImGui::Selectable(mode.id.c_str(), false, is_default_mode ? ImGuiSelectableFlags_Disabled : 0)) {
@@ -289,16 +280,12 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                 }
 
                 if (ImGui::TreeNode("Required Game States")) {
-                    // Check if "Any" state is active (empty gameState array)
                     bool isAnySelected = hotkey.conditions.gameState.empty();
 
-                    // "Any" option at the top
                     if (ImGui::Checkbox("Any", &isAnySelected)) {
                         if (isAnySelected) {
-                            // Clear all game states to represent "Any"
                             hotkey.conditions.gameState.clear();
                         } else {
-                            // When unticking "Any", select common states
                             hotkey.conditions.gameState.clear();
                             hotkey.conditions.gameState.push_back("wall");
                             hotkey.conditions.gameState.push_back("inworld,cursor_free");
@@ -308,14 +295,12 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                         g_configIsDirty = true;
                     }
 
-                    // Disable other options when "Any" is selected
                     if (isAnySelected) { ImGui::BeginDisabled(); }
 
                     for (const char* state : guiGameStates) {
                         auto it = std::find(hotkey.conditions.gameState.begin(), hotkey.conditions.gameState.end(), state);
                         bool is_selected = (it != hotkey.conditions.gameState.end());
 
-                        // Special handling for "generating" - check for both "generating" and "waiting"
                         if (strcmp(state, "generating") == 0) {
                             auto waitingIt = std::find(hotkey.conditions.gameState.begin(), hotkey.conditions.gameState.end(), "waiting");
                             is_selected = is_selected || (waitingIt != hotkey.conditions.gameState.end());
@@ -324,8 +309,6 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                         const char* friendlyName = getGameStateFriendlyName(state);
                         if (ImGui::Checkbox(friendlyName, &is_selected)) {
                             if (strcmp(state, "generating") == 0) {
-                                // Special handling for "World Generation" - affects both "generating" and
-                                // "waiting"
                                 if (is_selected) {
                                     auto generateIt = std::find(hotkey.conditions.gameState.begin(), hotkey.conditions.gameState.end(),
                                                                "generating");
@@ -339,14 +322,11 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                                         hotkey.conditions.gameState.push_back("waiting");
                                     }
                                 } else {
-                                    // IMPORTANT: std::vector::erase invalidates iterators at/after the erase point.
-                                    // Erase by value (erase-remove) to avoid using invalidated iterators.
                                     auto& gs = hotkey.conditions.gameState;
                                     gs.erase(std::remove(gs.begin(), gs.end(), "waiting"), gs.end());
                                     gs.erase(std::remove(gs.begin(), gs.end(), "generating"), gs.end());
                                 }
                             } else {
-                                // Normal handling for other states
                                 if (is_selected) {
                                     hotkey.conditions.gameState.push_back(state);
                                 } else {
@@ -405,7 +385,7 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
 
         if (hotkey_to_remove != -1) {
             g_config.hotkeys.erase(g_config.hotkeys.begin() + hotkey_to_remove);
-            ResetAllHotkeySecondaryModes(); // Sync secondary mode state after removal
+            ResetAllHotkeySecondaryModes();
             // DEADLOCK FIX: Use internal version since g_configMutex is already held
             std::lock_guard<std::mutex> hotkeyLock(g_hotkeyMainKeysMutex);
             RebuildHotkeyMainKeys_Internal();
@@ -414,15 +394,15 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
         if (ImGui::Button("Add New Hotkey")) {
             try {
                 HotkeyConfig newHotkey;
-                newHotkey.keys = std::vector<DWORD>(); // Explicitly initialize empty vector
+                newHotkey.keys = std::vector<DWORD>();
                 newHotkey.mainMode = g_config.defaultMode.empty() ? "Fullscreen" : g_config.defaultMode;
-                newHotkey.secondaryMode = "";                                  // Initialize to empty
-                newHotkey.altSecondaryModes = std::vector<AltSecondaryMode>(); // Explicitly initialize empty vector
-                newHotkey.conditions = HotkeyConditions();                     // Initialize conditions
+                newHotkey.secondaryMode = "";
+                newHotkey.altSecondaryModes = std::vector<AltSecondaryMode>();
+                newHotkey.conditions = HotkeyConditions();
                 newHotkey.debounce = 100;
-                g_config.hotkeys.push_back(std::move(newHotkey));        // Use move semantics
-                ResizeHotkeySecondaryModes(g_config.hotkeys.size());     // Sync runtime state
-                SetHotkeySecondaryMode(g_config.hotkeys.size() - 1, ""); // Init new entry
+                g_config.hotkeys.push_back(std::move(newHotkey));
+                ResizeHotkeySecondaryModes(g_config.hotkeys.size());
+                SetHotkeySecondaryMode(g_config.hotkeys.size() - 1, "");
                 std::lock_guard<std::mutex> hotkeyLock(g_hotkeyMainKeysMutex);
                 RebuildHotkeyMainKeys_Internal();
                 g_configIsDirty = true;
@@ -439,7 +419,7 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
             ImGui::Separator();
             if (ImGui::Button("Confirm Reset", ImVec2(120, 0))) {
                 g_config.hotkeys = GetDefaultHotkeys();
-                ResetAllHotkeySecondaryModes(); // Sync secondary mode state after reset
+                ResetAllHotkeySecondaryModes();
                 // DEADLOCK FIX: Use internal version since g_configMutex is already held
                 std::lock_guard<std::mutex> hotkeyLock(g_hotkeyMainKeysMutex);
                 RebuildHotkeyMainKeys_Internal();
@@ -452,9 +432,6 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
             ImGui::EndPopup();
         }
 
-        // ============================================================================
-        // SENSITIVITY HOTKEYS SECTION
-        // ============================================================================
         ImGui::SeparatorText("Sensitivity Hotkeys");
         ImGui::TextDisabled("(?)");
         if (ImGui::IsItemHovered()) {
@@ -471,12 +448,10 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
             std::string sensNodeLabel = "Sensitivity: " + (sensKeyStr.empty() ? "[None]" : sensKeyStr) + " -> " +
                                         std::to_string(sensHotkey.sensitivity).substr(0, 4) + "x";
 
-            // X button on the left
             if (ImGui::Button(("X##del_sens_" + std::to_string(i)).c_str(), ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()))) {
                 ImGui::OpenPopup(("Delete Sensitivity Hotkey?##" + std::to_string(i)).c_str());
             }
 
-            // Popup modal
             if (ImGui::BeginPopupModal(("Delete Sensitivity Hotkey?##" + std::to_string(i)).c_str(), NULL,
                                        ImGuiWindowFlags_AlwaysAutoResize)) {
                 ImGui::Text("Are you sure you want to delete this sensitivity hotkey?");
@@ -495,7 +470,6 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
             bool sensNodeOpen = ImGui::TreeNodeEx("##sens_hotkey_node", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", sensNodeLabel.c_str());
 
             if (sensNodeOpen) {
-                // Key binding button
                 const char* sensButtonLabel =
                     (s_sensHotkeyToBind == (int)i) ? "[Press Keys...]" : (sensKeyStr.empty() ? "[None]" : sensKeyStr.c_str());
                 if (ImGui::Button(sensButtonLabel)) {
@@ -508,11 +482,9 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                 ImGui::SameLine();
                 HelpMarker("Click to bind a key combination for this sensitivity override.");
 
-                // Sensitivity value
                 ImGui::SeparatorText("Sensitivity");
                 if (ImGui::Checkbox("Separate X/Y##sens", &sensHotkey.separateXY)) {
                     if (!sensHotkey.separateXY) {
-                        // When disabling, sync X/Y to unified value
                         sensHotkey.sensitivityX = sensHotkey.sensitivity;
                         sensHotkey.sensitivityY = sensHotkey.sensitivity;
                     }
@@ -539,16 +511,12 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                 }
 
                 if (ImGui::TreeNode("Required Game States##sens")) {
-                    // Check if "Any" state is active (empty gameState array)
                     bool isAnySelected = sensHotkey.conditions.gameState.empty();
 
-                    // "Any" option at the top
                     if (ImGui::Checkbox("Any##sens", &isAnySelected)) {
                         if (isAnySelected) {
-                            // Clear all game states to represent "Any"
                             sensHotkey.conditions.gameState.clear();
                         } else {
-                            // When unticking "Any", select common states
                             sensHotkey.conditions.gameState.clear();
                             sensHotkey.conditions.gameState.push_back("wall");
                             sensHotkey.conditions.gameState.push_back("inworld,cursor_free");
@@ -558,14 +526,12 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                         g_configIsDirty = true;
                     }
 
-                    // Disable other options when "Any" is selected
                     if (isAnySelected) { ImGui::BeginDisabled(); }
 
                     for (const char* state : guiGameStates) {
                         auto it = std::find(sensHotkey.conditions.gameState.begin(), sensHotkey.conditions.gameState.end(), state);
                         bool is_selected = (it != sensHotkey.conditions.gameState.end());
 
-                        // Special handling for "generating" - check for both "generating" and "waiting"
                         if (strcmp(state, "generating") == 0) {
                             auto waitingIt =
                                 std::find(sensHotkey.conditions.gameState.begin(), sensHotkey.conditions.gameState.end(), "waiting");
@@ -575,7 +541,6 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                         const char* friendlyName = getGameStateFriendlyName(state);
                         if (ImGui::Checkbox((std::string(friendlyName) + "##sens").c_str(), &is_selected)) {
                             if (strcmp(state, "generating") == 0) {
-                                // Special handling for "World Generation" - affects both "generating" and "waiting"
                                 if (is_selected) {
                                     auto generateIt = std::find(sensHotkey.conditions.gameState.begin(), sensHotkey.conditions.gameState.end(),
                                                                "generating");
@@ -589,14 +554,11 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                                         sensHotkey.conditions.gameState.push_back("waiting");
                                     }
                                 } else {
-                                    // IMPORTANT: std::vector::erase invalidates iterators at/after the erase point.
-                                    // Erase by value (erase-remove) to avoid using invalidated iterators.
                                     auto& gs = sensHotkey.conditions.gameState;
                                     gs.erase(std::remove(gs.begin(), gs.end(), "waiting"), gs.end());
                                     gs.erase(std::remove(gs.begin(), gs.end(), "generating"), gs.end());
                                 }
                             } else {
-                                // Normal handling for other states
                                 if (is_selected) {
                                     sensHotkey.conditions.gameState.push_back(state);
                                 } else {
@@ -612,13 +574,11 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                     ImGui::TreePop();
                 }
 
-                // Toggle mode
                 if (ImGui::Checkbox("Toggle##sens", &sensHotkey.toggle)) { g_configIsDirty = true; }
                 ImGui::SameLine();
                 HelpMarker(
                     "When enabled, pressing the hotkey again resets sensitivity back to normal (mode override or global sensitivity).");
 
-                // Debounce
                 ImGui::Text("Debounce:");
                 ImGui::SameLine();
                 ImGui::SetNextItemWidth(100);
@@ -658,3 +618,5 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
         ImGui::EndTabItem();
     }
 }
+
+

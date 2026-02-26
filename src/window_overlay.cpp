@@ -40,7 +40,6 @@ struct DeferredOverlayReload {
 std::vector<DeferredOverlayReload> g_deferredOverlayReloads;
 std::mutex g_deferredOverlayReloadsMutex;
 
-// Implementation of WindowOverlayCacheEntry destructor
 WindowOverlayCacheEntry::~WindowOverlayCacheEntry() {
     if (hBitmap) {
         DeleteObject(hBitmap);
@@ -54,15 +53,11 @@ WindowOverlayCacheEntry::~WindowOverlayCacheEntry() {
         delete[] pixelData;
         pixelData = nullptr;
     }
-    // Triple-buffer cleanup is handled automatically by unique_ptr
     // Note: OpenGL texture cleanup should be done on the OpenGL thread
-    // The texture will be cleaned up in CleanupWindowOverlayCacheEntry
 }
 
-// Forward declaration
 std::string GetExecutableNameFromWindow(HWND hwnd);
 
-// Find window with priority-based matching (OBS-style)
 HWND FindWindowByTitleAndClass(const std::string& title, const std::string& className, const std::string& executableName = "",
                                const std::string& matchPriority = "title") {
     struct EnumData {
@@ -70,9 +65,9 @@ HWND FindWindowByTitleAndClass(const std::string& title, const std::string& clas
         std::string targetClass;
         std::string targetExecutable;
         std::string matchPriority;
-        HWND exactMatch;      // Exact title match
-        HWND classMatch;      // Same class, different title
-        HWND executableMatch; // Same executable, different title
+        HWND exactMatch;
+        HWND classMatch;
+        HWND executableMatch;
     };
 
     EnumData data;
@@ -88,8 +83,6 @@ HWND FindWindowByTitleAndClass(const std::string& title, const std::string& clas
         [](HWND hwnd, LPARAM lParam) -> BOOL {
             EnumData* data = reinterpret_cast<EnumData*>(lParam);
 
-            // Prevent recursive/self capture: never target our own game window (or any window owned by this process).
-            // Toolscreen runs injected, so "this process" is the game process.
             HWND gameHwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
             if (gameHwnd && hwnd == gameHwnd) { return TRUE; }
             DWORD pid = 0;
@@ -99,60 +92,46 @@ HWND FindWindowByTitleAndClass(const std::string& title, const std::string& clas
             // Skip invisible windows
             if (!IsWindowVisible(hwnd)) { return TRUE; }
 
-            // Get window title
             char windowTitle[256];
             GetWindowTextA(hwnd, windowTitle, sizeof(windowTitle));
             std::string title = windowTitle;
 
-            // Get window class
             char windowClass[256];
             GetClassNameA(hwnd, windowClass, sizeof(windowClass));
             std::string className = windowClass;
 
-            // Get executable name
             std::string exeName = GetExecutableNameFromWindow(hwnd);
 
-            // Check for exact title match
             bool titleMatch = !data->targetTitle.empty() && title == data->targetTitle;
 
-            // Check for class match
             bool classMatch = !data->targetClass.empty() && className == data->targetClass;
 
-            // Check for executable match
             bool executableMatch = !data->targetExecutable.empty() && exeName == data->targetExecutable;
 
-            // Priority 1: Exact title match
             if (titleMatch) {
                 data->exactMatch = hwnd;
-                return FALSE; // Found exact match, stop enumeration
+                return FALSE;
             }
 
-            // Priority 2: Same class (for "title_class" mode)
             if (classMatch && data->classMatch == NULL) { data->classMatch = hwnd; }
 
-            // Priority 3: Same executable (for "title_executable" mode)
             if (executableMatch && data->executableMatch == NULL) { data->executableMatch = hwnd; }
 
-            return TRUE; // Continue enumeration
+            return TRUE;
         },
         reinterpret_cast<LPARAM>(&data));
 
-    // Return based on priority and what was found
     if (data.exactMatch) { return data.exactMatch; }
 
-    // Apply match priority
     if (matchPriority == "title_class" && data.classMatch) { return data.classMatch; }
 
     if (matchPriority == "title_executable" && data.executableMatch) { return data.executableMatch; }
 
-    // For "title" mode, only return exact matches
     return NULL;
 }
 
-// Global initialization flag
 std::atomic<bool> g_windowOverlaysInitialized{ false };
 
-// Lazy initialization of window overlays
 // NOTE: This is called from the window capture background thread
 // to avoid blocking the render thread during expensive window searching
 void InitializeWindowOverlays() {
@@ -163,7 +142,6 @@ void InitializeWindowOverlays() {
         return;
     }
 
-    // Don't initialize if there are no window overlays configured
     if (cfgSnap->windowOverlays.empty()) {
         Log("No window overlays configured, skipping initialization");
         return;
@@ -184,13 +162,10 @@ void InitializeWindowOverlays() {
 static void LoadWindowOverlay_Internal(const std::string& overlayId, const WindowOverlayConfig& config) {
     // Note: Caller must hold g_windowOverlayCacheMutex
 
-    // Check if we're updating an existing entry
     auto it = g_windowOverlayCache.find(overlayId);
     if (it != g_windowOverlayCache.end()) {
-        // Update existing entry instead of recreating (preserves OpenGL texture)
         auto& entry = it->second;
 
-        // Check if window target is actually changing
         bool windowChanged = (entry->windowTitle != config.windowTitle || entry->windowClass != config.windowClass ||
                               entry->executableName != config.executableName || entry->windowMatchPriority != config.windowMatchPriority);
 
@@ -202,11 +177,7 @@ static void LoadWindowOverlay_Internal(const std::string& overlayId, const Windo
         entry->searchInterval.store(config.searchInterval, std::memory_order_relaxed);
         entry->needsUpdate.store(true, std::memory_order_relaxed);
 
-        // Only reset lastUploadedRenderData if window target changed
-        // This prevents flickering when only other properties change
         if (windowChanged) {
-            // Keep the current render buffer visible while we capture the new window
-            // Don't reset lastUploadedRenderData - let the new capture naturally update it
             entry->targetWindow.store(
                 FindWindowByTitleAndClass(config.windowTitle, config.windowClass, config.executableName, config.windowMatchPriority),
                 std::memory_order_relaxed);
@@ -221,7 +192,6 @@ static void LoadWindowOverlay_Internal(const std::string& overlayId, const Windo
         return;
     }
 
-    // Create new cache entry using unique_ptr
     auto entry = std::make_unique<WindowOverlayCacheEntry>();
     entry->windowTitle = config.windowTitle;
     entry->windowClass = config.windowClass;
@@ -231,7 +201,6 @@ static void LoadWindowOverlay_Internal(const std::string& overlayId, const Windo
     entry->searchInterval.store(config.searchInterval, std::memory_order_relaxed);
     entry->needsUpdate.store(true, std::memory_order_relaxed);
 
-    // Find the target window
     entry->targetWindow.store(
         FindWindowByTitleAndClass(config.windowTitle, config.windowClass, config.executableName, config.windowMatchPriority),
         std::memory_order_relaxed);
@@ -242,11 +211,9 @@ static void LoadWindowOverlay_Internal(const std::string& overlayId, const Windo
         Log("Warning: Could not find target window for overlay '" + overlayId + "': " + config.windowTitle);
     }
 
-    // Insert into cache
     g_windowOverlayCache[overlayId] = std::move(entry);
 }
 
-// Load window overlay configuration and initialize cache entry
 void LoadWindowOverlay(const std::string& overlayId, const WindowOverlayConfig& config) {
     std::lock_guard<std::mutex> lock(g_windowOverlayCacheMutex);
     LoadWindowOverlay_Internal(overlayId, config);
@@ -255,33 +222,27 @@ void LoadWindowOverlay(const std::string& overlayId, const WindowOverlayConfig& 
 // Queue a deferred overlay reload (non-blocking, safe to call from GUI thread)
 void QueueOverlayReload(const std::string& overlayId, const WindowOverlayConfig& config) {
     std::lock_guard<std::mutex> lock(g_deferredOverlayReloadsMutex);
-    // Check if already queued to avoid duplicates
     for (auto& pending : g_deferredOverlayReloads) {
         if (pending.overlayId == overlayId) {
-            // Update existing entry
             pending.config = config;
             return;
         }
     }
-    // Add new entry
     g_deferredOverlayReloads.push_back({ overlayId, config });
 }
 
-// Update all window overlays (refresh window handles)
 void UpdateAllWindowOverlays() {
     std::lock_guard<std::mutex> lock(g_windowOverlayCacheMutex);
     auto now = std::chrono::steady_clock::now();
 
     for (auto& [overlayId, entry] : g_windowOverlayCache) {
         HWND target = entry->targetWindow.load(std::memory_order_relaxed);
-        // Check if the window is still valid
         if (target && !IsWindow(target)) {
             entry->targetWindow.store(NULL, std::memory_order_relaxed);
-            entry->lastSearchTime = now; // Reset search timer when window is lost
+            entry->lastSearchTime = now;
             target = NULL;
         }
 
-        // Try to find window again if we lost it, respecting the search interval
         if (!target) {
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - entry->lastSearchTime);
             int interval = entry->searchInterval.load(std::memory_order_relaxed);
@@ -301,7 +262,6 @@ void UpdateAllWindowOverlays() {
     }
 }
 
-// Update window overlay FPS setting
 void UpdateWindowOverlayFPS(const std::string& overlayId, int newFPS) {
     // LOCK-FREE: fps is atomic, so we just need to get the entry pointer safely
     // We use a very brief lock just to get the pointer, then release immediately
@@ -319,13 +279,10 @@ void UpdateWindowOverlayFPS(const std::string& overlayId, int newFPS) {
         entry->needsUpdate.store(true, std::memory_order_relaxed);
         Log("Updated FPS for overlay '" + overlayId + "' to " + std::to_string(newFPS));
     } else {
-        // Cache entry doesn't exist yet, which is normal for new overlays
-        // The FPS will be set when LoadWindowOverlay is called
         Log("FPS update requested for overlay '" + overlayId + "' but cache entry not found (overlay may not be loaded yet)");
     }
 }
 
-// Update window overlay search interval setting
 void UpdateWindowOverlaySearchInterval(const std::string& overlayId, int newSearchInterval) {
     // LOCK-FREE: searchInterval is atomic, so we just need to get the entry pointer safely
     // We use a very brief lock just to get the pointer, then release immediately
@@ -342,13 +299,10 @@ void UpdateWindowOverlaySearchInterval(const std::string& overlayId, int newSear
         entry->searchInterval.store(newSearchInterval, std::memory_order_relaxed);
         Log("Updated search interval for overlay '" + overlayId + "' to " + std::to_string(newSearchInterval) + "ms");
     } else {
-        // Cache entry doesn't exist yet, which is normal for new overlays
-        // The search interval will be set when LoadWindowOverlay is called
         Log("Search interval update requested for overlay '" + overlayId + "' but cache entry not found (overlay may not be loaded yet)");
     }
 }
 
-// Update window overlay - refresh window handle if needed
 // NOTE: This is called from the render thread via GUI. To avoid freezing,
 // we only mark the entry for update and let the background thread do the expensive work.
 void UpdateWindowOverlay(const std::string& overlayId) {
@@ -359,7 +313,6 @@ void UpdateWindowOverlay(const std::string& overlayId) {
 
     WindowOverlayCacheEntry& entry = *it->second;
 
-    // Check if the window is still valid (fast check, no enumeration)
     {
         HWND target = entry.targetWindow.load(std::memory_order_relaxed);
         if (target && !IsWindow(target)) { entry.targetWindow.store(NULL, std::memory_order_relaxed); }
@@ -368,17 +321,15 @@ void UpdateWindowOverlay(const std::string& overlayId) {
     // Mark for update - the background thread will find the window
     // This avoids expensive window enumeration on the render thread
     entry.needsUpdate.store(true, std::memory_order_relaxed);
-    entry.lastSearchTime = std::chrono::steady_clock::now() - std::chrono::seconds(100); // Force immediate search
+    entry.lastSearchTime = std::chrono::steady_clock::now() - std::chrono::seconds(100);
 }
 
-// Capture window content using various methods based on config
 bool CaptureWindowContent(WindowOverlayCacheEntry& entry, const WindowOverlayConfig& config) {
     std::lock_guard<std::mutex> lock(entry.captureMutex);
 
     HWND targetHwnd = entry.targetWindow.load(std::memory_order_relaxed);
     if (!targetHwnd || !IsWindow(targetHwnd) || !IsWindowVisible(targetHwnd)) { return false; }
 
-    // Prevent recursive/self capture even if config was manually edited to target our own window.
     {
         HWND gameHwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
         if (gameHwnd && targetHwnd == gameHwnd) {
@@ -400,13 +351,12 @@ bool CaptureWindowContent(WindowOverlayCacheEntry& entry, const WindowOverlayCon
         }
     }
 
-    // Check FPS throttling
     auto now = std::chrono::steady_clock::now();
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - entry.lastCaptureTime);
     int targetInterval = 1000 / std::max(1, entry.fps.load(std::memory_order_relaxed));
 
     if (elapsed.count() < targetInterval && !entry.needsUpdate.load(std::memory_order_relaxed)) {
-        return true; // Skip capture, too soon
+        return true;
     }
 
     entry.lastCaptureTime = now;
@@ -415,7 +365,6 @@ bool CaptureWindowContent(WindowOverlayCacheEntry& entry, const WindowOverlayCon
     targetHwnd = entry.targetWindow.load(std::memory_order_relaxed);
     if (!targetHwnd || !IsWindow(targetHwnd)) { return false; }
 
-    // Get window dimensions using client area for more accurate capture
     RECT clientRect;
     if (!GetClientRect(targetHwnd, &clientRect)) { return false; }
 
@@ -424,7 +373,6 @@ bool CaptureWindowContent(WindowOverlayCacheEntry& entry, const WindowOverlayCon
 
     if (windowWidth <= 0 || windowHeight <= 0) { return false; }
 
-    // Apply cropping
     int cropLeft = config.crop_left;
     int cropRight = config.crop_right;
     int cropTop = config.crop_top;
@@ -435,10 +383,6 @@ bool CaptureWindowContent(WindowOverlayCacheEntry& entry, const WindowOverlayCon
 
     if (captureWidth <= 0 || captureHeight <= 0) { return false; }
 
-    // Create device contexts
-    // NOTE: For PrintWindow, we DON'T need GetDC(targetWindow) - that causes flickering!
-    // PrintWindow renders directly to the memory DC without needing the window's DC.
-    // We only need hdcWindow for BitBlt fallback.
     HDC hdcScreen = GetDC(NULL);
     HDC hdcMem = CreateCompatibleDC(hdcScreen);
 
@@ -448,7 +392,6 @@ bool CaptureWindowContent(WindowOverlayCacheEntry& entry, const WindowOverlayCon
         return false;
     }
 
-    // Create bitmap
     HBITMAP hBitmap = CreateCompatibleBitmap(hdcScreen, captureWidth, captureHeight);
     if (!hBitmap) {
         ReleaseDC(NULL, hdcScreen);
@@ -458,57 +401,44 @@ bool CaptureWindowContent(WindowOverlayCacheEntry& entry, const WindowOverlayCon
 
     HBITMAP hOldBitmap = (HBITMAP)SelectObject(hdcMem, hBitmap);
 
-    // SECURITY: Clear the bitmap to black to prevent leaking screen content
     // If BitBlt/PrintWindow fails, we don't want uninitialized memory showing other windows
     RECT clearRect = { 0, 0, captureWidth, captureHeight };
     HBRUSH hBlackBrush = (HBRUSH)GetStockObject(DKGRAY_BRUSH);
     FillRect(hdcMem, &clearRect, hBlackBrush);
 
-    // Set proper raster operation to avoid visual artifacts
     int oldROP = SetROP2(hdcMem, R2_COPYPEN);
 
-    // Check if window is cloaked (hidden/minimized) or iconic (minimized) using DWM
     BOOL isCloaked = FALSE;
     HRESULT hr = DwmGetWindowAttribute(targetHwnd, DWMWA_CLOAKED, &isCloaked, sizeof(isCloaked));
     bool windowIsCloaked = SUCCEEDED(hr) && isCloaked;
     bool windowIsIconic = IsIconic(targetHwnd);
 
-    // Determine if we should avoid PrintWindow (though PrintWindow itself is fine)
     // We avoid it for cloaked/iconic windows since they may not render properly
     bool shouldAvoidPrintWindow = windowIsCloaked || windowIsIconic;
 
-    // Try capture methods based on config setting
     BOOL result = FALSE;
-    HDC hdcWindow = NULL; // Only create when needed (for BitBlt fallback)
+    HDC hdcWindow = NULL;
     bool usedPrintWindow = false;
 
     if (config.captureMethod == "BitBlt") {
-        // BitBlt method: Captures from window DC with source offset
         // Note: BitBlt requires GetDC which CAN cause flicker on some windows
         hdcWindow = GetDC(targetHwnd);
         if (hdcWindow) { result = BitBlt(hdcMem, 0, 0, captureWidth, captureHeight, hdcWindow, cropLeft, cropTop, SRCCOPY); }
     } else {
         // Windows 10+ method (default): Uses PrintWindow with PW_RENDERFULLCONTENT
-        // PrintWindow doesn't cause flicker - it renders directly without needing GetDC on target
-        // IMPORTANT: PrintWindow captures from (0,0) so we need to capture the full window
-        // and then extract the cropped region afterwards
         if (!shouldAvoidPrintWindow) {
-            // If we have cropping, we need to capture the full window first
             bool needsCropping = (cropLeft > 0 || cropTop > 0 || cropRight > 0 || cropBottom > 0);
 
             if (needsCropping) {
-                // Create a full-size bitmap to capture the entire window
                 HBITMAP hFullBitmap = CreateCompatibleBitmap(hdcScreen, windowWidth, windowHeight);
                 if (hFullBitmap) {
                     HDC hdcFullMem = CreateCompatibleDC(hdcScreen);
                     if (hdcFullMem) {
                         HBITMAP hOldFullBitmap = (HBITMAP)SelectObject(hdcFullMem, hFullBitmap);
 
-                        // Capture the full window
                         result = PrintWindow(targetHwnd, hdcFullMem, PW_RENDERFULLCONTENT);
 
                         if (result) {
-                            // Copy only the cropped region to our output bitmap
                             result = BitBlt(hdcMem, 0, 0, captureWidth, captureHeight, hdcFullMem, cropLeft, cropTop, SRCCOPY);
                             usedPrintWindow = true;
                         }
@@ -519,26 +449,20 @@ bool CaptureWindowContent(WindowOverlayCacheEntry& entry, const WindowOverlayCon
                     DeleteObject(hFullBitmap);
                 }
             } else {
-                // No cropping needed, capture directly to our output bitmap
                 result = PrintWindow(targetHwnd, hdcMem, PW_RENDERFULLCONTENT);
                 usedPrintWindow = true;
             }
         }
-        // Fall back to BitBlt only if PrintWindow fails or was avoided
         if (!result) {
             hdcWindow = GetDC(targetHwnd);
             if (hdcWindow) { result = BitBlt(hdcMem, 0, 0, captureWidth, captureHeight, hdcWindow, cropLeft, cropTop, SRCCOPY); }
         }
     }
 
-    // Restore original ROP
     SetROP2(hdcMem, oldROP);
 
-    // Extract pixel data - always extract even if capture failed (to get the black cleared bitmap)
-    // This ensures we never show uninitialized memory or leaked screen content
     bool success = false;
 
-    // Ensure we have pixel data buffer with safe size validation
     if (entry.width != captureWidth || entry.height != captureHeight) {
         if (entry.pixelData) {
             delete[] entry.pixelData;
@@ -546,13 +470,11 @@ bool CaptureWindowContent(WindowOverlayCacheEntry& entry, const WindowOverlayCon
         }
         entry.width = captureWidth;
         entry.height = captureHeight;
-        // Validate size before allocation to prevent overflow
         size_t bufferSize = static_cast<size_t>(captureWidth) * static_cast<size_t>(captureHeight) * 4;
-        if (bufferSize > 0 && bufferSize < 100 * 1024 * 1024) { // Sanity check: < 100MB
-            entry.pixelData = new unsigned char[bufferSize];    // RGBA
+        if (bufferSize > 0 && bufferSize < 100 * 1024 * 1024) {
+            entry.pixelData = new unsigned char[bufferSize];
         } else {
             Log("[WindowOverlay] Invalid buffer size: " + std::to_string(bufferSize));
-            // Clean up GDI resources before returning
             SelectObject(hdcMem, hOldBitmap);
             DeleteObject(hBitmap);
             DeleteDC(hdcMem);
@@ -562,11 +484,10 @@ bool CaptureWindowContent(WindowOverlayCacheEntry& entry, const WindowOverlayCon
         }
     }
 
-    // Convert bitmap to RGBA pixel data (will be black if capture failed)
     BITMAPINFO bmi = {};
     bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
     bmi.bmiHeader.biWidth = captureWidth;
-    bmi.bmiHeader.biHeight = -captureHeight; // Negative for top-down
+    bmi.bmiHeader.biHeight = -captureHeight;
     bmi.bmiHeader.biPlanes = 1;
     bmi.bmiHeader.biBitCount = 32;
     bmi.bmiHeader.biCompression = BI_RGB;
@@ -574,22 +495,17 @@ bool CaptureWindowContent(WindowOverlayCacheEntry& entry, const WindowOverlayCon
     int scanlines = GetDIBits(hdcScreen, hBitmap, 0, captureHeight, entry.pixelData, &bmi, DIB_RGB_COLORS);
 
     if (scanlines == captureHeight) {
-        // Convert BGRA to RGBA (even if capture failed, we still have the black cleared bitmap)
         const int totalPixels = captureWidth * captureHeight;
 
-        // Pre-calculate color key values if enabled (optimization)
         if (result && config.enableColorKey && !config.colorKeys.empty()) {
-            // Process each pixel and check against all color keys
             for (int i = 0; i < totalPixels; i++) {
                 unsigned char* pixel = &entry.pixelData[i * 4];
-                std::swap(pixel[0], pixel[2]); // Swap B and R
+                std::swap(pixel[0], pixel[2]);
 
-                // Get pixel color as float
                 float r = pixel[0] / 255.0f;
                 float g = pixel[1] / 255.0f;
                 float b = pixel[2] / 255.0f;
 
-                // Check against all color keys - pixel is transparent if it matches ANY key
                 bool matchesAnyKey = false;
                 for (const auto& key : config.colorKeys) {
                     float dr = r - key.color.r;
@@ -600,27 +516,23 @@ bool CaptureWindowContent(WindowOverlayCacheEntry& entry, const WindowOverlayCon
 
                     if (distanceSq <= sensitivitySq) {
                         matchesAnyKey = true;
-                        break; // No need to check other keys
+                        break;
                     }
                 }
 
                 pixel[3] = matchesAnyKey ? 0 : 255;
             }
         } else {
-            // Just convert BGRA to RGBA without color key
             for (int i = 0; i < totalPixels; i++) {
                 unsigned char* pixel = &entry.pixelData[i * 4];
-                std::swap(pixel[0], pixel[2]); // Swap B and R
-                pixel[3] = 255;                // Set alpha to fully opaque
+                std::swap(pixel[0], pixel[2]);
+                pixel[3] = 255;
             }
         }
 
-        // Mark as successful only if the actual capture succeeded
-        // If capture failed, we still update with black pixels (safe fallback)
         success = true;
     }
 
-    // Mark texture for update if capture was successful
     if (success) {
         // Copy to write buffer for thread-safe transfer to render thread (OpenGL path)
         if (entry.writeBuffer->width != entry.width || entry.writeBuffer->height != entry.height) {
@@ -630,7 +542,6 @@ bool CaptureWindowContent(WindowOverlayCacheEntry& entry, const WindowOverlayCon
             }
             entry.writeBuffer->width = entry.width;
             entry.writeBuffer->height = entry.height;
-            // Validate size before allocation
             size_t bufferSize = static_cast<size_t>(entry.width) * static_cast<size_t>(entry.height) * 4;
             if (bufferSize > 0 && bufferSize < 100 * 1024 * 1024) { entry.writeBuffer->pixelData = new unsigned char[bufferSize]; }
         }
@@ -650,7 +561,6 @@ bool CaptureWindowContent(WindowOverlayCacheEntry& entry, const WindowOverlayCon
         }
     }
 
-    // Cleanup
     SelectObject(hdcMem, hOldBitmap);
     DeleteObject(hBitmap);
     DeleteDC(hdcMem);
@@ -658,13 +568,11 @@ bool CaptureWindowContent(WindowOverlayCacheEntry& entry, const WindowOverlayCon
     ReleaseDC(NULL, hdcScreen);
 
     // If Windows 10+ method failed and capture failed, show error texture
-    // BitBlt failures are not shown as error since BitBlt is the fallback method
     if (!success && config.captureMethod != "BitBlt") {
         // Capture failed with Windows 10+ method - create dark blue error texture
         int errorWidth = 64;
         int errorHeight = 64;
 
-        // Ensure we have pixel data buffer for error texture
         if (entry.width != errorWidth || entry.height != errorHeight) {
             if (entry.pixelData) {
                 delete[] entry.pixelData;
@@ -672,22 +580,19 @@ bool CaptureWindowContent(WindowOverlayCacheEntry& entry, const WindowOverlayCon
             }
             entry.width = errorWidth;
             entry.height = errorHeight;
-            // Validate size (error texture should be small anyway)
             size_t bufferSize = static_cast<size_t>(errorWidth) * static_cast<size_t>(errorHeight) * 4;
-            if (bufferSize > 0 && bufferSize < 1 * 1024 * 1024) { // 1MB sanity check for error texture
+            if (bufferSize > 0 && bufferSize < 1 * 1024 * 1024) {
                 entry.pixelData = new unsigned char[bufferSize];
             }
         }
 
-        // Fill with dark blue color (RGBA: 0, 32, 96, 255)
         for (int i = 0; i < errorWidth * errorHeight; i++) {
-            entry.pixelData[i * 4 + 0] = 0;   // R
-            entry.pixelData[i * 4 + 1] = 32;  // G
-            entry.pixelData[i * 4 + 2] = 96;  // B
-            entry.pixelData[i * 4 + 3] = 255; // A
+            entry.pixelData[i * 4 + 0] = 0;
+            entry.pixelData[i * 4 + 1] = 32;
+            entry.pixelData[i * 4 + 2] = 96;
+            entry.pixelData[i * 4 + 3] = 255;
         }
 
-        // Copy error texture to write buffer
         if (entry.writeBuffer->width != entry.width || entry.writeBuffer->height != entry.height) {
             if (entry.writeBuffer->pixelData) {
                 delete[] entry.writeBuffer->pixelData;
@@ -695,7 +600,6 @@ bool CaptureWindowContent(WindowOverlayCacheEntry& entry, const WindowOverlayCon
             }
             entry.writeBuffer->width = entry.width;
             entry.writeBuffer->height = entry.height;
-            // Validate size before allocation
             size_t bufferSize = static_cast<size_t>(entry.width) * static_cast<size_t>(entry.height) * 4;
             if (bufferSize > 0 && bufferSize < 100 * 1024 * 1024) { entry.writeBuffer->pixelData = new unsigned char[bufferSize]; }
         }
@@ -718,7 +622,6 @@ bool CaptureWindowContent(WindowOverlayCacheEntry& entry, const WindowOverlayCon
     return success;
 }
 
-// Helper function to find window overlay config by name
 const WindowOverlayConfig* FindWindowOverlayConfig(const std::string& overlayId) {
     // Note: Caller should hold g_configMutex
     const auto& overlays = g_config.windowOverlays;
@@ -729,7 +632,6 @@ const WindowOverlayConfig* FindWindowOverlayConfig(const std::string& overlayId)
     return nullptr;
 }
 
-// Overload that takes a specific Config reference (for use with config snapshots)
 const WindowOverlayConfig* FindWindowOverlayConfigIn(const std::string& overlayId, const Config& config) {
     const auto& overlays = config.windowOverlays;
     const size_t size = overlays.size();
@@ -739,12 +641,10 @@ const WindowOverlayConfig* FindWindowOverlayConfigIn(const std::string& overlayI
     return nullptr;
 }
 
-// Remove window overlay from cache without accessing config (call when you already have config access)
 void RemoveWindowOverlayFromCache(const std::string& overlayId) {
     std::lock_guard<std::mutex> cacheLock(g_windowOverlayCacheMutex);
     auto it = g_windowOverlayCache.find(overlayId);
     if (it != g_windowOverlayCache.end()) {
-        // Clean up OpenGL texture if it exists
         if (it->second->glTextureId != 0) {
             glDeleteTextures(1, &it->second->glTextureId);
             it->second->glTextureId = 0;
@@ -753,14 +653,12 @@ void RemoveWindowOverlayFromCache(const std::string& overlayId) {
     }
 }
 
-// Clean up specific cache entry
 void CleanupWindowOverlayCacheEntry(const std::string& overlayId) {
     // Don't actually erase the entry - this would cause crashes when capture thread is using it
-    // Instead, just find the config and reload it which will update the entry in-place
 
     // First, get the config (without holding cache lock) - use snapshot for thread safety
     const WindowOverlayConfig* config = nullptr;
-    WindowOverlayConfig configCopy; // Make a copy
+    WindowOverlayConfig configCopy;
     {
         auto cleanupSnap = GetConfigSnapshot();
         const WindowOverlayConfig* foundConfig = cleanupSnap ? FindWindowOverlayConfigIn(overlayId, *cleanupSnap) : nullptr;
@@ -774,13 +672,10 @@ void CleanupWindowOverlayCacheEntry(const std::string& overlayId) {
     std::lock_guard<std::mutex> cacheLock(g_windowOverlayCacheMutex);
 
     if (config) {
-        // This will update the existing entry in-place safely
         LoadWindowOverlay_Internal(overlayId, *config);
     } else {
-        // Config doesn't exist, so actually erase the entry (safe case - overlay removed from config)
         auto it = g_windowOverlayCache.find(overlayId);
         if (it != g_windowOverlayCache.end()) {
-            // Clean up OpenGL texture if it exists
             if (it->second->glTextureId != 0) {
                 glDeleteTextures(1, &it->second->glTextureId);
                 it->second->glTextureId = 0;
@@ -790,12 +685,9 @@ void CleanupWindowOverlayCacheEntry(const std::string& overlayId) {
     }
 }
 
-// Clean up entire window overlay cache
 void CleanupWindowOverlayCache() {
     std::lock_guard<std::mutex> lock(g_windowOverlayCacheMutex);
 
-    // CRITICAL: Clean up OpenGL textures before clearing the cache
-    // Only do this if we have a valid GL context to avoid crashes
     HGLRC currentContext = wglGetCurrentContext();
     if (currentContext) {
         for (auto& [id, entry] : g_windowOverlayCache) {
@@ -813,17 +705,11 @@ void CleanupWindowOverlayCache() {
     g_windowOverlayCache.clear();
 }
 
-// NOTE: RenderWindowOverlaysGL() has been removed.
-// All overlay rendering is now done asynchronously via the render thread.
-// See RT_RenderWindowOverlays() in render_thread.cpp
-
 std::atomic<bool> g_windowOverlayInteractionActive{ false };
 std::string g_focusedWindowOverlayName;
 std::mutex g_focusedWindowOverlayMutex;
 
-// Helper function to calculate window overlay dimensions (internal use)
 static void CalculateWindowOverlayDimensions(const WindowOverlayConfig& config, int& displayW, int& displayH) {
-    // Try to get actual texture dimensions from cache
     std::lock_guard<std::mutex> lock(g_windowOverlayCacheMutex);
     auto it = g_windowOverlayCache.find(config.name);
     if (it != g_windowOverlayCache.end() && it->second) {
@@ -837,12 +723,10 @@ static void CalculateWindowOverlayDimensions(const WindowOverlayConfig& config, 
             return;
         }
     }
-    // Fallback to default dimensions
     displayW = static_cast<int>(100 * config.scale);
     displayH = static_cast<int>(100 * config.scale);
 }
 
-// Get the overlay under a specific screen point
 std::string GetWindowOverlayAtPoint(int x, int y, int screenWidth, int screenHeight) {
     if (!g_windowOverlaysVisible.load(std::memory_order_acquire)) { return ""; }
 
@@ -861,7 +745,6 @@ std::string GetWindowOverlayAtPoint(int x, int y, int screenWidth, int screenHei
         const ModeConfig* mode = overlaySnap ? GetModeFromSnapshot(*overlaySnap, currentModeId) : nullptr;
         if (!mode) return "";
 
-        // Iterate in reverse order so topmost (last rendered) is checked first
         for (auto it = mode->windowOverlayIds.rbegin(); it != mode->windowOverlayIds.rend(); ++it) {
             const std::string& overlayId = *it;
             const WindowOverlayConfig* config = FindWindowOverlayConfigIn(overlayId, *overlaySnap);
@@ -869,7 +752,6 @@ std::string GetWindowOverlayAtPoint(int x, int y, int screenWidth, int screenHei
         }
     }
 
-    // Get current viewport for viewport-relative positioning
     ModeViewportInfo viewport = GetCurrentModeViewport();
 
     for (const auto& [overlayId, config] : activeOverlays) {
@@ -878,28 +760,23 @@ std::string GetWindowOverlayAtPoint(int x, int y, int screenWidth, int screenHei
 
         int finalScreenX, finalScreenY;
 
-        // Check if this is a viewport-relative overlay
         bool isViewportRelative = IsViewportRelativeAnchor(config.relativeTo);
 
         if (isViewportRelative && viewport.valid) {
-            // Use viewport-relative positioning
             GetRelativeCoordsForImageWithViewport(config.relativeTo, config.x, config.y, displayW, displayH, viewport.stretchX,
                                                   viewport.stretchY, viewport.stretchWidth, viewport.stretchHeight, screenWidth,
                                                   screenHeight, finalScreenX, finalScreenY);
         } else {
-            // Use screen-relative positioning
             GetRelativeCoordsForImage(config.relativeTo, config.x, config.y, displayW, displayH, screenWidth, screenHeight, finalScreenX,
                                       finalScreenY);
         }
 
-        // Check if point is within bounds
         if (x >= finalScreenX && x < finalScreenX + displayW && y >= finalScreenY && y < finalScreenY + displayH) { return overlayId; }
     }
 
     return "";
 }
 
-// Get the HWND for a window overlay by name
 HWND GetWindowOverlayHWND(const std::string& overlayName) {
     std::lock_guard<std::mutex> lock(g_windowOverlayCacheMutex);
     auto it = g_windowOverlayCache.find(overlayName);
@@ -907,7 +784,6 @@ HWND GetWindowOverlayHWND(const std::string& overlayName) {
     return NULL;
 }
 
-// Translate screen coordinates to window overlay coordinates
 bool TranslateToWindowOverlayCoords(const std::string& overlayName, int screenX, int screenY, int screenWidth, int screenHeight, int& outX,
                                     int& outY) {
     WindowOverlayConfig config;
@@ -931,7 +807,6 @@ bool TranslateToWindowOverlayCoords(const std::string& overlayName, int screenX,
 
     if (texWidth <= 0 || texHeight <= 0) return false;
 
-    // Calculate display dimensions
     int croppedWidth = texWidth - config.crop_left - config.crop_right;
     int croppedHeight = texHeight - config.crop_top - config.crop_bottom;
     int displayW = static_cast<int>(croppedWidth * config.scale);
@@ -939,47 +814,37 @@ bool TranslateToWindowOverlayCoords(const std::string& overlayName, int screenX,
 
     if (displayW <= 0 || displayH <= 0) return false;
 
-    // Get overlay position on screen
     int overlayScreenX, overlayScreenY;
 
-    // Check if this is a viewport-relative overlay
     bool isViewportRelative = IsViewportRelativeAnchor(config.relativeTo);
 
     if (isViewportRelative) {
-        // Get current viewport for viewport-relative positioning
         ModeViewportInfo viewport = GetCurrentModeViewport();
         if (viewport.valid) {
             GetRelativeCoordsForImageWithViewport(config.relativeTo, config.x, config.y, displayW, displayH, viewport.stretchX,
                                                   viewport.stretchY, viewport.stretchWidth, viewport.stretchHeight, screenWidth,
                                                   screenHeight, overlayScreenX, overlayScreenY);
         } else {
-            // Fallback to screen-relative if no valid viewport
             GetRelativeCoordsForImage(config.relativeTo, config.x, config.y, displayW, displayH, screenWidth, screenHeight, overlayScreenX,
                                       overlayScreenY);
         }
     } else {
-        // Use screen-relative positioning
         GetRelativeCoordsForImage(config.relativeTo, config.x, config.y, displayW, displayH, screenWidth, screenHeight, overlayScreenX,
                                   overlayScreenY);
     }
 
-    // Calculate relative position within the overlay (0.0 to 1.0)
     float relX = static_cast<float>(screenX - overlayScreenX) / displayW;
     float relY = static_cast<float>(screenY - overlayScreenY) / displayH;
 
-    // Clamp to valid range
     relX = std::max(0.0f, std::min(1.0f, relX));
     relY = std::max(0.0f, std::min(1.0f, relY));
 
-    // Map to the cropped region of the original window
-    // The cropped region starts at (crop_left, crop_top) in window coords
     outX = config.crop_left + static_cast<int>(relX * croppedWidth);
     outY = config.crop_top + static_cast<int>(relY * croppedHeight);
 
     return true;
 }
 
-// Focus a window overlay for interaction
 void FocusWindowOverlay(const std::string& overlayName) {
     HWND targetHwnd = GetWindowOverlayHWND(overlayName);
 
@@ -988,16 +853,12 @@ void FocusWindowOverlay(const std::string& overlayName) {
     g_windowOverlayInteractionActive.store(true);
     Log("[WindowOverlay] Focused overlay for interaction: " + overlayName);
 
-    // Notify target window that it's gaining focus for input
     if (targetHwnd && IsWindow(targetHwnd)) {
-        // Send WM_SETFOCUS to the target window to activate text boxes, etc.
         PostMessage(targetHwnd, WM_SETFOCUS, 0, 0);
-        // Also send WM_ACTIVATE to make it think it's the active window
         PostMessage(targetHwnd, WM_ACTIVATE, WA_ACTIVE, 0);
     }
 }
 
-// Unfocus the current window overlay
 void UnfocusWindowOverlay() {
     std::string overlayToUnfocus;
     {
@@ -1013,26 +874,20 @@ void UnfocusWindowOverlay() {
     // Get HWND outside the lock to avoid deadlock (GetWindowOverlayHWND acquires g_windowOverlayCacheMutex)
     if (!overlayToUnfocus.empty()) {
         HWND targetHwnd = GetWindowOverlayHWND(overlayToUnfocus);
-        // Notify target window that it's losing focus - this makes text boxes lose selection, etc.
         if (targetHwnd && IsWindow(targetHwnd)) {
-            // Send WM_KILLFOCUS to deactivate focused controls in target window
             PostMessage(targetHwnd, WM_KILLFOCUS, 0, 0);
-            // Send WM_ACTIVATE with WA_INACTIVE to deactivate the window
             PostMessage(targetHwnd, WM_ACTIVATE, WA_INACTIVE, 0);
         }
     }
 }
 
-// Check if any window overlay is currently focused
 bool IsWindowOverlayFocused() { return g_windowOverlayInteractionActive.load(); }
 
-// Get the name of the currently focused window overlay
 std::string GetFocusedWindowOverlayName() {
     std::lock_guard<std::mutex> lock(g_focusedWindowOverlayMutex);
     return g_focusedWindowOverlayName;
 }
 
-// Forward a mouse message to the focused window overlay
 bool ForwardMouseToWindowOverlay(UINT uMsg, int screenX, int screenY, WPARAM wParam, int screenWidth, int screenHeight) {
     if (!g_windowOverlayInteractionActive.load()) return false;
 
@@ -1044,7 +899,6 @@ bool ForwardMouseToWindowOverlay(UINT uMsg, int screenX, int screenY, WPARAM wPa
 
     if (overlayName.empty()) return false;
 
-    // Get the target window handle
     HWND targetHwnd = GetWindowOverlayHWND(overlayName);
     if (!targetHwnd || !IsWindow(targetHwnd)) {
         UnfocusWindowOverlay();
@@ -1053,10 +907,8 @@ bool ForwardMouseToWindowOverlay(UINT uMsg, int screenX, int screenY, WPARAM wPa
 
     // Handle WM_MOUSEWHEEL and WM_MOUSEHWHEEL specially
     if (uMsg == WM_MOUSEWHEEL || uMsg == WM_MOUSEHWHEEL) {
-        // For scroll messages, translate the coordinates to the target window
         int windowX, windowY;
         if (!TranslateToWindowOverlayCoords(overlayName, screenX, screenY, screenWidth, screenHeight, windowX, windowY)) {
-            // If translation fails, just use center of the target window as fallback
             RECT clientRect;
             if (GetClientRect(targetHwnd, &clientRect)) {
                 windowX = (clientRect.right - clientRect.left) / 2;
@@ -1067,32 +919,25 @@ bool ForwardMouseToWindowOverlay(UINT uMsg, int screenX, int screenY, WPARAM wPa
             }
         }
 
-        // Convert window client coords to screen coords for the wheel message
         POINT targetScreenPos = { windowX, windowY };
         ClientToScreen(targetHwnd, &targetScreenPos);
 
-        // For wheel messages, lParam contains screen coordinates
         LPARAM wheelLParam = MAKELPARAM(targetScreenPos.x, targetScreenPos.y);
 
-        // Use SendMessage for more reliable wheel delivery (some apps don't handle posted wheel messages)
         SendMessage(targetHwnd, uMsg, wParam, wheelLParam);
         return true;
     }
 
-    // Translate screen coords to window coords for non-wheel messages
     int windowX, windowY;
     if (!TranslateToWindowOverlayCoords(overlayName, screenX, screenY, screenWidth, screenHeight, windowX, windowY)) { return false; }
 
-    // Convert WM_MOUSE* to appropriate message for the target window (client coordinates)
     LPARAM lParam = MAKELPARAM(windowX, windowY);
 
-    // Post the message to the target window
     PostMessage(targetHwnd, uMsg, wParam, lParam);
 
     return true;
 }
 
-// Forward a keyboard message to the focused window overlay
 bool ForwardKeyboardToWindowOverlay(UINT uMsg, WPARAM wParam, LPARAM lParam) {
     if (!g_windowOverlayInteractionActive.load()) return false;
 
@@ -1104,45 +949,31 @@ bool ForwardKeyboardToWindowOverlay(UINT uMsg, WPARAM wParam, LPARAM lParam) {
 
     if (overlayName.empty()) return false;
 
-    // Check for Escape to unfocus
     if (uMsg == WM_KEYDOWN && wParam == VK_ESCAPE) {
         UnfocusWindowOverlay();
-        return true; // Consume the Escape key
+        return true;
     }
 
-    // Get the target window handle
     HWND targetHwnd = GetWindowOverlayHWND(overlayName);
     if (!targetHwnd || !IsWindow(targetHwnd)) {
         UnfocusWindowOverlay();
         return false;
     }
 
-    // Post the keyboard message to the target window
     PostMessage(targetHwnd, uMsg, wParam, lParam);
 
-    // For WM_KEYDOWN, synthesize WM_CHAR for special control keys that need it.
-    // NOTE: We only do this for Enter, Tab, and Backspace - NOT for regular characters.
-    // Regular printable characters (A-Z, 0-9, etc.) will get WM_CHAR generated by the
-    // target window's message loop calling TranslateMessage() on our posted WM_KEYDOWN.
-    // If we also sent WM_CHAR for those, they'd type twice.
-    // But Enter/Tab/Backspace need explicit WM_CHAR for proper behavior (e.g., Enter to send a message).
     if (uMsg == WM_KEYDOWN) {
         WCHAR charCode = 0;
 
-        // Only synthesize WM_CHAR for special control keys
         if (wParam == VK_RETURN) {
-            charCode = '\r'; // Carriage return - needed for "send message" behavior
+            charCode = '\r';
         } else if (wParam == VK_TAB) {
-            charCode = '\t'; // Tab - for tab navigation
+            charCode = '\t';
         } else if (wParam == VK_BACK) {
-            charCode = '\b'; // Backspace - for character deletion
+            charCode = '\b';
         }
-        // Note: Regular printable characters are intentionally NOT handled here
-        // They get WM_CHAR from the target window's TranslateMessage() call
 
         if (charCode != 0) {
-            // Post WM_CHAR with the character code
-            // lParam for WM_CHAR should have the same repeat count and scan code as WM_KEYDOWN
             PostMessage(targetHwnd, WM_CHAR, charCode, lParam);
         }
     }
@@ -1150,8 +981,6 @@ bool ForwardKeyboardToWindowOverlay(UINT uMsg, WPARAM wParam, LPARAM lParam) {
     return true;
 }
 
-// Window enumeration callback
-// Helper function to get executable name from HWND
 std::string GetExecutableNameFromWindow(HWND hwnd) {
     DWORD processId = 0;
     GetWindowThreadProcessId(hwnd, &processId);
@@ -1167,7 +996,6 @@ std::string GetExecutableNameFromWindow(HWND hwnd) {
     CloseHandle(hProcess);
 
     if (success && size > 0) {
-        // Extract just the filename from the full path (optimized with reverse search)
         const char* fileName = exePath;
         for (const char* p = exePath + size - 1; p >= exePath; --p) {
             if (*p == '\\' || *p == '/') {
@@ -1206,15 +1034,12 @@ BOOL CALLBACK EnumWindowsCallback(HWND hwnd, LPARAM lParam) {
     std::string className = windowClass;
     std::string executableName = GetExecutableNameFromWindow(hwnd);
 
-    // Hardcoded list of executables to exclude from window capture dropdown
     static const std::vector<std::string> excludedExecutables = { "TextInputHost.exe", "RazerAppEngine.exe" };
 
-    // Skip excluded executables
     for (const auto& excluded : excludedExecutables) {
         if (executableName == excluded) { return TRUE; }
     }
 
-    // Skip empty titles unless it's a known interesting class
     if (title.empty() && className.find("Chrome") == std::string::npos && className.find("Firefox") == std::string::npos &&
         className.find("Notepad") == std::string::npos) {
         return TRUE;
@@ -1239,14 +1064,12 @@ std::vector<WindowInfo> GetCurrentlyOpenWindows() {
     std::vector<WindowInfo> windows;
     EnumWindows(EnumWindowsCallback, reinterpret_cast<LPARAM>(&windows));
 
-    // Sort by title for better user experience
     std::sort(windows.begin(), windows.end(),
               [](const WindowInfo& a, const WindowInfo& b) { return a.GetDisplayName() < b.GetDisplayName(); });
 
     return windows;
 }
 
-// Check if window info is still valid
 bool IsWindowInfoValid(const WindowInfo& windowInfo) { return IsWindow(windowInfo.hwnd) && IsWindowVisible(windowInfo.hwnd); }
 
 // Background capture thread function
@@ -1265,11 +1088,11 @@ void WindowCaptureThreadFunc() {
         }
 
         auto lastWindowUpdateCheck = std::chrono::steady_clock::now();
-        const auto windowUpdateInterval = std::chrono::seconds(5); // Check for window changes every 5 seconds
+        const auto windowUpdateInterval = std::chrono::seconds(5);
 
         auto lastWindowListUpdate = std::chrono::steady_clock::now();
-        const auto windowListUpdateIntervalGuiOpen = std::chrono::milliseconds(500); // GUI open: keep list fresh
-        const auto windowListUpdateIntervalGuiClosed = std::chrono::seconds(5);      // GUI closed: reduce CPU
+        const auto windowListUpdateIntervalGuiOpen = std::chrono::milliseconds(500);
+        const auto windowListUpdateIntervalGuiClosed = std::chrono::seconds(5);
 
         while (!g_stopWindowCaptureThread) {
             try {
@@ -1286,21 +1109,19 @@ void WindowCaptureThreadFunc() {
                 const auto listInterval = guiOpen ? windowListUpdateIntervalGuiOpen : windowListUpdateIntervalGuiClosed;
                 if (now - lastWindowListUpdate >= listInterval) {
                     auto newWindowList = std::make_unique<std::vector<WindowInfo>>();
-                    // Only do the expensive enumeration frequently while the GUI is open.
                     *newWindowList = GetCurrentlyOpenWindows();
 
                     {
                         std::lock_guard<std::mutex> lock(g_windowListCacheMutex);
                         auto oldList = g_windowListCache.exchange(newWindowList.release());
                         if (oldList) {
-                            delete oldList; // Clean up old cache
+                            delete oldList;
                         }
                         g_lastWindowListUpdate = now;
                     }
                     lastWindowListUpdate = now;
                 }
 
-                // If window overlays are hidden, skip all capture work.
                 // (We still keep the thread alive for quick re-enable.)
                 if (!g_windowOverlaysVisible.load(std::memory_order_acquire)) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -1327,7 +1148,6 @@ void WindowCaptureThreadFunc() {
                     }
                 }
 
-                // Build a list of overlay IDs and configs to capture (safer than holding pointers)
                 std::vector<std::pair<std::string, WindowOverlayConfig>> overlaysToCapture;
                 {
                     // Use snapshot for thread-safe config access + cache lock for cache access
@@ -1338,20 +1158,17 @@ void WindowCaptureThreadFunc() {
                     overlaysToCapture.reserve(cacheSize);
 
                     for (const auto& [overlayId, entry] : g_windowOverlayCache) {
-                        // Find config for this overlay from snapshot
                         const WindowOverlayConfig* config = captureSnap ? FindWindowOverlayConfigIn(overlayId, *captureSnap) : nullptr;
                         if (config) { overlaysToCapture.emplace_back(overlayId, *config); }
                     }
                 }
 
                 if (overlaysToCapture.empty()) {
-                    // Nothing to capture (no configured overlays) - don't spin at 60Hz.
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                     continue;
                 }
                 // Locks released - now we can capture without blocking config/cache changes
 
-                // Process each overlay
                 for (auto& [overlayId, config] : overlaysToCapture) {
                     if (g_stopWindowCaptureThread) { break; }
 
@@ -1372,14 +1189,12 @@ void WindowCaptureThreadFunc() {
                             // and the capture thread checks for null before each capture
                             CaptureWindowContent(*entry, config);
                         }
-                        // If entry was removed, skip this overlay (it was deleted from config)
                     } catch (const std::exception& e) {
                         Log("Error capturing window content for overlay '" + overlayId + "': " + e.what());
                     } catch (...) { Log("Unknown error capturing window content for overlay '" + overlayId + "'"); }
                 }
 
-                // Sleep for a short time to prevent excessive CPU usage
-                std::this_thread::sleep_for(std::chrono::milliseconds(16)); // ~60 FPS max
+                std::this_thread::sleep_for(std::chrono::milliseconds(16));
             } catch (const std::exception& e) { Log("Error in window capture thread: " + std::string(e.what())); } catch (...) {
                 Log("Unknown error in window capture thread");
             }
@@ -1418,11 +1233,12 @@ void StopWindowCaptureThread() {
 }
 
 // Get cached window list for GUI (non-blocking)
-// Returns a copy of the cached list or empty vector if not available
 std::vector<WindowInfo> GetCachedWindowList() {
     std::lock_guard<std::mutex> lock(g_windowListCacheMutex);
     if (auto* cachedList = g_windowListCache.load()) {
-        return *cachedList; // Return a copy
+        return *cachedList;
     }
-    return std::vector<WindowInfo>(); // Return empty list if cache not ready
+    return std::vector<WindowInfo>();
 }
+
+

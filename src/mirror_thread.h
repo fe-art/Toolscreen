@@ -14,7 +14,6 @@
 // Need gui.h for Color and MirrorCaptureConfig used as value types in ThreadedMirrorConfig
 #include "gui.h"
 
-// Forward declarations
 struct MirrorInstance;
 
 // Thread runs independently, capturing game content to back-buffer FBOs
@@ -22,19 +21,13 @@ struct MirrorInstance;
 // Is the mirror capture thread currently running
 extern std::atomic<bool> g_mirrorCaptureRunning;
 
-// Safe capture window flag: true during SwapBuffers hook execution (between entry and owglSwapBuffers call)
 // Capture thread only captures while this is true - if it becomes false, capture is aborted
 extern std::atomic<bool> g_safeToCapture;
 
-// Number of active mirrors currently configured for capture in the current mode.
 // Updated by UpdateMirrorCaptureConfigs() (logic thread) and read by SwapBuffers hook to
-// avoid doing expensive full-frame GPU copies when nothing consumes them.
 extern std::atomic<int> g_activeMirrorCaptureCount;
 
 // Maximum requested FPS among active mirrors (summary of ThreadedMirrorConfig::fps).
-// - 0 means "unlimited" (at least one mirror has fps <= 0) OR "no mirrors" when count==0.
-// - >0 means captures for mirror-only consumption can be rate-limited to this FPS.
-// Updated by UpdateMirrorCaptureConfigs() and UpdateMirrorFPS(); read by SwapBuffers hook.
 extern std::atomic<int> g_activeMirrorCaptureMaxFps;
 
 // Named ThreadedMirrorConfig to avoid conflict with MirrorCaptureConfig in gui.h
@@ -43,34 +36,31 @@ struct ThreadedMirrorConfig {
     int captureWidth = 0;
     int captureHeight = 0;
 
-    // Border configuration
     MirrorBorderType borderType = MirrorBorderType::Dynamic;
-    int dynamicBorderThickness = 0; // For dynamic border (shader-based)
-    // Static border settings (rendered if staticBorderThickness > 0)
+    int dynamicBorderThickness = 0;
     MirrorBorderShape staticBorderShape = MirrorBorderShape::Rectangle;
     Color staticBorderColor = { 1.0f, 1.0f, 1.0f };
     int staticBorderThickness = 2;
     int staticBorderRadius = 0;
     int staticBorderOffsetX = 0;
     int staticBorderOffsetY = 0;
-    int staticBorderWidth = 0;  // 0 = use mirror width
-    int staticBorderHeight = 0; // 0 = use mirror height
+    int staticBorderWidth = 0;
+    int staticBorderHeight = 0;
 
     int fps = 0;
     bool rawOutput = false;
-    bool colorPassthrough = false;   // If true, output original pixel color instead of Output Color when matching
-    std::vector<Color> targetColors; // Multiple target colors - any matching pixel is shown
+    bool colorPassthrough = false;
+    std::vector<Color> targetColors;
     Color outputColor;
-    Color borderColor; // Border color for dynamic render shader
+    Color borderColor;
     float colorSensitivity = 0.0f;
-    std::vector<MirrorCaptureConfig> input; // Uses MirrorCaptureConfig from gui.h
+    std::vector<MirrorCaptureConfig> input;
     std::chrono::steady_clock::time_point lastCaptureTime;
 
-    // Output positioning config (for pre-computing render cache)
     float outputScale = 1.0f;
-    bool outputSeparateScale = false; // When true, use outputScaleX/Y instead of outputScale
-    float outputScaleX = 1.0f;        // X-axis scale
-    float outputScaleY = 1.0f;        // Y-axis scale
+    bool outputSeparateScale = false;
+    float outputScaleX = 1.0f;
+    float outputScaleY = 1.0f;
     int outputX = 0, outputY = 0;
     std::string outputRelativeTo;
 };
@@ -114,9 +104,8 @@ inline bool CaptureQueuePush(const FrameCaptureNotification& notif) {
     int head = g_captureQueueHead.load(std::memory_order_relaxed);
     int nextHead = (head + 1) % CAPTURE_QUEUE_SIZE;
 
-    // Check if queue is full (would overwrite unread data)
     if (nextHead == g_captureQueueTail.load(std::memory_order_acquire)) {
-        return false; // Queue full, drop notification
+        return false;
     }
 
     g_captureQueue[head] = notif;
@@ -127,9 +116,8 @@ inline bool CaptureQueuePush(const FrameCaptureNotification& notif) {
 inline bool CaptureQueuePop(FrameCaptureNotification& notif) {
     int tail = g_captureQueueTail.load(std::memory_order_relaxed);
 
-    // Check if queue is empty
     if (tail == g_captureQueueHead.load(std::memory_order_acquire)) {
-        return false; // Queue empty
+        return false;
     }
 
     notif = g_captureQueue[tail];
@@ -144,32 +132,25 @@ void StartMirrorCaptureThread(void* gameGLContext);
 // Stop the mirror capture thread
 void StopMirrorCaptureThread();
 
-// Swap buffers for all mirrors that have new captures ready
 // Call this from main render thread each frame
 void SwapMirrorBuffers();
 
 // Update capture configs from main thread (call when active mirrors change)
 void UpdateMirrorCaptureConfigs(const std::vector<MirrorConfig>& activeMirrors);
 
-// Update FPS for a specific mirror (call from GUI when FPS spinner changes)
 void UpdateMirrorFPS(const std::string& mirrorName, int fps);
 
-// Update output position for a specific mirror (call from GUI when position changes)
 void UpdateMirrorOutputPosition(const std::string& mirrorName, int x, int y, float scale, bool separateScale, float scaleX, float scaleY,
                                 const std::string& relativeTo);
 
-// Update output position for all mirrors in a group (call from GUI when group settings change)
 void UpdateMirrorGroupOutputPosition(const std::vector<std::string>& mirrorIds, int x, int y, float scale, bool separateScale, float scaleX,
                                      float scaleY, const std::string& relativeTo);
 
-// Update input/capture regions for a specific mirror (call from GUI when input zones change)
 void UpdateMirrorInputRegions(const std::string& mirrorName, const std::vector<MirrorCaptureConfig>& inputRegions);
 
-// Update capture-related settings for a specific mirror (call from GUI when capture settings change)
 void UpdateMirrorCaptureSettings(const std::string& mirrorName, int captureWidth, int captureHeight, const MirrorBorderConfig& border,
                                  const MirrorColors& colors, float colorSensitivity, bool rawOutput, bool colorPassthrough);
 
-// Global mirror match colorspace (applies to all mirrors)
 void SetGlobalMirrorGammaMode(MirrorGammaMode mode);
 MirrorGammaMode GetGlobalMirrorGammaMode();
 
@@ -182,25 +163,25 @@ void SubmitFrameCapture(GLuint gameTexture, int width, int height);
 
 // These provide access to the copied game texture for render_thread/OBS to use
 // The copy is made by mirror thread (deferred from SwapBuffers)
-GLuint GetGameCopyTexture(); // Returns texture ID of the most recent copy (0 if none ready)
+GLuint GetGameCopyTexture();
 
 // --- Ready Frame Accessors (for OBS render thread) ---
 // These return GUARANTEED COMPLETE frames - GPU fence has signaled, safe to read without waiting
 // Updated by mirror thread after fence signals, read by OBS without any fence wait
-GLuint GetReadyGameTexture(); // Returns texture that is guaranteed complete (0 if none ready)
-int GetReadyGameWidth();      // Width of ready frame content
-int GetReadyGameHeight();     // Height of ready frame content
+GLuint GetReadyGameTexture();
+int GetReadyGameWidth();
+int GetReadyGameHeight();
 
 // --- Fallback Frame Accessors (for render_thread when ready frame not available) ---
 // These return the last copy texture info, but require fence wait before use
-// Used as fallback when GetReadyGameTexture() returns 0 due to timing
-GLuint GetFallbackGameTexture(); // Returns texture from g_lastCopyReadIndex (0 if none)
-int GetFallbackGameWidth();      // Width of fallback frame
-int GetFallbackGameHeight();     // Height of fallback frame
+GLuint GetFallbackGameTexture();
+int GetFallbackGameWidth();
+int GetFallbackGameHeight();
 GLsync GetFallbackCopyFence();   // Fence to wait on before using fallback texture
 
-// Returns the texture NOT currently being written to - always safe to read (may be 1 frame old)
 // No fence wait needed - this is a simple and reliable fallback
 GLuint GetSafeReadTexture();
 
 // Note: OBS capture is now handled by obs_thread.h/cpp via glBlitFramebuffer hook
+
+

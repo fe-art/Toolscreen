@@ -8,7 +8,6 @@
 #include <filesystem>
 #include <fstream>
 
-// Get optional value from TOML table with default
 template <typename T> T GetOr(const toml::table& tbl, const std::string& key, T defaultValue) {
     if (auto node = tbl.get(key)) {
         if (auto val = node->value<T>()) { return *val; }
@@ -16,7 +15,6 @@ template <typename T> T GetOr(const toml::table& tbl, const std::string& key, T 
     return defaultValue;
 }
 
-// Get optional string with default
 std::string GetStringOr(const toml::table& tbl, const std::string& key, const std::string& defaultValue) {
     if (auto node = tbl.get(key)) {
         if (auto val = node->value<std::string>()) { return *val; }
@@ -24,35 +22,29 @@ std::string GetStringOr(const toml::table& tbl, const std::string& key, const st
     return defaultValue;
 }
 
-// Get optional nested table
 const toml::table* GetTable(const toml::table& tbl, const std::string& key) {
     if (auto node = tbl.get(key)) { return node->as_table(); }
     return nullptr;
 }
 
-// Get optional array
 const toml::array* GetArray(const toml::table& tbl, const std::string& key) {
     if (auto node = tbl.get(key)) { return node->as_array(); }
     return nullptr;
 }
 
-// Write a table with keys in the specified order
 void WriteTableOrdered(std::ostream& out, const toml::table& tbl, const std::vector<std::string>& orderedKeys) {
-    // Write keys in the specified order first
     for (const auto& key : orderedKeys) {
         if (tbl.contains(key)) {
             const toml::node* nodePtr = tbl.get(key);
             if (!nodePtr) continue;
 
             if (nodePtr->is_table()) {
-                // Inline table
                 const toml::table* subtbl = nodePtr->as_table();
                 if (subtbl) out << key << " = " << *subtbl << "\n";
             } else if (nodePtr->is_array()) {
                 const toml::array* arr = nodePtr->as_array();
                 if (arr) out << key << " = " << *arr << "\n";
             } else {
-                // Scalar value
                 out << key << " = ";
                 nodePtr->visit([&out](auto&& val) { out << val; });
                 out << "\n";
@@ -60,7 +52,6 @@ void WriteTableOrdered(std::ostream& out, const toml::table& tbl, const std::vec
         }
     }
 
-    // Write any remaining keys not in orderedKeys
     for (const auto& [key, node] : tbl) {
         std::string keyStr(key.str());
         if (std::find(orderedKeys.begin(), orderedKeys.end(), keyStr) == orderedKeys.end()) {
@@ -80,13 +71,11 @@ void WriteTableOrdered(std::ostream& out, const toml::table& tbl, const std::vec
 }
 
 toml::array ColorToTomlArray(const Color& color) {
-    // Convert from internal float [0-1] to int [0-255] RGB(A) array
-    // Only include alpha if it's not fully opaque (1.0) for backward compatibility
     toml::array arr;
     arr.push_back(static_cast<int64_t>(std::round(color.r * 255.0f)));
     arr.push_back(static_cast<int64_t>(std::round(color.g * 255.0f)));
     arr.push_back(static_cast<int64_t>(std::round(color.b * 255.0f)));
-    if (color.a < 1.0f - 0.001f) { // Only add alpha if not fully opaque
+    if (color.a < 1.0f - 0.001f) {
         arr.push_back(static_cast<int64_t>(std::round(color.a * 255.0f)));
     }
     return arr;
@@ -98,21 +87,15 @@ Color ColorFromTomlArray(const toml::array* arr, Color defaultColor = { 0.0f, 0.
         return color;
     }
 
-    // Accept both legacy int arrays in [0..255] and float arrays in [0..1].
-    // Reason: older/custom user theme.toml files may store floats; previous parsing only
-    // accepted int64_t, which silently fell back to the default (often black), making UI
-    // text appear "broken"/black.
     auto readComponent01 = [&](size_t idx, float fallback01) -> float {
         if (idx >= arr->size()) {
             return fallback01;
         }
 
         if (auto vInt = (*arr)[idx].value<int64_t>()) {
-            // Integer format: 0..255
             return static_cast<float>(*vInt) / 255.0f;
         }
 
-        // Float format: either 0..1 or 0..255 (rare but possible)
         if (auto vDbl = (*arr)[idx].value<double>()) {
             const double v = *vDbl;
             if (v <= 1.0) {
@@ -129,7 +112,6 @@ Color ColorFromTomlArray(const toml::array* arr, Color defaultColor = { 0.0f, 0.
     color.b = readComponent01(2, defaultColor.b);
     color.a = (arr->size() >= 4) ? readComponent01(3, defaultColor.a) : 1.0f;
 
-    // Clamp in case the config contains out-of-range values.
     color.r = (std::max)(0.0f, (std::min)(1.0f, color.r));
     color.g = (std::max)(0.0f, (std::min)(1.0f, color.g));
     color.b = (std::max)(0.0f, (std::min)(1.0f, color.b));
@@ -137,9 +119,6 @@ Color ColorFromTomlArray(const toml::array* arr, Color defaultColor = { 0.0f, 0.
     return color;
 }
 
-// ============================================================================
-// GradientAnimationType Serialization
-// ============================================================================
 
 std::string GradientAnimationTypeToString(GradientAnimationType type) {
     switch (type) {
@@ -168,13 +147,12 @@ GradientAnimationType StringToGradientAnimationType(const std::string& str) {
 }
 
 void BackgroundConfigToToml(const BackgroundConfig& cfg, toml::table& out) {
-    out.is_inline(false); // Need non-inline for gradient arrays
+    out.is_inline(false);
 
     out.insert("selectedMode", cfg.selectedMode);
     out.insert("image", cfg.image);
     out.insert("color", ColorToTomlArray(cfg.color));
 
-    // Gradient settings
     toml::array stopsArr;
     for (const auto& stop : cfg.gradientStops) {
         toml::table stopTbl;
@@ -186,7 +164,6 @@ void BackgroundConfigToToml(const BackgroundConfig& cfg, toml::table& out) {
     out.insert("gradientStops", stopsArr);
     out.insert("gradientAngle", cfg.gradientAngle);
 
-    // Gradient animation settings
     out.insert("gradientAnimation", GradientAnimationTypeToString(cfg.gradientAnimation));
     out.insert("gradientAnimationSpeed", cfg.gradientAnimationSpeed);
     out.insert("gradientColorFade", cfg.gradientColorFade);
@@ -197,7 +174,6 @@ void BackgroundConfigFromToml(const toml::table& tbl, BackgroundConfig& cfg) {
     cfg.image = GetStringOr(tbl, "image", "");
     cfg.color = ColorFromTomlArray(GetArray(tbl, "color"), { 0.0f, 0.0f, 0.0f });
 
-    // Load gradient stops
     cfg.gradientStops.clear();
     if (auto arr = GetArray(tbl, "gradientStops")) {
         for (const auto& elem : *arr) {
@@ -209,7 +185,6 @@ void BackgroundConfigFromToml(const toml::table& tbl, BackgroundConfig& cfg) {
             }
         }
     }
-    // Ensure minimum 2 stops with defaults if empty
     if (cfg.gradientStops.size() < 2) {
         cfg.gradientStops.clear();
         cfg.gradientStops.push_back({ { 0.0f, 0.0f, 0.0f }, 0.0f });
@@ -217,15 +192,11 @@ void BackgroundConfigFromToml(const toml::table& tbl, BackgroundConfig& cfg) {
     }
     cfg.gradientAngle = GetOr(tbl, "gradientAngle", 0.0f);
 
-    // Load gradient animation settings
     cfg.gradientAnimation = StringToGradientAnimationType(GetStringOr(tbl, "gradientAnimation", "None"));
     cfg.gradientAnimationSpeed = GetOr(tbl, "gradientAnimationSpeed", 1.0f);
     cfg.gradientColorFade = GetOr(tbl, "gradientColorFade", false);
 }
 
-// ============================================================================
-// MirrorCaptureConfig Serialization
-// ============================================================================
 
 void MirrorCaptureConfigToToml(const MirrorCaptureConfig& cfg, toml::table& out) {
     out.is_inline(true);
@@ -243,8 +214,6 @@ void MirrorCaptureConfigFromToml(const toml::table& tbl, MirrorCaptureConfig& cf
 void MirrorRenderConfigToToml(const MirrorRenderConfig& cfg, toml::table& out) {
     out.is_inline(true);
 
-    // When using relative position, save as float (0-1) for percentage
-    // When using absolute position, save as int for pixel values
     if (cfg.useRelativePosition) {
         out.insert("x", cfg.relativeX);
         out.insert("y", cfg.relativeY);
@@ -264,7 +233,6 @@ void MirrorRenderConfigToToml(const MirrorRenderConfig& cfg, toml::table& out) {
 }
 
 void MirrorRenderConfigFromToml(const toml::table& tbl, MirrorRenderConfig& cfg) {
-    // Load explicit relative position fields if present
     cfg.useRelativePosition = GetOr(tbl, "useRelativePosition", false);
     cfg.relativeX = GetOr(tbl, "relativeX", 0.5f);
     cfg.relativeY = GetOr(tbl, "relativeY", 0.5f);
@@ -309,7 +277,6 @@ void MirrorRenderConfigFromToml(const toml::table& tbl, MirrorRenderConfig& cfg)
         cfg.y = ConfigDefaults::MIRROR_RENDER_Y;
     }
 
-    // Auto-detect relative mode if both x and y were percentages
     if (!tbl.contains("useRelativePosition") && xIsPercentage && yIsPercentage) { cfg.useRelativePosition = true; }
 
     if (cfg.useRelativePosition) {
@@ -334,7 +301,6 @@ void MirrorRenderConfigFromToml(const toml::table& tbl, MirrorRenderConfig& cfg)
 void MirrorColorsToToml(const MirrorColors& cfg, toml::table& out) {
     out.is_inline(true);
 
-    // Serialize array of target colors
     toml::array targetColorsArr;
     for (const auto& color : cfg.targetColors) { targetColorsArr.push_back(ColorToTomlArray(color)); }
     out.insert("targetColors", targetColorsArr);
@@ -344,7 +310,6 @@ void MirrorColorsToToml(const MirrorColors& cfg, toml::table& out) {
 }
 
 void MirrorColorsFromToml(const toml::table& tbl, MirrorColors& cfg) {
-    // Load array of target colors
     cfg.targetColors.clear();
     if (auto arr = GetArray(tbl, "targetColors")) {
         for (const auto& elem : *arr) {
@@ -352,16 +317,12 @@ void MirrorColorsFromToml(const toml::table& tbl, MirrorColors& cfg) {
         }
     }
 
-    // Backward compatibility: if no targetColors array, try old single "target" field
     if (cfg.targetColors.empty()) { cfg.targetColors.push_back(ColorFromTomlArray(GetArray(tbl, "target"), { 0.0f, 1.0f, 0.0f })); }
 
     cfg.output = ColorFromTomlArray(GetArray(tbl, "output"), { 1.0f, 0.0f, 0.0f });
     cfg.border = ColorFromTomlArray(GetArray(tbl, "border"), { 1.0f, 1.0f, 1.0f });
 }
 
-// ============================================================================
-// MirrorBorderConfig Serialization
-// ============================================================================
 
 static std::string MirrorGammaModeToString(MirrorGammaMode mode) {
     switch (mode) {
@@ -396,7 +357,6 @@ static HookChainingNextTarget StringToHookChainingNextTarget(const std::string& 
     if (str == "LatestHook" || str == "Latest" || str == "latest" || str == "latestHook" || str == "LATEST") {
         return HookChainingNextTarget::LatestHook;
     }
-    // Backward compatible default
     return HookChainingNextTarget::LatestHook;
 }
 
@@ -459,7 +419,6 @@ void MirrorConfigToToml(const MirrorConfig& cfg, toml::table& out) {
     out.insert("captureWidth", cfg.captureWidth);
     out.insert("captureHeight", cfg.captureHeight);
 
-    // Input array
     toml::array inputArr;
     for (const auto& input : cfg.input) {
         toml::table inputTbl;
@@ -468,19 +427,16 @@ void MirrorConfigToToml(const MirrorConfig& cfg, toml::table& out) {
     }
     out.insert("input", inputArr);
 
-    // Output
     toml::table outputTbl;
     MirrorRenderConfigToToml(cfg.output, outputTbl);
     out.insert("output", outputTbl);
 
-    // Colors
     toml::table colorsTbl;
     MirrorColorsToToml(cfg.colors, colorsTbl);
     out.insert("colors", colorsTbl);
 
     out.insert("colorSensitivity", std::round(cfg.colorSensitivity * 1000.0f) / 1000.0f);
 
-    // Border config
     toml::table borderTbl;
     MirrorBorderConfigToToml(cfg.border, borderTbl);
     out.insert("border", borderTbl);
@@ -489,8 +445,6 @@ void MirrorConfigToToml(const MirrorConfig& cfg, toml::table& out) {
     out.insert("opacity", std::round(cfg.opacity * 1000.0f) / 1000.0f);
     out.insert("rawOutput", cfg.rawOutput);
     out.insert("colorPassthrough", cfg.colorPassthrough);
-    // Mirrors: onlyOnMyScreen is currently disabled (forced false), but we keep the field
-    // in the config for compatibility with older/newer configs.
     out.insert("onlyOnMyScreen", false);
 }
 
@@ -499,7 +453,6 @@ void MirrorConfigFromToml(const toml::table& tbl, MirrorConfig& cfg) {
     cfg.captureWidth = GetOr(tbl, "captureWidth", ConfigDefaults::MIRROR_CAPTURE_WIDTH);
     cfg.captureHeight = GetOr(tbl, "captureHeight", ConfigDefaults::MIRROR_CAPTURE_HEIGHT);
 
-    // Input array
     cfg.input.clear();
     if (auto arr = GetArray(tbl, "input")) {
         for (const auto& elem : *arr) {
@@ -511,19 +464,15 @@ void MirrorConfigFromToml(const toml::table& tbl, MirrorConfig& cfg) {
         }
     }
 
-    // Output
     if (auto t = GetTable(tbl, "output")) { MirrorRenderConfigFromToml(*t, cfg.output); }
 
-    // Colors
     if (auto t = GetTable(tbl, "colors")) { MirrorColorsFromToml(*t, cfg.colors); }
 
     cfg.colorSensitivity = GetOr(tbl, "colorSensitivity", ConfigDefaults::MIRROR_COLOR_SENSITIVITY);
 
-    // Border config - check for new format first, then fallback to old borderThickness
     if (auto t = GetTable(tbl, "border")) {
         MirrorBorderConfigFromToml(*t, cfg.border);
     } else {
-        // Backward compatibility: migrate old borderThickness to new format
         cfg.border.type = MirrorBorderType::Dynamic;
         cfg.border.dynamicThickness = GetOr(tbl, "borderThickness", ConfigDefaults::MIRROR_BORDER_DYNAMIC_THICKNESS);
     }
@@ -532,12 +481,9 @@ void MirrorConfigFromToml(const toml::table& tbl, MirrorConfig& cfg) {
     cfg.opacity = GetOr(tbl, "opacity", 1.0f);
     cfg.rawOutput = GetOr(tbl, "rawOutput", ConfigDefaults::MIRROR_RAW_OUTPUT);
     cfg.colorPassthrough = GetOr(tbl, "colorPassthrough", ConfigDefaults::MIRROR_COLOR_PASSTHROUGH);
-    // Mirrors: onlyOnMyScreen is intentionally disabled. We still read the key for
-    // backward compatibility, but force the runtime value to false.
     const bool parsedOnlyOnMyScreen = GetOr(tbl, "onlyOnMyScreen", ConfigDefaults::MIRROR_ONLY_ON_MY_SCREEN);
     (void)parsedOnlyOnMyScreen;
     cfg.onlyOnMyScreen = false;
-    // Note: mirror.debug section is ignored for backward compatibility
 }
 
 void MirrorGroupItemToToml(const MirrorGroupItem& item, toml::table& out) {
@@ -566,7 +512,6 @@ void MirrorGroupConfigToToml(const MirrorGroupConfig& cfg, toml::table& out) {
     MirrorRenderConfigToToml(cfg.output, outputTbl);
     out.insert("output", outputTbl);
 
-    // Serialize mirrors array with per-item sizing
     toml::array mirrorsArr;
     for (const auto& item : cfg.mirrors) {
         toml::table itemTbl;
@@ -583,7 +528,6 @@ void MirrorGroupConfigFromToml(const toml::table& tbl, MirrorGroupConfig& cfg) {
 
     cfg.mirrors.clear();
 
-    // New format: mirrors array with per-item sizing
     if (auto arr = GetArray(tbl, "mirrors")) {
         for (const auto& elem : *arr) {
             if (auto t = elem.as_table()) {
@@ -594,15 +538,14 @@ void MirrorGroupConfigFromToml(const toml::table& tbl, MirrorGroupConfig& cfg) {
         }
     }
 
-    // Backward compatibility: old mirrorIds format (string array)
     if (cfg.mirrors.empty()) {
         if (auto arr = GetArray(tbl, "mirrorIds")) {
             for (const auto& elem : *arr) {
                 if (auto val = elem.value<std::string>()) {
                     MirrorGroupItem item;
                     item.mirrorId = *val;
-                    item.widthPercent = 1.0f;  // Default 100%
-                    item.heightPercent = 1.0f; // Default 100%
+                    item.widthPercent = 1.0f;
+                    item.heightPercent = 1.0f;
                     cfg.mirrors.push_back(item);
                 }
             }
@@ -631,7 +574,6 @@ void StretchConfigToToml(const StretchConfig& cfg, toml::table& out) {
     out.insert("x", cfg.x);
     out.insert("y", cfg.y);
 
-    // Expression fields (only save if non-empty)
     if (!cfg.widthExpr.empty()) { out.insert("widthExpr", cfg.widthExpr); }
     if (!cfg.heightExpr.empty()) { out.insert("heightExpr", cfg.heightExpr); }
     if (!cfg.xExpr.empty()) { out.insert("xExpr", cfg.xExpr); }
@@ -645,7 +587,6 @@ void StretchConfigFromToml(const toml::table& tbl, StretchConfig& cfg) {
     cfg.x = GetOr(tbl, "x", ConfigDefaults::STRETCH_X);
     cfg.y = GetOr(tbl, "y", ConfigDefaults::STRETCH_Y);
 
-    // Expression fields
     cfg.widthExpr = GetStringOr(tbl, "widthExpr", "");
     cfg.heightExpr = GetStringOr(tbl, "heightExpr", "");
     cfg.xExpr = GetStringOr(tbl, "xExpr", "");
@@ -662,7 +603,7 @@ void BorderConfigToToml(const BorderConfig& cfg, toml::table& out) {
 
 void BorderConfigFromToml(const toml::table& tbl, BorderConfig& cfg) {
     cfg.enabled = GetOr(tbl, "enabled", ConfigDefaults::BORDER_ENABLED);
-    cfg.color = ColorFromTomlArray(GetArray(tbl, "color"), { 1.0f, 1.0f, 1.0f }); // Default white
+    cfg.color = ColorFromTomlArray(GetArray(tbl, "color"), { 1.0f, 1.0f, 1.0f });
     cfg.width = GetOr(tbl, "width", ConfigDefaults::BORDER_WIDTH);
     cfg.radius = GetOr(tbl, "radius", ConfigDefaults::BORDER_RADIUS);
 }
@@ -691,7 +632,6 @@ void ImageConfigToToml(const ImageConfig& cfg, toml::table& out) {
     out.insert("crop_right", cfg.crop_right);
     out.insert("enableColorKey", cfg.enableColorKey);
 
-    // Color keys array
     toml::array colorKeysArr;
     for (const auto& ck : cfg.colorKeys) {
         toml::table ckTbl;
@@ -727,7 +667,6 @@ void ImageConfigFromToml(const toml::table& tbl, ImageConfig& cfg) {
     cfg.crop_right = GetOr(tbl, "crop_right", ConfigDefaults::IMAGE_CROP_RIGHT);
     cfg.enableColorKey = GetOr(tbl, "enableColorKey", ConfigDefaults::IMAGE_ENABLE_COLOR_KEY);
 
-    // Color keys array
     cfg.colorKeys.clear();
     if (auto arr = GetArray(tbl, "colorKeys")) {
         for (const auto& elem : *arr) {
@@ -765,7 +704,6 @@ void WindowOverlayConfigToToml(const WindowOverlayConfig& cfg, toml::table& out)
     out.insert("crop_right", cfg.crop_right);
     out.insert("enableColorKey", cfg.enableColorKey);
 
-    // Color keys array
     toml::array colorKeysArr;
     for (const auto& ck : cfg.colorKeys) {
         toml::table ckTbl;
@@ -807,7 +745,6 @@ void WindowOverlayConfigFromToml(const toml::table& tbl, WindowOverlayConfig& cf
     cfg.crop_right = GetOr(tbl, "crop_right", ConfigDefaults::IMAGE_CROP_RIGHT);
     cfg.enableColorKey = GetOr(tbl, "enableColorKey", ConfigDefaults::IMAGE_ENABLE_COLOR_KEY);
 
-    // Color keys array
     cfg.colorKeys.clear();
     if (auto arr = GetArray(tbl, "colorKeys")) {
         for (const auto& elem : *arr) {
@@ -829,7 +766,6 @@ void WindowOverlayConfigFromToml(const toml::table& tbl, WindowOverlayConfig& cf
     cfg.captureMethod = GetStringOr(tbl, "captureMethod", ConfigDefaults::WINDOW_OVERLAY_CAPTURE_METHOD);
     cfg.enableInteraction = GetOr(tbl, "enableInteraction", ConfigDefaults::WINDOW_OVERLAY_ENABLE_INTERACTION);
 
-    // Migrate old capture method names
     if (cfg.captureMethod == "Auto" || cfg.captureMethod == "PrintWindow_FullContent" || cfg.captureMethod == "PrintWindow_ClientOnly" ||
         cfg.captureMethod == "PrintWindow_Default") {
         cfg.captureMethod = "Windows 10+";
@@ -841,7 +777,6 @@ void WindowOverlayConfigFromToml(const toml::table& tbl, WindowOverlayConfig& cf
 void ModeConfigToToml(const ModeConfig& cfg, toml::table& out) {
     out.insert("id", cfg.id);
 
-    // Width/Height can be absolute pixels, relative (0-1), or expressions (string)
     if (!cfg.widthExpr.empty()) {
         out.insert("width", cfg.widthExpr);
     } else if (cfg.useRelativeSize && cfg.relativeWidth >= 0.0f && cfg.relativeWidth <= 1.0f) {
@@ -862,22 +797,18 @@ void ModeConfigToToml(const ModeConfig& cfg, toml::table& out) {
     BackgroundConfigToToml(cfg.background, bgTbl);
     out.insert("background", bgTbl);
 
-    // Mirror IDs array
     toml::array mirrorIds;
     for (const auto& id : cfg.mirrorIds) { mirrorIds.push_back(id); }
     out.insert("mirrorIds", mirrorIds);
 
-    // Mirror Group IDs array
     toml::array mirrorGroupIds;
     for (const auto& id : cfg.mirrorGroupIds) { mirrorGroupIds.push_back(id); }
     out.insert("mirrorGroupIds", mirrorGroupIds);
 
-    // Image IDs array
     toml::array imageIds;
     for (const auto& id : cfg.imageIds) { imageIds.push_back(id); }
     out.insert("imageIds", imageIds);
 
-    // Window overlay IDs array
     toml::array windowOverlayIds;
     for (const auto& id : cfg.windowOverlayIds) { windowOverlayIds.push_back(id); }
     out.insert("windowOverlayIds", windowOverlayIds);
@@ -886,14 +817,12 @@ void ModeConfigToToml(const ModeConfig& cfg, toml::table& out) {
     StretchConfigToToml(cfg.stretch, stretchTbl);
     out.insert("stretch", stretchTbl);
 
-    // Transitions
     toml::table transitionTbl;
     transitionTbl.insert("gameTransition", GameTransitionTypeToString(cfg.gameTransition));
     transitionTbl.insert("overlayTransition", OverlayTransitionTypeToString(cfg.overlayTransition));
     transitionTbl.insert("backgroundTransition", BackgroundTransitionTypeToString(cfg.backgroundTransition));
     transitionTbl.insert("transitionDurationMs", cfg.transitionDurationMs);
 
-    // Easing settings
     transitionTbl.insert("easeInPower", cfg.easeInPower);
     transitionTbl.insert("easeOutPower", cfg.easeOutPower);
     transitionTbl.insert("bounceCount", cfg.bounceCount);
@@ -909,14 +838,12 @@ void ModeConfigToToml(const ModeConfig& cfg, toml::table& out) {
     BorderConfigToToml(cfg.border, borderTbl);
     out.insert("border", borderTbl);
 
-    // Sensitivity
     out.insert("sensitivityOverrideEnabled", cfg.sensitivityOverrideEnabled);
     out.insert("modeSensitivity", cfg.modeSensitivity);
     out.insert("separateXYSensitivity", cfg.separateXYSensitivity);
     out.insert("modeSensitivityX", cfg.modeSensitivityX);
     out.insert("modeSensitivityY", cfg.modeSensitivityY);
 
-    // Transition animation now lives under transition table
 }
 
 void ModeConfigFromToml(const toml::table& tbl, ModeConfig& cfg) {
@@ -928,7 +855,6 @@ void ModeConfigFromToml(const toml::table& tbl, ModeConfig& cfg) {
     cfg.widthExpr.clear();
     cfg.heightExpr.clear();
 
-    // Read width/height - can be expression string, float (0-1) relative, or absolute number
     bool widthIsPercentage = false;
     bool heightIsPercentage = false;
 
@@ -972,11 +898,9 @@ void ModeConfigFromToml(const toml::table& tbl, ModeConfig& cfg) {
         cfg.height = ConfigDefaults::MODE_HEIGHT;
     }
 
-    // Legacy expression fields (widthExpr/heightExpr) for backward compat
     if (cfg.widthExpr.empty()) { cfg.widthExpr = GetStringOr(tbl, "widthExpr", ""); }
     if (cfg.heightExpr.empty()) { cfg.heightExpr = GetStringOr(tbl, "heightExpr", ""); }
 
-    // Legacy relative size fields for backward compat
     if (tbl.contains("useRelativeSize") || tbl.contains("relativeWidth") || tbl.contains("relativeHeight")) {
         cfg.useRelativeSize = GetOr(tbl, "useRelativeSize", false);
         cfg.relativeWidth = GetOr(tbl, "relativeWidth", cfg.relativeWidth);
@@ -989,11 +913,9 @@ void ModeConfigFromToml(const toml::table& tbl, ModeConfig& cfg) {
     if (!cfg.heightExpr.empty()) { cfg.relativeHeight = -1.0f; }
 
     // Note: Actual pixel conversion from percentages is done elsewhere (GUI/logic thread)
-    // because we need screen dimensions which may not be available during config load
 
     if (auto t = GetTable(tbl, "background")) { BackgroundConfigFromToml(*t, cfg.background); }
 
-    // Mirror IDs
     cfg.mirrorIds.clear();
     if (auto arr = GetArray(tbl, "mirrorIds")) {
         for (const auto& elem : *arr) {
@@ -1001,7 +923,6 @@ void ModeConfigFromToml(const toml::table& tbl, ModeConfig& cfg) {
         }
     }
 
-    // Mirror Group IDs
     cfg.mirrorGroupIds.clear();
     if (auto arr = GetArray(tbl, "mirrorGroupIds")) {
         for (const auto& elem : *arr) {
@@ -1009,7 +930,6 @@ void ModeConfigFromToml(const toml::table& tbl, ModeConfig& cfg) {
         }
     }
 
-    // Image IDs
     cfg.imageIds.clear();
     if (auto arr = GetArray(tbl, "imageIds")) {
         for (const auto& elem : *arr) {
@@ -1017,7 +937,6 @@ void ModeConfigFromToml(const toml::table& tbl, ModeConfig& cfg) {
         }
     }
 
-    // Window overlay IDs
     cfg.windowOverlayIds.clear();
     if (auto arr = GetArray(tbl, "windowOverlayIds")) {
         for (const auto& elem : *arr) {
@@ -1027,7 +946,6 @@ void ModeConfigFromToml(const toml::table& tbl, ModeConfig& cfg) {
 
     if (auto t = GetTable(tbl, "stretch")) { StretchConfigFromToml(*t, cfg.stretch); }
 
-    // Transitions (new: transition table, old: top-level keys)
     const toml::table* transitionTbl = GetTable(tbl, "transition");
     const toml::table& transitionSrc = transitionTbl ? *transitionTbl : tbl;
 
@@ -1038,7 +956,6 @@ void ModeConfigFromToml(const toml::table& tbl, ModeConfig& cfg) {
         StringToBackgroundTransitionType(GetStringOr(transitionSrc, "backgroundTransition", ConfigDefaults::BACKGROUND_TRANSITION_CUT));
     cfg.transitionDurationMs = GetOr(transitionSrc, "transitionDurationMs", ConfigDefaults::MODE_TRANSITION_DURATION_MS);
 
-    // Easing
     cfg.easeInPower = GetOr(transitionSrc, "easeInPower", ConfigDefaults::MODE_EASE_IN_POWER);
     cfg.easeOutPower = GetOr(transitionSrc, "easeOutPower", ConfigDefaults::MODE_EASE_OUT_POWER);
     cfg.bounceCount = GetOr(transitionSrc, "bounceCount", ConfigDefaults::MODE_BOUNCE_COUNT);
@@ -1050,14 +967,12 @@ void ModeConfigFromToml(const toml::table& tbl, ModeConfig& cfg) {
 
     if (auto t = GetTable(tbl, "border")) { BorderConfigFromToml(*t, cfg.border); }
 
-    // Sensitivity
     cfg.sensitivityOverrideEnabled = GetOr(tbl, "sensitivityOverrideEnabled", ConfigDefaults::MODE_SENSITIVITY_OVERRIDE_ENABLED);
     cfg.modeSensitivity = GetOr(tbl, "modeSensitivity", ConfigDefaults::MODE_SENSITIVITY);
     cfg.separateXYSensitivity = GetOr(tbl, "separateXYSensitivity", ConfigDefaults::MODE_SEPARATE_XY_SENSITIVITY);
     cfg.modeSensitivityX = GetOr(tbl, "modeSensitivityX", ConfigDefaults::MODE_SENSITIVITY_X);
     cfg.modeSensitivityY = GetOr(tbl, "modeSensitivityY", ConfigDefaults::MODE_SENSITIVITY_Y);
 
-    // Transition animation
     cfg.slideMirrorsIn = GetOr(transitionSrc, "slideMirrorsIn", false);
 }
 
@@ -1161,7 +1076,6 @@ void HotkeyConfigFromToml(const toml::table& tbl, HotkeyConfig& cfg) {
     cfg.blockKeyFromGame = GetOr(tbl, "blockKeyFromGame", false);
     cfg.allowExitToFullscreenRegardlessOfGameState = GetOr(tbl, "allowExitToFullscreenRegardlessOfGameState", false);
     // Note: currentSecondaryMode is now tracked separately via thread-safe
-    // Get/SetHotkeySecondaryMode() API - initialized by ResetAllHotkeySecondaryModes() after load
 }
 
 void SensitivityHotkeyConfigToToml(const SensitivityHotkeyConfig& cfg, toml::table& out) {
@@ -1259,7 +1173,6 @@ void CursorConfigFromToml(const toml::table& tbl, CursorConfig& cfg) {
     cfg.cursorName = GetStringOr(tbl, "cursorName", "");
     cfg.cursorSize = GetOr(tbl, "cursorSize", ConfigDefaults::CURSOR_SIZE);
 
-    // Validate size is in valid range
     static const std::vector<int> validSizes = {
         16, 20, 24, 28, 32, 40, 48, 56, 64, 72, 80, 96, 112, 128, 144, 160, 192, 224, 256, 288, 320
     };
@@ -1327,8 +1240,6 @@ void EyeZoomConfigFromToml(const toml::table& tbl, EyeZoomConfig& cfg) {
     if (cfg.cloneWidth < 2) cfg.cloneWidth = 2;
     if (cfg.cloneWidth % 2 != 0) cfg.cloneWidth = (cfg.cloneWidth / 2) * 2;
 
-    // overlayWidth is boxes/labels PER SIDE. Backward-compatible default is cloneWidth/2.
-    // Allow older configs (without overlayWidth) to behave like before.
     int overlayDefaultSentinel = -1;
     int overlayWidth = GetOr(tbl, "overlayWidth", overlayDefaultSentinel);
     if (overlayWidth == overlayDefaultSentinel) {
@@ -1383,7 +1294,6 @@ static bool TryParseUnicodeCodepointString(const std::string& in, uint32_t& outC
     while (!s.empty() && isSpace((unsigned char)s.back())) s.pop_back();
     if (s.empty()) return false;
 
-    // Accept "U+XXXX", "\\uXXXX", "0xXXXX", or plain hex.
     auto startsWithI = [&](const char* pfx) {
         size_t n = std::char_traits<char>::length(pfx);
         if (s.size() < n) return false;
@@ -1406,8 +1316,6 @@ static bool TryParseUnicodeCodepointString(const std::string& in, uint32_t& outC
     // Strip optional surrounding braces like "{00F8}".
     if (!hex.empty() && hex.front() == '{' && hex.back() == '}') hex = hex.substr(1, hex.size() - 2);
 
-    // If it's a single UTF-8 character (e.g. "ø"), accept it.
-    // Convert to UTF-16 and decode first scalar.
     {
         std::wstring w = Utf8ToWide(s);
         if (!w.empty()) {
@@ -1424,13 +1332,12 @@ static bool TryParseUnicodeCodepointString(const std::string& in, uint32_t& outC
         }
     }
 
-    // Hex parse
     try {
         size_t idx = 0;
         unsigned long v = std::stoul(hex, &idx, 16);
         if (idx == 0) return false;
         if (v == 0 || v > 0x10FFFFul) return false;
-        if (v >= 0xD800ul && v <= 0xDFFFul) return false; // surrogates invalid
+        if (v >= 0xD800ul && v <= 0xDFFFul) return false;
         outCp = (uint32_t)v;
         return true;
     } catch (...) {
@@ -1489,16 +1396,10 @@ void KeyRebindsConfigFromToml(const toml::table& tbl, KeyRebindsConfig& cfg) {
     }
 }
 
-// ============================================================================
-// AppearanceConfig Serialization
-// ============================================================================
 
 void AppearanceConfigToToml(const AppearanceConfig& cfg, toml::table& out) {
     out.insert("theme", cfg.theme);
 
-    // Save custom colors whenever present.
-    // Rationale: users may customize colors, then switch to a preset theme temporarily.
-    // Keeping the custom palette in the config allows switching back to "Custom" without losing edits.
     if (!cfg.customColors.empty()) {
         toml::table colorsTbl;
         for (const auto& [name, color] : cfg.customColors) { colorsTbl.insert(name, ColorToTomlArray(color)); }
@@ -1536,18 +1437,15 @@ void ConfigToToml(const Config& config, toml::table& out) {
     out.insert("disableFullscreenPrompt", config.disableFullscreenPrompt);
     out.insert("disableConfigurePrompt", config.disableConfigurePrompt);
 
-    // GUI Hotkey
     toml::array guiHotkeyArr;
     for (const auto& key : config.guiHotkey) { guiHotkeyArr.push_back(static_cast<int64_t>(key)); }
     out.insert("guiHotkey", guiHotkeyArr);
 
-    // Borderless toggle hotkey (optional)
     toml::array borderlessHotkeyArr;
     for (const auto& key : config.borderlessHotkey) { borderlessHotkeyArr.push_back(static_cast<int64_t>(key)); }
     out.insert("borderlessHotkey", borderlessHotkeyArr);
     out.insert("autoBorderless", config.autoBorderless);
 
-    // Overlay visibility toggle hotkeys (optional)
     toml::array imageOverlaysHotkeyArr;
     for (const auto& key : config.imageOverlaysHotkey) { imageOverlaysHotkeyArr.push_back(static_cast<int64_t>(key)); }
     out.insert("imageOverlaysHotkey", imageOverlaysHotkeyArr);
@@ -1556,32 +1454,26 @@ void ConfigToToml(const Config& config, toml::table& out) {
     for (const auto& key : config.windowOverlaysHotkey) { windowOverlaysHotkeyArr.push_back(static_cast<int64_t>(key)); }
     out.insert("windowOverlaysHotkey", windowOverlaysHotkeyArr);
 
-    // Debug
     toml::table debugTbl;
     DebugGlobalConfigToToml(config.debug, debugTbl);
     out.insert("debug", debugTbl);
 
-    // EyeZoom
     toml::table eyezoomTbl;
     EyeZoomConfigToToml(config.eyezoom, eyezoomTbl);
     out.insert("eyezoom", eyezoomTbl);
 
-    // Cursors
     toml::table cursorsTbl;
     CursorsConfigToToml(config.cursors, cursorsTbl);
     out.insert("cursors", cursorsTbl);
 
-    // Key Rebinds
     toml::table keyRebindsTbl;
     KeyRebindsConfigToToml(config.keyRebinds, keyRebindsTbl);
     out.insert("keyRebinds", keyRebindsTbl);
 
-    // Appearance
     toml::table appearanceTbl;
     AppearanceConfigToToml(config.appearance, appearanceTbl);
     out.insert("appearance", appearanceTbl);
 
-    // Modes array
     toml::array modesArr;
     for (const auto& mode : config.modes) {
         toml::table modeTbl;
@@ -1590,7 +1482,6 @@ void ConfigToToml(const Config& config, toml::table& out) {
     }
     out.insert("mode", modesArr);
 
-    // Mirrors array
     toml::array mirrorsArr;
     for (const auto& mirror : config.mirrors) {
         toml::table mirrorTbl;
@@ -1599,7 +1490,6 @@ void ConfigToToml(const Config& config, toml::table& out) {
     }
     out.insert("mirror", mirrorsArr);
 
-    // Mirror groups array
     toml::array mirrorGroupsArr;
     for (const auto& group : config.mirrorGroups) {
         toml::table groupTbl;
@@ -1608,7 +1498,6 @@ void ConfigToToml(const Config& config, toml::table& out) {
     }
     out.insert("mirrorGroup", mirrorGroupsArr);
 
-    // Images array
     toml::array imagesArr;
     for (const auto& image : config.images) {
         toml::table imageTbl;
@@ -1617,7 +1506,6 @@ void ConfigToToml(const Config& config, toml::table& out) {
     }
     out.insert("image", imagesArr);
 
-    // Window overlays array
     toml::array windowOverlaysArr;
     for (const auto& overlay : config.windowOverlays) {
         toml::table overlayTbl;
@@ -1626,7 +1514,6 @@ void ConfigToToml(const Config& config, toml::table& out) {
     }
     out.insert("windowOverlay", windowOverlaysArr);
 
-    // Hotkeys array
     toml::array hotkeysArr;
     for (const auto& hotkey : config.hotkeys) {
         toml::table hotkeyTbl;
@@ -1635,7 +1522,6 @@ void ConfigToToml(const Config& config, toml::table& out) {
     }
     out.insert("hotkey", hotkeysArr);
 
-    // Sensitivity Hotkeys array
     toml::array sensitivityHotkeysArr;
     for (const auto& sensHotkey : config.sensitivityHotkeys) {
         toml::table sensHotkeyTbl;
@@ -1667,7 +1553,6 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
     config.disableFullscreenPrompt = GetOr(tbl, "disableFullscreenPrompt", ConfigDefaults::CONFIG_DISABLE_FULLSCREEN_PROMPT);
     config.disableConfigurePrompt = GetOr(tbl, "disableConfigurePrompt", ConfigDefaults::CONFIG_DISABLE_CONFIGURE_PROMPT);
 
-    // GUI Hotkey
     config.guiHotkey.clear();
     if (auto arr = GetArray(tbl, "guiHotkey")) {
         for (const auto& elem : *arr) {
@@ -1676,7 +1561,6 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
     }
     if (config.guiHotkey.empty()) { config.guiHotkey = ConfigDefaults::GetDefaultGuiHotkey(); }
 
-    // Borderless toggle hotkey (optional; empty array = disabled)
     config.borderlessHotkey.clear();
     const bool hasBorderlessHotkey = tbl.contains("borderlessHotkey");
     if (auto arr = GetArray(tbl, "borderlessHotkey")) {
@@ -1687,7 +1571,6 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
     if (!hasBorderlessHotkey) { config.borderlessHotkey = ConfigDefaults::GetDefaultBorderlessHotkey(); }
     config.autoBorderless = GetOr(tbl, "autoBorderless", ConfigDefaults::CONFIG_AUTO_BORDERLESS);
 
-    // Overlay visibility toggle hotkeys (optional; empty array = disabled)
     config.imageOverlaysHotkey.clear();
     const bool hasImageOverlaysHotkey = tbl.contains("imageOverlaysHotkey");
     if (auto arr = GetArray(tbl, "imageOverlaysHotkey")) {
@@ -1706,22 +1589,16 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
     }
     if (!hasWindowOverlaysHotkey) { config.windowOverlaysHotkey = ConfigDefaults::GetDefaultWindowOverlaysHotkey(); }
 
-    // Debug
     if (auto t = GetTable(tbl, "debug")) { DebugGlobalConfigFromToml(*t, config.debug); }
 
-    // EyeZoom
     if (auto t = GetTable(tbl, "eyezoom")) { EyeZoomConfigFromToml(*t, config.eyezoom); }
 
-    // Cursors
     if (auto t = GetTable(tbl, "cursors")) { CursorsConfigFromToml(*t, config.cursors); }
 
-    // Key Rebinds
     if (auto t = GetTable(tbl, "keyRebinds")) { KeyRebindsConfigFromToml(*t, config.keyRebinds); }
 
-    // Appearance
     if (auto t = GetTable(tbl, "appearance")) { AppearanceConfigFromToml(*t, config.appearance); }
 
-    // Modes
     config.modes.clear();
     if (auto arr = GetArray(tbl, "mode")) {
         for (const auto& elem : *arr) {
@@ -1733,13 +1610,10 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
         }
     }
 
-    // Mirrors
     config.mirrors.clear();
     if (auto arr = GetArray(tbl, "mirror")) {
         for (const auto& elem : *arr) {
             if (auto t = elem.as_table()) {
-                // Backward compatibility: old per-mirror gammaMode setting.
-                // If the new global key isn't present, adopt the first mirror's gammaMode as the global setting.
                 if (!hasGlobalMirrorMatchColorspace && t->contains("gammaMode")) {
                     config.mirrorGammaMode = StringToMirrorGammaMode(GetStringOr(*t, "gammaMode", ConfigDefaults::CONFIG_MIRROR_MATCH_COLORSPACE));
                     hasGlobalMirrorMatchColorspace = true;
@@ -1751,7 +1625,6 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
         }
     }
 
-    // Mirror Groups
     config.mirrorGroups.clear();
     if (auto arr = GetArray(tbl, "mirrorGroup")) {
         for (const auto& elem : *arr) {
@@ -1763,7 +1636,6 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
         }
     }
 
-    // Images
     config.images.clear();
     if (auto arr = GetArray(tbl, "image")) {
         for (const auto& elem : *arr) {
@@ -1775,7 +1647,6 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
         }
     }
 
-    // Window overlays
     config.windowOverlays.clear();
     if (auto arr = GetArray(tbl, "windowOverlay")) {
         for (const auto& elem : *arr) {
@@ -1787,7 +1658,6 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
         }
     }
 
-    // Hotkeys
     config.hotkeys.clear();
     if (auto arr = GetArray(tbl, "hotkey")) {
         for (const auto& elem : *arr) {
@@ -1799,7 +1669,6 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
         }
     }
 
-    // Sensitivity Hotkeys
     config.sensitivityHotkeys.clear();
     if (auto arr = GetArray(tbl, "sensitivityHotkey")) {
         for (const auto& elem : *arr) {
@@ -1817,12 +1686,11 @@ bool SaveConfigToTomlFile(const Config& config, const std::wstring& path) {
         toml::table tbl;
         ConfigToToml(config, tbl);
 
-        // IMPORTANT (Windows/Unicode): do not pass UTF-8 narrow strings to std::ofstream.
+        // Do not pass UTF-8 narrow strings to std::ofstream.
         // Use std::filesystem::path so the wide Win32 APIs are used under the hood.
         std::ofstream file(std::filesystem::path(path), std::ios::binary | std::ios::trunc);
         if (!file.is_open()) { return false; }
 
-        // Define the order of top-level keys
         std::vector<std::string> orderedKeys = { "configVersion",
                      "disableHookChaining",
                      "hookChainingNextTarget",
@@ -1857,7 +1725,6 @@ bool SaveConfigToTomlFile(const Config& config, const std::wstring& path) {
                                                  "hotkey",
                                                  "sensitivityHotkey" };
 
-        // Key orders for each item type (matches the order in *ToToml functions)
         std::vector<std::string> modeKeys = { "id",
                                               "width",
                                               "height",
@@ -1919,7 +1786,6 @@ bool SaveConfigToTomlFile(const Config& config, const std::wstring& path) {
                                                        "border" };
         std::vector<std::string> hotkeyKeys = { "keys", "mainMode", "secondaryMode", "altSecondaryModes", "conditions", "debounce" };
 
-        // Helper to get key order for a given array type
         auto getKeyOrder = [&](const std::string& arrayKey) -> const std::vector<std::string>* {
             if (arrayKey == "mode") return &modeKeys;
             if (arrayKey == "mirror") return &mirrorKeys;
@@ -1930,16 +1796,13 @@ bool SaveConfigToTomlFile(const Config& config, const std::wstring& path) {
             return nullptr;
         };
 
-        // Write keys in the specified order
         for (const auto& key : orderedKeys) {
             if (tbl.contains(key)) {
                 const toml::node* nodePtr = tbl.get(key);
                 if (!nodePtr) continue;
 
-                // Arrays of tables need special formatting with [[array_name]]
                 if (nodePtr->is_array()) {
                     const toml::array* arr = nodePtr->as_array();
-                    // Check if it's an array of tables (like [[mode]])
                     if (arr && !arr->empty() && (*arr)[0].is_table()) {
                         const std::vector<std::string>* itemKeyOrder = getKeyOrder(key);
                         for (const auto& elem : *arr) {
@@ -1954,16 +1817,13 @@ bool SaveConfigToTomlFile(const Config& config, const std::wstring& path) {
                             }
                         }
                     } else if (arr) {
-                        // Simple array - use default formatting
                         file << key << " = " << *arr << "\n";
                     }
                 } else if (nodePtr->is_table()) {
-                    // Named table like [debug]
                     file << "\n[" << key << "]\n";
                     const toml::table* subtbl = nodePtr->as_table();
                     if (subtbl) file << *subtbl;
                 } else {
-                    // Scalar values
                     file << key << " = ";
                     nodePtr->visit([&file](auto&& val) { file << val; });
                     file << "\n";
@@ -1971,7 +1831,6 @@ bool SaveConfigToTomlFile(const Config& config, const std::wstring& path) {
             }
         }
 
-        // Write any remaining keys that weren't in orderedKeys (for forward compatibility)
         for (const auto& [key, node] : tbl) {
             std::string keyStr(key.str());
             if (std::find(orderedKeys.begin(), orderedKeys.end(), keyStr) == orderedKeys.end()) {
@@ -2017,21 +1876,15 @@ bool LoadConfigFromTomlFile(const std::wstring& path, Config& config) {
     }
 }
 
-// ============================================================================
-// Embedded Default Config Implementation
-// ============================================================================
 
 #include "resource.h"
 
-// Cache for the embedded config string (loaded once)
 static std::string s_embeddedConfigCache;
 static bool s_embeddedConfigLoaded = false;
 
 std::string GetEmbeddedDefaultConfigString() {
-    // Return cached value if available
     if (s_embeddedConfigLoaded) { return s_embeddedConfigCache; }
 
-    // Get module handle for this DLL
     HMODULE hModule = nullptr;
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                             reinterpret_cast<LPCWSTR>(&GetEmbeddedDefaultConfigString), &hModule)) {
@@ -2039,21 +1892,18 @@ std::string GetEmbeddedDefaultConfigString() {
         return "";
     }
 
-    // Find the resource
     HRSRC hResource = FindResourceW(hModule, MAKEINTRESOURCEW(IDR_DEFAULT_CONFIG), RT_RCDATA);
     if (!hResource) {
         Log("ERROR: Failed to find embedded default.toml resource. Error: " + std::to_string(GetLastError()));
         return "";
     }
 
-    // Load the resource
     HGLOBAL hData = LoadResource(hModule, hResource);
     if (!hData) {
         Log("ERROR: Failed to load embedded default.toml resource. Error: " + std::to_string(GetLastError()));
         return "";
     }
 
-    // Get the resource data
     DWORD size = SizeofResource(hModule, hResource);
     const char* data = static_cast<const char*>(LockResource(hData));
 
@@ -2062,7 +1912,6 @@ std::string GetEmbeddedDefaultConfigString() {
         return "";
     }
 
-    // Copy to string and cache
     s_embeddedConfigCache = std::string(data, size);
     s_embeddedConfigLoaded = true;
 
@@ -2087,7 +1936,6 @@ bool LoadEmbeddedDefaultConfig(Config& config) {
     }
 }
 
-// Forward declarations for screen size functions (defined in gui.cpp)
 int GetCachedScreenWidth();
 int GetCachedScreenHeight();
 
@@ -2103,7 +1951,6 @@ std::vector<ModeConfig> GetDefaultModesFromEmbedded() {
     try {
         toml::table tbl = toml::parse(configStr);
 
-        // Parse modes array
         if (auto arr = GetArray(tbl, "mode")) {
             for (const auto& elem : *arr) {
                 if (auto t = elem.as_table()) {
@@ -2114,12 +1961,10 @@ std::vector<ModeConfig> GetDefaultModesFromEmbedded() {
             }
         }
 
-        // Apply dynamic screen-relative values
         int screenWidth = GetCachedScreenWidth();
         int screenHeight = GetCachedScreenHeight();
 
         for (auto& mode : modes) {
-            // Update Fullscreen mode to match current screen size
             if (mode.id == "Fullscreen") {
                 mode.width = screenWidth;
                 mode.height = screenHeight;
@@ -2128,11 +1973,9 @@ std::vector<ModeConfig> GetDefaultModesFromEmbedded() {
                     mode.stretch.height = screenHeight;
                 }
             }
-            // Update height-relative modes (Thin uses full screen height)
             else if (mode.id == "Thin") {
                 mode.height = screenHeight;
             }
-            // Wide mode uses full screen width
             else if (mode.id == "Wide") {
                 mode.width = screenWidth;
             }
@@ -2155,7 +1998,6 @@ std::vector<MirrorConfig> GetDefaultMirrorsFromEmbedded() {
     try {
         toml::table tbl = toml::parse(configStr);
 
-        // Parse mirrors array
         if (auto arr = GetArray(tbl, "mirror")) {
             for (const auto& elem : *arr) {
                 if (auto t = elem.as_table()) {
@@ -2183,7 +2025,6 @@ std::vector<MirrorGroupConfig> GetDefaultMirrorGroupsFromEmbedded() {
     try {
         toml::table tbl = toml::parse(configStr);
 
-        // Parse mirror groups array
         if (auto arr = GetArray(tbl, "mirrorGroup")) {
             for (const auto& elem : *arr) {
                 if (auto t = elem.as_table()) {
@@ -2213,7 +2054,6 @@ std::vector<HotkeyConfig> GetDefaultHotkeysFromEmbedded() {
     try {
         toml::table tbl = toml::parse(configStr);
 
-        // Parse hotkeys array
         if (auto arr = GetArray(tbl, "hotkey")) {
             for (const auto& elem : *arr) {
                 if (auto t = elem.as_table()) {
@@ -2241,7 +2081,6 @@ std::vector<ImageConfig> GetDefaultImagesFromEmbedded() {
     try {
         toml::table tbl = toml::parse(configStr);
 
-        // Parse images array
         if (auto arr = GetArray(tbl, "image")) {
             for (const auto& elem : *arr) {
                 if (auto t = elem.as_table()) {
@@ -2252,7 +2091,6 @@ std::vector<ImageConfig> GetDefaultImagesFromEmbedded() {
             }
         }
 
-        // Apply dynamic paths for Ninjabrain Bot image
         for (auto& image : images) {
             if (image.name == "Ninjabrain Bot" && image.path.empty()) {
                 WCHAR tempPath[MAX_PATH];
@@ -2280,10 +2118,8 @@ CursorsConfig GetDefaultCursorsFromEmbedded() {
     try {
         toml::table tbl = toml::parse(configStr);
 
-        // Parse cursors section
         if (auto t = GetTable(tbl, "cursors")) { CursorsConfigFromToml(*t, cursors); }
 
-        // Apply dynamic cursor size based on system DPI
         HDC hdc = GetDC(NULL);
         int dpi = GetDeviceCaps(hdc, LOGPIXELSY);
         ReleaseDC(NULL, hdc);
@@ -2313,10 +2149,8 @@ EyeZoomConfig GetDefaultEyeZoomConfigFromEmbedded() {
     try {
         toml::table tbl = toml::parse(configStr);
 
-        // Parse eyezoom section
         if (auto t = GetTable(tbl, "eyezoom")) { EyeZoomConfigFromToml(*t, eyezoom); }
 
-        // Apply dynamic margins based on screen size
         int screenWidth = GetCachedScreenWidth();
         int screenHeight = GetCachedScreenHeight();
 
@@ -2330,3 +2164,5 @@ EyeZoomConfig GetDefaultEyeZoomConfigFromEmbedded() {
 
     return eyezoom;
 }
+
+

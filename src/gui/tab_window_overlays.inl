@@ -1,8 +1,7 @@
 if (ImGui::BeginTabItem("Window Overlays")) {
-    g_currentlyEditingMirror = ""; // Disable image drag mode in other tabs
+    g_currentlyEditingMirror = "";
     g_imageDragMode.store(false);
 
-    // Enable window overlay drag mode when Window Overlays tab is active
     g_windowOverlayDragMode.store(true);
 
     SliderCtrlClickTip();
@@ -12,7 +11,6 @@ if (ImGui::BeginTabItem("Window Overlays")) {
         auto& overlay = g_config.windowOverlays[i];
         ImGui::PushID((int)i);
 
-        // X button on the left
         std::string delete_overlay_label = "X##delete_overlay_" + std::to_string(i);
         if (ImGui::Button(delete_overlay_label.c_str(), ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()))) {
             std::string overlay_popup_id = "Delete Window Overlay?##" + std::to_string(i);
@@ -36,14 +34,12 @@ if (ImGui::BeginTabItem("Window Overlays")) {
 
         ImGui::SameLine();
 
-        // Capture old name at frame start, before any ImGui input modifies it
         std::string oldOverlayName = overlay.name;
 
         bool node_open = ImGui::TreeNodeEx("##overlay_node", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", overlay.name.c_str());
 
         if (node_open) {
 
-            // Check for duplicate names
             bool hasDuplicate = HasDuplicateWindowOverlayName(overlay.name, i);
             if (hasDuplicate) {
                 ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.6f, 0.2f, 0.2f, 1.0f));
@@ -52,10 +48,8 @@ if (ImGui::BeginTabItem("Window Overlays")) {
             }
 
             if (ImGui::InputText("Name", &overlay.name)) {
-                // Check if the new name is a duplicate
                 if (!HasDuplicateWindowOverlayName(overlay.name, i)) {
                     g_configIsDirty = true;
-                    // Update all mode references to the renamed window overlay
                     if (oldOverlayName != overlay.name) {
                         for (auto& mode : g_config.modes) {
                             for (auto& overlayId : mode.windowOverlayIds) {
@@ -64,7 +58,6 @@ if (ImGui::BeginTabItem("Window Overlays")) {
                         }
                     }
                 } else {
-                    // Revert the change if it creates a duplicate
                     overlay.name = oldOverlayName;
                 }
             }
@@ -85,7 +78,6 @@ if (ImGui::BeginTabItem("Window Overlays")) {
 
             ImGui::PushID(("window_dropdown_" + std::to_string(i)).c_str());
 
-            // Show current selection in dropdown button if available
             std::string dropdownPreview = "Choose Window...";
             if (!overlay.windowTitle.empty()) {
                 WindowInfo currentInfo;
@@ -93,7 +85,6 @@ if (ImGui::BeginTabItem("Window Overlays")) {
                 currentInfo.className = overlay.windowClass;
                 currentInfo.executableName = overlay.executableName;
                 dropdownPreview = currentInfo.GetDisplayName();
-                // Truncate if too long
                 if (dropdownPreview.length() > 60) { dropdownPreview = dropdownPreview.substr(0, 57) + "..."; }
             }
 
@@ -106,7 +97,6 @@ if (ImGui::BeginTabItem("Window Overlays")) {
                         bool isSelected = (overlay.windowTitle == windowInfo.title && overlay.windowClass == windowInfo.className &&
                                            overlay.executableName == windowInfo.executableName);
 
-                        // Add status indicator
                         std::string displayText = windowInfo.GetDisplayName();
                         if (!IsWindowInfoValid(windowInfo)) {
                             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
@@ -131,7 +121,6 @@ if (ImGui::BeginTabItem("Window Overlays")) {
             }
             ImGui::PopID();
 
-            // Window Match Priority dropdown
             ImGui::Text("Window Match Priority");
             ImGui::SameLine();
             ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "(?)");
@@ -231,21 +220,17 @@ if (ImGui::BeginTabItem("Window Overlays")) {
             ImGui::SetNextItemWidth(250);
             if (ImGui::SliderInt("##fps", &overlay.fps, 1, 60, "%d fps")) {
                 g_configIsDirty = true;
-                // Update FPS in cache immediately
                 UpdateWindowOverlayFPS(overlay.name, overlay.fps);
             }
             ImGui::NextColumn();
 
             ImGui::Text("Search Interval");
             ImGui::NextColumn();
-            // Convert milliseconds to seconds for display
             float searchIntervalSeconds = overlay.searchInterval / 1000.0f;
             ImGui::SetNextItemWidth(250);
             if (ImGui::SliderFloat("##searchInterval", &searchIntervalSeconds, 0.5f, 5.0f, "%.1f s")) {
-                // Convert seconds back to milliseconds
                 overlay.searchInterval = static_cast<int>(searchIntervalSeconds * 1000.0f);
                 g_configIsDirty = true;
-                // Update search interval in cache immediately (lightweight operation)
                 UpdateWindowOverlaySearchInterval(overlay.name, overlay.searchInterval);
             }
             ImGui::NextColumn();
@@ -300,7 +285,6 @@ if (ImGui::BeginTabItem("Window Overlays")) {
             if (ImGui::Checkbox("Enable Color Key", &overlay.enableColorKey)) g_configIsDirty = true;
             ImGui::BeginDisabled(!overlay.enableColorKey);
 
-            // Multiple color keys UI
             int colorKeyToRemove = -1;
             for (size_t k = 0; k < overlay.colorKeys.size(); k++) {
                 ImGui::PushID(static_cast<int>(k));
@@ -320,13 +304,11 @@ if (ImGui::BeginTabItem("Window Overlays")) {
                 ImGui::PopID();
             }
 
-            // Remove color key if requested
             if (colorKeyToRemove >= 0) {
                 overlay.colorKeys.erase(overlay.colorKeys.begin() + colorKeyToRemove);
                 g_configIsDirty = true;
             }
 
-            // Add new color key button
             if (ImGui::Button("+ Add Color Key")) {
                 ColorKeyConfig newKey;
                 newKey.color = { 0.0f, 0.0f, 0.0f };
@@ -372,7 +354,6 @@ if (ImGui::BeginTabItem("Window Overlays")) {
         std::string deletedOverlayName = g_config.windowOverlays[windowOverlay_to_remove].name;
         RemoveWindowOverlayFromCache(deletedOverlayName);
         g_config.windowOverlays.erase(g_config.windowOverlays.begin() + windowOverlay_to_remove);
-        // Remove deleted window overlay from all modes
         for (auto& mode : g_config.modes) {
             auto it = std::find(mode.windowOverlayIds.begin(), mode.windowOverlayIds.end(), deletedOverlayName);
             while (it != mode.windowOverlayIds.end()) {
@@ -390,11 +371,9 @@ if (ImGui::BeginTabItem("Window Overlays")) {
         g_config.windowOverlays.push_back(newOverlay);
         g_configIsDirty = true;
 
-        // Automatically add to currently selected mode
         if (!g_currentModeId.empty()) {
             for (auto& mode : g_config.modes) {
                 if (mode.id == g_currentModeId) {
-                    // Check if not already added
                     if (std::find(mode.windowOverlayIds.begin(), mode.windowOverlayIds.end(), newOverlay.name) ==
                         mode.windowOverlayIds.end()) {
                         mode.windowOverlayIds.push_back(newOverlay.name);
@@ -414,7 +393,6 @@ if (ImGui::BeginTabItem("Window Overlays")) {
         ImGui::Text("This action cannot be undone.");
         ImGui::Separator();
         if (ImGui::Button("Confirm Reset", ImVec2(120, 0))) {
-            // Clear window overlay cache before resetting
             for (const auto& overlay : g_config.windowOverlays) { RemoveWindowOverlayFromCache(overlay.name); }
             g_config.windowOverlays = GetDefaultWindowOverlays();
             g_configIsDirty = true;
@@ -428,6 +406,7 @@ if (ImGui::BeginTabItem("Window Overlays")) {
 
     ImGui::EndTabItem();
 } else {
-    // Ensure we can't drag window overlays while this tab is not active.
     g_windowOverlayDragMode.store(false);
 }
+
+

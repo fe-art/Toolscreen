@@ -14,12 +14,11 @@
 class Profiler {
   public:
     struct ProfileEntry {
-        std::string displayName; // Just the scope name for display
-        double totalTime = 0.0;  // Total accumulated time in milliseconds for current frame
-        double selfTime = 0.0;   // Time excluding children
-        int callCount = 0;       // Number of times called in current frame
+        std::string displayName;
+        double totalTime = 0.0;
+        double selfTime = 0.0;
+        int callCount = 0;
 
-        // Rolling average data
         double accumulatedTime = 0.0;
         double accumulatedSelfTime = 0.0;
         int accumulatedCalls = 0;
@@ -27,34 +26,30 @@ class Profiler {
         double rollingAverageTime = 0.0;
         double rollingSelfTime = 0.0;
 
-        // Max time tracking
         double maxTimeInLastSecond = 0.0;
 
-        // Stale entry removal - time when entry was last updated with actual data
         std::chrono::steady_clock::time_point lastUpdateTime{};
 
-        // Hierarchy support - using string paths
-        std::string parentPath;              // Parent scope path (empty for root)
-        std::vector<std::string> childPaths; // Child scope paths
-        int depth = 0;                       // Nesting depth (0 = root)
+        std::string parentPath;
+        std::vector<std::string> childPaths;
+        int depth = 0;
 
-        // Percentages
-        double parentPercentage = 0.0; // Percentage of parent's time
-        double totalPercentage = 0.0;  // Percentage of total frame time
+        double parentPercentage = 0.0;
+        double totalPercentage = 0.0;
     };
 
     // Minimal timing event for lock-free submission
     struct TimingEvent {
-        const char* sectionName; // Static string (from PROFILE_SCOPE macro)
-        const char* parentName;  // Parent scope name (for hierarchy)
-        double durationMs;       // Duration in milliseconds
+        const char* sectionName;
+        const char* parentName;
+        double durationMs;
         uint32_t threadId;       // Thread that generated this event
-        uint8_t depth;           // Stack depth when event was created
+        uint8_t depth;
         bool isRenderThread;     // Whether from render thread
     };
 
     // Lock-free ring buffer for timing events (per-thread)
-    static constexpr size_t RING_BUFFER_SIZE = 4096; // Power of 2 for fast modulo
+    static constexpr size_t RING_BUFFER_SIZE = 4096;
 
     struct ThreadRingBuffer {
         TimingEvent events[RING_BUFFER_SIZE];
@@ -93,21 +88,18 @@ class Profiler {
     // Lock-free event submission (called from ScopedTimer destructor)
     void SubmitEvent(const char* sectionName, const char* parentName, double durationMs, uint8_t depth);
 
-    // Frame management
     void EndFrame();
 
     // Start/stop background processing thread
     void StartProcessingThread();
     void StopProcessingThread();
 
-    // Get profiling data for display - returns two separate lists
     struct DisplayData {
         std::vector<std::pair<std::string, ProfileEntry>> renderThread;
         std::vector<std::pair<std::string, ProfileEntry>> otherThreads;
     };
     DisplayData GetProfileData() const;
 
-    // Legacy API for compatibility
     std::vector<std::pair<std::string, ProfileEntry>> GetProfileDataFlat() const;
 
     void Clear();
@@ -155,7 +147,8 @@ class Profiler {
 // Convenience macros - completely lock-free on hot path
 #define PROFILE_SCOPE(name) Profiler::ScopedTimer _profiler_timer_##__LINE__(Profiler::GetInstance(), name)
 
-// Category macro is now an alias (category becomes parent override if needed in future)
 #define PROFILE_SCOPE_CAT(name, category) PROFILE_SCOPE(name)
 
 #define PROFILE_START(name) /* deprecated - use PROFILE_SCOPE */
+
+

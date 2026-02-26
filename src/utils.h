@@ -20,7 +20,6 @@
 
 // Config access: Reader threads use GetConfigSnapshot() for safe, lock-free access.
 // g_config is the mutable draft, only touched by the GUI/main thread.
-// After any mutation, PublishConfigSnapshot() makes it available to readers.
 
 struct MirrorInstance {
     GLuint fbo = 0;
@@ -28,41 +27,37 @@ struct MirrorInstance {
     int fbo_w = 0;
     int fbo_h = 0;
     std::chrono::steady_clock::time_point lastUpdateTime{};
-    int forceUpdateFrames = 0;              // Counter to bypass FPS throttling for multiple frames
-    std::vector<unsigned char> pixelBuffer; // For EyeZoom mode: stores captured pixels from framebuffer
-    GLuint tempCaptureTexture = 0;          // For EyeZoom mode: temporary texture for raw capture before filtering
+    int forceUpdateFrames = 0;
+    std::vector<unsigned char> pixelBuffer;
+    GLuint tempCaptureTexture = 0;
 
     // Double-buffering for threaded capture
     GLuint fboBack = 0;                      // Back FBO (written by capture thread)
     GLuint fboTextureBack = 0;               // Back texture (written by capture thread)
-    std::atomic<bool> captureReady{ false }; // True when back buffer has new frame ready to swap
-    bool hasValidContent = false;            // True after first successful buffer swap (front buffer has renderable content)
+    std::atomic<bool> captureReady{ false };
+    bool hasValidContent = false;
 
-    // Track how the FBO was captured to ensure render uses matching shader
     // This prevents race conditions when rawOutput setting changes mid-frame
-    bool capturedAsRawOutput = false;     // How front buffer was captured
-    bool capturedAsRawOutputBack = false; // How back buffer was captured (swapped with capturedAsRawOutput)
+    bool capturedAsRawOutput = false;
+    bool capturedAsRawOutputBack = false;
 
     // Desired rawOutput state - written by main thread, read by capture thread
     // This ensures capture thread always uses the latest value
     std::atomic<bool> desiredRawOutput{ false };
 
-    // Final rendered content (with borders/shaders applied) - ready for screen blit
     // The capture thread renders here, the render thread just blits this
-    GLuint finalFbo = 0;                    // Front FBO with screen-ready content
-    GLuint finalTexture = 0;                // Front texture with screen-ready content
+    GLuint finalFbo = 0;
+    GLuint finalTexture = 0;
     GLuint finalFboBack = 0;                // Back FBO (capture thread writes)
     GLuint finalTextureBack = 0;            // Back texture (capture thread writes)
-    int final_w = 0, final_h = 0;           // Dimensions of FRONT final FBO
-    int final_w_back = 0, final_h_back = 0; // Dimensions of BACK final FBO (may differ during scale changes)
+    int final_w = 0, final_h = 0;
+    int final_w_back = 0, final_h_back = 0;
 
-    // Track whether the mirror has actual filtered content (not empty)
     bool hasFrameContent = false;     // Front buffer has content (read by render thread)
     bool hasFrameContentBack = false; // Back buffer has content (written by capture thread)
 
     // Cross-context GPU synchronization fences
     // These ensure the render thread waits for capture thread's GPU work to complete
-    // before reading from the texture. glFinish() only syncs within one context;
     // fences work across shared contexts via glWaitSync.
     GLsync gpuFence = nullptr;     // Front buffer fence (render thread waits on this)
     GLsync gpuFenceBack = nullptr; // Back buffer fence (capture thread sets this)
@@ -70,7 +65,6 @@ struct MirrorInstance {
     // Cached render state - computed by capture thread, used by render thread
     // This minimizes per-frame calculations on the render thread
     struct CachedMirrorRenderState {
-        // Inputs (for invalidation detection)
         float outputScale = -1.0f;
         bool outputSeparateScale = false;
         float outputScaleX = 1.0f;
@@ -82,20 +76,17 @@ struct MirrorInstance {
         int finalX = 0, finalY = 0, finalW = 0, finalH = 0;
         int fbo_w = 0, fbo_h = 0;
 
-        // Pre-computed GPU data (ready to upload to VBO)
-        float vertices[24];     // 6 vertices * 4 floats (x, y, u, v)
-        int outW = 0, outH = 0; // Output dimensions on screen
+        float vertices[24];
+        int outW = 0, outH = 0;
 
-        // Mirror screen position (for static border rendering)
         int mirrorScreenX = 0, mirrorScreenY = 0;
         int mirrorScreenW = 0, mirrorScreenH = 0;
 
         bool isValid = false;
     };
     CachedMirrorRenderState cachedRenderState;
-    CachedMirrorRenderState cachedRenderStateBack; // Back buffer cache (swapped to front)
+    CachedMirrorRenderState cachedRenderStateBack;
 
-    // Default constructor
     MirrorInstance() = default;
 
     MirrorInstance(const MirrorInstance& other)
@@ -129,7 +120,6 @@ struct MirrorInstance {
           cachedRenderState(other.cachedRenderState),
           cachedRenderStateBack(other.cachedRenderStateBack) {}
 
-    // Move constructor
     MirrorInstance(MirrorInstance&& other) noexcept
         : fbo(other.fbo),
           fboTexture(other.fboTexture),
@@ -165,7 +155,6 @@ struct MirrorInstance {
         other.gpuFenceBack = nullptr;
     }
 
-    // Copy assignment operator
     MirrorInstance& operator=(const MirrorInstance& other) {
         if (this != &other) {
             fbo = other.fbo;
@@ -202,7 +191,6 @@ struct MirrorInstance {
         return *this;
     }
 
-    // Move assignment operator
     MirrorInstance& operator=(MirrorInstance&& other) noexcept {
         if (this != &other) {
             fbo = other.fbo;
@@ -246,23 +234,19 @@ struct UserImageInstance {
     GLuint textureId = 0;
     int width = 0;
     int height = 0;
-    bool isFullyTransparent = false; // True if all pixels have alpha = 0
+    bool isFullyTransparent = false;
 
     // Render-thread-only texture sampling state cache.
-    // Avoids redundant glTexParameteri calls every frame.
     bool filterInitialized = false;
     bool lastPixelatedScaling = false;
 
-    // Animation data (for animated GIFs)
     bool isAnimated = false;
-    std::vector<GLuint> frameTextures; // All frame textures for animation
-    std::vector<int> frameDelays;      // Delay in ms between each frame
+    std::vector<GLuint> frameTextures;
+    std::vector<int> frameDelays;
     size_t currentFrame = 0;
     std::chrono::steady_clock::time_point lastFrameTime;
 
-    // Cached rendering data (invalidated when config changes)
     struct CachedImageRenderState {
-        // Config hash to detect changes
         int crop_left = -1;
         int crop_right = -1;
         int crop_top = -1;
@@ -274,7 +258,6 @@ struct UserImageInstance {
         int screenWidth = 0;
         int screenHeight = 0;
 
-        // Cached computed values
         int displayW = 0;
         int displayH = 0;
         float tx1 = 0, ty1 = 0, tx2 = 0, ty2 = 0;
@@ -307,22 +290,16 @@ extern std::atomic<HCURSOR> g_specialCursorHandle;
 void Log(const std::string& message);
 void Log(const std::wstring& message);
 
-// Async logging system
 void StartLogThread(); // Start background log writer thread
 void StopLogThread();  // Stop background log writer thread (flushes first)
-void FlushLogs();      // Force flush all pending logs (for crash/shutdown)
+void FlushLogs();
 
-// Category-based logging - only logs if category is enabled in debug config
-// Categories: "mode_switch", "animation", "hotkey", "obs", "window_overlay",
-//             "file_monitor", "image_monitor", "performance"
 void LogCategory(const char* category, const std::string& message);
 
 std::wstring Utf8ToWide(const std::string& utf8_string);
 std::string WideToUtf8(const std::wstring& wstr);
 std::wstring GetToolscreenPath();
 
-// Compress a file to gzip format (.gz) using in-process DEFLATE compression.
-// Returns true on success.
 bool CompressFileToGzip(const std::wstring& srcPath, const std::wstring& dstPath);
 
 inline std::string GetKeyComboString(const std::vector<DWORD>& keys) {
@@ -347,17 +324,10 @@ struct ModeViewportInfo {
     bool stretchEnabled = false;
 };
 
-// Multi-monitor helpers
-// Returns the rcMonitor rect for the monitor nearest to the given window.
-// Returns false if the monitor info couldn't be queried.
 bool GetMonitorRectForWindow(HWND hwnd, RECT& outRect);
-// Convenience wrapper to get monitor width/height for a window.
 bool GetMonitorSizeForWindow(HWND hwnd, int& outW, int& outH);
 
 bool IsFullscreen();
-// Toggle borderless-windowed fullscreen for the given window.
-// When toggling on, the window is resized to the current monitor's full rect and decorations are removed.
-// When toggling off, the window returns to windowed mode centered on the current monitor at half its width/height.
 void ToggleBorderlessWindowedFullscreen(HWND hwnd);
 bool IsCursorVisible();
 void WriteCurrentModeToFile(const std::string& modeId);
@@ -365,11 +335,10 @@ bool SwitchToMode(const std::string& newModeId, const std::string& source = "", 
 bool IsHardcodedMode(const std::string& modeId);
 bool EqualsIgnoreCase(const std::string& a, const std::string& b);
 const ModeConfig* GetMode(const std::string& id);
-const ModeConfig* GetMode_Internal(const std::string& id); // Direct access version
-ModeConfig* GetModeMutable(const std::string& id);         // Mutable version for modifications
+const ModeConfig* GetMode_Internal(const std::string& id);
+ModeConfig* GetModeMutable(const std::string& id);
 MirrorConfig* GetMutableMirror(const std::string& name);
 
-// Snapshot-safe overloads: look up in a specific config snapshot instead of g_config
 const ModeConfig* GetModeFromSnapshot(const Config& config, const std::string& id);
 const MirrorConfig* GetMirrorFromSnapshot(const Config& config, const std::string& name);
 bool isWallTitleOrWaiting(const std::string& state);
@@ -390,15 +359,10 @@ void BackupConfigFile();
 void GetRelativeCoords(const std::string& type, int relX, int relY, int w, int h, int containerW, int containerH, int& outX, int& outY);
 void GetRelativeCoordsForImage(const std::string& type, int relX, int relY, int w, int h, int containerW, int containerH, int& outX,
                                int& outY);
-// Overload that supports viewport-relative positioning (for anchors ending with "Viewport")
-// gameX/Y/W/H = current game viewport position on screen (may be animated)
-// fullW/H = screen dimensions
 void GetRelativeCoordsForImageWithViewport(const std::string& type, int relX, int relY, int w, int h, int gameX, int gameY, int gameW,
                                            int gameH, int fullW, int fullH, int& outX, int& outY);
 
-// Check if an anchor type is viewport-relative (positions relative to game viewport, animates during transitions)
 inline bool IsViewportRelativeAnchor(const std::string& relativeTo) {
-    // Viewport-relative anchors end with "Viewport"
     if (relativeTo.length() > 8 && relativeTo.substr(relativeTo.length() - 8) == "Viewport") { return true; }
     return false;
 }
@@ -410,7 +374,6 @@ void ScreenshotToClipboard(int width, int height);
 DWORD WINAPI FileMonitorThread(LPVOID lpParam);
 DWORD WINAPI ImageMonitorThread(LPVOID lpParam);
 
-// Exception handling
 class SE_Exception : public std::exception {
   public:
     SE_Exception(unsigned int code, EXCEPTION_POINTERS* info) : m_code(code), m_info(info) {}

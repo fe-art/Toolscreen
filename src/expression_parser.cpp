@@ -1,10 +1,3 @@
-// ============================================================================
-// EXPRESSION_PARSER.CPP - Safe Expression Evaluation Implementation
-// ============================================================================
-// Implements a simple recursive descent parser for math expressions.
-// Security: Only whitelisted identifiers (screenWidth, screenHeight) allowed.
-// No eval(), no string execution, no arbitrary code paths.
-// ============================================================================
 
 #include "expression_parser.h"
 #include "gui.h"
@@ -16,9 +9,6 @@
 #include <string>
 #include <vector>
 
-// ============================================================================
-// Tokenizer
-// ============================================================================
 
 // Using Expr prefix to avoid Windows header macro conflicts
 enum class ExprTokenKind {
@@ -54,7 +44,6 @@ public:
 
         char c = m_input[m_pos];
 
-        // Single character tokens
         if (c == '+') {
             m_pos++;
             return ExprToken(ExprTokenKind::Plus, "+", 0);
@@ -84,7 +73,6 @@ public:
             return ExprToken(ExprTokenKind::Comma, ",", 0);
         }
 
-        // Numbers (including decimals)
         if (std::isdigit(c) || c == '.') {
             size_t start = m_pos;
             bool hasDecimal = false;
@@ -100,7 +88,6 @@ public:
             return ExprToken(ExprTokenKind::Number, numStr, num);
         }
 
-        // Identifiers (variable names and function names)
         if (std::isalpha(c) || c == '_') {
             size_t start = m_pos;
             while (m_pos < m_input.size() && (std::isalnum(m_input[m_pos]) || m_input[m_pos] == '_')) { m_pos++; }
@@ -108,7 +95,6 @@ public:
             return ExprToken(ExprTokenKind::Identifier, id, 0);
         }
 
-        // Invalid character
         m_pos++;
         return ExprToken(ExprTokenKind::Invalid, std::string(1, c), 0);
     }
@@ -124,9 +110,6 @@ private:
     size_t m_pos;
 };
 
-// ============================================================================
-// Parser
-// ============================================================================
 
 class ExpressionParser {
 public:
@@ -145,12 +128,11 @@ public:
         try {
             parseExpression();
             if (m_currentToken.kind != ExprTokenKind::End) { return "Unexpected token at end: " + m_currentToken.text; }
-            return ""; // Valid
+            return "";
         } catch (const std::exception& e) { return e.what(); }
     }
 
 private:
-    // Expression = Term (('+' | '-') Term)*
     double parseExpression() {
         double left = parseTerm();
         while (m_currentToken.kind == ExprTokenKind::Plus || m_currentToken.kind == ExprTokenKind::Minus) {
@@ -166,7 +148,6 @@ private:
         return left;
     }
 
-    // Term = Unary (('*' | '/') Unary)*
     double parseTerm() {
         double left = parseUnary();
         while (m_currentToken.kind == ExprTokenKind::Star || m_currentToken.kind == ExprTokenKind::Slash) {
@@ -183,7 +164,6 @@ private:
         return left;
     }
 
-    // Unary = ('-')? Primary
     double parseUnary() {
         if (m_currentToken.kind == ExprTokenKind::Minus) {
             advance();
@@ -196,7 +176,6 @@ private:
         return parsePrimary();
     }
 
-    // Primary = Number | Identifier | FunctionCall | '(' Expression ')'
     double parsePrimary() {
         if (m_currentToken.kind == ExprTokenKind::Number) {
             double val = m_currentToken.numValue;
@@ -208,10 +187,8 @@ private:
             std::string id = m_currentToken.text;
             advance();
 
-            // Check for function call
             if (m_currentToken.kind == ExprTokenKind::LParen) { return parseFunctionCall(id); }
 
-            // Variable lookup
             return lookupVariable(id);
         }
 
@@ -228,7 +205,6 @@ private:
     double parseFunctionCall(const std::string& funcName) {
         expect(ExprTokenKind::LParen, "Expected '(' after function name");
 
-        // Parse arguments
         std::vector<double> args;
         if (m_currentToken.kind != ExprTokenKind::RParen) {
             args.push_back(parseExpression());
@@ -243,7 +219,6 @@ private:
     }
 
     double lookupVariable(const std::string& name) {
-        // Whitelist of allowed variables
         if (name == "screenWidth") { return static_cast<double>(m_screenWidth); }
         if (name == "screenHeight") { return static_cast<double>(m_screenHeight); }
 
@@ -251,7 +226,6 @@ private:
     }
 
     double callFunction(const std::string& name, const std::vector<double>& args) {
-        // Whitelist of allowed functions
         if (name == "min") {
             if (args.size() != 2) { throw std::runtime_error("min() requires 2 arguments"); }
             return (std::min)(args[0], args[1]);
@@ -278,7 +252,6 @@ private:
         }
         if (name == "roundEven") {
             if (args.size() != 1) { throw std::runtime_error("roundEven() requires 1 argument"); }
-            // Round up to nearest even number: ceil(x/2) * 2
             return std::ceil(args[0] / 2.0) * 2.0;
         }
 
@@ -298,14 +271,10 @@ private:
     int m_screenHeight;
 };
 
-// ============================================================================
-// Public API
-// ============================================================================
 
 int EvaluateExpression(const std::string& expr, int screenWidth, int screenHeight, int defaultValue) {
     if (expr.empty()) { return defaultValue; }
 
-    // Trim whitespace
     std::string trimmed = expr;
     size_t start = trimmed.find_first_not_of(" \t\r\n");
     size_t end = trimmed.find_last_not_of(" \t\r\n");
@@ -324,23 +293,21 @@ int EvaluateExpression(const std::string& expr, int screenWidth, int screenHeigh
 bool IsExpression(const std::string& str) {
     if (str.empty()) { return false; }
 
-    // Trim whitespace
     std::string trimmed = str;
     size_t start = trimmed.find_first_not_of(" \t\r\n");
     size_t end = trimmed.find_last_not_of(" \t\r\n");
     if (start == std::string::npos) { return false; }
     trimmed = trimmed.substr(start, end - start + 1);
 
-    // Check if it's a pure integer (possibly with leading minus)
     size_t checkStart = 0;
     if (!trimmed.empty() && trimmed[0] == '-') { checkStart = 1; }
 
-    if (checkStart >= trimmed.size()) { return true; } // Just a minus sign = expression
+    if (checkStart >= trimmed.size()) { return true; }
 
     for (size_t i = checkStart; i < trimmed.size(); i++) {
-        if (!std::isdigit(trimmed[i])) { return true; } // Has non-digit = expression
+        if (!std::isdigit(trimmed[i])) { return true; }
     }
-    return false; // Pure integer = not an expression
+    return false;
 }
 
 bool ValidateExpression(const std::string& expr, std::string& errorOut) {
@@ -349,7 +316,6 @@ bool ValidateExpression(const std::string& expr, std::string& errorOut) {
         return false;
     }
 
-    // Trim whitespace
     std::string trimmed = expr;
     size_t start = trimmed.find_first_not_of(" \t\r\n");
     size_t end = trimmed.find_last_not_of(" \t\r\n");
@@ -360,7 +326,6 @@ bool ValidateExpression(const std::string& expr, std::string& errorOut) {
     trimmed = trimmed.substr(start, end - start + 1);
 
     try {
-        // Use dummy screen dimensions for validation
         ExpressionParser parser(trimmed, 1920, 1080);
         std::string error = parser.validate();
         if (!error.empty()) {
@@ -379,27 +344,22 @@ void RecalculateExpressionDimensions() {
     int screenW = GetCachedScreenWidth();
     int screenH = GetCachedScreenHeight();
 
-    // Recalculate mode dimensions from expressions
     for (auto& mode : g_config.modes) {
-        // Preemptive mode is always resolution-linked to EyeZoom.
         // It must not be expression-driven.
         if (mode.id == "Preemptive") {
             mode.widthExpr.clear();
             mode.heightExpr.clear();
         }
 
-        // Width expression
         if (mode.id != "Preemptive" && !mode.widthExpr.empty()) {
             int newWidth = EvaluateExpression(mode.widthExpr, screenW, screenH, mode.width);
             if (newWidth > 0) { mode.width = newWidth; }
         }
-        // Height expression
         if (mode.id != "Preemptive" && !mode.heightExpr.empty()) {
             int newHeight = EvaluateExpression(mode.heightExpr, screenW, screenH, mode.height);
             if (newHeight > 0) { mode.height = newHeight; }
         }
 
-        // Stretch expressions
         if (!mode.stretch.widthExpr.empty()) {
             int val = EvaluateExpression(mode.stretch.widthExpr, screenW, screenH, mode.stretch.width);
             if (val >= 0) { mode.stretch.width = val; }
@@ -412,8 +372,6 @@ void RecalculateExpressionDimensions() {
         if (!mode.stretch.yExpr.empty()) { mode.stretch.y = EvaluateExpression(mode.stretch.yExpr, screenW, screenH, mode.stretch.y); }
     }
 
-    // After expression evaluation, enforce Preemptive resolution sync with EyeZoom.
-    // This makes the linkage resilient even if EyeZoom itself were expression-driven.
     ModeConfig* eyezoomMode = nullptr;
     ModeConfig* preemptiveMode = nullptr;
     for (auto& mode : g_config.modes) {
@@ -430,3 +388,5 @@ void RecalculateExpressionDimensions() {
         preemptiveMode->heightExpr.clear();
     }
 }
+
+

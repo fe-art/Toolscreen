@@ -5,7 +5,6 @@ if (ImGui::BeginTabItem("Other")) {
 
     SliderCtrlClickTip();
 
-    // --- GUI HOTKEY SECTION ---
     ImGui::SeparatorText("GUI Hotkey");
     ImGui::PushID("basic_gui_hotkey");
     std::string guiKeyStr = GetKeyComboString(g_config.guiHotkey);
@@ -16,17 +15,15 @@ if (ImGui::BeginTabItem("Other")) {
     bool isBindingGui = (s_mainHotkeyToBind == -999);
     const char* guiButtonLabel = isBindingGui ? "[Press Keys...]" : (guiKeyStr.empty() ? "[Click to Bind]" : guiKeyStr.c_str());
     if (ImGui::Button(guiButtonLabel, ImVec2(150, 0))) {
-        s_mainHotkeyToBind = -999; // Special ID for GUI hotkey
+        s_mainHotkeyToBind = -999;
         s_altHotkeyToBind = { -1, -1 };
         s_exclusionToBind = { -1, -1 };
             MarkHotkeyBindingActive();
     }
     ImGui::PopID();
 
-    // --- OVERLAY VISIBILITY HOTKEYS ---
     ImGui::SeparatorText("Overlay Visibility Hotkeys");
 
-    // Image overlays
     ImGui::PushID("basic_image_overlay_toggle_hotkey");
     {
         const bool imgOverlaysVisible = g_imageOverlaysVisible.load(std::memory_order_acquire);
@@ -57,7 +54,6 @@ if (ImGui::BeginTabItem("Other")) {
     }
     ImGui::PopID();
 
-    // Window overlays
     ImGui::PushID("basic_window_overlay_toggle_hotkey");
     {
         const bool winOverlaysVisible = g_windowOverlaysVisible.load(std::memory_order_acquire);
@@ -88,7 +84,6 @@ if (ImGui::BeginTabItem("Other")) {
     }
     ImGui::PopID();
 
-    // --- BORDERLESS TOGGLE HOTKEY SECTION ---
     ImGui::SeparatorText("Window Hotkeys");
     ImGui::PushID("basic_borderless_hotkey");
     std::string borderlessKeyStr = GetKeyComboString(g_config.borderlessHotkey);
@@ -100,7 +95,7 @@ if (ImGui::BeginTabItem("Other")) {
     const char* borderlessButtonLabel =
         isBindingBorderless ? "[Press Keys...]" : (borderlessKeyStr.empty() ? "[Click to Bind]" : borderlessKeyStr.c_str());
     if (ImGui::Button(borderlessButtonLabel, ImVec2(150, 0))) {
-        s_mainHotkeyToBind = -998; // Special ID for borderless toggle hotkey
+        s_mainHotkeyToBind = -998;
         s_altHotkeyToBind = { -1, -1 };
         s_exclusionToBind = { -1, -1 };
             MarkHotkeyBindingActive();
@@ -109,7 +104,6 @@ if (ImGui::BeginTabItem("Other")) {
     HelpMarker("Toggles the game window between its previous windowed size and a borderless, monitor-sized window.");
     ImGui::PopID();
 
-    // Auto-Borderless toggle
     {
         ImGui::PushID("basic_auto_borderless");
         ImGui::Text("Auto-Borderless:");
@@ -124,7 +118,6 @@ if (ImGui::BeginTabItem("Other")) {
         ImGui::PopID();
     }
 
-    // --- DISPLAY SETTINGS ---
     ImGui::SeparatorText("Display Settings");
 
     ImGui::Text("FPS Limit:");
@@ -152,7 +145,6 @@ if (ImGui::BeginTabItem("Other")) {
     ImGui::SameLine();
     HelpMarker("Disables the configure toast prompt (toast1) shown in windowed mode.");*/
 
-    // --- FONT SETTINGS ---
     ImGui::SeparatorText("Font");
 
     ImGui::Text("Font Path:");
@@ -163,3 +155,5 @@ if (ImGui::BeginTabItem("Other")) {
 
     ImGui::EndTabItem();
 }
+
+

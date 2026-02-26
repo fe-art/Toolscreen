@@ -12,21 +12,16 @@
 #include <vector>
 #include <windows.h>
 
-// Virtual Camera implementation
-// Compatible with OBS Virtual Camera shared memory protocol
-// Reference: https://github.com/obsproject/obs-studio/blob/master/plugins/win-dshow/shared-memory-queue.c
 
 std::atomic<bool> g_virtualCameraActive{ false };
 
 static std::mutex g_vcMutex;
 static std::string g_vcLastError;
 
-// Shared memory name used by OBS Virtual Camera
 #define VIDEO_NAME L"OBSVirtualCamVideo"
 #define FRAME_HEADER_SIZE 32
 #define ALIGN_SIZE(size, align) size = (((size) + (align - 1)) & (~(align - 1)))
 
-// Queue states matching OBS
 enum queue_state {
     SHARED_QUEUE_STATE_INVALID = 0,
     SHARED_QUEUE_STATE_STARTING = 1,
@@ -34,7 +29,6 @@ enum queue_state {
     SHARED_QUEUE_STATE_STOPPING = 3,
 };
 
-// Queue header matching OBS format exactly
 struct queue_header {
     volatile uint32_t write_idx;
     volatile uint32_t read_idx;
@@ -47,7 +41,6 @@ struct queue_header {
     uint32_t reserved[8];
 };
 
-// Virtual camera state
 struct VirtualCameraState {
     HANDLE handle = nullptr;
     queue_header* header = nullptr;
@@ -55,16 +48,15 @@ struct VirtualCameraState {
     uint8_t* frame[3] = { nullptr, nullptr, nullptr };
     uint32_t width = 0;
     uint32_t height = 0;
-    uint64_t interval = 333333; // 30fps in 100-nanosecond units
+    uint64_t interval = 333333;
     int targetFps = 30;
-    LARGE_INTEGER lastFrameTime = {}; // For FPS limiting
-    LARGE_INTEGER perfFreq = {};      // Performance counter frequency
+    LARGE_INTEGER lastFrameTime = {};
+    LARGE_INTEGER perfFreq = {};
     bool active = false;
 };
 
 static VirtualCameraState g_vcState;
 
-// NV12 conversion buffer is no longer needed - we write directly to shared memory frame slots
 
 // Helper to clamp int to byte range (avoids Windows min/max macro conflict)
 static inline uint8_t clampToByte(int32_t val) {
@@ -73,20 +65,16 @@ static inline uint8_t clampToByte(int32_t val) {
     return static_cast<uint8_t>(val);
 }
 
-// Optimized RGBA to NV12 conversion with vertical flip (OpenGL bottom-up -> NV12 top-down)
 // Single pass: computes Y for every pixel and UV for every 2x2 block simultaneously
-// Uses fixed-point arithmetic throughout with no division in the inner loop
 static void ConvertRGBAtoNV12(const uint8_t* __restrict rgba, uint8_t* __restrict nv12, uint32_t width, uint32_t height) {
     const uint32_t yPlaneSize = width * height;
     uint8_t* __restrict yPlane = nv12;
     uint8_t* __restrict uvPlane = nv12 + yPlaneSize;
-    const uint32_t stride = width * 4; // RGBA stride in bytes
+    const uint32_t stride = width * 4;
 
-    // Process two rows at a time (required for UV 2x2 subsampling)
     for (uint32_t y = 0; y < height; y += 2) {
-        // Source rows are flipped (bottom-up -> top-down)
-        const uint8_t* __restrict srcRow0 = rgba + (height - 1 - y) * stride; // Top output row
-        const uint8_t* __restrict srcRow1 = rgba + (height - 2 - y) * stride; // Bottom output row
+        const uint8_t* __restrict srcRow0 = rgba + (height - 1 - y) * stride;
+        const uint8_t* __restrict srcRow1 = rgba + (height - 2 - y) * stride;
         uint8_t* __restrict yRow0 = yPlane + y * width;
         uint8_t* __restrict yRow1 = yPlane + (y + 1) * width;
         uint8_t* __restrict uvRow = uvPlane + (y / 2) * width;
@@ -98,7 +86,6 @@ static void ConvertRGBAtoNV12(const uint8_t* __restrict rgba, uint8_t* __restric
             const uint8_t* p01 = srcRow1 + x * 4;
             const uint8_t* p11 = srcRow1 + (x + 1) * 4;
 
-            // Compute Y for all 4 pixels: Y = ((66*R + 129*G + 25*B + 128) >> 8) + 16
             int32_t y00 = ((66 * p00[0] + 129 * p00[1] + 25 * p00[2] + 128) >> 8) + 16;
             int32_t y10 = ((66 * p10[0] + 129 * p10[1] + 25 * p10[2] + 128) >> 8) + 16;
             int32_t y01 = ((66 * p01[0] + 129 * p01[1] + 25 * p01[2] + 128) >> 8) + 16;
@@ -114,8 +101,6 @@ static void ConvertRGBAtoNV12(const uint8_t* __restrict rgba, uint8_t* __restric
             int32_t avgG = (p00[1] + p10[1] + p01[1] + p11[1] + 2) >> 2;
             int32_t avgB = (p00[2] + p10[2] + p01[2] + p11[2] + 2) >> 2;
 
-            // U = ((-38*R - 74*G + 112*B + 128) >> 8) + 128
-            // V = ((112*R - 94*G - 18*B + 128) >> 8) + 128
             int32_t u = ((-38 * avgR - 74 * avgG + 112 * avgB + 128) >> 8) + 128;
             int32_t v = ((112 * avgR - 94 * avgG - 18 * avgB + 128) >> 8) + 128;
 
@@ -126,8 +111,6 @@ static void ConvertRGBAtoNV12(const uint8_t* __restrict rgba, uint8_t* __restric
 }
 
 bool IsVirtualCameraDriverInstalled() {
-    // Check if the OBS Virtual Camera COM object is registered
-    // CLSID for OBS Virtual Camera: {A3FCE0F5-3493-419F-958A-ABA1250EC20B}
     HKEY hKey;
     LONG result = RegOpenKeyExA(HKEY_CLASSES_ROOT, "CLSID\\{A3FCE0F5-3493-419F-958A-ABA1250EC20B}", 0, KEY_READ, &hKey);
 
@@ -136,7 +119,6 @@ bool IsVirtualCameraDriverInstalled() {
         return true;
     }
 
-    // Alternative: check for the DLL in common OBS install locations
     const char* possiblePaths[] = {
         "C:\\Program Files\\obs-studio\\data\\obs-plugins\\win-dshow\\obs-virtualcam-module64.dll",
         "C:\\Program Files (x86)\\obs-studio\\data\\obs-plugins\\win-dshow\\obs-virtualcam-module64.dll",
@@ -150,22 +132,17 @@ bool IsVirtualCameraDriverInstalled() {
 }
 
 bool IsVirtualCameraInUseByOBS() {
-    // If we're already active, we created it - not OBS
     if (g_virtualCameraActive.load(std::memory_order_acquire)) { return false; }
 
-    // Try to open the shared memory for reading
-    // If it exists with state READY or STARTING, OBS created it
     HANDLE testHandle = OpenFileMappingW(FILE_MAP_READ, FALSE, VIDEO_NAME);
     if (!testHandle) {
-        return false; // Shared memory doesn't exist
+        return false;
     }
 
-    // Map the header to check state
     queue_header* testHeader = static_cast<queue_header*>(MapViewOfFile(testHandle, FILE_MAP_READ, 0, 0, sizeof(queue_header)));
 
     bool inUse = false;
     if (testHeader) {
-        // Check if it's actively being used by something else
         inUse = (testHeader->state == SHARED_QUEUE_STATE_READY || testHeader->state == SHARED_QUEUE_STATE_STARTING);
         UnmapViewOfFile(testHeader);
     }
@@ -175,14 +152,13 @@ bool IsVirtualCameraInUseByOBS() {
 }
 
 bool StartVirtualCamera(uint32_t width, uint32_t height, int fps) {
-    // Clamp FPS to valid range
     if (fps < 15) fps = 15;
     if (fps > 60) fps = 60;
     std::lock_guard<std::mutex> lock(g_vcMutex);
 
     if (g_vcState.active) {
         g_vcLastError = "Virtual camera already active";
-        return true; // Already running
+        return true;
     }
 
     if (!IsVirtualCameraDriverInstalled()) {
@@ -197,18 +173,15 @@ bool StartVirtualCamera(uint32_t width, uint32_t height, int fps) {
         return false;
     }
 
-    // Set FPS-related state
     g_vcState.targetFps = fps;
-    g_vcState.interval = 10000000ULL / fps; // 100-nanosecond units
+    g_vcState.interval = 10000000ULL / fps;
     QueryPerformanceFrequency(&g_vcState.perfFreq);
-    g_vcState.lastFrameTime.QuadPart = 0; // Allow first frame immediately
+    g_vcState.lastFrameTime.QuadPart = 0;
 
-    // Calculate frame size (NV12: Y + UV/2 = 1.5 bytes per pixel)
     uint32_t frameSize = width * height * 3 / 2;
     uint32_t offset_frame[3];
     uint32_t totalSize;
 
-    // Calculate offsets matching OBS layout
     totalSize = sizeof(queue_header);
     ALIGN_SIZE(totalSize, 32);
 
@@ -224,7 +197,6 @@ bool StartVirtualCamera(uint32_t width, uint32_t height, int fps) {
     totalSize += frameSize + FRAME_HEADER_SIZE;
     ALIGN_SIZE(totalSize, 32);
 
-    // Create the shared memory
     g_vcState.handle = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, totalSize, VIDEO_NAME);
 
     if (!g_vcState.handle) {
@@ -233,7 +205,6 @@ bool StartVirtualCamera(uint32_t width, uint32_t height, int fps) {
         return false;
     }
 
-    // Map the memory
     g_vcState.header = static_cast<queue_header*>(MapViewOfFile(g_vcState.handle, FILE_MAP_ALL_ACCESS, 0, 0, 0));
 
     if (!g_vcState.header) {
@@ -244,10 +215,9 @@ bool StartVirtualCamera(uint32_t width, uint32_t height, int fps) {
         return false;
     }
 
-    // Initialize header
     memset(g_vcState.header, 0, sizeof(queue_header));
     g_vcState.header->state = SHARED_QUEUE_STATE_STARTING;
-    g_vcState.header->type = 0; // SHARED_QUEUE_TYPE_VIDEO
+    g_vcState.header->type = 0;
     g_vcState.header->cx = width;
     g_vcState.header->cy = height;
     g_vcState.header->interval = g_vcState.interval;
@@ -273,10 +243,8 @@ void StopVirtualCamera() {
 
     if (!g_vcState.active) { return; }
 
-    // Signal stopping state
     if (g_vcState.header) { g_vcState.header->state = SHARED_QUEUE_STATE_STOPPING; }
 
-    // Cleanup
     if (g_vcState.header) {
         UnmapViewOfFile(g_vcState.header);
         g_vcState.header = nullptr;
@@ -305,32 +273,26 @@ bool WriteVirtualCameraFrame(const uint8_t* rgba_data, uint32_t width, uint32_t 
     LARGE_INTEGER now;
     QueryPerformanceCounter(&now);
     if (g_vcState.lastFrameTime.QuadPart != 0) {
-        // Use integer comparison to avoid floating-point division
         LONGLONG elapsed = now.QuadPart - g_vcState.lastFrameTime.QuadPart;
         LONGLONG minTicks = g_vcState.perfFreq.QuadPart / g_vcState.targetFps;
         if (elapsed < minTicks) {
-            return true; // Skip this frame
+            return true;
         }
     }
 
     // Quick state check without lock
     if (!g_vcState.active || !g_vcState.header) { return false; }
 
-    // Check dimensions match
     if (width != g_vcState.width || height != g_vcState.height) { return false; }
 
-    // Convert RGBA to NV12 directly into the shared memory frame slot (avoid intermediate copy)
     uint32_t writeIdx = g_vcState.header->write_idx + 1;
     uint32_t idx = writeIdx % 3;
     uint8_t* dst = g_vcState.frame[idx];
 
-    // Convert directly into the target slot
     ConvertRGBAtoNV12(rgba_data, dst, width, height);
 
-    // Write timestamp
     *g_vcState.ts[idx] = timestamp;
 
-    // Memory barrier to ensure data is visible before updating indices
     MemoryBarrier();
 
     // Update indices atomically
@@ -340,7 +302,6 @@ bool WriteVirtualCameraFrame(const uint8_t* rgba_data, uint32_t width, uint32_t 
 
     MemoryBarrier();
 
-    // Debug: log first few frames
     static int frameCount = 0;
     if (frameCount < 3) {
         uint32_t frameSize = width * height * 3 / 2;
@@ -363,7 +324,7 @@ bool WriteVirtualCameraFrameNV12(const uint8_t* nv12_data, uint32_t width, uint3
         LONGLONG elapsed = now.QuadPart - g_vcState.lastFrameTime.QuadPart;
         LONGLONG minTicks = g_vcState.perfFreq.QuadPart / g_vcState.targetFps;
         if (elapsed < minTicks) {
-            return true; // Skip this frame
+            return true;
         }
     }
 
@@ -372,11 +333,9 @@ bool WriteVirtualCameraFrameNV12(const uint8_t* nv12_data, uint32_t width, uint3
 
     if (width != g_vcState.width || height != g_vcState.height) { return false; }
 
-    // Write directly to next frame slot
     uint32_t writeIdx = g_vcState.header->write_idx + 1;
     uint32_t idx = writeIdx % 3;
 
-    // Copy NV12 data directly to shared memory
     uint32_t frameSize = width * height * 3 / 2;
     memcpy(g_vcState.frame[idx], nv12_data, frameSize);
 
@@ -397,3 +356,5 @@ bool WriteVirtualCameraFrameNV12(const uint8_t* nv12_data, uint32_t width, uint3
 bool IsVirtualCameraActive() { return g_virtualCameraActive.load(std::memory_order_acquire); }
 
 const char* GetVirtualCameraError() { return g_vcLastError.c_str(); }
+
+

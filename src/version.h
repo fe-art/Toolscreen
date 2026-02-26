@@ -2,15 +2,11 @@
 
 #include <string>
 
-// Version system: Toolscreen uses semantic versioning, Config uses integer version for automatic upgrades
-// Toolscreen version displayed in GUI, Config version triggers auto-upgrade in LoadConfig()
 
-// Toolscreen version information
 #define TOOLSCREEN_VERSION_MAJOR 1
 #define TOOLSCREEN_VERSION_MINOR 0
 #define TOOLSCREEN_VERSION_PATCH 9
 
-// Config version for automatic upgrades
 #define CONFIG_VERSION 1
 
 #define STRINGIFY(x) #x
@@ -57,3 +53,5 @@ GameVersion GetGameVersionFromCommandLine();
 GameVersion ParseMinecraftVersionFromMMCPack(const std::wstring& mmcPackPath);
 bool IsVersionInRange(const GameVersion& version, const GameVersion& minVer, const GameVersion& maxVer);
 bool IsResolutionChangeSupported(const GameVersion& version);
+
+

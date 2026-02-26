@@ -50,17 +50,11 @@
 Config g_config;
 std::atomic<bool> g_configIsDirty{ false };
 
-// Monotonic version for published config snapshots.
-// Readers can use this to avoid recomputing derived state when config hasn't changed.
 std::atomic<uint64_t> g_configSnapshotVersion{ 0 };
 
-// ============================================================================
 // CONFIG SNAPSHOT (RCU) - Lock-free immutable config for reader threads
-// ============================================================================
 // The mutable g_config is only touched by the GUI/main thread.
-// After any mutation, PublishConfigSnapshot() copies it into a shared_ptr.
 // Reader threads call GetConfigSnapshot() for a safe, lock-free snapshot.
-// ============================================================================
 static std::shared_ptr<const Config> g_configSnapshot;
 
 void PublishConfigSnapshot() {
@@ -68,7 +62,6 @@ void PublishConfigSnapshot() {
     // Lock-free publish: atomic store of shared_ptr.
     std::atomic_store_explicit(&g_configSnapshot, std::move(snapshot), std::memory_order_release);
 
-    // Bump version AFTER publishing.
     g_configSnapshotVersion.fetch_add(1, std::memory_order_release);
 }
 
@@ -77,9 +70,7 @@ std::shared_ptr<const Config> GetConfigSnapshot() {
     return std::atomic_load_explicit(&g_configSnapshot, std::memory_order_acquire);
 }
 
-// ============================================================================
 // HOTKEY SECONDARY MODE STATE - Thread-safe runtime state separated from Config
-// ============================================================================
 static std::vector<std::string> g_hotkeySecondaryModes;
 std::mutex g_hotkeySecondaryModesMutex;
 
@@ -112,9 +103,6 @@ void ResizeHotkeySecondaryModes(size_t count) {
     g_hotkeySecondaryModes.resize(count);
 }
 
-// ============================================================================
-// TEMPORARY SENSITIVITY OVERRIDE - Set by sensitivity hotkeys, cleared on mode change
-// ============================================================================
 TempSensitivityOverride g_tempSensitivityOverride;
 std::mutex g_tempSensitivityMutex;
 
@@ -144,7 +132,7 @@ std::string g_configLoadError;
 std::mutex g_configErrorMutex;
 std::wstring g_modeFilePath;
 std::atomic<bool> g_configLoadFailed{ false };
-std::atomic<bool> g_configLoaded{ false }; // Set to true once LoadConfig() completes successfully
+std::atomic<bool> g_configLoaded{ false };
 std::map<std::string, std::chrono::steady_clock::time_point> g_hotkeyTimestamps;
 std::atomic<bool> g_guiNeedsRecenter{ true };
 std::atomic<bool> g_wasCursorVisible{ true };
@@ -161,10 +149,8 @@ std::mutex g_hotkeyMainKeysMutex;
 std::mutex g_hotkeyTimestampsMutex;
 
 // Track trigger-on-release hotkeys that are currently pressed
-// Key is the hotkey ID string (from GetKeyComboString)
 std::set<std::string> g_triggerOnReleasePending;
 // Track which pending trigger-on-release hotkeys have been invalidated
-// (another key was pressed while the hotkey was held)
 std::set<std::string> g_triggerOnReleaseInvalidated;
 std::mutex g_triggerOnReleaseMutex;
 
@@ -182,12 +168,12 @@ GameVersion g_gameVersion;
 
 bool g_glewLoaded = false;
 WNDPROC g_originalWndProc = NULL;
-std::atomic<HWND> g_subclassedHwnd{ NULL }; // Track which window is currently subclassed
-std::atomic<bool> g_hwndChanged{ false };   // Signal that HWND changed (for ImGui reinit etc.)
+std::atomic<HWND> g_subclassedHwnd{ NULL };
+std::atomic<bool> g_hwndChanged{ false };
 std::atomic<bool> g_isShuttingDown{ false };
 std::atomic<bool> g_allImagesLoaded{ false };
 std::atomic<bool> g_isTransitioningMode{ false };
-std::atomic<bool> g_skipViewportAnimation{ false }; // When true, viewport hook uses target position (for animations)
+std::atomic<bool> g_skipViewportAnimation{ false };
 std::atomic<int> g_wmMouseMoveCount{ 0 };
 
 static std::atomic<HGLRC> g_lastSeenGameGLContext{ NULL };
@@ -209,12 +195,12 @@ std::atomic<double> g_originalFrameTimeMs{ 0.0 };
 
 std::chrono::high_resolution_clock::time_point g_lastFrameEndTime = std::chrono::high_resolution_clock::now();
 std::mutex g_fpsLimitMutex;
-HANDLE g_highResTimer = NULL;                             // High-resolution waitable timer for FPS limiting
+HANDLE g_highResTimer = NULL;
 int g_originalWindowsMouseSpeed = 0;                      // Original Windows mouse speed to restore on exit
-std::atomic<bool> g_windowsMouseSpeedApplied{ false };    // Track if we've applied our speed setting
-FILTERKEYS g_originalFilterKeys = { sizeof(FILTERKEYS) }; // Original FILTERKEYS state to restore on exit
+std::atomic<bool> g_windowsMouseSpeedApplied{ false };
+FILTERKEYS g_originalFilterKeys = { sizeof(FILTERKEYS) };
 std::atomic<bool> g_filterKeysApplied{ false };
-std::atomic<bool> g_originalFilterKeysCaptured{ false }; // Track if original FILTERKEYS snapshot has been captured
+std::atomic<bool> g_originalFilterKeysCaptured{ false };
 
 std::string g_lastFrameModeId = "";
 std::mutex g_lastFrameModeIdMutex;
@@ -240,8 +226,6 @@ std::atomic<bool> g_isStateOutputAvailable{ false };
 std::vector<DecodedImageData> g_decodedImagesQueue;
 std::mutex g_decodedImagesMutex;
 
-// Use UINT_MAX as sentinel value for "not yet initialized"
-// This allows 0 to be a valid texture ID
 std::atomic<GLuint> g_cachedGameTextureId{ UINT_MAX };
 
 std::atomic<HCURSOR> g_specialCursorHandle{ NULL };
@@ -259,35 +243,27 @@ void RenderSettingsGUI();
 void AttemptAggressiveGlViewportHook();
 GLuint CalculateGameTextureId(int windowWidth, int windowHeight, int fullWidth, int fullHeight);
 
-// Hook chaining / third-party detour compatibility logic is implemented in hook_chain.cpp
 
 bool SubclassGameWindow(HWND hwnd) {
     if (!hwnd) return false;
 
-    // Don't subclass if already shutting down
     if (g_isShuttingDown.load()) return false;
 
-    // Check if we already subclassed this window
     HWND currentSubclassed = g_subclassedHwnd.load();
     if (currentSubclassed == hwnd && g_originalWndProc != NULL) {
-        // Already subclassed this window
         return true;
     }
 
-    // If we have a different window subclassed, log the transition and signal state reset
     if (currentSubclassed != NULL && currentSubclassed != hwnd) {
         Log("Window handle changed from " + std::to_string(reinterpret_cast<uintptr_t>(currentSubclassed)) + " to " +
             std::to_string(reinterpret_cast<uintptr_t>(hwnd)) + " (likely fullscreen toggle)");
-        // Note: We don't restore the old window proc because the old window is likely destroyed
-        g_originalWndProc = NULL; // Reset to allow new subclassing
+        g_originalWndProc = NULL;
 
-        // Update global HWND and signal for state reset (ImGui reinit, texture cache invalidation, etc.)
         g_minecraftHwnd.store(hwnd);
-        g_cachedGameTextureId.store(UINT_MAX); // Force texture recalculation
-        g_hwndChanged.store(true);             // Signal ImGui backends to reinitialize
+        g_cachedGameTextureId.store(UINT_MAX);
+        g_hwndChanged.store(true);
     }
 
-    // Subclass the new window
     WNDPROC oldProc = (WNDPROC)SetWindowLongPtr(hwnd, GWLP_WNDPROC, (LONG_PTR)SubclassedWndProc);
     if (oldProc) {
         g_originalWndProc = oldProc;
@@ -315,31 +291,24 @@ template <typename T> bool CreateHookOrDie(LPVOID pTarget, LPVOID pDetour, T** p
     return true;
 }
 
-// Internal function to rebuild hotkey main keys cache
 // REQUIRES: g_configMutex and g_hotkeyMainKeysMutex must already be held by caller
 void RebuildHotkeyMainKeys_Internal() {
     g_hotkeyMainKeys.clear();
 
-    // Helper lambda to check if a key is a modifier
     auto isModifier = [](DWORD key) {
         return key == VK_CONTROL || key == VK_LCONTROL || key == VK_RCONTROL || key == VK_SHIFT || key == VK_LSHIFT || key == VK_RSHIFT ||
                key == VK_MENU || key == VK_LMENU || key == VK_RMENU;
     };
 
-    // Helper lambda to add the main key from a key list
-    // The main key is the last key in the list, OR if all keys are modifiers,
-    // the last modifier is treated as the main key
     auto addMainKey = [&](const std::vector<DWORD>& keys) {
         if (keys.empty()) return;
         DWORD mainKey = keys.back();
         g_hotkeyMainKeys.insert(mainKey);
 
         // For modifier keys, also add the generic version since Windows sends
-        // VK_CONTROL/VK_SHIFT/VK_MENU in wParam, not the left/right-specific codes
         if (mainKey == VK_LCONTROL || mainKey == VK_RCONTROL) {
             g_hotkeyMainKeys.insert(VK_CONTROL);
         } else if (mainKey == VK_CONTROL) {
-            // If the binding uses the generic modifier, also accept left/right variants
             g_hotkeyMainKeys.insert(VK_LCONTROL);
             g_hotkeyMainKeys.insert(VK_RCONTROL);
         } else if (mainKey == VK_LSHIFT || mainKey == VK_RSHIFT) {
@@ -355,34 +324,25 @@ void RebuildHotkeyMainKeys_Internal() {
         }
     };
 
-    // Extract main keys from all hotkey configurations
     for (const auto& hotkey : g_config.hotkeys) {
-        // Main hotkey
         addMainKey(hotkey.keys);
 
-        // Alt secondary mode hotkeys
         for (const auto& alt : hotkey.altSecondaryModes) { addMainKey(alt.keys); }
     }
 
-    // Extract main keys from sensitivity hotkeys
     for (const auto& sensHotkey : g_config.sensitivityHotkeys) { addMainKey(sensHotkey.keys); }
 
-    // Also include GUI hotkey
     addMainKey(g_config.guiHotkey);
 
-    // Also include borderless toggle hotkey (optional)
     addMainKey(g_config.borderlessHotkey);
 
-    // Always include Escape as it can toggle GUI
     g_hotkeyMainKeys.insert(VK_ESCAPE);
 
-    // Include key rebinds so they're not skipped by the early exit optimization
     if (g_config.keyRebinds.enabled) {
         for (const auto& rebind : g_config.keyRebinds.rebinds) {
             if (rebind.enabled && rebind.fromKey != 0) {
                 g_hotkeyMainKeys.insert(rebind.fromKey);
 
-                // Mirror the modifier normalization rules so rebinding VK_RSHIFT still works even though
                 // Windows may deliver VK_SHIFT in wParam (and vice-versa).
                 if (rebind.fromKey == VK_LCONTROL || rebind.fromKey == VK_RCONTROL) {
                     g_hotkeyMainKeys.insert(VK_CONTROL);
@@ -405,7 +365,6 @@ void RebuildHotkeyMainKeys_Internal() {
     }
 }
 
-// Public function to rebuild the set of main keys used in hotkey bindings
 // This version acquires both required locks - use when you don't already hold them
 void RebuildHotkeyMainKeys() {
     std::lock_guard<std::mutex> hotkeyLock(g_hotkeyMainKeysMutex);
@@ -420,7 +379,7 @@ void SaveOriginalWindowsMouseSpeed() {
         LogCategory("init", "Saved original Windows mouse speed: " + std::to_string(currentSpeed));
     } else {
         Log("WARNING: Failed to get current Windows mouse speed");
-        g_originalWindowsMouseSpeed = 10; // Default to middle value
+        g_originalWindowsMouseSpeed = 10;
     }
 }
 
@@ -429,7 +388,6 @@ void ApplyWindowsMouseSpeed() {
     int targetSpeed = g_config.windowsMouseSpeed;
 
     if (targetSpeed == 0) {
-        // Feature disabled - restore original speed if we had applied ours
         if (g_windowsMouseSpeedApplied.load()) {
             if (SystemParametersInfo(SPI_SETMOUSESPEED, 0, reinterpret_cast<void*>(static_cast<intptr_t>(g_originalWindowsMouseSpeed)),
                                      0)) {
@@ -440,7 +398,6 @@ void ApplyWindowsMouseSpeed() {
         return;
     }
 
-    // Clamp to valid range
     if (targetSpeed < 1) targetSpeed = 1;
     if (targetSpeed > 20) targetSpeed = 20;
 
@@ -464,7 +421,6 @@ void RestoreWindowsMouseSpeed() {
     }
 }
 
-// Save the original key repeat settings (FILTERKEYS)
 void SaveOriginalKeyRepeatSettings() {
     g_originalFilterKeys.cbSize = sizeof(FILTERKEYS);
     if (SystemParametersInfo(SPI_GETFILTERKEYS, sizeof(FILTERKEYS), &g_originalFilterKeys, 0)) {
@@ -474,7 +430,6 @@ void SaveOriginalKeyRepeatSettings() {
                                 ", iRepeatMSec=" + std::to_string(g_originalFilterKeys.iRepeatMSec));
     } else {
         Log("WARNING: Failed to get current FILTERKEYS settings");
-        // Initialize with defaults
         g_originalFilterKeys.dwFlags = 0;
         g_originalFilterKeys.iDelayMSec = 0;
         g_originalFilterKeys.iRepeatMSec = 0;
@@ -482,17 +437,13 @@ void SaveOriginalKeyRepeatSettings() {
     }
 }
 
-// Apply the configured key repeat settings (if enabled)
 void ApplyKeyRepeatSettings() {
-    // Ensure we have a baseline snapshot to restore from even if apply is called early.
     if (!g_originalFilterKeysCaptured.load(std::memory_order_acquire)) { SaveOriginalKeyRepeatSettings(); }
 
     int startDelay = g_config.keyRepeatStartDelay;
     int repeatDelay = g_config.keyRepeatDelay;
 
-    // Check if either setting is enabled (non-zero)
     if (startDelay == 0 && repeatDelay == 0) {
-        // Both disabled - restore original settings if we had applied ours
         if (g_filterKeysApplied.load()) {
             if (SystemParametersInfo(SPI_SETFILTERKEYS, sizeof(FILTERKEYS), &g_originalFilterKeys, 0)) {
                 Log("Restored original FILTERKEYS settings");
@@ -502,19 +453,17 @@ void ApplyKeyRepeatSettings() {
         return;
     }
 
-    // Clamp to valid range (1-500ms)
     if (startDelay < 0) startDelay = 0;
     if (startDelay > 500) startDelay = 500;
     if (repeatDelay < 0) repeatDelay = 0;
     if (repeatDelay > 500) repeatDelay = 500;
 
-    // Build FILTERKEYS structure with our custom settings
     FILTERKEYS fk = { sizeof(FILTERKEYS) };
-    fk.dwFlags = FKF_FILTERKEYSON;                                                       // Enable filter keys
-    fk.iWaitMSec = 0;                                                                    // No wait before accepting keystrokes
-    fk.iDelayMSec = (startDelay > 0) ? startDelay : g_originalFilterKeys.iDelayMSec;     // Delay before repeat starts
-    fk.iRepeatMSec = (repeatDelay > 0) ? repeatDelay : g_originalFilterKeys.iRepeatMSec; // Time between repeats
-    fk.iBounceMSec = 0;                                                                  // No bounce time
+    fk.dwFlags = FKF_FILTERKEYSON;
+    fk.iWaitMSec = 0;
+    fk.iDelayMSec = (startDelay > 0) ? startDelay : g_originalFilterKeys.iDelayMSec;
+    fk.iRepeatMSec = (repeatDelay > 0) ? repeatDelay : g_originalFilterKeys.iRepeatMSec;
+    fk.iBounceMSec = 0;
 
     if (SystemParametersInfo(SPI_SETFILTERKEYS, sizeof(FILTERKEYS), &fk, 0)) {
         g_filterKeysApplied.store(true);
@@ -525,7 +474,6 @@ void ApplyKeyRepeatSettings() {
     }
 }
 
-// Restore the original key repeat settings on shutdown or focus loss
 void RestoreKeyRepeatSettings() {
     if (g_filterKeysApplied.load()) {
         if (SystemParametersInfo(SPI_SETFILTERKEYS, sizeof(FILTERKEYS), &g_originalFilterKeys, 0)) {
@@ -557,12 +505,6 @@ typedef void(WINAPI* GLVIEWPORTPROC)(GLint x, GLint y, GLsizei width, GLsizei he
 GLVIEWPORTPROC oglViewport = NULL;
 
 // Additional glViewport hook chains for compatibility with driver-level entrypoints and
-// third-party overlay hook layers (e.g., MSI Afterburner / RTSS) that may be installed at runtime.
-//
-// IMPORTANT:
-// - `oglViewport` remains the opengl32.dll-export hook's trampoline and is treated as our
-//   stable "bypass our hkglViewport" entrypoint for internal rendering.
-// - These additional originals are ONLY used by their respective detours.
 GLVIEWPORTPROC g_oglViewportDriver = NULL;
 GLVIEWPORTPROC g_oglViewportThirdParty = NULL;
 std::atomic<void*> g_glViewportDriverHookTarget{ nullptr };
@@ -571,7 +513,6 @@ std::atomic<void*> g_glViewportThirdPartyHookTarget{ nullptr };
 // Thread-local flag to track if glViewport is being called from our own code
 thread_local bool g_internalViewportCall = false;
 
-// Multiple glViewport hook targets for aggressive hooking (AMD GPU compatibility)
 std::atomic<int> g_glViewportHookCount{ 0 };
 std::atomic<bool> g_glViewportHookedViaGLEW{ false };
 std::atomic<bool> g_glViewportHookedViaWGL{ false };
@@ -581,7 +522,6 @@ typedef void(WINAPI* GLBLITNAMEDFRAMEBUFFERPROC)(GLuint readFramebuffer, GLuint 
                                                  GLenum filter);
 GLBLITNAMEDFRAMEBUFFERPROC oglBlitNamedFramebuffer = NULL;
 
-// glBlitFramebuffer hook for OBS graphics-hook detection
 typedef void(APIENTRY* PFNGLBLITFRAMEBUFFERPROC_HOOK)(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0,
                                                       GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter);
 PFNGLBLITFRAMEBUFFERPROC_HOOK oglBlitFramebuffer = NULL;
@@ -592,7 +532,6 @@ GLFWSETINPUTMODE oglfwSetInputMode = NULL;
 GLFWSETINPUTMODE g_oglfwSetInputModeThirdParty = NULL;
 std::atomic<void*> g_glfwSetInputModeThirdPartyHookTarget{ nullptr };
 
-// GetRawInputData hook for mouse sensitivity
 typedef UINT(WINAPI* GETRAWINPUTDATAPROC)(HRAWINPUT hRawInput, UINT uiCommand, LPVOID pData, PUINT pcbSize, UINT cbSizeHeader);
 GETRAWINPUTDATAPROC oGetRawInputData = NULL;
 GETRAWINPUTDATAPROC g_oGetRawInputDataThirdParty = NULL;
@@ -601,19 +540,14 @@ std::atomic<void*> g_getRawInputDataThirdPartyHookTarget{ nullptr };
 static BOOL ClipCursorHook_Impl(CLIPCURSORPROC next, const RECT* lpRect) {
     if (!next) return FALSE;
 
-    // When GUI is open, always allow cursor to move freely (even to other monitors)
     if (g_showGui.load()) { return next(NULL); }
 
-    // For 1.13.0+, just pass through the original rect
     if (g_gameVersion >= GameVersion(1, 13, 0)) { return next(lpRect); }
 
-    // For < 1.13.0, check toggle to decide whether to allow cursor escape
-    // Note: Reading scalar bool directly - pragmatically safe on x86-64 for aligned bools.
-    // hkClipCursor is called too frequently to justify a full snapshot per call.
     if (g_config.allowCursorEscape) {
-        return next(NULL); // Allow cursor to escape (pass NULL)
+        return next(NULL);
     }
-    return next(lpRect); // Confine cursor (pass original rect)
+    return next(lpRect);
 }
 
 BOOL WINAPI hkClipCursor(const RECT* lpRect) { return ClipCursorHook_Impl(oClipCursor, lpRect); }
@@ -638,16 +572,13 @@ static HCURSOR SetCursorHook_Impl(SETCURSORPROC next, HCURSOR hCursor) {
         if (cursorData && cursorData->hCursor) { return next(cursorData->hCursor); }
     }
 
-    // If we've already found the special cursor, skip checking
     if (g_specialCursorHandle.load() != NULL) { return next(hCursor); }
 
-    // Check if mask hash of new cursor is "773ff800"
     ICONINFO ii = { sizeof(ICONINFO) };
     if (GetIconInfo(hCursor, &ii)) {
         BITMAP bitmask = {};
         GetObject(ii.hbmMask, sizeof(BITMAP), &bitmask);
 
-        // Compute hash of hbmMask using same algorithm as utils.cpp
         std::string maskHash = "N/A";
         if (bitmask.bmWidth > 0 && bitmask.bmHeight > 0) {
             size_t bufferSize = bitmask.bmWidth * bitmask.bmHeight;
@@ -663,13 +594,11 @@ static HCURSOR SetCursorHook_Impl(SETCURSORPROC next, HCURSOR hCursor) {
 
         Log("hkSetCursor: maskHash = " + maskHash);
 
-        // If mask hash is "773ff800", cache it
         if (maskHash == "773ff800") {
             Log("hkSetCursor: Detected special cursor (maskHash=773ff800), caching for later use");
             g_specialCursorHandle.store(hCursor);
         }
 
-        // Clean up ICONINFO bitmaps
         if (ii.hbmMask) DeleteObject(ii.hbmMask);
         if (ii.hbmColor) DeleteObject(ii.hbmColor);
     }
@@ -687,22 +616,18 @@ HCURSOR WINAPI hkSetCursor_ThirdParty(HCURSOR hCursor) {
     return SetCursorHook_Impl(next, hCursor);
 }
 // Note: OBS capture is now handled by obs_thread.cpp via glBlitFramebuffer hook
-// Old functions EnsureObsCaptureFBO, CaptureToObsFBO, and OBS blit redirection removed
 
 static int lastViewportW = 0;
 static int lastViewportH = 0;
 
 static inline void ViewportHook_Impl(GLVIEWPORTPROC next, GLint x, GLint y, GLsizei width, GLsizei height) {
-    // If called before hook installation completed, fail-safe to the unmodified call.
     if (!next) return;
 
-    // Allow internal rendering code to bypass any viewport manipulation logic.
     if (g_internalViewportCall) {
         return next(x, y, width, height);
     }
 
     if (!IsFullscreen()) {
-        // Log("viewport not fullscreen");
         return next(x, y, width, height);
     }
 
@@ -714,25 +639,20 @@ static inline void ViewportHook_Impl(GLVIEWPORTPROC next, GLint x, GLint y, GLsi
     // Lock-free read of cached mode viewport data (updated by logic_thread)
     const CachedModeViewport& cachedMode = g_viewportModeCache[g_viewportModeCacheIndex.load(std::memory_order_acquire)];
 
-    // During transitions, we can derive dimensions from the transition snapshot even if cache is stale.
     // The snapshot is updated synchronously on mode switch, while cache has ~16ms lag.
     int modeWidth, modeHeight;
     bool stretchEnabled;
     int stretchX, stretchY, stretchWidth, stretchHeight;
 
     if (isTransitionActive) {
-        // Use transition snapshot's NATIVE dimensions for matching - game's glViewport uses native size
-        // The stretch dimensions are only used for actual viewport positioning
         modeWidth = transitionSnap.toNativeWidth;
         modeHeight = transitionSnap.toNativeHeight;
-        // For stretch, use target position/size from snapshot
-        stretchEnabled = true; // Transition implies stretching to target position
+        stretchEnabled = true;
         stretchX = transitionSnap.toX;
         stretchY = transitionSnap.toY;
         stretchWidth = transitionSnap.toWidth;
         stretchHeight = transitionSnap.toHeight;
     } else if (cachedMode.valid) {
-        // Not transitioning - use cached mode data
         modeWidth = cachedMode.width;
         modeHeight = cachedMode.height;
         stretchEnabled = cachedMode.stretchEnabled;
@@ -741,7 +661,6 @@ static inline void ViewportHook_Impl(GLVIEWPORTPROC next, GLint x, GLint y, GLsi
         stretchWidth = cachedMode.stretchWidth;
         stretchHeight = cachedMode.stretchHeight;
     } else {
-        // Cache not yet populated and no transition - fall back to original viewport call
         return next(x, y, width, height);
     }
 
@@ -749,10 +668,6 @@ static inline void ViewportHook_Impl(GLVIEWPORTPROC next, GLint x, GLint y, GLsi
     bool widthMatches = (width == modeWidth) || (width == lastViewportW);
     bool heightMatches = (height == modeHeight) || (height == lastViewportH);
 
-    // During transition, also accept FROM and TO NATIVE dimensions (from snapshot)
-    // FROM: the first viewport call may still be at old dimensions
-    // TO: WM_SIZE is sent immediately, so game may already be at target dimensions
-    // Use native dimensions since that's what glViewport receives from the game
     if (isTransitionActive && (!widthMatches || !heightMatches)) {
         widthMatches = widthMatches || (width == transitionSnap.fromNativeWidth) || (width == transitionSnap.toNativeWidth);
         heightMatches = heightMatches || (height == transitionSnap.fromNativeHeight) || (height == transitionSnap.toNativeHeight);
@@ -773,8 +688,6 @@ static inline void ViewportHook_Impl(GLVIEWPORTPROC next, GLint x, GLint y, GLsi
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &currentTexture);
 
     if (currentTexture == 0 || readFBO != 0) {
-        // Log("Returning because no texture is bound or FBO is bound (fb binding =" + std::to_string(readFBO) +
-        //     " and tex binding=" + std::to_string(currentTexture) + ")");
         return next(x, y, width, height);
     }
 
@@ -785,9 +698,6 @@ static inline void ViewportHook_Impl(GLVIEWPORTPROC next, GLint x, GLint y, GLsi
     const int screenH = GetCachedScreenHeight();
 
     // Check if mode transition animation is active (from snapshot - no lock needed)
-    // For Move transitions: use TARGET position so game renders at final location,
-    // then RenderModeInternal will blit it to the animated position.
-    // This prevents stretching the entire framebuffer including GUI/overlays.
     bool useAnimatedDimensions = transitionSnap.active;
     bool isMoveTransition = transitionSnap.isBounceTransition;
     int animatedX = transitionSnap.currentX;
@@ -800,49 +710,35 @@ static inline void ViewportHook_Impl(GLVIEWPORTPROC next, GLint x, GLint y, GLsi
     int targetHeight = transitionSnap.toHeight;
 
     if (useAnimatedDimensions) {
-        // Check if we should skip animation (for "Hide Animations in Game" feature)
-        // Note: Reading scalar bool directly from g_config is pragmatically safe on x86-64
-        // (no tearing for aligned bools). A full config snapshot per glViewport call would be too expensive.
         bool shouldSkipAnimation = g_config.hideAnimationsInGame;
 
         if (shouldSkipAnimation) {
-            // With hideAnimationsInGame: render game at TARGET position immediately
-            // OBS capture handles its own animated blitting separately.
             stretchX = targetX;
             stretchY = targetY;
             stretchWidth = targetWidth;
             stretchHeight = targetHeight;
         } else {
-            // Use animated position - game renders directly at the animated location on screen
             stretchX = animatedX;
             stretchY = animatedY;
             stretchWidth = animatedWidth;
             stretchHeight = animatedHeight;
         }
     } else {
-        // Not animating - use mode's stretch settings directly if enabled
         if (!stretchEnabled) {
-            // No stretch configured - center the game viewport
             stretchX = screenW / 2 - modeWidth / 2;
             stretchY = screenH / 2 - modeHeight / 2;
             stretchWidth = modeWidth;
             stretchHeight = modeHeight;
         }
-        // else: stretchX/Y/Width/Height already set from mode config above
-        // Log("[VIEWPORT] Using static stretch: " + std::to_string(stretchWidth) + "x" + std::to_string(stretchHeight) + " at " +
-        //    std::to_string(stretchX) + "," + std::to_string(stretchY) + " (enabled: " + std::to_string(stretchEnabled) + ")");
     }
 
     // Convert Y coordinate from Windows screen space (top-left origin) to OpenGL viewport space (bottom-left origin)
     int stretchY_gl = screenH - stretchY - stretchHeight;
 
-    // Log("Viewport Hook: setting viewport to " + std::to_string(stretchWidth) + "x" + std::to_string(stretchHeight) + " at (" +
-    //     std::to_string(stretchX) + "," + std::to_string(stretchY_gl) + ")");
 
     return next(stretchX, stretchY_gl, stretchWidth, stretchHeight);
 }
 
-// Primary glViewport hook (opengl32.dll export / initial hook).
 void WINAPI hkglViewport(GLint x, GLint y, GLsizei width, GLsizei height) { ViewportHook_Impl(oglViewport, x, y, width, height); }
 
 // Driver-level glViewport hook (wglGetProcAddress / GLEW-resolved function pointer).
@@ -850,7 +746,6 @@ void WINAPI hkglViewport_Driver(GLint x, GLint y, GLsizei width, GLsizei height)
     ViewportHook_Impl(g_oglViewportDriver, x, y, width, height);
 }
 
-// Third-party layer hook target (when another injector replaces the opengl32 export at runtime).
 void WINAPI hkglViewport_ThirdParty(GLint x, GLint y, GLsizei width, GLsizei height) {
     GLVIEWPORTPROC next = oglViewport ? oglViewport : g_oglViewportDriver;
     if (g_config.hookChainingNextTarget == HookChainingNextTarget::LatestHook) {
@@ -859,12 +754,10 @@ void WINAPI hkglViewport_ThirdParty(GLint x, GLint y, GLsizei width, GLsizei hei
     ViewportHook_Impl(next, x, y, width, height);
 }
 
-// Forward declaration for extension hook
 void WINAPI hkglBlitNamedFramebuffer(GLuint readFramebuffer, GLuint drawFramebuffer, GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                                      GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter);
 
 static void AttemptHookGlBlitNamedFramebufferViaGlew() {
-    // If already hooked (either via opengl32 export or via this path), skip.
     static std::atomic<bool> s_hooked{ false };
     if (s_hooked.load(std::memory_order_acquire)) return;
     if (oglBlitNamedFramebuffer != NULL) {
@@ -875,7 +768,6 @@ static void AttemptHookGlBlitNamedFramebufferViaGlew() {
     PFNGLBLITNAMEDFRAMEBUFFERPROC pFunc = glBlitNamedFramebuffer;
     if (pFunc == NULL) return;
 
-    // Create + enable hook on the actual resolved entrypoint.
     MH_STATUS st = MH_CreateHook(reinterpret_cast<void*>(pFunc), reinterpret_cast<void*>(&hkglBlitNamedFramebuffer),
                                 reinterpret_cast<void**>(&oglBlitNamedFramebuffer));
     if (st != MH_OK && st != MH_ERROR_ALREADY_CREATED) {
@@ -901,8 +793,6 @@ static BOOL SetCursorPosHook_Impl(SETCURSORPOSPROC next, int X, int Y) {
 
     CapturingState currentState = g_capturingMousePos.load();
 
-    // IMPORTANT: SetCursorPos expects VIRTUAL SCREEN coordinates.
-    // Our mode viewport coordinates are computed relative to the game monitor's (0,0),
     // so we must add the monitor's rcMonitor.left/top for multi-monitor setups.
     int centerX = viewport.stretchX + viewport.stretchWidth / 2;
     int centerY = viewport.stretchY + viewport.stretchHeight / 2;
@@ -932,7 +822,6 @@ static BOOL SetCursorPosHook_Impl(SETCURSORPOSPROC next, int X, int Y) {
         return next(expectedX, expectedY);
     }
 
-    // probably never happens, maybe if we SetCursorPos from elsewhere
     return next(X, Y);
 }
 
@@ -965,7 +854,7 @@ static void GlfwSetInputModeHook_Impl(GLFWSETINPUTMODE next, void* window, int m
     } else if (value == GLFW_CURSOR_NORMAL) {
         g_capturingMousePos.store(CapturingState::NORMAL);
         next(window, mode, value);
-    } else { // probably never happens
+    } else {
         next(window, mode, value);
     }
 
@@ -982,35 +871,26 @@ void hkglfwSetInputMode_ThirdParty(void* window, int mode, int value) {
     GlfwSetInputModeHook_Impl(next, window, mode, value);
 }
 
-// Hook for GetRawInputData to apply mouse sensitivity multiplier and keyboard rebinds
 static UINT GetRawInputDataHook_Impl(GETRAWINPUTDATAPROC next, HRAWINPUT hRawInput, UINT uiCommand, LPVOID pData, PUINT pcbSize,
                                     UINT cbSizeHeader) {
     if (!next) return static_cast<UINT>(-1);
 
-    // Call original first
     UINT result = next(hRawInput, uiCommand, pData, pcbSize, cbSizeHeader);
 
-    // Raw input is being used - reset the WM_MOUSEMOVE counter
     g_wmMouseMoveCount.store(0);
 
-    // Only modify if we got valid data
     if (result == static_cast<UINT>(-1) || pData == nullptr || uiCommand != RID_INPUT) { return result; }
 
-    // Skip if GUI is open or shutting down
     if (g_showGui.load() || g_isShuttingDown.load()) { return result; }
 
     RAWINPUT* raw = reinterpret_cast<RAWINPUT*>(pData);
 
-    // Handle mouse sensitivity
     if (raw->header.dwType == RIM_TYPEMOUSE) {
         // Get sensitivity setting using LOCK-FREE access to avoid input delay
-        // This is critical for low-latency input processing
         float sensitivityX = 1.0f;
         float sensitivityY = 1.0f;
         bool sensitivityDetermined = false;
 
-        // Priority 1: Check for temporary sensitivity override (from sensitivity hotkeys)
-        // This takes precedence over all other sensitivity settings until mode change
         {
             std::lock_guard<std::mutex> lock(g_tempSensitivityMutex);
             if (g_tempSensitivityOverride.active) {
@@ -1020,13 +900,11 @@ static UINT GetRawInputDataHook_Impl(GETRAWINPUTDATAPROC next, HRAWINPUT hRawInp
             }
         }
 
-        // Priority 2: Mode-specific or global sensitivity (if no temp override)
         if (!sensitivityDetermined) {
             // Lock-free read: check transition snapshot first
             const ViewportTransitionSnapshot& transitionSnap =
                 g_viewportTransitionSnapshots[g_viewportTransitionSnapshotIndex.load(std::memory_order_acquire)];
 
-            // Get mode ID: use target mode during transitions, otherwise current mode
             std::string modeId;
             if (transitionSnap.active) {
                 modeId = transitionSnap.toModeId; // Target mode during transition (lock-free from snapshot)
@@ -1052,24 +930,17 @@ static UINT GetRawInputDataHook_Impl(GETRAWINPUTDATAPROC next, HRAWINPUT hRawInp
             }
         }
 
-        // Only process if sensitivity is different from default
         if (sensitivityX != 1.0f || sensitivityY != 1.0f) {
-            // Only apply to relative mouse movement (not absolute positioning)
             if (!(raw->data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE)) {
-                // Use accumulators to preserve fractional movements that would otherwise be lost
-                // This prevents small movements from being truncated to zero with sub-1.0 sensitivity
                 static float xAccum = 0.0f;
                 static float yAccum = 0.0f;
 
-                // Add scaled movement to accumulator
                 xAccum += raw->data.mouse.lLastX * sensitivityX;
                 yAccum += raw->data.mouse.lLastY * sensitivityY;
 
-                // Extract integer portion for output
                 LONG outputX = static_cast<LONG>(xAccum);
                 LONG outputY = static_cast<LONG>(yAccum);
 
-                // Keep fractional remainder for next frame
                 xAccum -= outputX;
                 yAccum -= outputY;
 
@@ -1102,40 +973,29 @@ void WINAPI hkglBlitNamedFramebuffer(GLuint readFramebuffer, GLuint drawFramebuf
                                        filter);
     }
 
-    // Minecraft 1.21+ uses glBlitNamedFramebuffer extensively for internal post-processing blits between FBOs.
-    // Our coordinate remap is ONLY intended for the final blit into the default framebuffer.
-    // If we remap internal blits (drawFramebuffer != 0), we can corrupt the pipeline and end up with a black final frame.
     if (drawFramebuffer != 0) {
         return oglBlitNamedFramebuffer(readFramebuffer, drawFramebuffer, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask,
                                        filter);
     }
 
-    // Get the current mode's viewport information to determine proper destination coordinates
     ModeViewportInfo viewport = GetCurrentModeViewport();
 
     if (viewport.valid) {
-        // Convert OpenGL Y coordinates (bottom-left origin) to screen Y coordinates (top-left origin)
         int screenH = GetCachedScreenHeight();
         int destY0_screen = screenH - viewport.stretchY - viewport.stretchHeight;
         int destY1_screen = screenH - viewport.stretchY;
 
-        // Use the stretch dimensions as destination coordinates
         return oglBlitNamedFramebuffer(readFramebuffer, drawFramebuffer, srcX0, srcY0, srcX1, srcY1, viewport.stretchX, destY0_screen,
                                        viewport.stretchX + viewport.stretchWidth, destY1_screen, mask, filter);
     }
 
-    // Fallback to original parameters if viewport invalid or stretch disabled
     return oglBlitNamedFramebuffer(readFramebuffer, drawFramebuffer, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
 }
 
-// Aggressive glViewport hooking for AMD GPU compatibility
-// This function attempts multiple hooking strategies to ensure we catch all glViewport calls
 void AttemptAggressiveGlViewportHook() {
     int hooksCreated = 0;
 
     // We only install ONE additional driver-level hook target at a time.
-    // Creating multiple hooks with the same detour but a shared `oglViewport` trampoline breaks chaining
-    // (the last MH_CreateHook overwrites the original pointer).
     if (g_glViewportDriverHookTarget.load(std::memory_order_acquire) != nullptr) {
         return;
     }
@@ -1166,8 +1026,6 @@ void AttemptAggressiveGlViewportHook() {
         }
     }
 
-    // Strategy 2: Hook via the function pointer GLEW resolves for the current context.
-    // This is often the actual ICD entrypoint used by the game.
     if (g_glViewportDriverHookTarget.load(std::memory_order_acquire) == nullptr && !g_glViewportHookedViaGLEW.load()) {
         GLVIEWPORTPROC pGlViewportGLEW = glViewport;
         if (pGlViewportGLEW != NULL && reinterpret_cast<void*>(pGlViewportGLEW) != reinterpret_cast<void*>(&hkglViewport) &&
@@ -1189,9 +1047,7 @@ void AttemptAggressiveGlViewportHook() {
     Log("Total glViewport hook count: " + std::to_string(g_glViewportHookCount.load()));
 }
 
-// Hook chaining is implemented in hook_chain.cpp
 
-// Helper function to find the game texture ID by matching dimensions with current mode viewport
 GLuint CalculateGameTextureId(int windowWidth, int windowHeight, int fullWidth, int fullHeight) {
     ModeViewportInfo viewport = GetCurrentModeViewport();
     if (!viewport.valid) {
@@ -1209,27 +1065,20 @@ GLuint CalculateGameTextureId(int windowWidth, int windowHeight, int fullWidth, 
 
     Log("CalculateGameTextureId: Looking for texture with dimensions " + std::to_string(targetWidth) + "x" + std::to_string(targetHeight));
 
-    // Get the maximum texture ID that OpenGL might have allocated
-    // We'll check a reasonable range of texture IDs (0-1000)
     const GLuint maxCheckRange = 1000;
 
     for (GLuint texId = 0; texId < maxCheckRange; texId++) {
-        // Check if this is a valid texture object
         if (!glIsTexture(texId)) { continue; }
 
-        // Save current texture binding to restore later
         GLint oldTexture = 0;
         glGetIntegerv(GL_TEXTURE_BINDING_2D, &oldTexture);
 
-        // Bind the texture to query its properties
         glBindTexture(GL_TEXTURE_2D, texId);
 
-        // Get texture dimensions
         GLint width = 0, height = 0;
         glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &width);
         glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &height);
 
-        // Check if dimensions match
         if (width == targetWidth && height == targetHeight) {
             // Check texture parameters: minFilter and magFilter must be GL_NEAREST,
             // wrapS and wrapT must be GL_CLAMP_TO_EDGE
@@ -1239,7 +1088,6 @@ GLuint CalculateGameTextureId(int windowWidth, int windowHeight, int fullWidth, 
             glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, &wrapS);
             glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, &wrapT);
 
-            // Restore previous texture binding
             glBindTexture(GL_TEXTURE_2D, oldTexture);
 
             if (g_gameVersion <= GameVersion(1, 16, 5)) {
@@ -1247,7 +1095,7 @@ GLuint CalculateGameTextureId(int windowWidth, int windowHeight, int fullWidth, 
                     Log("CalculateGameTextureId: Texture " + std::to_string(texId) +
                         " has matching dimensions but wrong parameters (minFilter=" + std::to_string(minFilter) + ", magFilter=" +
                         std::to_string(magFilter) + ", wrapS=" + std::to_string(wrapS) + ", wrapT=" + std::to_string(wrapT) + ")");
-                    continue; // Skip this texture, try next one
+                    continue;
                 }
             } else {
                 /*
@@ -1255,7 +1103,7 @@ GLuint CalculateGameTextureId(int windowWidth, int windowHeight, int fullWidth, 
                     Log("CalculateGameTextureId: Texture " + std::to_string(texId) +
                         " has matching dimensions but wrong parameters (minFilter=" + std::to_string(minFilter) + ", magFilter=" +
                         std::to_string(magFilter) + ", wrapS=" + std::to_string(wrapS) + ", wrapT=" + std::to_string(wrapT) + ")");
-                    continue; // Skip this texture, try next one
+                    continue;
                 }*/
             }
 
@@ -1264,7 +1112,6 @@ GLuint CalculateGameTextureId(int windowWidth, int windowHeight, int fullWidth, 
             return texId;
         }
 
-        // Restore previous texture binding
         glBindTexture(GL_TEXTURE_2D, oldTexture);
     }
 
@@ -1285,11 +1132,8 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                 LogCategory("init", "[RENDER] GLEW Initialized successfully.");
                 g_glewLoaded = true;
 
-                // Record the initial context used for sharing.
                 g_lastSeenGameGLContext.store(wglGetCurrentContext(), std::memory_order_release);
 
-                // Keep welcome toast system active; per-toast visibility is controlled by config toggles.
-                // We still keep touching the legacy "has_opened" marker when GUI is opened.
                 g_welcomeToastVisible.store(true);
 
                 CursorTextures::LoadCursorTextures();
@@ -1305,17 +1149,13 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                     }
 
                     // ALWAYS start worker threads. They will automatically use the pre-shared contexts if available,
-                    // otherwise they fall back to creating/sharing their own contexts.
                     StartRenderThread(currentContext);
                     StartMirrorCaptureThread(currentContext);
                     StartObsHookThread();
                 }
 
-                // Aggressively hook glViewport for AMD GPU compatibility
                 AttemptAggressiveGlViewportHook();
 
-                // glBlitNamedFramebuffer may only be available via wglGetProcAddress/GLEW.
-                // Hook it here now that a context is current and GLEW is initialized.
                 AttemptHookGlBlitNamedFramebufferViaGlew();
 
                 // Note: glBlitFramebuffer hook for OBS is now handled by obs_thread.cpp
@@ -1326,8 +1166,6 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
         }
         if (g_isShuttingDown.load()) { return next(hDc); }
 
-        // Runtime hook compatibility: some third-party tools install GL detours after we initialize.
-        // Periodically attempt to chain behind their detours instead of being bypassed.
         {
             static std::chrono::steady_clock::time_point s_lastViewportCompatCheck = std::chrono::steady_clock::now();
             auto now = std::chrono::steady_clock::now();
@@ -1383,12 +1221,10 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                     StartMirrorCaptureThread(currentContext);
                     StartObsHookThread();
 
-                    // Force recache of game texture IDs in the new context.
                     g_cachedGameTextureId.store(UINT_MAX, std::memory_order_release);
                     g_lastSeenGameGLContext.store(currentContext, std::memory_order_release);
                 }
             } else {
-                // No change (or missing context) => clear pending state.
                 s_pendingContext = NULL;
                 s_pendingSinceMs = 0;
                 if (currentContext && (!lastContext)) {
@@ -1427,18 +1263,15 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
         // Early exit if config hasn't been loaded yet (prevents race conditions during startup)
         if (!g_configLoaded.load()) { return next(hDc); }
 
-        // Grab immutable config snapshot for this frame - all config reads in SwapBuffers use this
         auto frameCfgSnap = GetConfigSnapshot();
-        if (!frameCfgSnap) { return next(hDc); } // Config not yet published
+        if (!frameCfgSnap) { return next(hDc); }
         const Config& frameCfg = *frameCfgSnap;
 
         HWND hwnd = WindowFromDC(hDc);
         if (!hwnd) { return next(hDc); }
         if (hwnd != g_minecraftHwnd.load()) { g_minecraftHwnd.store(hwnd); }
 
-        // Submit frame capture (GPU-to-GPU copy of the game texture) ONLY when something consumes it.
         // This copy is expensive: it blits the full game texture + inserts fences + flushes.
-        // When no mirrors / EyeZoom / OBS / virtual-camera are active, doing this every frame wastes GPU time.
         {
             const bool needCaptureForMirrors = (g_activeMirrorCaptureCount.load(std::memory_order_acquire) > 0);
             const bool needCaptureForEyeZoom = g_showEyeZoom.load(std::memory_order_relaxed) ||
@@ -1447,8 +1280,6 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
 
             const bool needCapture = needCaptureForMirrors || needCaptureForEyeZoom || needCaptureForObsOrVc;
             if (needCapture) {
-                // Mirror-only optimization: if mirrors are throttled (e.g. 1 FPS), avoid capturing every SwapBuffers.
-                // EyeZoom / OBS / VC require per-frame capture for smoothness and correctness, so don't throttle then.
                 static auto s_lastMirrorOnlyCaptureSubmit = std::chrono::steady_clock::time_point{};
                 static int s_lastMirrorOnlyW = 0;
                 static int s_lastMirrorOnlyH = 0;
@@ -1466,7 +1297,6 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                                 const auto interval = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                                     std::chrono::duration<double, std::milli>(intervalMsD));
 
-                                // If dimensions changed, force capture immediately so mirrors don't go black for up to the throttle interval.
                                 const bool dimsChanged = (viewport.width != s_lastMirrorOnlyW) || (viewport.height != s_lastMirrorOnlyH);
 
                                 if (!dimsChanged && s_lastMirrorOnlyCaptureSubmit.time_since_epoch().count() != 0) {
@@ -1491,9 +1321,6 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                         g_captureGameW.store(viewport.width, std::memory_order_release);
                         g_captureGameH.store(viewport.height, std::memory_order_release);
 
-                        // Calculate actual game viewport position (finalX, finalY, finalW, finalH).
-                        // Always use stretchX/Y/Width/Height - these contain the actual screen position
-                        // whether stretch is enabled (custom position) or disabled (centered).
                         g_captureFinalX.store(viewport.stretchX, std::memory_order_release);
                         g_captureFinalY.store(viewport.stretchY, std::memory_order_release);
                         g_captureFinalW.store(viewport.stretchWidth, std::memory_order_release);
@@ -1512,8 +1339,6 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
         // Mark safe capture window - capture thread can now safely read the game texture
         g_safeToCapture.store(true, std::memory_order_release);
 
-        // For versions < 1.13.0, always check for window handle changes (fullscreen toggle creates new window)
-        // For versions >= 1.13.0, only subclass once
         bool shouldCheckSubclass = (g_gameVersion < GameVersion(1, 13, 0)) || (g_originalWndProc == NULL);
 
         if (shouldCheckSubclass && hwnd != NULL) {
@@ -1521,8 +1346,6 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
             SubclassGameWindow(hwnd);
         }
 
-        // Render debug texture grid overlay if enabled (BEFORE checking for cached game texture)
-        // This allows debugging why game texture caching might be failing
         {
             bool showTextureGrid = frameCfg.debug.showTextureGrid;
             if (showTextureGrid && g_glInitialized.load(std::memory_order_acquire) && g_solidColorProgram != 0) {
@@ -1554,13 +1377,8 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                 g_cachedGameTextureId.store(gameTextureId);
                 Log("Calculated game texture ID: " + std::to_string(gameTextureId));
             }
-            // If texture not found, leave g_cachedGameTextureId as UINT_MAX.
             // This will retry next frame. We do NOT store UINT_MAX explicitly -
-            // it's already UINT_MAX and storing it again would be redundant.
-            // Previously this was unconditionally storing UINT_MAX which is fine,
-            // but the real fix is that we continue rendering with whatever the
             // render thread has (ready frame / safe read texture fallback) rather
-            // than stalling the pipeline.
         }
 
         // Note: Windows mouse speed application is now handled by the logic thread
@@ -1569,9 +1387,6 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
         if (!isFull) {
             g_safeToCapture.store(false, std::memory_order_release);
 
-            // Determine if we need to use the dual rendering path:
-            // - Pre-1.13.0: Always use dual rendering for OBS/virtual camera (centered output)
-            // - 1.13.0+: Only use dual rendering for virtual camera (game capture uses backbuffer)
             bool isPre113 = (g_gameVersion < GameVersion(1, 13, 0));
             bool hasObs = g_graphicsHookDetected.load();
             bool hasVirtualCam = IsVirtualCameraActive();
@@ -1579,17 +1394,7 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
             bool needsProcessedOutput = isPre113 ? (hasObs || hasVirtualCam) : hasVirtualCam;
 
             if (true) {
-                // No OBS/virtual camera active - skip processing entirely
 
-                // Render welcome toast in windowed mode before early return.
-                // This is fully self-contained: creates its own shader/VAO/VBO because
-                // g_glInitialized / g_imageRenderProgram are not yet initialized at this point
-                // (InitializeGPUResources runs after this early-return path).
-                // Also uses modern GL (shaders + VAO) because Minecraft 1.17+ uses core profile
-                // where fixed-function (glBegin/glEnd) doesn't work.
-                // NOTE: Rendering this every frame forever costs GPU time.
-                // For performance, show it only briefly after injection / entering windowed mode
-                // (and stop once the user opens the GUI).
                 static auto s_wt_startTime = std::chrono::steady_clock::now();
                 static bool s_wt_prevFullscreen = true;
                 const bool isFullNow = IsFullscreen();
@@ -1601,7 +1406,6 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                 const bool wantWindowedToast = (wtElapsed <= 10.0f) && !g_showGui.load(std::memory_order_relaxed);
 
                 if (wantWindowedToast && windowWidth > 0 && windowHeight > 0) {
-                    // Self-contained GL resources (created lazily, persisted)
                     static GLuint s_wt_program = 0;
                     static GLuint s_wt_vao = 0, s_wt_vbo = 0;
                     static GLint s_wt_locTexture = -1, s_wt_locOpacity = -1;
@@ -1610,8 +1414,6 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                     static bool s_wt_initialized = false;
                     static HGLRC s_wt_lastContext = NULL;
 
-                    // Fullscreen toggles can recreate the game's OpenGL context.
-                    // These GL object IDs are context-specific, so force a re-init when HGLRC changes.
                     HGLRC s_wt_currentContext = wglGetCurrentContext();
                     if (s_wt_currentContext != s_wt_lastContext) {
                         s_wt_lastContext = s_wt_currentContext;
@@ -1626,10 +1428,7 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                         s_wt_texH = 0;
                     }
 
-                    // Initialize lazily, but be resilient: fullscreen toggles can recreate contexts and
-                    // occasionally resource creation can fail transiently. Keep retrying until fully ready.
                     if (!s_wt_initialized) {
-                        // Create a minimal shader program
                         const char* vtxSrc = R"(#version 330 core
 layout(location = 0) in vec2 aPos;
 layout(location = 1) in vec2 aTexCoord;
@@ -1653,14 +1452,12 @@ void main() {
                                 s_wt_locTexture = glGetUniformLocation(s_wt_program, "uTexture");
                                 s_wt_locOpacity = glGetUniformLocation(s_wt_program, "uOpacity");
 
-                                // Set sampler uniform once
                                 glUseProgram(s_wt_program);
                                 glUniform1i(s_wt_locTexture, 0);
                                 glUseProgram(0);
                             }
                         }
 
-                        // Create VAO/VBO (4 floats per vertex: x, y, u, v)
                         if (s_wt_vao == 0) { glGenVertexArrays(1, &s_wt_vao); }
                         if (s_wt_vbo == 0) { glGenBuffers(1, &s_wt_vbo); }
                         if (s_wt_vao && s_wt_vbo) {
@@ -1675,7 +1472,6 @@ void main() {
                             glBindBuffer(GL_ARRAY_BUFFER, 0);
                         }
 
-                        // Load toast texture (disable flip for consistent V=0 = top of image)
                         if (s_wt_texture == 0 || s_wt_texW <= 0 || s_wt_texH <= 0) {
                             stbi_set_flip_vertically_on_load_thread(0);
 
@@ -1713,13 +1509,11 @@ void main() {
                             }
                         }
 
-                        // Mark initialized only when fully ready
                         s_wt_initialized = (s_wt_program != 0 && s_wt_vao != 0 && s_wt_vbo != 0 && s_wt_texture != 0 && s_wt_texW > 0 &&
                                             s_wt_texH > 0);
                     }
 
                     if (s_wt_program && s_wt_vao && s_wt_texture && s_wt_texW > 0 && s_wt_texH > 0) {
-                        // Save GL state
                         GLint savedProgram, savedVAO, savedVBO, savedFBO, savedTex, savedActiveTex;
                         GLboolean savedBlend, savedDepthTest, savedScissor, savedStencil;
                         GLint savedBlendSrcRGB, savedBlendDstRGB, savedBlendSrcA, savedBlendDstA;
@@ -1753,7 +1547,6 @@ void main() {
                         glGetIntegerv(GL_UNPACK_SKIP_ROWS, &savedUnpackSkipRows);
                         glGetIntegerv(GL_UNPACK_ALIGNMENT, &savedUnpackAlignment);
 
-                        // Setup state
                         glBindFramebuffer(GL_FRAMEBUFFER, 0);
                         if (oglViewport)
                             oglViewport(0, 0, windowWidth, windowHeight);
@@ -1766,7 +1559,6 @@ void main() {
                         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
                         glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
-                        // Bind shader and resources
                         glUseProgram(s_wt_program);
                         glBindVertexArray(s_wt_vao);
                         glBindBuffer(GL_ARRAY_BUFFER, s_wt_vbo);
@@ -1782,13 +1574,10 @@ void main() {
                         glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
                         glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
 
-                        // Scale toast image based on window size (baseline 1080p)
                         float scaleFactor = (static_cast<float>(windowHeight) / 1080.0f) * 0.45f;
                         float drawW = (float)s_wt_texW * scaleFactor;
                         float drawH = (float)s_wt_texH * scaleFactor;
 
-                        // Clicking toast1 switches windowed game into borderless fullscreen.
-                        // Detect click edge so this only triggers once per mouse press.
                         static bool s_wt_leftDownLastFrame = false;
                         bool leftDownNow = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
                         if (leftDownNow && !s_wt_leftDownLastFrame) {
@@ -1800,9 +1589,6 @@ void main() {
                                         cursorClient.x >= 0 && cursorClient.y >= 0 && cursorClient.x < drawW && cursorClient.y < drawH;
 
                                     if (clickedToast) {
-                                        // Multi-monitor support: target the monitor the game window is currently on.
-                                        // Use rcMonitor so the window matches the monitor's exact pixel resolution.
-                                        // We still keep it acting like a normal window by avoiding WS_POPUP / WS_EX_TOPMOST.
                                         RECT targetRect{ 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN) };
                                         {
                                             HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
@@ -1820,13 +1606,11 @@ void main() {
                                         const int targetH = (targetRect.bottom - targetRect.top);
 
                                         if (IsIconic(hwnd) || IsZoomed(hwnd)) {
-                                            // Ensure we're in a normal (restored) state before resizing/restyling.
                                             ShowWindow(hwnd, SW_RESTORE);
                                         }
 
                                         {
                                             // Keep this as a "window" (avoid WS_POPUP / WS_EX_TOPMOST) so the GPU driver
-                                            // doesn't treat it like exclusive/fullscreen, while still removing decorations.
                                             DWORD style = static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_STYLE));
                                             style &= ~(WS_POPUP | WS_CAPTION | WS_BORDER | WS_DLGFRAME | WS_THICKFRAME | WS_MINIMIZEBOX |
                                                        WS_MAXIMIZEBOX | WS_SYSMENU);
@@ -1834,7 +1618,6 @@ void main() {
                                             SetWindowLongPtr(hwnd, GWL_STYLE, static_cast<LONG_PTR>(style));
 
                                             DWORD exStyle = static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_EXSTYLE));
-                                            // Clear edge styles so the client area matches the monitor rect exactly.
                                             exStyle &= ~(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_DLGMODALFRAME |
                                                          WS_EX_STATICEDGE);
                                             exStyle |= WS_EX_APPWINDOW;
@@ -1854,33 +1637,27 @@ void main() {
                         }
                         s_wt_leftDownLastFrame = leftDownNow;
 
-                        // Calculate NDC coordinates for top-left placement (no margin)
-                        // NDC: (-1,-1) = bottom-left, (+1,+1) = top-right
                         float px1 = 0.0f;
-                        float py1 = 0.0f; // pixels from top of window
+                        float py1 = 0.0f;
                         float px2 = drawW;
                         float py2 = drawH;
 
                         float nx1 = (px1 / windowWidth) * 2.0f - 1.0f;
                         float nx2 = (px2 / windowWidth) * 2.0f - 1.0f;
-                        float ny_top = 1.0f - (py1 / windowHeight) * 2.0f; // top edge (high NDC Y)
-                        float ny_bot = 1.0f - (py2 / windowHeight) * 2.0f; // bottom edge (low NDC Y)
+                        float ny_top = 1.0f - (py1 / windowHeight) * 2.0f;
+                        float ny_bot = 1.0f - (py2 / windowHeight) * 2.0f;
 
-                        // Vertex data: {ndcX, ndcY, u, v}
-                        // No flip: V=0 = top of image, V=1 = bottom of image
-                        // ny_top (high) gets V=0 (top of image), ny_bot (low) gets V=1 (bottom)
                         float verts[] = {
-                            nx1, ny_bot, 0.0f, 1.0f, // bottom-left  (V=1 = bottom of image)
-                            nx2, ny_bot, 1.0f, 1.0f, // bottom-right (V=1)
-                            nx2, ny_top, 1.0f, 0.0f, // top-right    (V=0 = top of image)
-                            nx1, ny_bot, 0.0f, 1.0f, // bottom-left  (V=1)
-                            nx2, ny_top, 1.0f, 0.0f, // top-right    (V=0)
-                            nx1, ny_top, 0.0f, 0.0f, // top-left     (V=0)
+                            nx1, ny_bot, 0.0f, 1.0f,
+                            nx2, ny_bot, 1.0f, 1.0f,
+                            nx2, ny_top, 1.0f, 0.0f,
+                            nx1, ny_bot, 0.0f, 1.0f,
+                            nx2, ny_top, 1.0f, 0.0f,
+                            nx1, ny_top, 0.0f, 0.0f,
                         };
                         glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
                         glDrawArrays(GL_TRIANGLES, 0, 6);
 
-                        // Restore GL state
                         glUseProgram(savedProgram);
                         glBindVertexArray(savedVAO);
                         glBindBuffer(GL_ARRAY_BUFFER, savedVBO);
@@ -1923,9 +1700,7 @@ void main() {
                 return next(hDc);
             }
 
-            // Fall through to dual rendering path
             if (isPre113) {
-                // Pre-1.13: Set offset values for OBS blit coordinate remapping (centered output)
                 int centeredX = (fullW - windowWidth) / 2;
                 int centeredY = (fullH - windowHeight) / 2;
                 g_obsPre113Windowed.store(true, std::memory_order_release);
@@ -1934,28 +1709,21 @@ void main() {
                 g_obsPre113ContentW.store(windowWidth, std::memory_order_release);
                 g_obsPre113ContentH.store(windowHeight, std::memory_order_release);
             } else {
-                // 1.13+: No coordinate remapping needed (game renders at window size)
                 g_obsPre113Windowed.store(false, std::memory_order_release);
             }
         } else {
-            // Fullscreen mode - clear pre-1.13 windowed mode flag
             g_obsPre113Windowed.store(false, std::memory_order_release);
         }
 
-        // Re-enable OBS override when returning to fullscreen (if OBS hook is active)
-        // For 1.13+ windowed, OBS should capture directly from backbuffer (no override)
-        // For pre-1.13 windowed, OBS needs our centered FBO (enable override)
         if (g_graphicsHookDetected.load()) {
             bool isPre113 = (g_gameVersion < GameVersion(1, 13, 0));
             if (isFull || isPre113) {
                 EnableObsOverride();
             } else {
-                // 1.13+ windowed: OBS captures backbuffer directly
                 ClearObsOverride();
             }
         }
 
-        // return owglSwapBuffers(hDc); // disable here to use NSight for debugging
 
         if (g_configLoadFailed.load()) {
             Log("Configuration load failed");
@@ -1970,19 +1738,13 @@ void main() {
         // Lock-free read of last frame mode ID from double-buffer
         std::string lastFrameModeIdCopy = g_lastFrameModeIdBuffers[g_lastFrameModeIdIndex.load(std::memory_order_acquire)];
 
-        // Check if mode transition is active (but DON'T update yet - update after rendering
-        // so that glViewport hook and RenderModeInternal use the same snapshot values)
         if (IsModeTransitionActive()) {
             g_isTransitioningMode = true;
         } else if (lastFrameModeIdCopy != desiredModeId) {
-            // Mode changed but animation already completed or wasn't started
-            // This handles cases where SwitchToMode was called and animation is complete
             PROFILE_SCOPE_CAT("Mode Transition Complete", "SwapBuffers");
             g_isTransitioningMode = true;
             Log("Mode transition detected (no animation): " + lastFrameModeIdCopy + " -> " + desiredModeId);
 
-            // Send final WM_SIZE to ensure game has correct dimensions (only in fullscreen mode)
-            // In windowed mode, the game manages its own window size - don't override it
             if (isFull) {
                 int modeWidth = 0, modeHeight = 0;
                 bool modeValid = false;
@@ -2005,7 +1767,6 @@ void main() {
         bool showPerformanceOverlay = frameCfg.debug.showPerformanceOverlay;
         bool showProfiler = frameCfg.debug.showProfiler;
 
-        // Enable/disable profiler based on config
         Profiler::GetInstance().SetEnabled(showProfiler);
         if (showProfiler) { Profiler::GetInstance().MarkAsRenderThread(); }
 
@@ -2015,7 +1776,6 @@ void main() {
             // Use target/desired mode - GetMode is lock-free
             const ModeConfig* tempMode = GetMode(desiredModeId);
             if (!tempMode && g_isTransitioningMode) {
-                // Fallback to old mode if new mode not found
                 tempMode = GetMode(lastFrameModeIdCopy);
             }
             if (tempMode) {
@@ -2024,7 +1784,6 @@ void main() {
             }
         }
 
-        // Validate mode before proceeding
         if (!modeFound) {
             Log("ERROR: Could not find mode to render, aborting frame");
             return next(hDc);
@@ -2033,20 +1792,17 @@ void main() {
         bool isEyeZoom = modeToRenderCopy.id == "EyeZoom";
         bool shouldRenderGui = g_showGui.load();
 
-        // Check if we're transitioning FROM EyeZoom
         bool isTransitioningFromEyeZoom = false;
-        int eyeZoomAnimatedViewportX = -1; // Animated viewport X for EyeZoom positioning (-1 = use static)
+        int eyeZoomAnimatedViewportX = -1;
 
         if (IsModeTransitionActive()) {
             ModeTransitionState eyeZoomTransitionState = GetModeTransitionState();
             std::string fromModeId = eyeZoomTransitionState.fromModeId;
 
             if (!isEyeZoom && fromModeId == "EyeZoom") {
-                // Transitioning FROM EyeZoom - animate out with bounce (follow viewport position)
                 isTransitioningFromEyeZoom = true;
                 eyeZoomAnimatedViewportX = eyeZoomTransitionState.x;
             } else if (isEyeZoom && fromModeId != "EyeZoom") {
-                // Transitioning TO EyeZoom - use animated position during transition in
                 eyeZoomAnimatedViewportX = eyeZoomTransitionState.x;
             }
         }
@@ -2055,25 +1811,17 @@ void main() {
         g_shouldRenderGui.store(shouldRenderGui, std::memory_order_relaxed);
         g_showPerformanceOverlay.store(showPerformanceOverlay, std::memory_order_relaxed);
         g_showProfiler.store(showProfiler, std::memory_order_relaxed);
-        // EyeZoom overlay visible when:
-        // 1. Target mode is EyeZoom (stable or transitioning TO EyeZoom)
-        // 2. Transitioning FROM EyeZoom to another mode (bounce-out animation)
-        // EXCEPT: when hideAnimationsInGame is enabled, skip transition-out on user's screen
         bool hideAnimOnScreenEyeZoom = frameCfg.hideAnimationsInGame;
         bool showEyeZoomOnScreen = isEyeZoom || (isTransitioningFromEyeZoom && !hideAnimOnScreenEyeZoom);
         g_showEyeZoom.store(showEyeZoomOnScreen, std::memory_order_relaxed);
-        g_eyeZoomFadeOpacity.store(1.0f, std::memory_order_relaxed); // Always full opacity - bounce, not fade
+        g_eyeZoomFadeOpacity.store(1.0f, std::memory_order_relaxed);
         g_eyeZoomAnimatedViewportX.store(eyeZoomAnimatedViewportX, std::memory_order_relaxed);
         // Release ensures all preceding EyeZoom stores are visible when the reader acquires this value
         g_isTransitioningFromEyeZoom.store(isTransitioningFromEyeZoom, std::memory_order_release);
 
-        // Dual rendering: when OBS hook is detected OR virtual camera is active, render separately for OBS/virtual cam and for user's screen.
         // This must be computed BEFORE any early-exit checks that reference it.
         const bool needsDualRendering = g_graphicsHookDetected.load(std::memory_order_acquire) || IsVirtualCameraActive();
 
-        // PERF: If Toolscreen has nothing to draw and the current mode has no visible effect,
-        // skip ALL custom rendering work (including expensive GL state backup).
-        // This is critical for games like Minecraft where repeated glGet* calls can stall the driver.
         {
             const bool modeSizesFullscreen = (modeToRenderCopy.width == fullW && modeToRenderCopy.height == fullH);
             const bool stretchIsFullscreen =
@@ -2098,8 +1846,6 @@ void main() {
                                              !anyImGuiOrDebugOverlay && !anyOtherCustomOutput;
 
             if (canSkipCustomRender) {
-                // FPS limiter still applies (user expects it), and transition animation still needs to tick.
-                // We jump directly to the final SwapBuffers + bookkeeping.
 
                 int targetFPS = frameCfg.fpsLimit;
                 if (targetFPS > 0 && g_highResTimer) {
@@ -2207,20 +1953,12 @@ void main() {
             g_pendingImageLoad = false;
         }
 
-        // Use mode dimensions for game texture sampling, NOT viewport dimensions
-        // The viewport may be animated/stretched during mode transitions, but
-        // the game texture always remains at the mode's configured width/height
         int current_gameW = modeToRenderCopy.width;
         int current_gameH = modeToRenderCopy.height;
 
-        // Reset OBS capture ready flag each frame - only set true when we have fresh animated content
-        // This ensures OBS captures from backbuffer normally when not animating
         g_obsCaptureReady.store(false);
 
-        // needsDualRendering is computed above (before the skip-render fast path)
 
-        // When hideAnimationsInGame is enabled and we're transitioning, skip animation on user's screen
-        // (OBS still gets the animated version)
         bool hideAnimOnScreen = frameCfg.hideAnimationsInGame && IsModeTransitionActive();
 
         {
@@ -2254,11 +1992,10 @@ void main() {
                     submission.context.eyeZoomSnapshotHeight = GetEyeZoomSnapshotHeight();
                     submission.context.showTextureGrid = frameCfg.debug.showTextureGrid;
                     submission.context.isWindowed = !isFull;
-                    submission.context.isRawWindowedMode = !isFull; // In windowed mode, skip all overlays
+                    submission.context.isRawWindowedMode = !isFull;
                     submission.context.windowW = windowWidth;
                     submission.context.windowH = windowHeight;
                     submission.context.welcomeToastIsFullscreen = isFull;
-                    // Always request toast rendering; RenderWelcomeToast() enforces session dismissal for toast2.
                     submission.context.showWelcomeToast = true;
                     submission.isDualRenderingPath = hideAnimOnScreen;
 
@@ -2270,22 +2007,15 @@ void main() {
                     SubmitObsFrameContext(submission);
                 }
 
-                // In windowed mode, skip custom rendering on user's screen
-                // The virtual camera gets custom rendering, but game window stays unmodified
                 if (isFull) {
-                    // Render user view - skip animation only if hideAnimationsInGame is enabled
                     PROFILE_SCOPE_CAT("Render for Screen", "Rendering");
                     RenderMode(&modeToRenderCopy, s, current_gameW, current_gameH, hideAnimOnScreen,
-                               false); // hideAnimOnScreen controls animation, false = include onlyOnMyScreen
+                               false);
                 }
 
-                // Note: EyeZoom rendering is now done inside RenderModeInternal (before async overlay blit)
             } else {
-                // No OBS hook detected - just render for user's screen (only in fullscreen)
-                // Still respect hideAnimationsInGame setting (hideAnimOnScreen = hideAnimationsInGame && transitioning)
                 if (isFull) { RenderMode(&modeToRenderCopy, s, current_gameW, current_gameH, hideAnimOnScreen, false); }
 
-                // Note: EyeZoom rendering is now done inside RenderModeInternal (before async overlay blit)
             }
         }
 
@@ -2297,7 +2027,6 @@ void main() {
         }
 
         // Render fake cursor overlay if enabled (MUST be after RestoreGLState)
-        // ^ the above comment might be lying idk
         {
             bool fakeCursorEnabled = frameCfg.debug.fakeCursor;
             if (fakeCursorEnabled) {
@@ -2324,25 +2053,21 @@ void main() {
 
         g_isTransitioningMode = false;
 
-        // FPS Limiting Logic - applied before swap buffers
         int targetFPS = 0;
         { targetFPS = frameCfg.fpsLimit; }
 
         if (targetFPS > 0 && g_highResTimer) {
             PROFILE_SCOPE_CAT("FPS Limit Sleep", "Timing");
 
-            const double targetFrameTimeUs = 1000000.0 / targetFPS; // Target frame time in microseconds
-            const bool isHighFPS = targetFPS > 500;                 // Special handling for FPS > 500
+            const double targetFrameTimeUs = 1000000.0 / targetFPS;
+            const bool isHighFPS = targetFPS > 500;
 
             std::lock_guard<std::mutex> lock(g_fpsLimitMutex);
 
-            // Calculate the target time for this frame
             auto targetTime = g_lastFrameEndTime + std::chrono::microseconds(static_cast<long long>(targetFrameTimeUs));
             auto now = std::chrono::high_resolution_clock::now();
 
-            // Check if we're already past the target time (frame took too long)
             if (now < targetTime) {
-                // Calculate time to wait in microseconds
                 auto timeToWaitUs = std::chrono::duration_cast<std::chrono::microseconds>(targetTime - now).count();
 
                 if (isHighFPS) {
@@ -2351,12 +2076,10 @@ void main() {
                         dueTime.QuadPart = -static_cast<LONGLONG>(timeToWaitUs);
 
                         if (SetWaitableTimer(g_highResTimer, &dueTime, 0, NULL, NULL, FALSE)) {
-                            // timeout after 1s in case something goes wrong, we get a hint for debugging
                             WaitForSingleObject(g_highResTimer, 1000);
                         }
                     }
                 } else {
-                    // Standard behavior for FPS <= 500
                     if (timeToWaitUs > 10) {
                         LARGE_INTEGER dueTime;
                         dueTime.QuadPart = -static_cast<LONGLONG>(timeToWaitUs * 10LL);
@@ -2365,23 +2088,17 @@ void main() {
                     }
                 }
 
-                // Update to actual target time for consistent pacing
                 g_lastFrameEndTime = targetTime;
             } else {
-                // Frame took longer than target - reset to current time
                 g_lastFrameEndTime = now;
             }
         }
 
-        // Update mode transition animation AFTER all rendering is complete
-        // This ensures glViewport hook and RenderModeInternal use the same snapshot values,
-        // preventing the 1-frame desync that caused black gaps between background and game
         if (IsModeTransitionActive()) {
             PROFILE_SCOPE_CAT("Mode Transition Animation", "SwapBuffers");
             UpdateModeTransition();
         }
 
-        // Optionally wait for all GPU rendering to complete before SwapBuffers
         if (frameCfg.debug.delayRenderingUntilFinished) { glFinish(); }
 
         // Optionally wait for the async overlay blit fence to complete before SwapBuffers
@@ -2390,14 +2107,12 @@ void main() {
         auto swapStartTime = std::chrono::high_resolution_clock::now();
         BOOL result = next(hDc);
 
-        // End safe capture window - next frame will start rendering soon
         g_safeToCapture.store(false, std::memory_order_release);
 
         auto swapEndTime = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double, std::milli> swapDuration = swapEndTime - swapStartTime;
         g_originalFrameTimeMs = swapDuration.count();
 
-        // Calculate overhead time (total time minus actual swap buffers time)
         std::chrono::duration<double, std::milli> fp_ms = swapStartTime - startTime;
         g_lastFrameTimeMs = fp_ms.count();
 
@@ -2406,7 +2121,7 @@ void main() {
             int nextIndex = 1 - g_lastFrameModeIdIndex.load(std::memory_order_relaxed);
             g_lastFrameModeIdBuffers[nextIndex] = desiredModeId;
             g_lastFrameModeIdIndex.store(nextIndex, std::memory_order_release);
-            g_lastFrameModeId = desiredModeId; // Keep legacy variable in sync
+            g_lastFrameModeId = desiredModeId;
         }
 
         return result;
@@ -2422,10 +2137,8 @@ void main() {
     }
 }
 
-// Primary wglSwapBuffers hook (opengl32.dll export / initial hook).
 BOOL WINAPI hkwglSwapBuffers(HDC hDc) { return SwapBuffersHook_Impl(owglSwapBuffers, hDc); }
 
-// Chained wglSwapBuffers hook (when a third-party detour is installed after us).
 BOOL WINAPI hkwglSwapBuffers_ThirdParty(HDC hDc) {
     WGLSWAPBUFFERS next = owglSwapBuffers;
     if (g_config.hookChainingNextTarget == HookChainingNextTarget::LatestHook) {
@@ -2440,20 +2153,18 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)DllMain,
                            &g_hModule);
 
-        // Install global exception handlers FIRST (before anything else can throw)
         InstallGlobalExceptionHandlers();
 
-        // Verify logging works immediately
         LogCategory("init", "========================================");
         LogCategory("init", "=== Toolscreen INITIALIZATION START ===");
         LogCategory("init", "========================================");
         PrintVersionToStdout();
 
         // Create high-resolution waitable timer for FPS limiting (Windows 10 1803+)
-        g_highResTimer = CreateWaitableTimerExW(NULL,                                  // Default security
-                                                NULL,                                  // No name
-                                                CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, // High-resolution flag
-                                                TIMER_ALL_ACCESS                       // Full access
+        g_highResTimer = CreateWaitableTimerExW(NULL,
+                                                NULL,
+                                                CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                                TIMER_ALL_ACCESS
         );
         if (g_highResTimer) {
             LogCategory("init", "High-resolution waitable timer created successfully for FPS limiting.");
@@ -2463,40 +2174,29 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 
         g_toolscreenPath = GetToolscreenPath();
         if (!g_toolscreenPath.empty()) {
-            // Create logs subdirectory
             std::wstring logsDir = g_toolscreenPath + L"\\logs";
             CreateDirectoryW(logsDir.c_str(), NULL);
 
-            // Path to latest.log
             std::wstring latestLogPath = logsDir + L"\\latest.log";
 
-            // If latest.log exists, rename it to timestamped filename
             if (GetFileAttributesW(latestLogPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
-                // Get file last write time (not creation time - creation time stays the same
-                // across sessions, causing archived logs to have incorrect/stale dates)
                 HANDLE hFile =
                     CreateFileW(latestLogPath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
                 if (hFile != INVALID_HANDLE_VALUE) {
                     FILETIME lastWriteTime;
                     if (GetFileTime(hFile, NULL, NULL, &lastWriteTime)) {
-                        // Convert to local time first, then to system time
-                        // This ensures the timestamp reflects the user's timezone
                         FILETIME localFileTime;
                         FileTimeToLocalFileTime(&lastWriteTime, &localFileTime);
                         SYSTEMTIME st;
                         FileTimeToSystemTime(&localFileTime, &st);
 
-                        // Format: YYYYMMDD_HHMMSS
                         WCHAR timestamp[32];
                         swprintf_s(timestamp, L"%04d%02d%02d_%02d%02d%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
 
                         std::wstring archivedLogPath = logsDir + L"\\" + timestamp + L".log";
 
-                        // Close handle before moving
                         CloseHandle(hFile);
 
-                        // Check if archive path already exists (same second collision)
-                        // If so, append a counter
                         if (GetFileAttributesW(archivedLogPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
                             for (int counter = 1; counter < 100; counter++) {
                                 std::wstring altPath = logsDir + L"\\" + timestamp + L"_" + std::to_wstring(counter) + L".log";
@@ -2507,11 +2207,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                             }
                         }
 
-                        // Rename the file
                         if (!MoveFileW(latestLogPath.c_str(), archivedLogPath.c_str())) {
-                            // If rename fails, DON'T delete - log a warning and the file will be
-                            // overwritten when the new latest.log is opened (data preserved until then)
-                            // This is better than losing all the log data
                             Log("WARNING: Could not rename old log to " + WideToUtf8(archivedLogPath) +
                                 ", error code: " + std::to_string(GetLastError()));
                         } else {
@@ -2521,10 +2217,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                             std::thread([archiveSrc]() {
                                 std::wstring gzPath = archiveSrc + L".gz";
                                 if (CompressFileToGzip(archiveSrc, gzPath)) {
-                                    // Compression succeeded - delete the uncompressed file
                                     DeleteFileW(archiveSrc.c_str());
                                 }
-                                // If compression fails, keep the uncompressed .log as fallback
                             }).detach();
                         }
                     } else {
@@ -2532,12 +2226,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                     }
                 }
             }
-            // Note: If latest.log doesn't exist, that's fine - this is normal for first run
 
-            // Open new latest.log
             {
                 std::lock_guard<std::mutex> lock(g_logFileMutex);
-                // IMPORTANT (Windows/Unicode): open via std::filesystem::path so wide Win32 APIs are used.
+                // Open via std::filesystem::path so wide Win32 APIs are used.
                 logFile.open(std::filesystem::path(latestLogPath), std::ios_base::out | std::ios_base::trunc);
             }
 
@@ -2547,12 +2239,11 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             g_modeFilePath = g_toolscreenPath + L"\\mode.txt";
         }
         LogCategory("init", "--- DLL instance attached ---");
-        LogVersionInfo(); // Log version information
+        LogVersionInfo();
         if (g_toolscreenPath.empty()) { Log("FATAL: Could not get toolscreen directory."); }
         
         StartSupportersFetch();
 
-        // Detect game version from command line arguments
         g_gameVersion = GetGameVersionFromCommandLine();
         GameVersion minVersion(1, 16, 1);
         GameVersion maxVersion(1, 18, 2);
@@ -2569,7 +2260,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             }
             LogCategory("init", oss.str());
         } else {
-            // No version detected - enable hook by default for backward compatibility
             LogCategory("init", "No game version detected from command line.");
         }
 
@@ -2594,7 +2284,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 
         // Use std::thread instead of CreateThread to ensure proper CRT per-thread
         // initialization (locale facets, errno, etc.). CreateThread skips CRT init which
-        // can cause null-pointer crashes in CRT functions like std::stringstream formatting.
         g_monitorThread = std::thread([]() { FileMonitorThread(nullptr); });
         g_imageMonitorThread = std::thread([]() { ImageMonitorThread(nullptr); });
 
@@ -2607,7 +2296,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 
         LogCategory("init", "Setting up hooks...");
 
-        // Get function addresses
         HMODULE hOpenGL32 = GetModuleHandle(L"opengl32.dll");
         HMODULE hUser32 = GetModuleHandle(L"user32.dll");
         HMODULE hGlfw = GetModuleHandle(L"glfw.dll");
@@ -2621,7 +2309,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             return TRUE;
         }
 
-// Create all hooks
 #define HOOK(mod, name) CreateHookOrDie(GetProcAddress(mod, #name), &hk##name, &o##name, #name)
         HOOK(hOpenGL32, wglSwapBuffers);
         if (IsVersionInRange(g_gameVersion, GameVersion(1, 0, 0), GameVersion(1, 21, 0))) {
@@ -2641,7 +2328,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         }
 #undef HOOK
 
-        // glBlitNamedFramebuffer is an extension, try to hook it but don't fail if unavailable
         LPVOID pGlBlitNamedFramebuffer = GetProcAddress(hOpenGL32, "glBlitNamedFramebuffer");
         if (pGlBlitNamedFramebuffer != NULL) {
             CreateHookOrDie(pGlBlitNamedFramebuffer, &hkglBlitNamedFramebuffer, &oglBlitNamedFramebuffer, "glBlitNamedFramebuffer");
@@ -2657,12 +2343,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 
         LogCategory("init", "Hooks enabled.");
 
-        // Background hook compatibility monitor:
-        // Some overlays install their detours AFTER our hooks, and sometimes even bypass our SwapBuffers hook.
         // This thread periodically detects those detours (prolog or IAT) and chains behind them.
         g_stopHookCompat.store(false, std::memory_order_release);
         g_hookCompatThread = std::thread([]() {
-            // Small startup delay to reduce contention during process init.
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
             while (!g_stopHookCompat.load(std::memory_order_acquire) && !g_isShuttingDown.load(std::memory_order_acquire)) {
                 HookChain::RefreshAllThirdPartyHookChains();
@@ -2677,27 +2360,19 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         // Save the original Windows mouse speed so we can restore it on exit
         SaveOriginalWindowsMouseSpeed();
 
-        // Save the original key repeat settings so we can restore them on exit
         SaveOriginalKeyRepeatSettings();
 
-        // Immediately apply loaded key repeat settings to the system.
         ApplyKeyRepeatSettings();
 
     } else if (ul_reason_for_call == DLL_PROCESS_DETACH) {
-        // CRITICAL: When DLL_PROCESS_DETACH is called, the process may be terminating
         // We should do MINIMAL cleanup here. Windows will automatically clean up:
-        // - Memory allocations
         // - GPU resources (driver handles cleanup)
         // - Thread handles
-        // Trying to do too much cleanup can cause crashes because:
         // 1. Other threads may still be running
-        // 2. The game may still be making OpenGL calls
-        // 3. Disabling hooks can corrupt the game's state
 
         g_isShuttingDown = true;
         Log("DLL Detached. Performing minimal cleanup...");
 
-        // Close high-resolution timer
         if (g_highResTimer) {
             CloseHandle(g_highResTimer);
             g_highResTimer = NULL;
@@ -2709,7 +2384,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         // Restore original Windows mouse speed before exiting
         RestoreWindowsMouseSpeed();
 
-        // Restore original key repeat settings before exiting
         RestoreKeyRepeatSettings();
 
         SaveConfigImmediate();
@@ -2729,7 +2403,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         // Stop background threads
         StopWindowCaptureThread();
 
-        // Cleanup shared OpenGL contexts
         CleanupSharedContexts();
 
         Log("Background threads stopped.");
@@ -2744,14 +2417,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         }
 
         // DO NOT:
-        // - Disable hooks (causes game to crash)
         // - Delete GPU resources (Windows/driver handles this)
-        // - Restore window procedure (game might still use it during shutdown)
-        //   Note: Even if we wanted to restore it, the window may already be destroyed (especially < 1.13.0)
-        // - Call GL functions (context may be invalid)
-        // - Uninitialize MinHook (can corrupt game state)
 
-        // Final log and close
         Log("DLL cleanup complete (minimal cleanup strategy).");
 
         // Stop async logging thread and flush all pending logs
@@ -2768,5 +2435,3 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
     }
     return TRUE;
 }
-
-// Hook chaining / third-party detour compatibility logic is implemented in hook_chain.cpp

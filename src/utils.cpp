@@ -3,7 +3,6 @@
 #include "logic_thread.h"
 #include "profiler.h"
 
-// From dllmain.cpp (declared in render.h)
 extern std::atomic<GLuint> g_cachedGameTextureId;
 
 #include "stb_image.h"
@@ -30,21 +29,16 @@ extern std::atomic<GLuint> g_cachedGameTextureId;
 #pragma comment(lib, "Shlwapi.lib")
 #pragma comment(lib, "DbgHelp.lib")
 
-// Symbol resolution state
 static std::atomic<bool> g_symbolsInitialized{ false };
 static std::atomic<bool> g_symbolInitAttempted{ false };
 static std::mutex g_symbolMutex;
 
-// Forward declaration
 void EnsureSymbolsInitialized();
 
-// Helper to resolve a single stack frame to function name + line number
 std::string ResolveStackFrame(void* address) {
-    // Try to initialize symbols if not done yet
     EnsureSymbolsInitialized();
 
     if (!g_symbolsInitialized.load()) {
-        // Still not initialized, return address only
         std::stringstream ss;
         ss << "0x" << std::hex << reinterpret_cast<uintptr_t>(address);
         return ss.str();
@@ -55,7 +49,6 @@ std::string ResolveStackFrame(void* address) {
     HANDLE process = GetCurrentProcess();
     DWORD64 addr64 = reinterpret_cast<DWORD64>(address);
 
-    // Allocate symbol info structure
     char buffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME * sizeof(TCHAR)];
     PSYMBOL_INFO symbol = reinterpret_cast<PSYMBOL_INFO>(buffer);
     symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
@@ -64,23 +57,20 @@ std::string ResolveStackFrame(void* address) {
     std::stringstream result;
     result << "0x" << std::hex << addr64;
 
-    // Try to get function name
     DWORD64 displacement = 0;
     if (SymFromAddr(process, addr64, &displacement, symbol)) {
         result << " " << symbol->Name;
         if (displacement != 0) { result << "+0x" << std::hex << displacement; }
 
-        // Try to get file and line number
         IMAGEHLP_LINE64 line;
         line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
         DWORD lineDisplacement = 0;
         if (SymGetLineFromAddr64(process, addr64, &lineDisplacement, &line)) {
-            // Extract just the filename from full path
             const char* filename = strrchr(line.FileName, '\\');
             if (!filename)
                 filename = line.FileName;
             else
-                filename++; // Skip the backslash
+                filename++;
 
             result << " [" << filename << ":" << std::dec << line.LineNumber << "]";
         }
@@ -97,11 +87,10 @@ std::string FormatStackTraceWithSymbols(void** stack, USHORT frames, int skipFra
     return ss.str();
 }
 
-// Signal handler for SIGABRT
 void SignalHandler(int sig) {
     if (sig == SIGABRT) {
         Log("!!! SIGABRT SIGNAL RECEIVED - ABNORMAL TERMINATION !!!");
-        FlushLogs(); // Force flush async log queue
+        FlushLogs();
 
         // Capture stack trace
         void* stack[64];
@@ -110,24 +99,18 @@ void SignalHandler(int sig) {
         FlushLogs(); // Force flush after stack trace
     }
 
-    // Re-raise signal to let default handler terminate
     signal(sig, SIG_DFL);
     raise(sig);
 }
 
-// Override abort() to log before terminating
 extern "C" void abort() {
-    // Prevent re-entry if abort is called recursively
     static std::atomic<bool> abortInProgress{ false };
     if (abortInProgress.exchange(true)) {
-        // Already handling abort - just raise signal to avoid infinite loop
         signal(SIGABRT, SIG_DFL);
         raise(SIGABRT);
-        // If raise returns (shouldn't), force terminate
         TerminateProcess(GetCurrentProcess(), 3);
     }
 
-    // Get additional context before logging
     DWORD lastError = GetLastError();
     DWORD threadId = GetCurrentThreadId();
     DWORD processId = GetCurrentProcessId();
@@ -139,13 +122,11 @@ extern "C" void abort() {
     if (lastError != 0) {
         contextSs << "GetLastError: " << lastError << " (0x" << std::hex << lastError << std::dec << ")";
 
-        // Try to get error message
         LPSTR messageBuffer = nullptr;
         size_t size = FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL,
                                      lastError, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR)&messageBuffer, 0, NULL);
         if (size > 0 && messageBuffer) {
             std::string errorMsg(messageBuffer, size);
-            // Remove trailing newlines
             while (!errorMsg.empty() && (errorMsg.back() == '\n' || errorMsg.back() == '\r')) { errorMsg.pop_back(); }
             contextSs << " - " << errorMsg;
             LocalFree(messageBuffer);
@@ -153,7 +134,6 @@ extern "C" void abort() {
         contextSs << std::endl;
     }
 
-    // Try to get C++ exception info
     std::exception_ptr eptr = std::current_exception();
     if (eptr) {
         try {
@@ -164,7 +144,7 @@ extern "C" void abort() {
     }
 
     Log(contextSs.str());
-    FlushLogs(); // Force flush async log queue
+    FlushLogs();
 
     // Capture stack trace at abort point
     void* stack[64];
@@ -172,12 +152,9 @@ extern "C" void abort() {
     Log(FormatStackTraceWithSymbols(stack, frames));
     FlushLogs(); // Force flush after stack trace
 
-    // Reset signal handler to default and raise SIGABRT to preserve original crash behavior
-    // This ensures the exit code and crash dump generation remain unchanged
     signal(SIGABRT, SIG_DFL);
     raise(SIGABRT);
 
-    // If raise returns (shouldn't happen), force terminate as fallback
     TerminateProcess(GetCurrentProcess(), 3);
 }
 
@@ -195,11 +172,6 @@ std::string GetTimestamp() {
     return ss.str();
 }
 
-// ============================================================================
-// GZIP LOG COMPRESSION
-// In-process gzip writer with real DEFLATE compression.
-// Uses a compact fixed-Huffman encoder + LZ77 matcher, no external tools.
-// ============================================================================
 
 static uint32_t g_crc32Table[256];
 static std::once_flag g_crc32InitFlag;
@@ -227,7 +199,7 @@ static bool FileExistsW(const std::wstring& path) {
 }
 
 static bool ReadFileBytes(const std::wstring& path, std::vector<uint8_t>& out) {
-    // IMPORTANT (Windows/Unicode): open via std::filesystem::path so wide Win32 APIs are used.
+    // Open via std::filesystem::path so wide Win32 APIs are used.
     std::ifstream in(std::filesystem::path(path), std::ios::binary | std::ios::ate);
     if (!in.is_open()) return false;
 
@@ -258,7 +230,7 @@ static uint16_t ReverseBits(uint16_t v, uint8_t bitCount) {
 }
 
 struct HuffCode {
-    uint16_t code = 0; // bit-reversed for LSB-first bitstream writer
+    uint16_t code = 0;
     uint8_t bits = 0;
 };
 
@@ -438,8 +410,8 @@ static bool WriteFixedDeflateStream(const std::vector<uint8_t>& input, std::vect
 
     BitWriter w;
     // Final block + fixed Huffman block type
-    w.WriteBits(1, 1);    // BFINAL
-    w.WriteBits(0b01, 2); // BTYPE=01 (fixed)
+    w.WriteBits(1, 1);
+    w.WriteBits(0b01, 2);
 
     for (const DeflateToken& t : tokens) {
         if (!t.isMatch) {
@@ -484,17 +456,16 @@ bool CompressFileToGzip(const std::wstring& srcPath, const std::wstring& dstPath
     std::wstring tempPath = dstPath + L".tmp";
     DeleteFileW(tempPath.c_str());
 
-    // IMPORTANT (Windows/Unicode): open via std::filesystem::path so wide Win32 APIs are used.
+    // Open via std::filesystem::path so wide Win32 APIs are used.
     std::ofstream out(std::filesystem::path(tempPath), std::ios::binary | std::ios::trunc);
     if (!out.is_open()) return false;
 
-    // Gzip header (RFC 1952)
     const uint8_t hdr[10] = {
-        0x1F, 0x8B,             // ID1, ID2
-        0x08,                   // CM=deflate
-        0x00,                   // FLG
-        0x00, 0x00, 0x00, 0x00, // MTIME
-        0x00,                   // XFL
+        0x1F, 0x8B,
+        0x08,
+        0x00,
+        0x00, 0x00, 0x00, 0x00,
+        0x00,
         0x0B                    // OS=NTFS/Windows
     };
     out.write(reinterpret_cast<const char*>(hdr), sizeof(hdr));
@@ -520,29 +491,24 @@ bool CompressFileToGzip(const std::wstring& srcPath, const std::wstring& dstPath
     return true;
 }
 
-// ASYNC LOGGING SYSTEM
 // Uses a lock-free ring buffer for zero-contention log submission.
 // A background thread writes to disk every 500ms.
-// FlushLogs() force-writes all pending messages (for crash/shutdown).
 
-// Pre-formatted log entry with timestamp already applied
 struct LogEntry {
-    std::atomic<bool> ready{ false }; // True when data is fully written and can be read
-    std::string formattedMessage;     // "[HH:MM:SS.mmm] message"
+    std::atomic<bool> ready{ false };
+    std::string formattedMessage;
 };
 
 // Lock-free ring buffer for log entries
-// Uses two-phase commit: claim slot with CAS, mark ready after write
-static constexpr size_t LOG_BUFFER_SIZE = 8192; // Power of 2 for fast modulo
+static constexpr size_t LOG_BUFFER_SIZE = 8192;
 static LogEntry g_logBuffer[LOG_BUFFER_SIZE];
-static std::atomic<size_t> g_logClaimIndex{ 0 }; // Next position to claim (writers)
-static std::atomic<size_t> g_logReadIndex{ 0 };  // Next position to read (reader)
+static std::atomic<size_t> g_logClaimIndex{ 0 };
+static std::atomic<size_t> g_logReadIndex{ 0 };
 
 // Background writer thread
 static std::thread g_logThread;
 static std::atomic<bool> g_logThreadRunning{ false };
 
-// Forward declaration
 static void LogThreadMain();
 static void WriteLogsToFile();
 
@@ -572,28 +538,22 @@ static void WriteLogsToFile() {
     size_t readPos = g_logReadIndex.load(std::memory_order_relaxed);
     size_t claimPos = g_logClaimIndex.load(std::memory_order_acquire);
 
-    if (readPos == claimPos) return; // Nothing claimed yet
+    if (readPos == claimPos) return;
 
     // Lock only during actual file I/O (not during Log() calls)
     std::lock_guard<std::mutex> lock(g_logFileMutex);
     if (!logFile.is_open()) return;
 
-    // Process all ready entries in order
-    // Note: entries might be claimed but not yet ready if writer is mid-write
     while (readPos != claimPos) {
         LogEntry& entry = g_logBuffer[readPos % LOG_BUFFER_SIZE];
 
-        // Wait for this slot to be ready (writer finished)
         // Use relaxed load in tight loop, acquire synchronizes with writer's release
         if (!entry.ready.load(std::memory_order_acquire)) {
-            // Entry not ready yet - stop here, will continue next flush
-            // This handles out-of-order completion
             break;
         }
 
         logFile << entry.formattedMessage << std::endl;
 
-        // Clear ready flag for next use of this slot
         entry.ready.store(false, std::memory_order_relaxed);
 
         readPos = (readPos + 1) % LOG_BUFFER_SIZE;
@@ -603,12 +563,9 @@ static void WriteLogsToFile() {
     g_logReadIndex.store(readPos, std::memory_order_release);
 }
 
-// Force flush all pending logs - call during crash/shutdown
 void FlushLogs() { WriteLogsToFile(); }
 
-// Category-based logging - only logs if category is enabled in debug config
 void LogCategory(const char* category, const std::string& message) {
-    // Check if category is enabled
     bool enabled = false;
     if (strcmp(category, "mode_switch") == 0)
         enabled = g_config.debug.logModeSwitch;
@@ -635,18 +592,15 @@ void LogCategory(const char* category, const std::string& message) {
     else if (strcmp(category, "cursor_textures") == 0)
         enabled = g_config.debug.logCursorTextures;
     else if (strcmp(category, "hookchain") == 0)
-        enabled = true; // Always log hookchain messages
+        enabled = true;
 
     if (!enabled) return;
-    Log(message); // Use standard Log for actual output
+    Log(message);
 }
 
 // True lock-free log submission using two-phase commit:
 // 1. Atomically claim a slot with CAS on g_logClaimIndex
-// 2. Write data to the claimed slot
-// 3. Mark slot as ready (signals reader that data is complete)
 void Log(const std::string& message) {
-    // Format with timestamp before entering critical path
     std::string formatted = "[" + GetTimestamp() + "] " + message;
 
     // Atomically claim a slot using CAS loop
@@ -655,7 +609,6 @@ void Log(const std::string& message) {
         claimPos = g_logClaimIndex.load(std::memory_order_relaxed);
         nextClaimPos = (claimPos + 1) % LOG_BUFFER_SIZE;
 
-        // Check if buffer is full (would overwrite unread data)
         if (nextClaimPos == g_logReadIndex.load(std::memory_order_acquire)) {
             // Buffer full - drop this message (better than blocking)
             return;
@@ -663,7 +616,6 @@ void Log(const std::string& message) {
         // Try to atomically claim this slot by advancing claimIndex
     } while (!g_logClaimIndex.compare_exchange_weak(claimPos, nextClaimPos, std::memory_order_acq_rel, std::memory_order_relaxed));
 
-    // We successfully claimed slot 'claimPos' - write data
     LogEntry& entry = g_logBuffer[claimPos % LOG_BUFFER_SIZE];
     entry.formattedMessage = std::move(formatted);
 
@@ -696,9 +648,7 @@ void LogException(const std::string& context, const std::exception& e) {
 }
 
 void LogException(const std::string& context, DWORD exceptionCode, EXCEPTION_POINTERS* exceptionInfo) {
-    // IMPORTANT PERFORMANCE NOTE:
     // If an exception occurs repeatedly (e.g. every frame inside SwapBuffers), logging + stack traces + FlushLogs()
-    // can create a catastrophic feedback loop that tanks FPS. This function therefore rate-limits expensive work.
 
     const uint64_t nowMs = GetTickCount64();
     const uintptr_t addr = (exceptionInfo && exceptionInfo->ExceptionRecord)
@@ -706,7 +656,6 @@ void LogException(const std::string& context, DWORD exceptionCode, EXCEPTION_POI
                                : 0;
 
     // Per-process spam guard for repeated identical SEH events.
-    // Keeps the first log, then suppresses repeats for a short window.
     static std::atomic<uint64_t> s_lastSehLogMs{ 0 };
     static std::atomic<DWORD> s_lastSehCode{ 0 };
     static std::atomic<uintptr_t> s_lastSehAddr{ 0 };
@@ -716,7 +665,6 @@ void LogException(const std::string& context, DWORD exceptionCode, EXCEPTION_POI
     const uintptr_t lastAddr = s_lastSehAddr.load(std::memory_order_relaxed);
     const uint64_t lastMs = s_lastSehLogMs.load(std::memory_order_relaxed);
 
-    // Suppress if same code+address within this window.
     constexpr uint64_t kRepeatSuppressWindowMs = 250;
     const bool isRepeatBurst = (exceptionCode == lastCode) && (addr == lastAddr) && (lastMs != 0) && ((nowMs - lastMs) < kRepeatSuppressWindowMs);
     if (isRepeatBurst) {
@@ -724,7 +672,6 @@ void LogException(const std::string& context, DWORD exceptionCode, EXCEPTION_POI
         return;
     }
 
-    // Emit a summary if we suppressed repeats.
     const uint32_t suppressed = s_suppressedSehCount.exchange(0, std::memory_order_relaxed);
     if (suppressed > 0) {
         Log("(Suppressed " + std::to_string(suppressed) + " repeat structured exceptions in last " +
@@ -751,7 +698,6 @@ void LogException(const std::string& context, DWORD exceptionCode, EXCEPTION_POI
         Log(FormatStackTraceWithSymbols(stack, frames));
     }
 
-    // Force flush after exception logging, but rate-limit flushes to avoid I/O storms.
     static std::atomic<uint64_t> s_lastFlushMs{ 0 };
     constexpr uint64_t kFlushMinIntervalMs = 1000;
     const uint64_t lastFlush = s_lastFlushMs.load(std::memory_order_relaxed);
@@ -762,7 +708,6 @@ void LogException(const std::string& context, DWORD exceptionCode, EXCEPTION_POI
 }
 
 LONG WINAPI CustomUnhandledExceptionFilter(EXCEPTION_POINTERS* exceptionInfo) {
-    // Force flush any pending logs first
     FlushLogs();
 
     std::cerr << "[Toolscreen] EXCEPTION FILTER TRIGGERED" << std::endl;
@@ -776,7 +721,6 @@ LONG WINAPI CustomUnhandledExceptionFilter(EXCEPTION_POINTERS* exceptionInfo) {
         ss << "\nException Address: 0x" << std::hex << reinterpret_cast<uintptr_t>(exceptionInfo->ExceptionRecord->ExceptionAddress);
         ss << "\nFlags: 0x" << std::hex << exceptionInfo->ExceptionRecord->ExceptionFlags;
 
-        // Decode common exception codes
         switch (code) {
         case EXCEPTION_ACCESS_VIOLATION:
             ss << "\nType: ACCESS_VIOLATION";
@@ -845,14 +789,11 @@ LONG WINAPI CustomUnhandledExceptionFilter(EXCEPTION_POINTERS* exceptionInfo) {
 
     Log("=== END EXCEPTION DETAILS ===");
 
-    // Force immediate flush to ensure log is written before crash
     FlushLogs();
 
-    // Also write to stderr for immediate visibility
     std::cerr << "[Toolscreen] EXCEPTION LOGGED - Check log file" << std::endl;
     std::cerr.flush();
 
-    // Return EXCEPTION_CONTINUE_SEARCH to let Java's exception handler process it
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
@@ -887,8 +828,6 @@ void EnsureSymbolsInitialized() {
     std::stringstream ssAddr;
     ssAddr << "Detected DLL loaded at address: 0x" << std::hex << dllBaseAddr;
     Log(ssAddr.str());
-    // Mark initialized so we don't spam this on every call.
-    // (The rest of the symbol loading logic is currently disabled below.)
     g_symbolsInitialized.store(true);
     return;
     /*
@@ -928,13 +867,10 @@ void EnsureSymbolsInitialized() {
 }
 
 void InstallGlobalExceptionHandlers() {
-    // Initialize symbol resolution first
     EnsureSymbolsInitialized();
 
-    // Install signal handler for SIGABRT
     signal(SIGABRT, SignalHandler);
 
-    // Install unhandled exception filter
     SetUnhandledExceptionFilter(CustomUnhandledExceptionFilter);
 
     // Install SEH to C++ exception translator
@@ -944,7 +880,6 @@ void InstallGlobalExceptionHandlers() {
 }
 
 std::wstring GetToolscreenPath() {
-    // First, check if a "toolscreen" folder exists in the current working directory
     WCHAR currentDir[MAX_PATH];
     if (GetCurrentDirectoryW(MAX_PATH, currentDir)) {
         std::wstring localPath = std::wstring(currentDir) + L"\\toolscreen";
@@ -952,7 +887,6 @@ std::wstring GetToolscreenPath() {
         if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY)) { return localPath; }
     }
 
-    // Fall back to %USERPROFILE%\.config\toolscreen
     WCHAR userProfile[MAX_PATH];
     if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_PROFILE, NULL, 0, userProfile))) {
         std::wstring path = std::wstring(userProfile) + L"\\.config\\toolscreen";
@@ -965,22 +899,19 @@ std::wstring GetToolscreenPath() {
 void WriteCurrentModeToFile(const std::string& modeId) {
     if (g_modeFilePath.empty()) return;
 
-    // Copy the mode ID and file path for the async operation
     std::string modeIdCopy = modeId;
     std::wstring filePathCopy = g_modeFilePath;
 
     // Fire-and-forget async write - never blocks the calling thread
     // NOTE: Do NOT use PROFILE_SCOPE inside short-lived detached threads!
     // The thread-local profiler buffer gets destroyed when the thread exits,
-    // while the pointer remains in the registry, causing access violations.
     std::thread([modeIdCopy, filePathCopy]() {
-        // IMPORTANT (Windows/Unicode): open via std::filesystem::path so wide Win32 APIs are used.
+        // Open via std::filesystem::path so wide Win32 APIs are used.
         std::ofstream modeFile(std::filesystem::path(filePathCopy), std::ios_base::out | std::ios_base::trunc);
         if (modeFile.is_open()) {
             modeFile << modeIdCopy;
             modeFile.close();
         }
-        // Don't log on failure - this is fire-and-forget
     }).detach();
 }
 
@@ -994,10 +925,8 @@ bool SwitchToMode(const std::string& newModeId, const std::string& source, bool 
         return false;
     }
 
-    // Clear temporary sensitivity override on any mode change
     ClearTempSensitivityOverride();
 
-    // Check if resolution changing is supported for this game version
     if (!IsResolutionChangeSupported(g_gameVersion)) {
         std::ostringstream oss;
         oss << "Mode switching disabled: Minecraft version ";
@@ -1020,10 +949,9 @@ bool SwitchToMode(const std::string& newModeId, const std::string& source, bool 
         LogCategory("mode_switch", "[MODE_SWITCH] g_modeIdMutex acquired");
         currentMode = g_currentModeId;
 
-        // Don't switch if we're already in the target mode
         if (EqualsIgnoreCase(currentMode, newModeId)) {
             Log("Mode switch to '" + newModeId + "' requested, but already in that mode.");
-            return false; // No change needed
+            return false;
         }
 
         g_currentModeId = newModeId;
@@ -1042,7 +970,6 @@ bool SwitchToMode(const std::string& newModeId, const std::string& source, bool 
     if (!source.empty()) { logMessage += " (source: " + source + ")"; }
     LogCategory("mode_switch", logMessage);
 
-    // Read mode configurations to get dimensions/positions
     int fromWidth = 0, fromHeight = 0, fromX = 0, fromY = 0;
     int toWidth = 0, toHeight = 0, toX = 0, toY = 0;
     const int fullW = GetCachedScreenWidth();
@@ -1051,22 +978,17 @@ bool SwitchToMode(const std::string& newModeId, const std::string& source, bool 
     // Variable to store target mode config (copied to avoid holding lock)
     ModeConfig toModeCopy;
 
-    // Check if a transition is already in progress - if so, use the current animated position
-    // as the "from" position so the animation smoothly reverses from where it currently is
     bool useAnimatedPosition = false;
-    float distanceRatio = 1.0f; // Ratio of new distance to original full distance (for duration scaling)
+    float distanceRatio = 1.0f;
     {
         std::lock_guard<std::mutex> transitionLock(g_modeTransitionMutex);
         if (g_modeTransition.active && g_modeTransition.gameTransition == GameTransitionType::Bounce) {
-            // Capture current animated position
             fromWidth = g_modeTransition.currentWidth;
             fromHeight = g_modeTransition.currentHeight;
             fromX = g_modeTransition.currentX;
             fromY = g_modeTransition.currentY;
             useAnimatedPosition = true;
 
-            // Calculate distance ratio for duration scaling
-            // Compare current-to-new-target distance vs original full distance
             int origDeltaW = std::abs(g_modeTransition.toWidth - g_modeTransition.fromWidth);
             int origDeltaH = std::abs(g_modeTransition.toHeight - g_modeTransition.fromHeight);
             int origDeltaX = std::abs(g_modeTransition.toX - g_modeTransition.fromX);
@@ -1074,11 +996,7 @@ bool SwitchToMode(const std::string& newModeId, const std::string& source, bool 
             float origDistance =
                 std::sqrt((float)(origDeltaW * origDeltaW + origDeltaH * origDeltaH + origDeltaX * origDeltaX + origDeltaY * origDeltaY));
 
-            // We'll calculate new distance after we know the new target (toWidth/toHeight/toX/toY)
-            // Store original distance for now
             if (origDistance > 0) {
-                // Store for later calculation after toMode is read
-                // We need to defer this calculation, so we'll just mark that we need to scale
             }
 
             LogCategory("mode_switch",
@@ -1093,7 +1011,6 @@ bool SwitchToMode(const std::string& newModeId, const std::string& source, bool 
         const ModeConfig* fromMode = modeSnap ? GetModeFromSnapshot(*modeSnap, currentMode) : nullptr;
         const ModeConfig* toMode = modeSnap ? GetModeFromSnapshot(*modeSnap, newModeId) : nullptr;
 
-        // Only calculate from dimensions from mode config if we're not using animated position
         if (!useAnimatedPosition) {
             if (fromMode) {
                 if (fromMode->stretch.enabled) {
@@ -1108,7 +1025,6 @@ bool SwitchToMode(const std::string& newModeId, const std::string& source, bool 
                     fromY = (fullH - fromHeight) / 2;
                 }
             } else {
-                // Fallback to fullscreen
                 fromWidth = fullW;
                 fromHeight = fullH;
                 fromX = 0;
@@ -1129,15 +1045,12 @@ bool SwitchToMode(const std::string& newModeId, const std::string& source, bool 
                 toY = (fullH - toHeight) / 2;
             }
 
-            // Copy the target mode for use
             toModeCopy = *toMode;
         } else {
-            // Fallback to fullscreen
             toWidth = fullW;
             toHeight = fullH;
             toX = 0;
             toY = 0;
-            // Create a default fullscreen mode config
             toModeCopy.id = newModeId;
             toModeCopy.width = fullW;
             toModeCopy.height = fullH;
@@ -1149,9 +1062,7 @@ bool SwitchToMode(const std::string& newModeId, const std::string& source, bool 
                                        std::to_string(fromHeight) + ", to: " + std::to_string(toWidth) + "x" + std::to_string(toHeight));
     }
 
-    // If we're reversing mid-animation, scale the duration based on distance ratio
     if (useAnimatedPosition && toModeCopy.gameTransition == GameTransitionType::Bounce) {
-        // Calculate the new distance (from current animated position to new target)
         int newDeltaW = std::abs(toWidth - fromWidth);
         int newDeltaH = std::abs(toHeight - fromHeight);
         int newDeltaX = std::abs(toX - fromX);
@@ -1159,13 +1070,10 @@ bool SwitchToMode(const std::string& newModeId, const std::string& source, bool 
         float newDistance =
             std::sqrt((float)(newDeltaW * newDeltaW + newDeltaH * newDeltaH + newDeltaX * newDeltaX + newDeltaY * newDeltaY));
 
-        // Get the full distance for the target mode (what it would be from static mode positions)
-        // Use the new target mode's static dimensions as reference for "full" distance
         // Use snapshot for thread-safe lookup (reuse modeSnap if still valid, else re-acquire)
         auto distSnap = GetConfigSnapshot();
         const ModeConfig* targetMode = distSnap ? GetModeFromSnapshot(*distSnap, newModeId) : nullptr;
         if (targetMode) {
-            // Calculate what the full distance would be (fullscreen to target, or vice versa)
             int refFromW = fullW, refFromH = fullH, refFromX = 0, refFromY = 0;
             int refToW = toWidth, refToH = toHeight, refToX = toX, refToY = toY;
 
@@ -1178,7 +1086,6 @@ bool SwitchToMode(const std::string& newModeId, const std::string& source, bool 
 
             if (fullDistance > 0) {
                 distanceRatio = newDistance / fullDistance;
-                // Clamp to reasonable range (minimum 10% of normal duration)
                 distanceRatio = (std::max)(0.1f, (std::min)(1.0f, distanceRatio));
 
                 int originalDuration = toModeCopy.transitionDurationMs;
@@ -1191,14 +1098,12 @@ bool SwitchToMode(const std::string& newModeId, const std::string& source, bool 
         }
     }
 
-    // Apply forceCut override — forces all transitions to Cut (instant) without mutating g_config
     if (forceCut) {
         toModeCopy.gameTransition = GameTransitionType::Cut;
         toModeCopy.overlayTransition = OverlayTransitionType::Cut;
         toModeCopy.backgroundTransition = BackgroundTransitionType::Cut;
     }
 
-    // Start animated transition (handles size interpolation and WM_SIZE messages)
     LogCategory("mode_switch",
                 "[MODE_SWITCH] Calling StartModeTransition with Game:" + GameTransitionTypeToString(toModeCopy.gameTransition) +
                     ", Overlay:" + OverlayTransitionTypeToString(toModeCopy.overlayTransition) +
@@ -1206,7 +1111,7 @@ bool SwitchToMode(const std::string& newModeId, const std::string& source, bool 
     StartModeTransition(currentMode, newModeId, fromWidth, fromHeight, fromX, fromY, toWidth, toHeight, toX, toY, toModeCopy);
     LogCategory("mode_switch", "[MODE_SWITCH] StartModeTransition completed");
 
-    return true; // Mode was changed
+    return true;
 }
 
 bool IsFullscreen() {
@@ -1218,7 +1123,6 @@ bool IsFullscreen() {
 
     RECT monRect{};
     if (!GetMonitorRectForWindow(hwnd, monRect)) {
-        // Fallback to legacy primary-monitor heuristic.
         return r.left == 0 && r.top == 0 && r.right == GetCachedScreenWidth() && r.bottom == GetCachedScreenHeight();
     }
 
@@ -1303,7 +1207,6 @@ MirrorConfig* GetMutableMirror(const std::string& name) {
     return nullptr;
 }
 
-// Snapshot-safe overloads: look up in a specific config snapshot instead of g_config
 const ModeConfig* GetModeFromSnapshot(const Config& config, const std::string& id) {
     for (const auto& mode : config.modes) {
         if (EqualsIgnoreCase(mode.id, id)) return &mode;
@@ -1332,7 +1235,7 @@ ModeViewportInfo GetCurrentModeViewport_Internal() {
     auto vpSnap = GetConfigSnapshot();
     const ModeConfig* mode = vpSnap ? GetModeFromSnapshot(*vpSnap, modeId) : nullptr;
     if (!mode) {
-        return info; // valid = false
+        return info;
     }
 
     info.valid = true;
@@ -1428,7 +1331,6 @@ void LoadImageAsync(DecodedImageData::Type type, std::string id, std::string pat
                 }
                 std::string path_utf8 = WideToUtf8(final_path);
 
-                // Check if file is a GIF by extension (case-insensitive)
                 bool isGif = false;
                 if (path.size() >= 4) {
                     std::string ext = path.substr(path.size() - 4);
@@ -1442,7 +1344,6 @@ void LoadImageAsync(DecodedImageData::Type type, std::string id, std::string pat
                 int* delays = nullptr;
 
                 if (isGif) {
-                    // Read file into memory for GIF loading
                     FILE* f = nullptr;
                     errno_t err = fopen_s(&f, path_utf8.c_str(), "rb");
                     if (err == 0 && f) {
@@ -1455,11 +1356,9 @@ void LoadImageAsync(DecodedImageData::Type type, std::string id, std::string pat
                         fclose(f);
 
                         if (bytesRead == static_cast<size_t>(fileSize)) {
-                            // Try loading as animated GIF
                             data = stbi_load_gif_from_memory(fileData.data(), (int)fileSize, &delays, &w, &h, &frameCount, &c, 4);
 
                             if (data && frameCount <= 1) {
-                                // Single-frame GIF, treat as static image
                                 frameCount = 1;
                                 stbi_image_free(delays);
                                 delays = nullptr;
@@ -1467,13 +1366,11 @@ void LoadImageAsync(DecodedImageData::Type type, std::string id, std::string pat
                         }
                     }
 
-                    // Fall back to regular load if GIF loading failed
                     if (!data) {
                         frameCount = 0;
                         data = stbi_load(path_utf8.c_str(), &w, &h, &c, 4);
                     }
                 } else {
-                    // Non-GIF: use regular stbi_load
                     data = stbi_load(path_utf8.c_str(), &w, &h, &c, 4);
                 }
 
@@ -1491,15 +1388,12 @@ void LoadImageAsync(DecodedImageData::Type type, std::string id, std::string pat
                     decoded.channels = 4;
                     decoded.data = data;
 
-                    // Set animation data
                     if (frameCount > 1) {
                         decoded.isAnimated = true;
                         decoded.frameCount = frameCount;
-                        decoded.height = h * frameCount; // stbi_load_gif returns stacked frames
+                        decoded.height = h * frameCount;
                         decoded.frameHeight = h;
                         for (int i = 0; i < frameCount; i++) {
-                            // stb_image already converts GIF delays to milliseconds internally
-                            // (see stb_image.h line 6916: "delay - 1/100th of a second, saving as 1/1000ths")
                             int delayMs = (delays && delays[i] > 0) ? delays[i] : 100;
                             decoded.frameDelays.push_back(delayMs);
                         }
@@ -1590,15 +1484,12 @@ DWORD WINAPI FileMonitorThread(LPVOID lpParam) {
 
         g_isStateOutputAvailable.store(true, std::memory_order_release);
 
-        // Pre-allocate buffer to avoid repeated allocations
         std::vector<char> buffer;
         buffer.reserve(128);
 
-        // Track last write time so we don't re-read the file when nothing changed.
         FILETIME lastWriteTime{};
         bool haveLastWriteTime = false;
 
-        // Adaptive polling: fast when the file is actively changing, slower when idle.
         DWORD sleepMs = 16;
         int consecutiveNoChange = 0;
 
@@ -1608,7 +1499,6 @@ DWORD WINAPI FileMonitorThread(LPVOID lpParam) {
             FILETIME curWriteTime{};
             if (GetFileTime(hFile, NULL, NULL, &curWriteTime)) {
                 if (haveLastWriteTime && CompareFileTime(&lastWriteTime, &curWriteTime) == 0) {
-                    // Back off when idle (no state changes). Reset instantly on the next change.
                     consecutiveNoChange++;
                     if (consecutiveNoChange > 600) {
                         sleepMs = 100;
@@ -1617,7 +1507,7 @@ DWORD WINAPI FileMonitorThread(LPVOID lpParam) {
                     } else if (consecutiveNoChange > 60) {
                         sleepMs = 33;
                     }
-                    continue; // No change, skip all work.
+                    continue;
                 }
                 lastWriteTime = curWriteTime;
                 haveLastWriteTime = true;
@@ -1634,12 +1524,10 @@ DWORD WINAPI FileMonitorThread(LPVOID lpParam) {
                 if (ReadFile(hFile, buffer.data(), fileSize, &bytesRead, NULL) && bytesRead == fileSize) {
                     std::string content(buffer.data(), bytesRead);
 
-                    // Optimize: Check prefix first before full vector search
                     bool isValid = (content.rfind("generating", 0) == 0) ||
                                    (std::find(VALID_STATES.begin(), VALID_STATES.end(), content) != VALID_STATES.end());
 
                     if (isValid) {
-                        // Map old inworld substates to cursor-based states
                         if (content == "inworld,unpaused" || content == "inworld,paused" || content == "inworld,gamescreenopen") {
                             content = IsCursorVisible() ? "inworld,cursor_free" : "inworld,cursor_grabbed";
                         }
@@ -1678,8 +1566,6 @@ DWORD WINAPI ImageMonitorThread(LPVOID lpParam) {
         static std::map<std::string, FILETIME> s_lastWriteTimes;
 
         while (!g_stopImageMonitoring) {
-            // 50ms polling can be expensive when there are many images (CreateFile + GetFileTime per image).
-            // Slow this down; hot-reload is still "fast enough" for typical use.
             Sleep(250);
 
             // Use snapshot to avoid racing GUI edits and to allow future lock-free snapshot impls.
@@ -1740,12 +1626,9 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
     const bool ctrl_down_now = lctrl_down || rctrl_down;
 
     // For trigger on release, skip exclusion key checks since user may have released modifiers
-    // before or at the same time as the main key
     if (!triggerOnRelease) {
-        // First check if any exclusion keys are pressed
         for (DWORD excluded_key : exclusionKeys) {
             bool excludedPressed = false;
-            // Treat LCTRL and CTRL as equivalent in exclusions.
             if (excluded_key == VK_CONTROL || excluded_key == VK_LCONTROL) {
                 excludedPressed = ctrl_down_now;
             } else {
@@ -1759,18 +1642,13 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
         }
     }
 
-    // The last key is always the "main" key that triggers the hotkey
-    // Keys before it are treated as required modifiers
     DWORD main_key = keys.back();
 
-    // Track specific modifier requirements (left/right variants)
-    // Only look at keys BEFORE the main key
     bool requires_lctrl = false, requires_rctrl = false, requires_ctrl = false;
     bool requires_lshift = false, requires_rshift = false, requires_shift = false;
     bool requires_lalt = false, requires_ralt = false, requires_alt = false;
 
     // For trigger on release, we don't need to track modifier requirements since we skip the check
-    // But we still need to parse the main key and match wParam
     if (!triggerOnRelease) {
         for (size_t i = 0; i < keys.size() - 1; ++i) {
             DWORD key = keys[i];
@@ -1795,9 +1673,8 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
         }
     }
 
-    // Debug logging (can be toggled via config)
     bool s_enableHotkeyDebug = g_config.debug.showHotkeyDebug;
-    std::string keyCombo; // Declare outside conditional for later use
+    std::string keyCombo;
 
     if (s_enableHotkeyDebug) {
         keyCombo = GetKeyComboString(keys);
@@ -1805,12 +1682,9 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
     }
 
     // Handle modifier keys specially - Windows sends VK_CONTROL/VK_SHIFT/VK_MENU in wParam,
-    // not the specific left/right variants. We need to check if the specific key is pressed.
     bool main_key_pressed = (main_key == wParam);
 
     if (!main_key_pressed) {
-        // Also support the inverse: bindings may use generic VK_* while the caller passes
-        // left/right variants (after resolving from scan code / extended flag).
         if (main_key == VK_CONTROL && (wParam == VK_LCONTROL || wParam == VK_RCONTROL)) {
             main_key_pressed = true;
         } else if (main_key == VK_LCONTROL && (wParam == VK_CONTROL || wParam == VK_RCONTROL)) {
@@ -1823,7 +1697,6 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
     }
 
     if (!main_key_pressed) {
-        // Check if wParam is a generic modifier and main_key is a specific variant
         if ((wParam == VK_CONTROL || wParam == VK_RCONTROL) && main_key == VK_LCONTROL) {
             if (triggerOnRelease) {
                 main_key_pressed = true;
@@ -1833,26 +1706,21 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
         } else if (wParam == VK_CONTROL && main_key == VK_RCONTROL) {
             if (triggerOnRelease) {
                 // For release triggers, we can't use GetAsyncKeyState (key is already released)
-                // Just accept the match - the hotkey was configured for this specific key
                 // Note: This means both left and right will trigger if either is released
-                // To distinguish, we'd need to pass lParam and check the extended key flag
                 main_key_pressed = true;
             } else {
-                // Check if the specific control key is pressed
                 main_key_pressed = (GetAsyncKeyState(main_key) & 0x8000) != 0;
             }
         } else if (wParam == VK_SHIFT && (main_key == VK_LSHIFT || main_key == VK_RSHIFT)) {
             if (triggerOnRelease) {
                 main_key_pressed = true;
             } else {
-                // Check if the specific shift key is pressed
                 main_key_pressed = (GetAsyncKeyState(main_key) & 0x8000) != 0;
             }
         } else if (wParam == VK_MENU && (main_key == VK_LMENU || main_key == VK_RMENU)) {
             if (triggerOnRelease) {
                 main_key_pressed = true;
             } else {
-                // Check if the specific alt key is pressed
                 main_key_pressed = (GetAsyncKeyState(main_key) & 0x8000) != 0;
             }
         }
@@ -1866,13 +1734,11 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
     // For trigger on release, skip modifier state checks since modifiers may have been
     // released before or at the same time as the main key
     if (!triggerOnRelease) {
-        // Check specific modifier states
         bool lshift_down = (GetAsyncKeyState(VK_LSHIFT) & 0x8000) != 0;
         bool rshift_down = (GetAsyncKeyState(VK_RSHIFT) & 0x8000) != 0;
         bool lalt_down = (GetAsyncKeyState(VK_LMENU) & 0x8000) != 0;
         bool ralt_down = (GetAsyncKeyState(VK_RMENU) & 0x8000) != 0;
 
-        // Generic modifier state (either left or right)
         bool shift_down_now = lshift_down || rshift_down;
         bool alt_down_now = lalt_down || ralt_down;
 
@@ -1886,8 +1752,6 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
                 " RAlt=" + std::to_string(ralt_down));
         }
 
-        // Check specific modifier requirements
-        // Treat LCTRL and CTRL as equivalent requirements.
         if (requires_lctrl && !ctrl_down_now) {
             if (s_enableHotkeyDebug) Log("[Hotkey] FAIL: Left Ctrl required but not pressed");
             return false;
@@ -1938,8 +1802,6 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
             }
         }
 
-        // Only check for unwanted modifiers if they are NOT in the exclusion list
-        // This allows modifiers to be pressed without affecting the match, unless specifically excluded
         bool ctrl_in_exclusions = std::find_if(exclusionKeys.begin(), exclusionKeys.end(), [](DWORD k) {
                                       return k == VK_CONTROL || k == VK_LCONTROL || k == VK_RCONTROL;
                                   }) != exclusionKeys.end();
@@ -1950,7 +1812,6 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
                                      return k == VK_MENU || k == VK_LMENU || k == VK_RMENU;
                                  }) != exclusionKeys.end();
 
-        // Determine if any ctrl/shift/alt is required (including specific variants)
         bool any_ctrl_required = requires_ctrl || requires_lctrl || requires_rctrl;
         bool any_shift_required = requires_shift || requires_lshift || requires_rshift;
         bool any_alt_required = requires_alt || requires_lalt || requires_ralt;
@@ -1980,7 +1841,6 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
 }
 
 void GetRelativeCoords(const std::string& type, int relX, int relY, int w, int h, int containerW, int containerH, int& outX, int& outY) {
-    // Strip Viewport/Screen suffix if present to get base anchor name
     std::string anchor = type;
     if (anchor.length() > 8 && anchor.substr(anchor.length() - 8) == "Viewport") {
         anchor = anchor.substr(0, anchor.length() - 8);
@@ -1988,21 +1848,20 @@ void GetRelativeCoords(const std::string& type, int relX, int relY, int w, int h
         anchor = anchor.substr(0, anchor.length() - 6);
     }
 
-    // Optimize by checking first character to reduce string comparisons
     char firstChar = anchor.empty() ? '\0' : anchor[0];
 
-    if (firstChar == 't') { // "topLeft" or "topRight"
+    if (firstChar == 't') {
         outY = relY;
         outX = (anchor == "topLeft") ? relX : containerW - w - relX;
-    } else if (firstChar == 'c') { // "center"
+    } else if (firstChar == 'c') {
         outX = (containerW - w) / 2 + relX;
         outY = (containerH - h) / 2 + relY;
-    } else if (firstChar == 'p') { // "pieLeft" or "pieRight"
+    } else if (firstChar == 'p') {
         const int PIE_Y_TOP = 220, PIE_X_LEFT = 92, PIE_X_RIGHT = 36;
         int base_x = (anchor == "pieLeft") ? containerW - PIE_X_LEFT : containerW - PIE_X_RIGHT;
         outX = base_x + relX;
         outY = containerH - PIE_Y_TOP + relY;
-    } else { // "bottomLeft" or "bottomRight"
+    } else {
         outY = containerH - h - relY;
         outX = (anchor == "bottomRight") ? containerW - w - relX : relX;
     }
@@ -2011,16 +1870,15 @@ void GetRelativeCoords(const std::string& type, int relX, int relY, int w, int h
 void GetRelativeCoordsForImage(const std::string& type, int relX, int relY, int w, int h, int containerW, int containerH, int& outX,
                                int& outY) {
     int anchor_x = 0, anchor_y = 0;
-    // Optimize by checking first character to reduce string comparisons
     char firstChar = type.empty() ? '\0' : type[0];
 
-    if (firstChar == 't') { // "topLeft" or "topRight"
+    if (firstChar == 't') {
         anchor_x = (type == "topLeft") ? 0 : containerW - w;
         anchor_y = 0;
-    } else if (firstChar == 'c') { // "center"
+    } else if (firstChar == 'c') {
         anchor_x = (containerW - w) / 2;
         anchor_y = (containerH - h) / 2;
-    } else if (firstChar == 'b') { // "bottomLeft" or "bottomRight"
+    } else if (firstChar == 'b') {
         anchor_x = (type == "bottomLeft") ? 0 : containerW - w;
         anchor_y = containerH - h;
     }
@@ -2029,36 +1887,28 @@ void GetRelativeCoordsForImage(const std::string& type, int relX, int relY, int 
     outY = anchor_y + relY;
 }
 
-// Get relative coordinates with viewport-aware positioning
-// For "Viewport" suffixed types: position relative to game viewport (animates with game)
-// For "Screen" suffixed types: position relative to screen (does not animate)
 void GetRelativeCoordsForImageWithViewport(const std::string& type, int relX, int relY, int w, int h, int gameX, int gameY, int gameW,
                                            int gameH, int fullW, int fullH, int& outX, int& outY) {
-    // Check if this is a viewport-relative anchor (ends with "Viewport")
     if (type.length() > 8 && type.substr(type.length() - 8) == "Viewport") {
-        // Strip the "Viewport" suffix to get the base anchor name
         std::string baseAnchor = type.substr(0, type.length() - 8);
 
-        // Calculate position relative to game viewport
         int anchor_x = 0, anchor_y = 0;
         char firstChar = baseAnchor.empty() ? '\0' : baseAnchor[0];
 
-        if (firstChar == 't') { // "topLeft" or "topRight"
+        if (firstChar == 't') {
             anchor_x = (baseAnchor == "topLeft") ? 0 : gameW - w;
             anchor_y = 0;
-        } else if (firstChar == 'c') { // "center"
+        } else if (firstChar == 'c') {
             anchor_x = (gameW - w) / 2;
             anchor_y = (gameH - h) / 2;
-        } else if (firstChar == 'b') { // "bottomLeft" or "bottomRight"
+        } else if (firstChar == 'b') {
             anchor_x = (baseAnchor == "bottomLeft") ? 0 : gameW - w;
             anchor_y = gameH - h;
         }
 
-        // Position is relative to game viewport origin
         outX = gameX + anchor_x + relX;
         outY = gameY + anchor_y + relY;
     } else {
-        // Screen-relative: strip "Screen" suffix if present and use screen dimensions
         std::string baseAnchor = type;
         if (type.length() > 6 && type.substr(type.length() - 6) == "Screen") { baseAnchor = type.substr(0, type.length() - 6); }
         GetRelativeCoordsForImage(baseAnchor, relX, relY, w, h, fullW, fullH, outX, outY);
@@ -2076,7 +1926,6 @@ void CalculateFinalScreenPos(const MirrorConfig* conf, const MirrorInstance& ins
     int offsetX = conf->output.x;
     int offsetY = conf->output.y;
 
-    // Check if this is a Screen anchor (absolute screen positioning)
     if (anchor.length() > 6 && anchor.substr(anchor.length() - 6) == "Screen") {
         anchor = anchor.substr(0, anchor.length() - 6);
         int relative_x, relative_y;
@@ -2086,48 +1935,41 @@ void CalculateFinalScreenPos(const MirrorConfig* conf, const MirrorInstance& ins
         return;
     }
 
-    // Check if this is a Viewport anchor - strip the suffix
     if (anchor.length() > 8 && anchor.substr(anchor.length() - 8) == "Viewport") { anchor = anchor.substr(0, anchor.length() - 8); }
 
-    // Calculate position in GAME coordinates first, then scale to screen.
-    // This mirrors how input regions work - they use GetRelativeCoords with gameW/gameH,
-    // then scale the result: finalX + gameCoordX * xScale.
     float xScale = (gameW > 0) ? static_cast<float>(finalW) / gameW : 1.0f;
     float yScale = (gameH > 0) ? static_cast<float>(finalH) / gameH : 1.0f;
 
-    // Output dimensions in game space (for calculating position relative to game edges)
     int outW_game = static_cast<int>(outW / xScale);
     int outH_game = static_cast<int>(outH / yScale);
 
-    // Calculate position in game coordinates
     int gamePosX, gamePosY;
     char firstChar = anchor.empty() ? '\0' : anchor[0];
 
-    if (firstChar == 't') { // topLeft or topRight
+    if (firstChar == 't') {
         gamePosY = offsetY;
         if (anchor == "topLeft") {
             gamePosX = offsetX;
-        } else { // topRight
+        } else {
             gamePosX = gameW - offsetX - outW_game;
         }
-    } else if (firstChar == 'c') { // center
+    } else if (firstChar == 'c') {
         gamePosX = (gameW - outW_game) / 2 + offsetX;
         gamePosY = (gameH - outH_game) / 2 + offsetY;
-    } else if (firstChar == 'p') { // pieLeft or pieRight
+    } else if (firstChar == 'p') {
         const int PIE_Y_TOP = 220, PIE_X_LEFT = 92, PIE_X_RIGHT = 36;
         int pieXOffset = (anchor == "pieLeft") ? PIE_X_LEFT : PIE_X_RIGHT;
         gamePosX = gameW - pieXOffset + offsetX - outW_game;
         gamePosY = gameH - PIE_Y_TOP + offsetY - outH_game;
-    } else { // bottomLeft or bottomRight
+    } else {
         gamePosY = gameH - offsetY - outH_game;
         if (anchor == "bottomRight") {
             gamePosX = gameW - offsetX - outW_game;
-        } else { // bottomLeft
+        } else {
             gamePosX = offsetX;
         }
     }
 
-    // Scale game coordinates to screen coordinates (same as input region approach)
     outScreenX = finalX + static_cast<int>(gamePosX * xScale);
     outScreenY = finalY + static_cast<int>(gamePosY * yScale);
 }
@@ -2142,7 +1984,7 @@ void ScreenshotToClipboard(int width, int height) {
     glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
 
     for (size_t i = 0; i < bufferSize; i += 4) {
-        std::swap(pixels[i + 0], pixels[i + 2]); // R <-> B
+        std::swap(pixels[i + 0], pixels[i + 2]);
     }
 
     if (!OpenClipboard(g_minecraftHwnd.load())) {
@@ -2202,27 +2044,21 @@ void BackupConfigFile() {
     std::wstring configPath = g_toolscreenPath + L"\\config.toml";
     std::wstring backupDir = g_toolscreenPath + L"\\backups";
 
-    // Check if config file exists
     if (GetFileAttributesW(configPath.c_str()) == INVALID_FILE_ATTRIBUTES) {
         Log("Config file does not exist, skipping backup.");
         return;
     }
 
-    // Create backup directory if it doesn't exist
     CreateDirectoryW(backupDir.c_str(), NULL);
 
-    // Get current unix timestamp
     auto now = std::chrono::system_clock::now();
     auto timestamp = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
 
-    // Create backup filename with timestamp
     std::wstring backupFileName = backupDir + L"\\config_" + std::to_wstring(timestamp) + L".toml";
 
-    // Copy the config file to backup location
     if (CopyFileW(configPath.c_str(), backupFileName.c_str(), FALSE)) {
         Log("Config backed up to: " + WideToUtf8(backupFileName));
 
-        // Clean up old backups, keeping only the latest 50
         WIN32_FIND_DATAW findData;
         std::vector<std::pair<FILETIME, std::wstring>> backupFiles;
 
@@ -2233,7 +2069,6 @@ void BackupConfigFile() {
             do {
                 if (!(findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
                     std::wstring fileName = findData.cFileName;
-                    // Verify it matches our backup filename pattern
                     if (fileName.find(L"config_") == 0 && fileName.find(L".toml") != std::wstring::npos) {
                         std::wstring fullPath = backupDir + L"\\" + fileName;
                         backupFiles.push_back(std::make_pair(findData.ftLastWriteTime, fullPath));
@@ -2243,13 +2078,11 @@ void BackupConfigFile() {
             FindClose(hFind);
         }
 
-        // Sort by modification time (newest first)
         std::sort(backupFiles.begin(), backupFiles.end(),
                   [](const std::pair<FILETIME, std::wstring>& a, const std::pair<FILETIME, std::wstring>& b) {
                       return CompareFileTime(&a.first, &b.first) > 0;
                   });
 
-        // Delete files beyond the 50 most recent
         if (backupFiles.size() > 50) {
             for (size_t i = 50; i < backupFiles.size(); i++) {
                 if (DeleteFileW(backupFiles[i].second.c_str())) {
@@ -2268,7 +2101,6 @@ void BackupConfigFile() {
 void ToggleBorderlessWindowedFullscreen(HWND hwnd) {
     if (!hwnd) { return; }
 
-    // Persist the last non-borderless placement/styles so we can restore on toggle-off.
     // Guard with a mutex since this can be triggered from the window message thread.
     static std::mutex s_borderlessMutex;
     static bool s_borderlessActive = false;
@@ -2278,34 +2110,28 @@ void ToggleBorderlessWindowedFullscreen(HWND hwnd) {
 
     std::lock_guard<std::mutex> lock(s_borderlessMutex);
 
-    // Determine target monitor rect (multi-monitor safe)
     RECT targetRect{ 0, 0, GetCachedScreenWidth(), GetCachedScreenHeight() };
     GetMonitorRectForWindow(hwnd, targetRect);
 
     const int targetW = (targetRect.right - targetRect.left);
     const int targetH = (targetRect.bottom - targetRect.top);
 
-    // Desired windowed size/pos when leaving borderless: centered at 50% of the monitor size.
-    // (Interpreted as outer window size, not client size.)
     const int windowedW = (std::max)(1, targetW / 2);
     const int windowedH = (std::max)(1, targetH / 2);
     const int windowedX = targetRect.left + (targetW - windowedW) / 2;
     const int windowedY = targetRect.top + (targetH - windowedH) / 2;
 
     if (!s_borderlessActive) {
-        // Save current styles once per "enter borderless" toggle.
         // (We intentionally do not restore the previous placement on toggle-off.)
         s_savedStyle = static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_STYLE));
         s_savedExStyle = static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_EXSTYLE));
         s_saved = true;
 
         if (IsIconic(hwnd) || IsZoomed(hwnd)) {
-            // Ensure we're in a normal (restored) state before resizing/restyling.
             ShowWindow(hwnd, SW_RESTORE);
         }
 
         // Keep it as a "window" (avoid WS_POPUP / WS_EX_TOPMOST) so drivers don't treat it as exclusive fullscreen,
-        // while still removing decorations.
         {
             DWORD style = static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_STYLE));
             style &= ~(WS_POPUP | WS_CAPTION | WS_BORDER | WS_DLGFRAME | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU);
@@ -2324,9 +2150,7 @@ void ToggleBorderlessWindowedFullscreen(HWND hwnd) {
 
         Log("[WINDOW] Toggled borderless ON (" + std::to_string(targetW) + "x" + std::to_string(targetH) + ")");
     } else {
-        // Leave borderless: restore windowed styles, then force a centered half-size window.
         if (IsIconic(hwnd) || IsZoomed(hwnd)) {
-            // Ensure we're in a normal (restored) state before resizing/restyling.
             ShowWindow(hwnd, SW_RESTORE);
         }
 
@@ -2341,7 +2165,6 @@ void ToggleBorderlessWindowedFullscreen(HWND hwnd) {
             exStyle |= WS_EX_APPWINDOW;
             SetWindowLongPtr(hwnd, GWL_EXSTYLE, static_cast<LONG_PTR>(exStyle));
         } else {
-            // Best-effort fallback if we never captured a saved style.
             DWORD style = static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_STYLE));
             style &= ~(WS_POPUP);
             style |= WS_OVERLAPPEDWINDOW;
@@ -2353,7 +2176,6 @@ void ToggleBorderlessWindowedFullscreen(HWND hwnd) {
             SetWindowLongPtr(hwnd, GWL_EXSTYLE, static_cast<LONG_PTR>(exStyle));
         }
 
-        // Apply frame change + move/size in one go.
         SetWindowPos(hwnd, HWND_NOTOPMOST, windowedX, windowedY, windowedW, windowedH, SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
 
         g_cachedGameTextureId.store(UINT_MAX);

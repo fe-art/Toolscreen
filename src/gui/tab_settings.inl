@@ -10,10 +10,8 @@ if (ImGui::BeginTabItem("Settings")) {
     ImGui::Text("FPS Limit:");
     ImGui::SetNextItemWidth(600);
     int fpsLimitValue = (g_config.fpsLimit == 0) ? 1001 : g_config.fpsLimit;
-    // Track when slider is being actively dragged
     bool sliderActive = ImGui::IsItemActive() || ImGui::IsItemHovered();
     if (ImGui::SliderInt("##fpsLimit", &fpsLimitValue, 30, 1001, fpsLimitValue == 1001 ? "Unlimited" : "%d fps")) {
-        // Set to 0 (unlimited) if slider is at max, otherwise use the slider value
         g_config.fpsLimit = (fpsLimitValue == 1001) ? 0 : fpsLimitValue;
         g_configIsDirty = true;
     }
@@ -48,10 +46,8 @@ if (ImGui::BeginTabItem("Settings")) {
             g_config.mirrorGammaMode = static_cast<MirrorGammaMode>(gm);
             g_configIsDirty = true;
 
-            // Apply immediately for runtime (does not require saving)
             SetGlobalMirrorGammaMode(g_config.mirrorGammaMode);
 
-            // Force mirrors to recapture with the new mode
             std::unique_lock<std::shared_mutex> lock(g_mirrorInstancesMutex);
             for (auto& kv : g_mirrorInstances) {
                 kv.second.forceUpdateFrames = 3;
@@ -66,7 +62,6 @@ if (ImGui::BeginTabItem("Settings")) {
                    "Assume Linear: treats sampled pixels as linear; converts only target colors.");
     }
 
-    // Virtual Camera
     bool driverInstalled = IsVirtualCameraDriverInstalled();
     bool inUseByOBS = driverInstalled && IsVirtualCameraInUseByOBS();
     ImGui::BeginDisabled(!driverInstalled || inUseByOBS);
@@ -74,9 +69,7 @@ if (ImGui::BeginTabItem("Settings")) {
     if (ImGui::Checkbox("Enable Virtual Camera", &vcEnabled)) {
         g_config.debug.virtualCameraEnabled = vcEnabled;
         g_configIsDirty = true;
-        // Start or stop based on new state
         if (vcEnabled) {
-            // Get current screen dimensions for initial startup
             int screenW = GetSystemMetrics(SM_CXSCREEN);
             int screenH = GetSystemMetrics(SM_CYSCREEN);
             StartVirtualCamera(screenW, screenH, g_config.debug.virtualCameraFps);
@@ -97,7 +90,6 @@ if (ImGui::BeginTabItem("Settings")) {
                    "Works independently of OBS being open.");
     }
 
-    // Virtual Camera performance settings (restart camera to apply)
     ImGui::BeginDisabled(!driverInstalled || inUseByOBS || !vcEnabled);
     ImGui::Indent();
     if (ImGui::SliderInt("Camera FPS", &g_config.debug.virtualCameraFps, 15, 120, "%d fps")) { g_configIsDirty = true; }
@@ -106,7 +98,6 @@ if (ImGui::BeginTabItem("Settings")) {
 
     ImGui::Spacing();
 
-    // Debug Options - Protected by passcode
     static bool s_debugUnlocked = false;
     static char s_passcodeInput[16] = "";
 
@@ -191,3 +182,5 @@ if (ImGui::BeginTabItem("Settings")) {
     }
     ImGui::EndTabItem();
 }
+
+

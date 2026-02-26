@@ -42,7 +42,6 @@ if (ImGui::BeginTabItem("Misc")) {
         ImGui::Spacing();
 
         if (ImGui::BeginChild("LicenseScrollArea", ImVec2(0, -ImGui::GetFrameHeightWithSpacing() - 10), true)) {
-            // Dear ImGui
             if (ImGui::CollapsingHeader("Dear ImGui", ImGuiTreeNodeFlags_DefaultOpen)) {
                 ImGui::Indent();
                 ImGui::TextWrapped("Copyright (c) 2014-2025 Omar Cornut");
@@ -67,7 +66,6 @@ if (ImGui::BeginTabItem("Misc")) {
 
             ImGui::Spacing();
 
-            // nlohmann JSON
             if (ImGui::CollapsingHeader("JSON for Modern C++ (nlohmann/json)")) {
                 ImGui::Indent();
                 ImGui::TextWrapped("Copyright (c) 2013-2022 Niels Lohmann");
@@ -92,7 +90,6 @@ if (ImGui::BeginTabItem("Misc")) {
 
             ImGui::Spacing();
 
-            // stb_image
             if (ImGui::CollapsingHeader("stb_image")) {
                 ImGui::Indent();
                 ImGui::TextWrapped("By Sean Barrett and contributors");
@@ -113,7 +110,6 @@ if (ImGui::BeginTabItem("Misc")) {
 
             ImGui::Spacing();
 
-            // GLEW
             if (ImGui::CollapsingHeader("GLEW (OpenGL Extension Wrangler Library)")) {
                 ImGui::Indent();
                 ImGui::TextWrapped("Copyright (c) 2002-2007, Milan Ikits");
@@ -138,7 +134,6 @@ if (ImGui::BeginTabItem("Misc")) {
 
             ImGui::Spacing();
 
-            // minhook-detours
             if (ImGui::CollapsingHeader("minhook-detours")) {
                 ImGui::Indent();
                 ImGui::TextWrapped("https://github.com/m417z/minhook-detours");
@@ -165,7 +160,6 @@ if (ImGui::BeginTabItem("Misc")) {
 
         ImGui::Spacing();
 
-        // Center the Close button
         float buttonWidth = 120.0f;
         ImGui::SetCursorPosX((ImGui::GetWindowWidth() - buttonWidth) / 2.0f);
         if (ImGui::Button("Close", ImVec2(buttonWidth, 0))) {
@@ -178,3 +172,5 @@ if (ImGui::BeginTabItem("Misc")) {
 
     ImGui::EndTabItem();
 }
+
+
