@@ -1714,6 +1714,30 @@ void handleEyeZoomMode(const GLState& s, float opacity, int animatedViewportX) {
         }
     };
 
+    auto ForceOpaqueAlphaInCurrentDrawFbo = [&](int x, int y, int w, int h) {
+        if (w <= 0 || h <= 0) { return; }
+
+        GLboolean prevColorMask[4] = { GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE };
+        glGetBooleanv(GL_COLOR_WRITEMASK, prevColorMask);
+
+        GLboolean prevScissorEnabled = glIsEnabled(GL_SCISSOR_TEST);
+        GLint prevScissorBox[4] = { 0, 0, 0, 0 };
+        if (prevScissorEnabled) { glGetIntegerv(GL_SCISSOR_BOX, prevScissorBox); }
+
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(x, y, w, h);
+        glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE); // Write alpha only
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);               // Force alpha = 1.0
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        glColorMask(prevColorMask[0], prevColorMask[1], prevColorMask[2], prevColorMask[3]);
+        if (prevScissorEnabled) {
+            glScissor(prevScissorBox[0], prevScissorBox[1], prevScissorBox[2], prevScissorBox[3]);
+        } else {
+            glDisable(GL_SCISSOR_TEST);
+        }
+    };
+
     // For opacity < 1.0, we need to render to a temporary texture first, then blend to screen
     if (opacity < 1.0f) {
         // PERF: Reuse cached FBO/texture - only reallocate when dimensions change
@@ -1772,6 +1796,9 @@ void handleEyeZoomMode(const GLState& s, float opacity, int animatedViewportX) {
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             s_eyeZoomSnapshotValid = true;
         }
+
+        glBindFramebuffer(GL_FRAMEBUFFER, s_eyeZoomTempFBO);
+        ForceOpaqueAlphaInCurrentDrawFbo(0, 0, zoomOutputWidth, zoomOutputHeight);
 
         // Now render the colored boxes and center line to the temp FBO
         glBindFramebuffer(GL_FRAMEBUFFER, s_eyeZoomTempFBO);
@@ -1936,6 +1963,9 @@ void handleEyeZoomMode(const GLState& s, float opacity, int animatedViewportX) {
 
             s_eyeZoomSnapshotValid = true;
         }
+
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        ForceOpaqueAlphaInCurrentDrawFbo(dstLeft, dstBottom, zoomOutputWidth, zoomOutputHeight);
 
         // STEP 2: Render colored overlay boxes with numbers
         glEnable(GL_BLEND);

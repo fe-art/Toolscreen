@@ -1924,6 +1924,30 @@ static void RT_RenderEyeZoom(GLuint gameTexture, int requestViewportX, int fullW
                           zoomY_gl + zoomOutputHeight, GL_COLOR_BUFFER_BIT, GL_NEAREST);
     };
 
+    auto ForceOpaqueAlphaInCurrentDrawFbo = [&](int x, int y, int w, int h) {
+        if (w <= 0 || h <= 0) { return; }
+
+        GLboolean prevColorMask[4] = { GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE };
+        glGetBooleanv(GL_COLOR_WRITEMASK, prevColorMask);
+
+        GLboolean prevScissorEnabled = glIsEnabled(GL_SCISSOR_TEST);
+        GLint prevScissorBox[4] = { 0, 0, 0, 0 };
+        if (prevScissorEnabled) { glGetIntegerv(GL_SCISSOR_BOX, prevScissorBox); }
+
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(x, y, w, h);
+        glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE); // Write alpha only
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);               // Force alpha = 1.0
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        glColorMask(prevColorMask[0], prevColorMask[1], prevColorMask[2], prevColorMask[3]);
+        if (prevScissorEnabled) {
+            glScissor(prevScissorBox[0], prevScissorBox[1], prevScissorBox[2], prevScissorBox[3]);
+        } else {
+            glDisable(GL_SCISSOR_TEST);
+        }
+    };
+
     // STEP 1: Render clone (either from cached snapshot, or live game texture)
     if (isTransitioningFromEyeZoom && rt_eyeZoomSnapshotValid && rt_eyeZoomSnapshotTexture != 0) {
         // Transitioning OUT: always freeze and use snapshot
@@ -1970,6 +1994,9 @@ static void RT_RenderEyeZoom(GLuint gameTexture, int requestViewportX, int fullW
         glBindFramebuffer(GL_FRAMEBUFFER, currentDrawFBO);
         rt_eyeZoomSnapshotValid = true;
     }
+
+    glBindFramebuffer(GL_FRAMEBUFFER, currentDrawFBO);
+    ForceOpaqueAlphaInCurrentDrawFbo(zoomX, zoomY_gl, zoomOutputWidth, zoomOutputHeight);
 
     // STEP 2: Render colored overlay boxes with numbers
     glBindFramebuffer(GL_FRAMEBUFFER, currentDrawFBO);
