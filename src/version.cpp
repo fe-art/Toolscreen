@@ -1,5 +1,4 @@
 #include "version.h"
-// a
 #include "json.hpp"
 #include "utils.h"
 #include <filesystem>
