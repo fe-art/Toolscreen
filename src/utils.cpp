@@ -1122,9 +1122,7 @@ bool IsFullscreen() {
     if (!GetWindowRect(hwnd, &r)) { return false; }
 
     RECT monRect{};
-    if (!GetMonitorRectForWindow(hwnd, monRect)) {
-        return r.left == 0 && r.top == 0 && r.right == GetCachedScreenWidth() && r.bottom == GetCachedScreenHeight();
-    }
+    if (!GetMonitorRectForWindow(hwnd, monRect)) { return false; }
 
     // Borderless windows can be off by a pixel due to DPI rounding or driver quirks.
     const int tol = 1;
@@ -1137,7 +1135,14 @@ bool IsFullscreen() {
 
 bool GetMonitorRectForWindow(HWND hwnd, RECT& outRect) {
     if (!hwnd) { return false; }
+
     HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    if (!mon) {
+        RECT wr{};
+        if (GetWindowRect(hwnd, &wr)) {
+            mon = MonitorFromRect(&wr, MONITOR_DEFAULTTONEAREST);
+        }
+    }
     if (!mon) { return false; }
 
     MONITORINFO mi{};
@@ -1154,6 +1159,24 @@ bool GetMonitorSizeForWindow(HWND hwnd, int& outW, int& outH) {
     outW = (r.right - r.left);
     outH = (r.bottom - r.top);
     return (outW > 0 && outH > 0);
+}
+
+bool GetWindowClientRectInScreen(HWND hwnd, RECT& outRect) {
+    if (!hwnd) { return false; }
+
+    RECT clientRect{};
+    if (!GetClientRect(hwnd, &clientRect)) { return false; }
+
+    POINT topLeft{ clientRect.left, clientRect.top };
+    POINT bottomRight{ clientRect.right, clientRect.bottom };
+    if (!ClientToScreen(hwnd, &topLeft) || !ClientToScreen(hwnd, &bottomRight)) { return false; }
+
+    outRect.left = topLeft.x;
+    outRect.top = topLeft.y;
+    outRect.right = bottomRight.x;
+    outRect.bottom = bottomRight.y;
+
+    return (outRect.right > outRect.left) && (outRect.bottom > outRect.top);
 }
 
 bool IsCursorVisible() {
@@ -2110,8 +2133,10 @@ void ToggleBorderlessWindowedFullscreen(HWND hwnd) {
 
     std::lock_guard<std::mutex> lock(s_borderlessMutex);
 
-    RECT targetRect{ 0, 0, GetCachedScreenWidth(), GetCachedScreenHeight() };
-    GetMonitorRectForWindow(hwnd, targetRect);
+    RECT targetRect{};
+    if (!GetMonitorRectForWindow(hwnd, targetRect)) {
+        if (!GetWindowRect(hwnd, &targetRect)) { return; }
+    }
 
     const int targetW = (targetRect.right - targetRect.left);
     const int targetH = (targetRect.bottom - targetRect.top);

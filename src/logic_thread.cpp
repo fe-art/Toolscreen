@@ -44,6 +44,7 @@ void ApplyWindowsMouseSpeed();
 CachedModeViewport g_viewportModeCache[2];
 std::atomic<int> g_viewportModeCacheIndex{ 0 };
 static std::string s_lastCachedModeId;
+static uint64_t s_lastCachedViewportSnapshotVersion = 0;
 
 static bool s_wasInWorld = false;
 static int s_lastAppliedWindowsMouseSpeed = -1;
@@ -58,12 +59,33 @@ static std::atomic<int> s_cachedScreenHeight{ 0 };
 static std::atomic<bool> s_screenMetricsDirty{ true };
 static std::atomic<bool> s_screenMetricsRecalcRequested{ false };
 static std::atomic<ULONGLONG> s_lastScreenMetricsRefreshMs{ 0 };
+static std::atomic<bool> s_startupMetricsResyncPending{ true };
 
 static void ComputeScreenMetricsForGameWindow(int& outW, int& outH) {
     outW = 0;
     outH = 0;
 
     HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
+    if (hwnd && IsWindow(hwnd)) {
+        RECT clientRect{};
+        if (GetClientRect(hwnd, &clientRect)) {
+            const int clientW = clientRect.right - clientRect.left;
+            const int clientH = clientRect.bottom - clientRect.top;
+            if (clientW > 0 && clientH > 0) {
+                outW = clientW;
+                outH = clientH;
+                return;
+            }
+        }
+
+        // Important: do NOT fall back to monitor metrics while a valid game window exists.
+        // During startup/minimize/live-resize, client size may be transiently zero; using
+        // monitor size in that window corrupts relative mode sizing calculations.
+        return;
+    }
+
+    // Only when there is no valid game window yet, fall back to monitor/system size
+    // so early startup code can still proceed.
     if (!GetMonitorSizeForWindow(hwnd, outW, outH)) {
         outW = GetSystemMetrics(SM_CXSCREEN);
         outH = GetSystemMetrics(SM_CYSCREEN);
@@ -83,7 +105,21 @@ static bool RefreshCachedScreenMetricsIfNeeded(bool requestRecalcOnChange) {
 
     int newW = 0, newH = 0;
     ComputeScreenMetricsForGameWindow(newW, newH);
-    if (newW <= 0 || newH <= 0) { return false; }
+    if (newW <= 0 || newH <= 0) {
+        // If a game window exists but currently reports an invalid/zero client area
+        // (common during startup/minimize/live-resize), invalidate cached dimensions.
+        // This prevents stale monitor-sized values from being reused for relative-mode math.
+        HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
+        if (hwnd && IsWindow(hwnd)) {
+            int prevW = s_cachedScreenWidth.load(std::memory_order_relaxed);
+            int prevH = s_cachedScreenHeight.load(std::memory_order_relaxed);
+            if (prevW != 0 || prevH != 0) {
+                s_cachedScreenWidth.store(0, std::memory_order_relaxed);
+                s_cachedScreenHeight.store(0, std::memory_order_relaxed);
+            }
+        }
+        return false;
+    }
 
     int prevW = s_cachedScreenWidth.load(std::memory_order_relaxed);
     int prevH = s_cachedScreenHeight.load(std::memory_order_relaxed);
@@ -101,6 +137,11 @@ static bool RefreshCachedScreenMetricsIfNeeded(bool requestRecalcOnChange) {
 
 void InvalidateCachedScreenMetrics() {
     s_screenMetricsDirty.store(true, std::memory_order_relaxed);
+}
+
+void RequestScreenMetricsRecalculation() {
+    s_screenMetricsDirty.store(true, std::memory_order_relaxed);
+    s_screenMetricsRecalcRequested.store(true, std::memory_order_relaxed);
 }
 
 static std::vector<std::string> s_lastActiveMirrorIds;
@@ -199,6 +240,24 @@ void UpdateActiveMirrorConfigs() {
 void UpdateCachedScreenMetrics() {
     PROFILE_SCOPE_CAT("LT Screen Metrics", "Logic Thread");
 
+    const bool startupPending = s_startupMetricsResyncPending.load(std::memory_order_relaxed);
+    bool startupClientReady = false;
+    if (startupPending) {
+        HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
+        if (hwnd) {
+            RECT clientRect{};
+            if (GetClientRect(hwnd, &clientRect)) {
+                startupClientReady = (clientRect.right - clientRect.left) > 0 && (clientRect.bottom - clientRect.top) > 0;
+            }
+        }
+
+        // Keep requesting refresh/recalc until the client area is valid at least once.
+        s_screenMetricsDirty.store(true, std::memory_order_relaxed);
+        if (!startupClientReady) {
+            s_screenMetricsRecalcRequested.store(true, std::memory_order_relaxed);
+        }
+    }
+
     // Note: other threads may refresh the cache (to avoid returning stale values),
     int prevWidth = s_cachedScreenWidth.load(std::memory_order_relaxed);
     int prevHeight = s_cachedScreenHeight.load(std::memory_order_relaxed);
@@ -209,11 +268,56 @@ void UpdateCachedScreenMetrics() {
     int newWidth = s_cachedScreenWidth.load(std::memory_order_relaxed);
     int newHeight = s_cachedScreenHeight.load(std::memory_order_relaxed);
 
-    // Recalculate expression-based dimensions if screen size changed or if another thread requested it.
-    if (prevWidth != 0 && prevHeight != 0 && (changed || recalcRequested || prevWidth != newWidth || prevHeight != newHeight)) {
+    // Recalculate expression/relative-based dimensions if screen size changed
+    // or if another thread explicitly requested it.
+    // Require only that current metrics are valid so resize after startup/minimize still triggers recalculation.
+    const bool startupShouldRunNow = startupPending && startupClientReady;
+    if (newWidth > 0 && newHeight > 0 && (startupShouldRunNow || changed || recalcRequested || prevWidth != newWidth || prevHeight != newHeight)) {
+        std::string currentModeId = g_modeIdBuffers[g_currentModeIdIndex.load(std::memory_order_acquire)];
+        int beforeModeW = 0;
+        int beforeModeH = 0;
+        if (ModeConfig* currentModeBefore = GetModeMutable(currentModeId)) {
+            beforeModeW = currentModeBefore->width;
+            beforeModeH = currentModeBefore->height;
+        }
+
         RecalculateExpressionDimensions();
+
+        int afterModeW = 0;
+        int afterModeH = 0;
+        if (ModeConfig* currentModeAfter = GetModeMutable(currentModeId)) {
+            afterModeW = currentModeAfter->width;
+            afterModeH = currentModeAfter->height;
+        }
+
+        const bool modeSizeChanged = (afterModeW != beforeModeW || afterModeH != beforeModeH);
+        bool clientSizeDiffersFromMode = false;
+        {
+            HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
+            if (hwnd && afterModeW > 0 && afterModeH > 0) {
+                RECT clientRect{};
+                if (GetClientRect(hwnd, &clientRect)) {
+                    const int clientW = clientRect.right - clientRect.left;
+                    const int clientH = clientRect.bottom - clientRect.top;
+                    if (clientW > 0 && clientH > 0) {
+                        clientSizeDiffersFromMode = (clientW != afterModeW) || (clientH != afterModeH);
+                    }
+                }
+            }
+        }
+
+        const bool windowSizeChanged = changed || (prevWidth != newWidth) || (prevHeight != newHeight);
+        const bool shouldEnforceModeSize = startupShouldRunNow || modeSizeChanged || (windowSizeChanged && clientSizeDiffersFromMode);
+
+        if (afterModeW > 0 && afterModeH > 0 && shouldEnforceModeSize && IsResolutionChangeSupported(g_gameVersion)) {
+            HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
+            if (hwnd) { PostMessage(hwnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(afterModeW, afterModeH)); }
+        }
+
         // Publish updated snapshot so reader threads see the recalculated dimensions.
         PublishConfigSnapshot();
+
+        if (startupShouldRunNow) { s_startupMetricsResyncPending.store(false, std::memory_order_relaxed); }
     }
 }
 
@@ -256,13 +360,16 @@ void UpdateCachedViewportMode() {
 
     // Read current mode ID from double-buffer (lock-free)
     std::string currentModeId = g_modeIdBuffers[g_currentModeIdIndex.load(std::memory_order_acquire)];
+    const uint64_t snapVer = g_configSnapshotVersion.load(std::memory_order_acquire);
 
     // Also force periodic refresh every 60 ticks (~1 second) as a safety net
     static int s_ticksSinceRefresh = 0;
     bool guiOpen = g_showGui.load(std::memory_order_relaxed);
     bool periodicRefresh = (++s_ticksSinceRefresh >= 60);
 
-    if (currentModeId == s_lastCachedModeId && !guiOpen && !periodicRefresh) { return; }
+    if (currentModeId == s_lastCachedModeId && snapVer == s_lastCachedViewportSnapshotVersion && !guiOpen && !periodicRefresh) {
+        return;
+    }
 
     if (periodicRefresh) { s_ticksSinceRefresh = 0; }
 
@@ -290,6 +397,7 @@ void UpdateCachedViewportMode() {
     // Atomic swap to make new cache visible
     g_viewportModeCacheIndex.store(nextIndex, std::memory_order_release);
     s_lastCachedModeId = currentModeId;
+    s_lastCachedViewportSnapshotVersion = snapVer;
 }
 
 void PollObsGraphicsHook() {
@@ -389,7 +497,8 @@ void ProcessPendingDimensionChange() {
     ModeConfig* mode = GetModeMutable(g_pendingDimensionChange.modeId);
     if (mode) {
         if (g_pendingDimensionChange.newWidth > 0) {
-            mode->width = g_pendingDimensionChange.newWidth;
+            mode->width = EqualsIgnoreCase(mode->id, "Thin") ? (std::max)(330, g_pendingDimensionChange.newWidth)
+                                                               : g_pendingDimensionChange.newWidth;
             mode->widthExpr.clear();
             mode->relativeWidth = -1.0f;
         }
@@ -536,6 +645,9 @@ void StartLogicThread() {
 
     Log("[LogicThread] Starting logic thread...");
     g_logicThreadShouldStop.store(false);
+    s_startupMetricsResyncPending.store(true, std::memory_order_relaxed);
+    s_screenMetricsDirty.store(true, std::memory_order_relaxed);
+    s_screenMetricsRecalcRequested.store(true, std::memory_order_relaxed);
 
     g_logicThread = std::thread(LogicThreadFunc);
     g_logicThreadRunning.store(true);

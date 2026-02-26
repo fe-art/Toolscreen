@@ -777,9 +777,14 @@ void WindowOverlayConfigFromToml(const toml::table& tbl, WindowOverlayConfig& cf
 void ModeConfigToToml(const ModeConfig& cfg, toml::table& out) {
     out.insert("id", cfg.id);
 
+    const bool widthHasRelative = cfg.relativeWidth >= 0.0f && cfg.relativeWidth <= 1.0f;
+    const bool heightHasRelative = cfg.relativeHeight >= 0.0f && cfg.relativeHeight <= 1.0f;
+    const bool useRelativeWidthForWrite = cfg.widthExpr.empty() && widthHasRelative;
+    const bool useRelativeHeightForWrite = cfg.heightExpr.empty() && heightHasRelative;
+
     if (!cfg.widthExpr.empty()) {
         out.insert("width", cfg.widthExpr);
-    } else if (cfg.useRelativeSize && cfg.relativeWidth >= 0.0f && cfg.relativeWidth <= 1.0f) {
+    } else if (useRelativeWidthForWrite) {
         out.insert("width", cfg.relativeWidth);
     } else {
         out.insert("width", cfg.width);
@@ -787,7 +792,7 @@ void ModeConfigToToml(const ModeConfig& cfg, toml::table& out) {
 
     if (!cfg.heightExpr.empty()) {
         out.insert("height", cfg.heightExpr);
-    } else if (cfg.useRelativeSize && cfg.relativeHeight >= 0.0f && cfg.relativeHeight <= 1.0f) {
+    } else if (useRelativeHeightForWrite) {
         out.insert("height", cfg.relativeHeight);
     } else {
         out.insert("height", cfg.height);
@@ -906,6 +911,12 @@ void ModeConfigFromToml(const toml::table& tbl, ModeConfig& cfg) {
         cfg.relativeWidth = GetOr(tbl, "relativeWidth", cfg.relativeWidth);
         cfg.relativeHeight = GetOr(tbl, "relativeHeight", cfg.relativeHeight);
     } else if (widthIsPercentage || heightIsPercentage) {
+        cfg.useRelativeSize = true;
+    }
+
+    const bool hasRelativeWidth = cfg.relativeWidth >= 0.0f && cfg.relativeWidth <= 1.0f;
+    const bool hasRelativeHeight = cfg.relativeHeight >= 0.0f && cfg.relativeHeight <= 1.0f;
+    if ((hasRelativeWidth || hasRelativeHeight) && cfg.widthExpr.empty() && cfg.heightExpr.empty()) {
         cfg.useRelativeSize = true;
     }
 

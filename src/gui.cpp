@@ -1962,6 +1962,8 @@ void LoadConfig() {
 
         int screenWidth = GetCachedScreenWidth();
         int screenHeight = GetCachedScreenHeight();
+        if (screenWidth < 1) screenWidth = 1;
+        if (screenHeight < 1) screenHeight = 1;
 
         auto modeExists = [&](const std::string& id) -> bool {
             for (const auto& mode : g_config.modes) {
@@ -2061,7 +2063,7 @@ void LoadConfig() {
         if (!modeExists("Thin")) {
             ModeConfig thinMode;
             thinMode.id = "Thin";
-            thinMode.width = 300;
+            thinMode.width = 330;
             thinMode.height = screenHeight;
             thinMode.background.selectedMode = "color";
             thinMode.background.color = { 45 / 255.0f, 0 / 255.0f, 80 / 255.0f };
@@ -2082,17 +2084,66 @@ void LoadConfig() {
             Log("Created missing Wide mode");
         }
 
+        int clientWidth = 0;
+        int clientHeight = 0;
+        bool hasClientMetrics = false;
+        {
+            RECT clientRect{};
+            HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
+            if (GetWindowClientRectInScreen(hwnd, clientRect)) {
+                clientWidth = clientRect.right - clientRect.left;
+                clientHeight = clientRect.bottom - clientRect.top;
+                hasClientMetrics = clientWidth > 0 && clientHeight > 0;
+            }
+        }
+
         for (auto& mode : g_config.modes) {
             bool widthIsRelative = mode.widthExpr.empty() && mode.relativeWidth >= 0.0f && mode.relativeWidth <= 1.0f;
             bool heightIsRelative = mode.heightExpr.empty() && mode.relativeHeight >= 0.0f && mode.relativeHeight <= 1.0f;
 
-            if (widthIsRelative) {
-                mode.width = static_cast<int>(mode.relativeWidth * screenWidth);
+            if (widthIsRelative && hasClientMetrics) {
+                mode.width = static_cast<int>(mode.relativeWidth * clientWidth);
                 if (mode.width < 1) mode.width = 1;
             }
-            if (heightIsRelative) {
-                mode.height = static_cast<int>(mode.relativeHeight * screenHeight);
+            if (heightIsRelative && hasClientMetrics) {
+                mode.height = static_cast<int>(mode.relativeHeight * clientHeight);
                 if (mode.height < 1) mode.height = 1;
+            }
+
+            if (EqualsIgnoreCase(mode.id, "Thin") && mode.width < 330) {
+                mode.width = 330;
+                g_configIsDirty = true;
+            }
+
+            if (EqualsIgnoreCase(mode.id, "Fullscreen")) {
+                const int targetW = hasClientMetrics ? clientWidth : screenWidth;
+                const int targetH = hasClientMetrics ? clientHeight : screenHeight;
+
+                if (!mode.useRelativeSize || mode.relativeWidth != 1.0f || mode.relativeHeight != 1.0f) {
+                    mode.useRelativeSize = true;
+                    mode.relativeWidth = 1.0f;
+                    mode.relativeHeight = 1.0f;
+                    g_configIsDirty = true;
+                }
+
+                if (targetW > 0 && mode.width != targetW) {
+                    mode.width = targetW;
+                    g_configIsDirty = true;
+                }
+                if (targetH > 0 && mode.height != targetH) {
+                    mode.height = targetH;
+                    g_configIsDirty = true;
+                }
+
+                if (!mode.stretch.enabled || mode.stretch.x != 0 || mode.stretch.y != 0 || mode.stretch.width != targetW ||
+                    mode.stretch.height != targetH) {
+                    mode.stretch.enabled = true;
+                    mode.stretch.x = 0;
+                    mode.stretch.y = 0;
+                    mode.stretch.width = targetW;
+                    mode.stretch.height = targetH;
+                    g_configIsDirty = true;
+                }
             }
         }
 
@@ -2160,7 +2211,17 @@ void LoadConfig() {
 
         SetOverlayTextFontSize(g_config.eyezoom.textFontSize);
 
-        RecalculateExpressionDimensions();
+        {
+            RECT startupClientRect{};
+            HWND startupHwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
+            const bool hasValidStartupClient = GetWindowClientRectInScreen(startupHwnd, startupClientRect);
+            if (hasValidStartupClient) {
+                RecalculateExpressionDimensions();
+            } else {
+                Log("Deferring mode dimension recalculation until game client size is valid.");
+            }
+        }
+        RequestScreenMetricsRecalculation();
 
         // Publish initial config snapshot for reader threads (RCU pattern)
         PublishConfigSnapshot();
@@ -2762,12 +2823,13 @@ void RenderSettingsGUI() {
         if (!windowOpen) {
             g_showGui = false;
             if (!g_wasCursorVisible.load()) {
-                RECT fullScreenRect;
-                fullScreenRect.left = 0;
-                fullScreenRect.top = 0;
-                fullScreenRect.right = GetCachedScreenWidth();
-                fullScreenRect.bottom = GetCachedScreenHeight();
-                ClipCursor(&fullScreenRect);
+                RECT clipRect{};
+                HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
+                if (GetWindowClientRectInScreen(hwnd, clipRect)) {
+                    ClipCursor(&clipRect);
+                } else {
+                    ClipCursor(NULL);
+                }
                 SetCursor(NULL);
             }
             g_currentlyEditingMirror = "";

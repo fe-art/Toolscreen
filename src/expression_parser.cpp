@@ -343,12 +343,47 @@ bool ValidateExpression(const std::string& expr, std::string& errorOut) {
 void RecalculateExpressionDimensions() {
     int screenW = GetCachedScreenWidth();
     int screenH = GetCachedScreenHeight();
+    if (screenW < 1) screenW = 1;
+    if (screenH < 1) screenH = 1;
 
     for (auto& mode : g_config.modes) {
+        if (mode.id == "Fullscreen") {
+            mode.width = screenW;
+            mode.height = screenH;
+            mode.useRelativeSize = true;
+            mode.relativeWidth = 1.0f;
+            mode.relativeHeight = 1.0f;
+
+            mode.stretch.enabled = true;
+            mode.stretch.x = 0;
+            mode.stretch.y = 0;
+            mode.stretch.width = screenW;
+            mode.stretch.height = screenH;
+
+            mode.stretch.widthExpr.clear();
+            mode.stretch.heightExpr.clear();
+            mode.stretch.xExpr.clear();
+            mode.stretch.yExpr.clear();
+        }
+
         // It must not be expression-driven.
         if (mode.id == "Preemptive") {
             mode.widthExpr.clear();
             mode.heightExpr.clear();
+        }
+
+        const bool widthIsRelative = mode.id != "Preemptive" && mode.widthExpr.empty() && mode.relativeWidth >= 0.0f && mode.relativeWidth <= 1.0f;
+        const bool heightIsRelative = mode.id != "Preemptive" && mode.heightExpr.empty() && mode.relativeHeight >= 0.0f && mode.relativeHeight <= 1.0f;
+
+        if (widthIsRelative) {
+            int newWidth = static_cast<int>(mode.relativeWidth * static_cast<float>(screenW));
+            if (newWidth < 1) newWidth = 1;
+            mode.width = newWidth;
+        }
+        if (heightIsRelative) {
+            int newHeight = static_cast<int>(mode.relativeHeight * static_cast<float>(screenH));
+            if (newHeight < 1) newHeight = 1;
+            mode.height = newHeight;
         }
 
         if (mode.id != "Preemptive" && !mode.widthExpr.empty()) {
@@ -370,6 +405,8 @@ void RecalculateExpressionDimensions() {
         }
         if (!mode.stretch.xExpr.empty()) { mode.stretch.x = EvaluateExpression(mode.stretch.xExpr, screenW, screenH, mode.stretch.x); }
         if (!mode.stretch.yExpr.empty()) { mode.stretch.y = EvaluateExpression(mode.stretch.yExpr, screenW, screenH, mode.stretch.y); }
+
+        if (mode.id == "Thin" && mode.width < 330) { mode.width = 330; }
     }
 
     ModeConfig* eyezoomMode = nullptr;

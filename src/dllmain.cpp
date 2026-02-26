@@ -241,7 +241,7 @@ void LoadConfig();
 void SaveConfig();
 void RenderSettingsGUI();
 void AttemptAggressiveGlViewportHook();
-GLuint CalculateGameTextureId(int windowWidth, int windowHeight, int fullWidth, int fullHeight);
+GLuint CalculateGameTextureId(int windowWidth, int windowHeight);
 
 
 bool SubclassGameWindow(HWND hwnd) {
@@ -627,10 +627,6 @@ static inline void ViewportHook_Impl(GLVIEWPORTPROC next, GLint x, GLint y, GLsi
         return next(x, y, width, height);
     }
 
-    if (!IsFullscreen()) {
-        return next(x, y, width, height);
-    }
-
     // Lock-free read of transition snapshot
     const ViewportTransitionSnapshot& transitionSnap =
         g_viewportTransitionSnapshots[g_viewportTransitionSnapshotIndex.load(std::memory_order_acquire)];
@@ -785,7 +781,6 @@ static void AttemptHookGlBlitNamedFramebufferViaGlew() {
 static BOOL SetCursorPosHook_Impl(SETCURSORPOSPROC next, int X, int Y) {
     if (!next) return FALSE;
 
-    bool isFull = IsFullscreen();
     if (g_showGui.load() || g_isShuttingDown.load()) { return next(X, Y); }
 
     ModeViewportInfo viewport = GetCurrentModeViewport();
@@ -793,14 +788,18 @@ static BOOL SetCursorPosHook_Impl(SETCURSORPOSPROC next, int X, int Y) {
 
     CapturingState currentState = g_capturingMousePos.load();
 
-    // so we must add the monitor's rcMonitor.left/top for multi-monitor setups.
+    // Convert viewport center (client-space) into absolute screen coordinates.
     int centerX = viewport.stretchX + viewport.stretchWidth / 2;
     int centerY = viewport.stretchY + viewport.stretchHeight / 2;
-    int centerX_abs = centerX;
-    int centerY_abs = centerY;
-    if (isFull) {
+    int centerX_abs = X;
+    int centerY_abs = Y;
+    HWND hwnd = g_minecraftHwnd.load();
+    RECT clientRectScreen{};
+    if (GetWindowClientRectInScreen(hwnd, clientRectScreen)) {
+        centerX_abs = clientRectScreen.left + centerX;
+        centerY_abs = clientRectScreen.top + centerY;
+    } else {
         RECT monRect{};
-        HWND hwnd = g_minecraftHwnd.load();
         if (GetMonitorRectForWindow(hwnd, monRect)) {
             centerX_abs = monRect.left + centerX;
             centerY_abs = monRect.top + centerY;
@@ -808,11 +807,7 @@ static BOOL SetCursorPosHook_Impl(SETCURSORPOSPROC next, int X, int Y) {
     }
 
     if (currentState == CapturingState::DISABLED) {
-        if (isFull) {
-            g_nextMouseXY.store(std::make_pair(centerX_abs, centerY_abs));
-        } else {
-            g_nextMouseXY.store(std::make_pair(X, Y));
-        }
+        g_nextMouseXY.store(std::make_pair(centerX_abs, centerY_abs));
         return next(X, Y);
     }
 
@@ -967,12 +962,6 @@ UINT WINAPI hkGetRawInputData_ThirdParty(HRAWINPUT hRawInput, UINT uiCommand, LP
 
 void WINAPI hkglBlitNamedFramebuffer(GLuint readFramebuffer, GLuint drawFramebuffer, GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                                      GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter) {
-    bool isFull = IsFullscreen();
-    if (!isFull) {
-        return oglBlitNamedFramebuffer(readFramebuffer, drawFramebuffer, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask,
-                                       filter);
-    }
-
     if (drawFramebuffer != 0) {
         return oglBlitNamedFramebuffer(readFramebuffer, drawFramebuffer, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask,
                                        filter);
@@ -1048,7 +1037,7 @@ void AttemptAggressiveGlViewportHook() {
 }
 
 
-GLuint CalculateGameTextureId(int windowWidth, int windowHeight, int fullWidth, int fullHeight) {
+GLuint CalculateGameTextureId(int windowWidth, int windowHeight) {
     ModeViewportInfo viewport = GetCurrentModeViewport();
     if (!viewport.valid) {
         Log("CalculateGameTextureId: Invalid viewport, cannot calculate texture ID");
@@ -1058,7 +1047,8 @@ GLuint CalculateGameTextureId(int windowWidth, int windowHeight, int fullWidth, 
     int targetWidth = viewport.width;
     int targetHeight = viewport.height;
 
-    if (windowWidth != fullWidth || windowHeight != fullHeight) {
+    // Texture calibration should follow the actual client area when available.
+    if (windowWidth > 0 && windowHeight > 0) {
         targetWidth = windowWidth;
         targetHeight = windowHeight;
     }
@@ -1371,7 +1361,7 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
             GLint gameTextureId = UINT_MAX;
             {
                 PROFILE_SCOPE_CAT("Calculate Game Texture ID", "SwapBuffers");
-                gameTextureId = CalculateGameTextureId(windowWidth, windowHeight, fullW, fullH);
+                gameTextureId = CalculateGameTextureId(windowWidth, windowHeight);
             }
             if (gameTextureId != UINT_MAX) {
                 g_cachedGameTextureId.store(gameTextureId);
@@ -1388,326 +1378,28 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
             g_safeToCapture.store(false, std::memory_order_release);
 
             bool isPre113 = (g_gameVersion < GameVersion(1, 13, 0));
-            bool hasObs = g_graphicsHookDetected.load();
-            bool hasVirtualCam = IsVirtualCameraActive();
-
-            bool needsProcessedOutput = isPre113 ? (hasObs || hasVirtualCam) : hasVirtualCam;
-
-            if (true) {
-
-                static auto s_wt_startTime = std::chrono::steady_clock::now();
-                static bool s_wt_prevFullscreen = true;
-                const bool isFullNow = IsFullscreen();
-                if (!isFullNow && s_wt_prevFullscreen) { s_wt_startTime = std::chrono::steady_clock::now(); }
-                s_wt_prevFullscreen = isFullNow;
-
-                const float wtElapsed =
-                    std::chrono::duration_cast<std::chrono::duration<float>>(std::chrono::steady_clock::now() - s_wt_startTime).count();
-                const bool wantWindowedToast = (wtElapsed <= 10.0f) && !g_showGui.load(std::memory_order_relaxed);
-
-                if (wantWindowedToast && windowWidth > 0 && windowHeight > 0) {
-                    static GLuint s_wt_program = 0;
-                    static GLuint s_wt_vao = 0, s_wt_vbo = 0;
-                    static GLint s_wt_locTexture = -1, s_wt_locOpacity = -1;
-                    static GLuint s_wt_texture = 0;
-                    static int s_wt_texW = 0, s_wt_texH = 0;
-                    static bool s_wt_initialized = false;
-                    static HGLRC s_wt_lastContext = NULL;
-
-                    HGLRC s_wt_currentContext = wglGetCurrentContext();
-                    if (s_wt_currentContext != s_wt_lastContext) {
-                        s_wt_lastContext = s_wt_currentContext;
-                        s_wt_initialized = false;
-                        s_wt_program = 0;
-                        s_wt_vao = 0;
-                        s_wt_vbo = 0;
-                        s_wt_locTexture = -1;
-                        s_wt_locOpacity = -1;
-                        s_wt_texture = 0;
-                        s_wt_texW = 0;
-                        s_wt_texH = 0;
-                    }
-
-                    if (!s_wt_initialized) {
-                        const char* vtxSrc = R"(#version 330 core
-layout(location = 0) in vec2 aPos;
-layout(location = 1) in vec2 aTexCoord;
-out vec2 TexCoord;
-void main() {
-    gl_Position = vec4(aPos, 0.0, 1.0);
-    TexCoord = aTexCoord;
-})";
-                        const char* fragSrc = R"(#version 330 core
-out vec4 FragColor;
-in vec2 TexCoord;
-uniform sampler2D uTexture;
-uniform float uOpacity;
-void main() {
-    vec4 c = texture(uTexture, TexCoord);
-    FragColor = vec4(c.rgb, c.a * uOpacity);
-})";
-                        if (s_wt_program == 0) {
-                            s_wt_program = CreateShaderProgram(vtxSrc, fragSrc);
-                            if (s_wt_program) {
-                                s_wt_locTexture = glGetUniformLocation(s_wt_program, "uTexture");
-                                s_wt_locOpacity = glGetUniformLocation(s_wt_program, "uOpacity");
-
-                                glUseProgram(s_wt_program);
-                                glUniform1i(s_wt_locTexture, 0);
-                                glUseProgram(0);
-                            }
-                        }
-
-                        if (s_wt_vao == 0) { glGenVertexArrays(1, &s_wt_vao); }
-                        if (s_wt_vbo == 0) { glGenBuffers(1, &s_wt_vbo); }
-                        if (s_wt_vao && s_wt_vbo) {
-                            glBindVertexArray(s_wt_vao);
-                            glBindBuffer(GL_ARRAY_BUFFER, s_wt_vbo);
-                            glBufferData(GL_ARRAY_BUFFER, 6 * 4 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
-                            glEnableVertexAttribArray(0);
-                            glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
-                            glEnableVertexAttribArray(1);
-                            glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
-                            glBindVertexArray(0);
-                            glBindBuffer(GL_ARRAY_BUFFER, 0);
-                        }
-
-                        if (s_wt_texture == 0 || s_wt_texW <= 0 || s_wt_texH <= 0) {
-                            stbi_set_flip_vertically_on_load_thread(0);
-
-                            HMODULE hModule = NULL;
-                            GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                                               (LPCWSTR)&g_welcomeToastVisible, &hModule);
-                            HRSRC hResource = FindResourceW(hModule, MAKEINTRESOURCEW(IDR_TOAST1_PNG), RT_RCDATA);
-                            if (hResource) {
-                                HGLOBAL hData = LoadResource(hModule, hResource);
-                                if (hData) {
-                                    DWORD dataSize = SizeofResource(hModule, hResource);
-                                    const unsigned char* rawData = (const unsigned char*)LockResource(hData);
-                                    if (rawData && dataSize > 0) {
-                                        int w, h, channels;
-                                        unsigned char* pixels = stbi_load_from_memory(rawData, (int)dataSize, &w, &h, &channels, 4);
-                                        if (pixels) {
-                                            if (s_wt_texture == 0) { glGenTextures(1, &s_wt_texture); }
-                                            glBindTexture(GL_TEXTURE_2D, s_wt_texture);
-                                            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                                            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                                            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                                            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-                                            glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-                                            glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
-                                            glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
-                                            glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-                                            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-                                            glBindTexture(GL_TEXTURE_2D, 0);
-                                            s_wt_texW = w;
-                                            s_wt_texH = h;
-                                            stbi_image_free(pixels);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        s_wt_initialized = (s_wt_program != 0 && s_wt_vao != 0 && s_wt_vbo != 0 && s_wt_texture != 0 && s_wt_texW > 0 &&
-                                            s_wt_texH > 0);
-                    }
-
-                    if (s_wt_program && s_wt_vao && s_wt_texture && s_wt_texW > 0 && s_wt_texH > 0) {
-                        GLint savedProgram, savedVAO, savedVBO, savedFBO, savedTex, savedActiveTex;
-                        GLboolean savedBlend, savedDepthTest, savedScissor, savedStencil;
-                        GLint savedBlendSrcRGB, savedBlendDstRGB, savedBlendSrcA, savedBlendDstA;
-                        GLint savedViewport[4];
-                        GLboolean savedColorMask[4];
-                        GLint savedUnpackRowLength = 0;
-                        GLint savedUnpackSkipPixels = 0;
-                        GLint savedUnpackSkipRows = 0;
-                        GLint savedUnpackAlignment = 0;
-
-                        glGetIntegerv(GL_CURRENT_PROGRAM, &savedProgram);
-                        glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &savedVAO);
-                        glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &savedVBO);
-                        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &savedFBO);
-                        glGetIntegerv(GL_ACTIVE_TEXTURE, &savedActiveTex);
-                        glActiveTexture(GL_TEXTURE0);
-                        glGetIntegerv(GL_TEXTURE_BINDING_2D, &savedTex);
-                        savedBlend = glIsEnabled(GL_BLEND);
-                        savedDepthTest = glIsEnabled(GL_DEPTH_TEST);
-                        savedScissor = glIsEnabled(GL_SCISSOR_TEST);
-                        savedStencil = glIsEnabled(GL_STENCIL_TEST);
-                        glGetIntegerv(GL_BLEND_SRC_RGB, &savedBlendSrcRGB);
-                        glGetIntegerv(GL_BLEND_DST_RGB, &savedBlendDstRGB);
-                        glGetIntegerv(GL_BLEND_SRC_ALPHA, &savedBlendSrcA);
-                        glGetIntegerv(GL_BLEND_DST_ALPHA, &savedBlendDstA);
-                        glGetIntegerv(GL_VIEWPORT, savedViewport);
-                        glGetBooleanv(GL_COLOR_WRITEMASK, savedColorMask);
-
-                        glGetIntegerv(GL_UNPACK_ROW_LENGTH, &savedUnpackRowLength);
-                        glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &savedUnpackSkipPixels);
-                        glGetIntegerv(GL_UNPACK_SKIP_ROWS, &savedUnpackSkipRows);
-                        glGetIntegerv(GL_UNPACK_ALIGNMENT, &savedUnpackAlignment);
-
-                        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-                        if (oglViewport)
-                            oglViewport(0, 0, windowWidth, windowHeight);
-                        else
-                            glViewport(0, 0, windowWidth, windowHeight);
-                        glDisable(GL_DEPTH_TEST);
-                        glDisable(GL_SCISSOR_TEST);
-                        glDisable(GL_STENCIL_TEST);
-                        glEnable(GL_BLEND);
-                        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-                        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-
-                        glUseProgram(s_wt_program);
-                        glBindVertexArray(s_wt_vao);
-                        glBindBuffer(GL_ARRAY_BUFFER, s_wt_vbo);
-                        glActiveTexture(GL_TEXTURE0);
-                        glBindTexture(GL_TEXTURE_2D, s_wt_texture);
-                        glUniform1f(s_wt_locOpacity, 1.0f);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-                        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-                        glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
-                        glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
-                        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-
-                        float scaleFactor = (static_cast<float>(windowHeight) / 1080.0f) * 0.45f;
-                        float drawW = (float)s_wt_texW * scaleFactor;
-                        float drawH = (float)s_wt_texH * scaleFactor;
-
-                        static bool s_wt_leftDownLastFrame = false;
-                        bool leftDownNow = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
-                        if (leftDownNow && !s_wt_leftDownLastFrame) {
-                            POINT cursorScreen{};
-                            if (GetCursorPos(&cursorScreen)) {
-                                POINT cursorClient = cursorScreen;
-                                if (ScreenToClient(hwnd, &cursorClient)) {
-                                    const bool clickedToast =
-                                        cursorClient.x >= 0 && cursorClient.y >= 0 && cursorClient.x < drawW && cursorClient.y < drawH;
-
-                                    if (clickedToast) {
-                                        RECT targetRect{ 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN) };
-                                        {
-                                            HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
-                                            if (!mon) {
-                                                const POINT primaryPt{ 0, 0 };
-                                                mon = MonitorFromPoint(primaryPt, MONITOR_DEFAULTTOPRIMARY);
-                                            }
-                                            if (mon) {
-                                                MONITORINFO mi{};
-                                                mi.cbSize = sizeof(mi);
-                                                if (GetMonitorInfo(mon, &mi)) { targetRect = mi.rcMonitor; }
-                                            }
-                                        }
-                                        const int targetW = (targetRect.right - targetRect.left);
-                                        const int targetH = (targetRect.bottom - targetRect.top);
-
-                                        if (IsIconic(hwnd) || IsZoomed(hwnd)) {
-                                            ShowWindow(hwnd, SW_RESTORE);
-                                        }
-
-                                        {
-                                            // Keep this as a "window" (avoid WS_POPUP / WS_EX_TOPMOST) so the GPU driver
-                                            DWORD style = static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_STYLE));
-                                            style &= ~(WS_POPUP | WS_CAPTION | WS_BORDER | WS_DLGFRAME | WS_THICKFRAME | WS_MINIMIZEBOX |
-                                                       WS_MAXIMIZEBOX | WS_SYSMENU);
-                                            style |= WS_OVERLAPPED;
-                                            SetWindowLongPtr(hwnd, GWL_STYLE, static_cast<LONG_PTR>(style));
-
-                                            DWORD exStyle = static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_EXSTYLE));
-                                            exStyle &= ~(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_DLGMODALFRAME |
-                                                         WS_EX_STATICEDGE);
-                                            exStyle |= WS_EX_APPWINDOW;
-                                            SetWindowLongPtr(hwnd, GWL_EXSTYLE, static_cast<LONG_PTR>(exStyle));
-                                        }
-
-                                        SetWindowPos(hwnd, HWND_NOTOPMOST, targetRect.left, targetRect.top, targetW, targetH,
-                                                     SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
-                                        g_cachedGameTextureId.store(UINT_MAX);
-
-                                        Log("[TOAST] toast1 clicked - switched to borderless-windowed (current monitor resolution) " +
-                                            std::to_string(targetW) + "x" + std::to_string(targetH) + " at (" +
-                                            std::to_string(targetRect.left) + "," + std::to_string(targetRect.top) + ")");
-                                    }
-                                }
-                            }
-                        }
-                        s_wt_leftDownLastFrame = leftDownNow;
-
-                        float px1 = 0.0f;
-                        float py1 = 0.0f;
-                        float px2 = drawW;
-                        float py2 = drawH;
-
-                        float nx1 = (px1 / windowWidth) * 2.0f - 1.0f;
-                        float nx2 = (px2 / windowWidth) * 2.0f - 1.0f;
-                        float ny_top = 1.0f - (py1 / windowHeight) * 2.0f;
-                        float ny_bot = 1.0f - (py2 / windowHeight) * 2.0f;
-
-                        float verts[] = {
-                            nx1, ny_bot, 0.0f, 1.0f,
-                            nx2, ny_bot, 1.0f, 1.0f,
-                            nx2, ny_top, 1.0f, 0.0f,
-                            nx1, ny_bot, 0.0f, 1.0f,
-                            nx2, ny_top, 1.0f, 0.0f,
-                            nx1, ny_top, 0.0f, 0.0f,
-                        };
-                        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
-                        glDrawArrays(GL_TRIANGLES, 0, 6);
-
-                        glUseProgram(savedProgram);
-                        glBindVertexArray(savedVAO);
-                        glBindBuffer(GL_ARRAY_BUFFER, savedVBO);
-                        glBindFramebuffer(GL_FRAMEBUFFER, savedFBO);
-                        glActiveTexture(GL_TEXTURE0);
-                        glBindTexture(GL_TEXTURE_2D, savedTex);
-                        glActiveTexture(savedActiveTex);
-                        if (oglViewport)
-                            oglViewport(savedViewport[0], savedViewport[1], savedViewport[2], savedViewport[3]);
-                        else
-                            glViewport(savedViewport[0], savedViewport[1], savedViewport[2], savedViewport[3]);
-                        glColorMask(savedColorMask[0], savedColorMask[1], savedColorMask[2], savedColorMask[3]);
-
-                        glPixelStorei(GL_UNPACK_ROW_LENGTH, savedUnpackRowLength);
-                        glPixelStorei(GL_UNPACK_SKIP_PIXELS, savedUnpackSkipPixels);
-                        glPixelStorei(GL_UNPACK_SKIP_ROWS, savedUnpackSkipRows);
-                        glPixelStorei(GL_UNPACK_ALIGNMENT, savedUnpackAlignment);
-
-                        if (savedBlend)
-                            glEnable(GL_BLEND);
-                        else
-                            glDisable(GL_BLEND);
-                        if (savedDepthTest)
-                            glEnable(GL_DEPTH_TEST);
-                        else
-                            glDisable(GL_DEPTH_TEST);
-                        if (savedScissor)
-                            glEnable(GL_SCISSOR_TEST);
-                        else
-                            glDisable(GL_SCISSOR_TEST);
-                        if (savedStencil)
-                            glEnable(GL_STENCIL_TEST);
-                        else
-                            glDisable(GL_STENCIL_TEST);
-                        glBlendFuncSeparate(savedBlendSrcRGB, savedBlendDstRGB, savedBlendSrcA, savedBlendDstA);
-                    }
-                }
-                ClearObsOverride();
-                g_obsPre113Windowed.store(false, std::memory_order_release);
-                return next(hDc);
-            }
-
             if (isPre113) {
-                int centeredX = (fullW - windowWidth) / 2;
-                int centeredY = (fullH - windowHeight) / 2;
+                ModeViewportInfo viewport = GetCurrentModeViewport();
+                int offsetX = 0;
+                int offsetY = 0;
+                int contentW = windowWidth;
+                int contentH = windowHeight;
+
+                if (viewport.valid && viewport.stretchWidth > 0 && viewport.stretchHeight > 0) {
+                    offsetX = viewport.stretchX;
+                    offsetY = viewport.stretchY;
+                    contentW = viewport.stretchWidth;
+                    contentH = viewport.stretchHeight;
+                } else {
+                    offsetX = (fullW - windowWidth) / 2;
+                    offsetY = (fullH - windowHeight) / 2;
+                }
+
                 g_obsPre113Windowed.store(true, std::memory_order_release);
-                g_obsPre113OffsetX.store(centeredX, std::memory_order_release);
-                g_obsPre113OffsetY.store(centeredY, std::memory_order_release);
-                g_obsPre113ContentW.store(windowWidth, std::memory_order_release);
-                g_obsPre113ContentH.store(windowHeight, std::memory_order_release);
+                g_obsPre113OffsetX.store(offsetX, std::memory_order_release);
+                g_obsPre113OffsetY.store(offsetY, std::memory_order_release);
+                g_obsPre113ContentW.store(contentW, std::memory_order_release);
+                g_obsPre113ContentH.store(contentH, std::memory_order_release);
             } else {
                 g_obsPre113Windowed.store(false, std::memory_order_release);
             }
@@ -1716,12 +1408,9 @@ void main() {
         }
 
         if (g_graphicsHookDetected.load()) {
-            bool isPre113 = (g_gameVersion < GameVersion(1, 13, 0));
-            if (isFull || isPre113) {
-                EnableObsOverride();
-            } else {
-                ClearObsOverride();
-            }
+            EnableObsOverride();
+        } else {
+            ClearObsOverride();
         }
 
 
@@ -2007,14 +1696,11 @@ void main() {
                     SubmitObsFrameContext(submission);
                 }
 
-                if (isFull) {
-                    PROFILE_SCOPE_CAT("Render for Screen", "Rendering");
-                    RenderMode(&modeToRenderCopy, s, current_gameW, current_gameH, hideAnimOnScreen,
-                               false);
-                }
+                PROFILE_SCOPE_CAT("Render for Screen", "Rendering");
+                RenderMode(&modeToRenderCopy, s, current_gameW, current_gameH, hideAnimOnScreen, false);
 
             } else {
-                if (isFull) { RenderMode(&modeToRenderCopy, s, current_gameW, current_gameH, hideAnimOnScreen, false); }
+                RenderMode(&modeToRenderCopy, s, current_gameW, current_gameH, hideAnimOnScreen, false);
 
             }
         }

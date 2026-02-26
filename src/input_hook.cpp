@@ -2,6 +2,7 @@
 
 #include "fake_cursor.h"
 #include "gui.h"
+#include "imgui_cache.h"
 #include "logic_thread.h"
 #include "profiler.h"
 #include "render.h"
@@ -113,22 +114,12 @@ static DWORD NormalizeModifierVkFromConfig(DWORD vk, UINT scanCodeWithFlags = 0)
 
 InputHandlerResult HandleMouseMoveViewportOffset(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM& lParam) {
     PROFILE_SCOPE("HandleMouseMoveViewportOffset");
-
-    if (uMsg == WM_MOUSEMOVE && !IsCursorVisible() && !g_showGui.load()) {
-
-        int x = GET_X_LPARAM(lParam);
-        int y = GET_Y_LPARAM(lParam);
-
-        ModeViewportInfo viewport = GetCurrentModeViewport();
-        if (viewport.valid) {
-            int offsetX = viewport.stretchX + (viewport.stretchWidth - viewport.width) / 2;
-            int offsetY = viewport.stretchY + (viewport.stretchHeight - viewport.height) / 2;
-            x += offsetX;
-            y += offsetY;
-        }
-
-        lParam = MAKELPARAM(x, y);
-    }
+    // Legacy compatibility path intentionally disabled.
+    // Mouse translation is handled centrally in HandleMouseCoordinateTranslationPhase.
+    (void)hWnd;
+    (void)uMsg;
+    (void)wParam;
+    (void)lParam;
     return { false, 0 };
 }
 
@@ -154,7 +145,7 @@ InputHandlerResult HandleWindowValidation(HWND hWnd, UINT uMsg, WPARAM wParam, L
 InputHandlerResult HandleNonFullscreenCheck(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     PROFILE_SCOPE("HandleNonFullscreenCheck");
 
-    if (!IsFullscreen()) { return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) }; }
+    // Windowed mode is supported; do not bypass the hook pipeline.
     return { false, 0 };
 }
 
@@ -170,41 +161,58 @@ InputHandlerResult HandleWindowPosChanged(HWND hWnd, UINT uMsg, WPARAM wParam, L
 
     if (uMsg != WM_WINDOWPOSCHANGED) { return { false, 0 }; }
 
-    WINDOWPOS* pos = reinterpret_cast<WINDOWPOS*>(lParam);
-    int flags = pos->flags;
-    if (flags == 20) { return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) }; }
+    auto forwardToOriginal = [&]() -> InputHandlerResult {
+        if (g_originalWndProc) { return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) }; }
+        return { true, DefWindowProc(hWnd, uMsg, wParam, lParam) };
+    };
 
-    int currentX = pos->x;
-    int currentY = pos->y;
-    int currentWidth = pos->cx;
-    int currentHeight = pos->cy;
+    if (lParam == 0) {
+        Log("[RESIZE] Ignoring WM_WINDOWPOSCHANGED with null WINDOWPOS");
+        return forwardToOriginal();
+    }
+
+    WINDOWPOS* pos = reinterpret_cast<WINDOWPOS*>(lParam);
+    const int flags = pos->flags;
+    const bool sizeChanged = (flags & SWP_NOSIZE) == 0;
+    const bool moveChanged = (flags & SWP_NOMOVE) == 0;
+    if (!sizeChanged && !moveChanged) { return forwardToOriginal(); }
+
+    const int currentX = pos->x;
+    const int currentY = pos->y;
+    const int currentWidth = pos->cx;
+    const int currentHeight = pos->cy;
 
     if (currentX == -32000 && currentY == -32000) {
         Log("[RESIZE] Ignoring WM_WINDOWPOSCHANGED with minimized coordinates");
-        return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
+        return forwardToOriginal();
     }
 
     Log("[RESIZE] External resize detected to " + std::to_string(currentWidth) + "x" + std::to_string(currentHeight) + " at (" +
         std::to_string(currentX) + "," + std::to_string(currentY) + "), flags=" + std::to_string(flags));
 
-    RECT targetRect{ 0, 0, GetCachedScreenWidth(), GetCachedScreenHeight() };
-    HMONITOR mon = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
-    if (mon) {
-        MONITORINFO mi{};
-        mi.cbSize = sizeof(mi);
-        if (GetMonitorInfo(mon, &mi)) {
-            targetRect = mi.rcMonitor;
+    // In windowed mode, keep user-driven position/size and just refresh dependent caches.
+    if (!IsFullscreen()) {
+        if (sizeChanged) {
+            RequestScreenMetricsRecalculation();
+        } else {
+            InvalidateCachedScreenMetrics();
         }
+        if (sizeChanged) { g_cachedGameTextureId.store(UINT_MAX); }
+        return forwardToOriginal();
+    }
+
+    RECT targetRect{};
+    if (!GetMonitorRectForWindow(hWnd, targetRect)) {
+        if (!GetWindowRect(hWnd, &targetRect)) { return forwardToOriginal(); }
     }
     const int targetW = (targetRect.right - targetRect.left);
     const int targetH = (targetRect.bottom - targetRect.top);
+    if (targetW <= 0 || targetH <= 0) { return forwardToOriginal(); }
     SetWindowPos(hWnd, HWND_NOTOPMOST, targetRect.left, targetRect.top, targetW, targetH, SWP_NOACTIVATE | SWP_NOOWNERZORDER);
-    ModeViewportInfo geo = GetCurrentModeViewport();
-    PostMessage(hWnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(geo.width, geo.height));
 
     g_cachedGameTextureId.store(UINT_MAX);
 
-    return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
+    return forwardToOriginal();
 }
 
 InputHandlerResult HandleAltF4(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
@@ -362,6 +370,7 @@ InputHandlerResult HandleGuiToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 
     if (is_closing) {
         g_showGui = false;
+        InvalidateImGuiCache();
         if (s_forcedShowCursor) {
             EnsureSystemCursorHidden();
             s_forcedShowCursor = false;
@@ -372,12 +381,12 @@ InputHandlerResult HandleGuiToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         ImGuiInputQueue_ResetMouseCapture(hWnd);
 
         if (!g_wasCursorVisible.load()) {
-            RECT fullScreenRect;
-            fullScreenRect.left = 0;
-            fullScreenRect.top = 0;
-            fullScreenRect.right = GetCachedScreenWidth();
-            fullScreenRect.bottom = GetCachedScreenHeight();
-            ClipCursor(&fullScreenRect);
+            RECT clipRect{};
+            if (GetWindowClientRectInScreen(hWnd, clipRect)) {
+                ClipCursor(&clipRect);
+            } else {
+                ClipCursor(NULL);
+            }
             SetCursor(NULL);
 
             if (g_gameVersion < GameVersion(1, 13, 0)) {
@@ -405,6 +414,7 @@ InputHandlerResult HandleGuiToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         s_isWindowOverlayDragging = false;
     } else if (!isEscape) {
         g_showGui = true;
+        InvalidateImGuiCache();
         const bool wasCursorVisible = IsCursorVisible();
         g_wasCursorVisible = wasCursorVisible;
         g_guiNeedsRecenter = true;
@@ -1094,17 +1104,74 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
 InputHandlerResult HandleMouseCoordinateTranslationPhase(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM& lParam) {
     PROFILE_SCOPE("HandleMouseCoordinateTranslation");
 
-    if (uMsg < WM_MOUSEFIRST || uMsg > WM_MOUSELAST) { return { false, 0 }; }
+    // Only translate messages whose lParam is already in CLIENT coordinates.
+    // Wheel messages use SCREEN coordinates and must not be transformed here.
+    switch (uMsg) {
+    case WM_MOUSEMOVE:
+    case WM_LBUTTONDOWN:
+    case WM_LBUTTONUP:
+    case WM_LBUTTONDBLCLK:
+    case WM_RBUTTONDOWN:
+    case WM_RBUTTONUP:
+    case WM_RBUTTONDBLCLK:
+    case WM_MBUTTONDOWN:
+    case WM_MBUTTONUP:
+    case WM_MBUTTONDBLCLK:
+    case WM_XBUTTONDOWN:
+    case WM_XBUTTONUP:
+    case WM_XBUTTONDBLCLK:
+        break;
+    default:
+        return { false, 0 };
+    }
 
     ModeViewportInfo geo = GetCurrentModeViewport();
+    if (!geo.valid || geo.width <= 0 || geo.height <= 0 || geo.stretchWidth <= 0 || geo.stretchHeight <= 0) { return { false, 0 }; }
+
+    RECT clientRect{};
+    if (!GetClientRect(hWnd, &clientRect)) { return { false, 0 }; }
+    const int clientW = clientRect.right - clientRect.left;
+    const int clientH = clientRect.bottom - clientRect.top;
+    if (clientW <= 0 || clientH <= 0) { return { false, 0 }; }
+
+    const int viewportLeft = geo.stretchX;
+    const int viewportTop = geo.stretchY;
+    const int viewportRight = geo.stretchX + geo.stretchWidth;
+    const int viewportBottom = geo.stretchY + geo.stretchHeight;
+
+    const int visibleLeft = (std::max)(0, viewportLeft);
+    const int visibleTop = (std::max)(0, viewportTop);
+    const int visibleRight = (std::min)(clientW, viewportRight);
+    const int visibleBottom = (std::min)(clientH, viewportBottom);
+
+    const int visibleW = visibleRight - visibleLeft;
+    const int visibleH = visibleBottom - visibleTop;
+    if (visibleW <= 0 || visibleH <= 0) { return { false, 0 }; }
 
     int mouseX = GET_X_LPARAM(lParam);
     int mouseY = GET_Y_LPARAM(lParam);
 
-    float relativeX = static_cast<float>(mouseX - geo.stretchX);
-    float relativeY = static_cast<float>(mouseY - geo.stretchY);
-    int newX = static_cast<int>((relativeX / geo.stretchWidth) * geo.width);
-    int newY = static_cast<int>((relativeY / geo.stretchHeight) * geo.height);
+    if (mouseX < visibleLeft) mouseX = visibleLeft;
+    if (mouseX >= visibleRight) mouseX = visibleRight - 1;
+    if (mouseY < visibleTop) mouseY = visibleTop;
+    if (mouseY >= visibleBottom) mouseY = visibleBottom - 1;
+
+    const float scaleX = static_cast<float>(geo.width) / static_cast<float>(geo.stretchWidth);
+    const float scaleY = static_cast<float>(geo.height) / static_cast<float>(geo.stretchHeight);
+
+    const float srcOffsetX = static_cast<float>(visibleLeft - viewportLeft) * scaleX;
+    const float srcOffsetY = static_cast<float>(visibleTop - viewportTop) * scaleY;
+
+    const float localVisibleX = static_cast<float>(mouseX - visibleLeft);
+    const float localVisibleY = static_cast<float>(mouseY - visibleTop);
+
+    int newX = static_cast<int>(srcOffsetX + localVisibleX * scaleX);
+    int newY = static_cast<int>(srcOffsetY + localVisibleY * scaleY);
+
+    if (newX < 0) newX = 0;
+    if (newY < 0) newY = 0;
+    if (newX >= geo.width) newX = geo.width - 1;
+    if (newY >= geo.height) newY = geo.height - 1;
 
     lParam = MAKELPARAM(newX, newY);
     return { false, 0 };
@@ -1398,7 +1465,10 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
                     if (GetCursorPos(&pt) && ScreenToClient(hWnd, &pt)) {
                         mouseLParam = MAKELPARAM(pt.x, pt.y);
                     } else {
-                        mouseLParam = MAKELPARAM(0, 0);
+                        RECT clientRect{};
+                        if (GetClientRect(hWnd, &clientRect)) {
+                            mouseLParam = MAKELPARAM((clientRect.right - clientRect.left) / 2, (clientRect.bottom - clientRect.top) / 2);
+                        }
                     }
                 }
 
@@ -1621,12 +1691,15 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     switch (uMsg) {
     case WM_MOVE:
     case WM_MOVING:
+        InvalidateCachedScreenMetrics();
+        break;
     case WM_SIZE:
     case WM_SIZING:
     case WM_WINDOWPOSCHANGED:
     case WM_DPICHANGED:
     case WM_DISPLAYCHANGE:
-        InvalidateCachedScreenMetrics();
+        RequestScreenMetricsRecalculation();
+        InvalidateImGuiCache();
         break;
     default:
         break;

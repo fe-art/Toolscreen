@@ -57,4 +57,8 @@ int GetCachedScreenHeight();
 // the game window is currently on. Safe to call from any thread.
 void InvalidateCachedScreenMetrics();
 
+// Marks screen metrics as dirty and requests mode-size recalculation on the logic thread.
+// Call this for resize/DPI/display events so relative-sized modes are recomputed immediately.
+void RequestScreenMetricsRecalculation();
+
 

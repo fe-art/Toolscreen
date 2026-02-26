@@ -4148,23 +4148,22 @@ FrameRenderRequest BuildObsFrameRequest(const ObsFrameContext& ctx, bool isDualR
         int contentW = ctx.windowW;
         int contentH = ctx.windowH;
 
-        int centeredX = (ctx.fullW - contentW) / 2;
-        int centeredY = (ctx.fullH - contentH) / 2;
-
-        req.animatedX = centeredX;
-        req.animatedY = centeredY;
+        req.fullW = contentW;
+        req.fullH = contentH;
+        req.animatedX = 0;
+        req.animatedY = 0;
         req.animatedW = contentW;
         req.animatedH = contentH;
-        req.fromX = centeredX;
-        req.fromY = centeredY;
+        req.fromX = 0;
+        req.fromY = 0;
         req.fromW = contentW;
         req.fromH = contentH;
-        req.toX = centeredX;
-        req.toY = centeredY;
+        req.toX = 0;
+        req.toY = 0;
         req.toW = contentW;
         req.toH = contentH;
-        req.finalX = centeredX;
-        req.finalY = centeredY;
+        req.finalX = 0;
+        req.finalY = 0;
         req.finalW = contentW;
         req.finalH = contentH;
         req.gameW = contentW;

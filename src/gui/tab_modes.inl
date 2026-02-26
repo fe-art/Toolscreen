@@ -43,32 +43,92 @@ if (ImGui::BeginTabItem("Modes")) {
 
                 if (!resolutionSupported) { ImGui::BeginDisabled(); }
 
+                int modeScreenW = GetCachedScreenWidth();
+                int modeScreenH = GetCachedScreenHeight();
+                if (modeScreenW < 1) modeScreenW = 1;
+                if (modeScreenH < 1) modeScreenH = 1;
+
+                bool useManualPixelSize = !mode.useRelativeSize;
+                if (ImGui::Checkbox("Manual pixel size##Fullscreen", &useManualPixelSize)) {
+                    mode.useRelativeSize = !useManualPixelSize;
+                    if (mode.useRelativeSize) {
+                        mode.widthExpr.clear();
+                        mode.heightExpr.clear();
+                        mode.relativeWidth = (std::max)(0.01f, (std::min)(1.0f, static_cast<float>(mode.width) / static_cast<float>(modeScreenW)));
+                        mode.relativeHeight =
+                            (std::max)(0.01f, (std::min)(1.0f, static_cast<float>(mode.height) / static_cast<float>(modeScreenH)));
+                    } else {
+                        mode.relativeWidth = -1.0f;
+                        mode.relativeHeight = -1.0f;
+                    }
+                    g_configIsDirty = true;
+                }
+
                 ImGui::Columns(2, "dims", false);
                 ImGui::Text("Width");
                 ImGui::NextColumn();
-                // Use temporary variable for spinner, then defer the change to logic thread
-                int tempWidth = mode.width;
-                if (Spinner("##Width", &tempWidth, 1, 1)) {
-                    // Queue the dimension change for logic thread to apply
-                    std::lock_guard<std::mutex> lock(g_pendingDimensionChangeMutex);
-                    g_pendingDimensionChange.pending = true;
-                    g_pendingDimensionChange.modeId = mode.id;
-                    g_pendingDimensionChange.newWidth = tempWidth;
-                    g_pendingDimensionChange.newHeight = 0;
-                    g_pendingDimensionChange.sendWmSize = (g_currentModeId == mode.id);
+                if (mode.useRelativeSize) {
+                    float widthPct = ((mode.relativeWidth >= 0.0f && mode.relativeWidth <= 1.0f)
+                                          ? mode.relativeWidth
+                                          : (static_cast<float>(mode.width) / static_cast<float>(modeScreenW))) *
+                                     100.0f;
+                    widthPct = (std::max)(1.0f, (std::min)(100.0f, widthPct));
+                    if (ImGui::SliderFloat("##WidthPercent", &widthPct, 1.0f, 100.0f, "%.1f%%")) {
+                        mode.useRelativeSize = true;
+                        mode.widthExpr.clear();
+                        mode.relativeWidth = widthPct / 100.0f;
+                        mode.width = (std::max)(1, static_cast<int>(mode.relativeWidth * static_cast<float>(modeScreenW)));
+                        g_configIsDirty = true;
+                        if (g_currentModeId == mode.id) {
+                            HWND hwnd = g_minecraftHwnd.load();
+                            if (hwnd) { PostMessage(hwnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(mode.width, mode.height)); }
+                        }
+                    }
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(%d px)", mode.width);
+                } else {
+                    int tempWidth = mode.width;
+                    if (Spinner("##Width", &tempWidth, 1, 1)) {
+                        std::lock_guard<std::mutex> lock(g_pendingDimensionChangeMutex);
+                        g_pendingDimensionChange.pending = true;
+                        g_pendingDimensionChange.modeId = mode.id;
+                        g_pendingDimensionChange.newWidth = tempWidth;
+                        g_pendingDimensionChange.newHeight = 0;
+                        g_pendingDimensionChange.sendWmSize = (g_currentModeId == mode.id);
+                    }
                 }
                 ImGui::NextColumn();
                 ImGui::Text("Height");
                 ImGui::NextColumn();
-                int tempHeight = mode.height;
-                if (Spinner("##Height", &tempHeight, 1, 1)) {
-                    // Queue the dimension change for logic thread to apply
-                    std::lock_guard<std::mutex> lock(g_pendingDimensionChangeMutex);
-                    g_pendingDimensionChange.pending = true;
-                    g_pendingDimensionChange.modeId = mode.id;
-                    g_pendingDimensionChange.newWidth = 0;
-                    g_pendingDimensionChange.newHeight = tempHeight;
-                    g_pendingDimensionChange.sendWmSize = (g_currentModeId == mode.id);
+                if (mode.useRelativeSize) {
+                    float heightPct = ((mode.relativeHeight >= 0.0f && mode.relativeHeight <= 1.0f)
+                                           ? mode.relativeHeight
+                                           : (static_cast<float>(mode.height) / static_cast<float>(modeScreenH))) *
+                                      100.0f;
+                    heightPct = (std::max)(1.0f, (std::min)(100.0f, heightPct));
+                    if (ImGui::SliderFloat("##HeightPercent", &heightPct, 1.0f, 100.0f, "%.1f%%")) {
+                        mode.useRelativeSize = true;
+                        mode.heightExpr.clear();
+                        mode.relativeHeight = heightPct / 100.0f;
+                        mode.height = (std::max)(1, static_cast<int>(mode.relativeHeight * static_cast<float>(modeScreenH)));
+                        g_configIsDirty = true;
+                        if (g_currentModeId == mode.id) {
+                            HWND hwnd = g_minecraftHwnd.load();
+                            if (hwnd) { PostMessage(hwnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(mode.width, mode.height)); }
+                        }
+                    }
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(%d px)", mode.height);
+                } else {
+                    int tempHeight = mode.height;
+                    if (Spinner("##Height", &tempHeight, 1, 1)) {
+                        std::lock_guard<std::mutex> lock(g_pendingDimensionChangeMutex);
+                        g_pendingDimensionChange.pending = true;
+                        g_pendingDimensionChange.modeId = mode.id;
+                        g_pendingDimensionChange.newWidth = 0;
+                        g_pendingDimensionChange.newHeight = tempHeight;
+                        g_pendingDimensionChange.sendWmSize = (g_currentModeId == mode.id);
+                    }
                 }
                 ImGui::Columns(1);
 
@@ -1311,30 +1371,99 @@ if (ImGui::BeginTabItem("Modes")) {
                 if (!resolutionSupported) { ImGui::BeginDisabled(); }
 
 
+                bool useManualPixelSizeThin = !mode.useRelativeSize;
+                if (ImGui::Checkbox("Manual pixel size##Thin", &useManualPixelSizeThin)) {
+                    mode.useRelativeSize = !useManualPixelSizeThin;
+                    if (mode.useRelativeSize) {
+                        mode.widthExpr.clear();
+                        mode.heightExpr.clear();
+                        mode.relativeWidth = (std::max)(0.01f, (std::min)(1.0f, static_cast<float>(mode.width) / static_cast<float>(screenWidth)));
+                        mode.relativeHeight =
+                            (std::max)(0.01f, (std::min)(1.0f, static_cast<float>(mode.height) / static_cast<float>(screenHeight)));
+                        int thinMinWidthPx = 330;
+                        float thinMinWidthPct = (std::min)(100.0f, (static_cast<float>(thinMinWidthPx) / static_cast<float>(screenWidth)) * 100.0f);
+                        float currentWidthPct = mode.relativeWidth * 100.0f;
+                        if (currentWidthPct < thinMinWidthPct) {
+                            mode.relativeWidth = thinMinWidthPct / 100.0f;
+                            mode.width = (std::max)(thinMinWidthPx,
+                                                    static_cast<int>(mode.relativeWidth * static_cast<float>(screenWidth)));
+                        }
+                    } else {
+                        if (mode.width < 330) { mode.width = 330; }
+                        mode.relativeWidth = -1.0f;
+                        mode.relativeHeight = -1.0f;
+                    }
+                    g_configIsDirty = true;
+                }
+
                 ImGui::Columns(2, "thin_dims", false);
 
                 ImGui::Text("Width");
                 ImGui::NextColumn();
-                int tempWidth3 = mode.width;
-                if (Spinner("##Width", &tempWidth3, 1, 1, screenWidth)) {
-                    std::lock_guard<std::mutex> lock(g_pendingDimensionChangeMutex);
-                    g_pendingDimensionChange.pending = true;
-                    g_pendingDimensionChange.modeId = mode.id;
-                    g_pendingDimensionChange.newWidth = tempWidth3;
-                    g_pendingDimensionChange.newHeight = 0;
-                    g_pendingDimensionChange.sendWmSize = (g_currentModeId == mode.id);
+                if (mode.useRelativeSize) {
+                    int thinMinWidthPx = 330;
+                    float thinMinWidthPct = (std::min)(100.0f, (static_cast<float>(thinMinWidthPx) / static_cast<float>(screenWidth)) * 100.0f);
+                    float widthPct = ((mode.relativeWidth >= 0.0f && mode.relativeWidth <= 1.0f)
+                                          ? mode.relativeWidth
+                                          : (static_cast<float>(mode.width) / static_cast<float>(screenWidth))) *
+                                     100.0f;
+                    widthPct = (std::max)(thinMinWidthPct, (std::min)(100.0f, widthPct));
+                    if (ImGui::SliderFloat("##ThinWidthPercent", &widthPct, thinMinWidthPct, 100.0f, "%.1f%%")) {
+                        mode.useRelativeSize = true;
+                        mode.widthExpr.clear();
+                        mode.relativeWidth = widthPct / 100.0f;
+                        mode.width = (std::max)(thinMinWidthPx, static_cast<int>(mode.relativeWidth * static_cast<float>(screenWidth)));
+                        g_configIsDirty = true;
+                        if (g_currentModeId == mode.id) {
+                            HWND hwnd = g_minecraftHwnd.load();
+                            if (hwnd) { PostMessage(hwnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(mode.width, mode.height)); }
+                        }
+                    }
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(%d px)", mode.width);
+                } else {
+                    int tempWidth3 = mode.width;
+                    if (Spinner("##Width", &tempWidth3, 1, 330, screenWidth)) {
+                        std::lock_guard<std::mutex> lock(g_pendingDimensionChangeMutex);
+                        g_pendingDimensionChange.pending = true;
+                        g_pendingDimensionChange.modeId = mode.id;
+                        g_pendingDimensionChange.newWidth = tempWidth3;
+                        g_pendingDimensionChange.newHeight = 0;
+                        g_pendingDimensionChange.sendWmSize = (g_currentModeId == mode.id);
+                    }
                 }
                 ImGui::NextColumn();
                 ImGui::Text("Height");
                 ImGui::NextColumn();
-                int tempHeight3 = mode.height;
-                if (Spinner("##Height", &tempHeight3, 1, 1, screenHeight)) {
-                    std::lock_guard<std::mutex> lock(g_pendingDimensionChangeMutex);
-                    g_pendingDimensionChange.pending = true;
-                    g_pendingDimensionChange.modeId = mode.id;
-                    g_pendingDimensionChange.newWidth = 0;
-                    g_pendingDimensionChange.newHeight = tempHeight3;
-                    g_pendingDimensionChange.sendWmSize = (g_currentModeId == mode.id);
+                if (mode.useRelativeSize) {
+                    float heightPct = ((mode.relativeHeight >= 0.0f && mode.relativeHeight <= 1.0f)
+                                           ? mode.relativeHeight
+                                           : (static_cast<float>(mode.height) / static_cast<float>(screenHeight))) *
+                                      100.0f;
+                    heightPct = (std::max)(1.0f, (std::min)(100.0f, heightPct));
+                    if (ImGui::SliderFloat("##ThinHeightPercent", &heightPct, 1.0f, 100.0f, "%.1f%%")) {
+                        mode.useRelativeSize = true;
+                        mode.heightExpr.clear();
+                        mode.relativeHeight = heightPct / 100.0f;
+                        mode.height = (std::max)(1, static_cast<int>(mode.relativeHeight * static_cast<float>(screenHeight)));
+                        g_configIsDirty = true;
+                        if (g_currentModeId == mode.id) {
+                            HWND hwnd = g_minecraftHwnd.load();
+                            if (hwnd) { PostMessage(hwnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(mode.width, mode.height)); }
+                        }
+                    }
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(%d px)", mode.height);
+                } else {
+                    int tempHeight3 = mode.height;
+                    if (Spinner("##Height", &tempHeight3, 1, 1, screenHeight)) {
+                        std::lock_guard<std::mutex> lock(g_pendingDimensionChangeMutex);
+                        g_pendingDimensionChange.pending = true;
+                        g_pendingDimensionChange.modeId = mode.id;
+                        g_pendingDimensionChange.newWidth = 0;
+                        g_pendingDimensionChange.newHeight = tempHeight3;
+                        g_pendingDimensionChange.sendWmSize = (g_currentModeId == mode.id);
+                    }
                 }
                 ImGui::Columns(1);
 
@@ -1674,30 +1803,88 @@ if (ImGui::BeginTabItem("Modes")) {
             if (node_open) {
                 if (!resolutionSupported) { ImGui::BeginDisabled(); }
 
+                bool useManualPixelSizeWide = !mode.useRelativeSize;
+                if (ImGui::Checkbox("Manual pixel size##Wide", &useManualPixelSizeWide)) {
+                    mode.useRelativeSize = !useManualPixelSizeWide;
+                    if (mode.useRelativeSize) {
+                        mode.widthExpr.clear();
+                        mode.heightExpr.clear();
+                        mode.relativeWidth = (std::max)(0.01f, (std::min)(1.0f, static_cast<float>(mode.width) / static_cast<float>(screenWidth)));
+                        mode.relativeHeight =
+                            (std::max)(0.01f, (std::min)(1.0f, static_cast<float>(mode.height) / static_cast<float>(screenHeight)));
+                    } else {
+                        mode.relativeWidth = -1.0f;
+                        mode.relativeHeight = -1.0f;
+                    }
+                    g_configIsDirty = true;
+                }
+
                 ImGui::Columns(2, "wide_dims", false);
 
                 ImGui::Text("Width");
                 ImGui::NextColumn();
-                int tempWidth4 = mode.width;
-                if (Spinner("##Width", &tempWidth4, 1, 1, screenWidth)) {
-                    std::lock_guard<std::mutex> lock(g_pendingDimensionChangeMutex);
-                    g_pendingDimensionChange.pending = true;
-                    g_pendingDimensionChange.modeId = mode.id;
-                    g_pendingDimensionChange.newWidth = tempWidth4;
-                    g_pendingDimensionChange.newHeight = 0;
-                    g_pendingDimensionChange.sendWmSize = (g_currentModeId == mode.id);
+                if (mode.useRelativeSize) {
+                    float widthPct = ((mode.relativeWidth >= 0.0f && mode.relativeWidth <= 1.0f)
+                                          ? mode.relativeWidth
+                                          : (static_cast<float>(mode.width) / static_cast<float>(screenWidth))) *
+                                     100.0f;
+                    widthPct = (std::max)(1.0f, (std::min)(100.0f, widthPct));
+                    if (ImGui::SliderFloat("##WideWidthPercent", &widthPct, 1.0f, 100.0f, "%.1f%%")) {
+                        mode.useRelativeSize = true;
+                        mode.widthExpr.clear();
+                        mode.relativeWidth = widthPct / 100.0f;
+                        mode.width = (std::max)(1, static_cast<int>(mode.relativeWidth * static_cast<float>(screenWidth)));
+                        g_configIsDirty = true;
+                        if (g_currentModeId == mode.id) {
+                            HWND hwnd = g_minecraftHwnd.load();
+                            if (hwnd) { PostMessage(hwnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(mode.width, mode.height)); }
+                        }
+                    }
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(%d px)", mode.width);
+                } else {
+                    int tempWidth4 = mode.width;
+                    if (Spinner("##Width", &tempWidth4, 1, 1, screenWidth)) {
+                        std::lock_guard<std::mutex> lock(g_pendingDimensionChangeMutex);
+                        g_pendingDimensionChange.pending = true;
+                        g_pendingDimensionChange.modeId = mode.id;
+                        g_pendingDimensionChange.newWidth = tempWidth4;
+                        g_pendingDimensionChange.newHeight = 0;
+                        g_pendingDimensionChange.sendWmSize = (g_currentModeId == mode.id);
+                    }
                 }
                 ImGui::NextColumn();
                 ImGui::Text("Height");
                 ImGui::NextColumn();
-                int tempHeight4 = mode.height;
-                if (Spinner("##Height", &tempHeight4, 1, 1, screenHeight)) {
-                    std::lock_guard<std::mutex> lock(g_pendingDimensionChangeMutex);
-                    g_pendingDimensionChange.pending = true;
-                    g_pendingDimensionChange.modeId = mode.id;
-                    g_pendingDimensionChange.newWidth = 0;
-                    g_pendingDimensionChange.newHeight = tempHeight4;
-                    g_pendingDimensionChange.sendWmSize = (g_currentModeId == mode.id);
+                if (mode.useRelativeSize) {
+                    float heightPct = ((mode.relativeHeight >= 0.0f && mode.relativeHeight <= 1.0f)
+                                           ? mode.relativeHeight
+                                           : (static_cast<float>(mode.height) / static_cast<float>(screenHeight))) *
+                                      100.0f;
+                    heightPct = (std::max)(1.0f, (std::min)(100.0f, heightPct));
+                    if (ImGui::SliderFloat("##WideHeightPercent", &heightPct, 1.0f, 100.0f, "%.1f%%")) {
+                        mode.useRelativeSize = true;
+                        mode.heightExpr.clear();
+                        mode.relativeHeight = heightPct / 100.0f;
+                        mode.height = (std::max)(1, static_cast<int>(mode.relativeHeight * static_cast<float>(screenHeight)));
+                        g_configIsDirty = true;
+                        if (g_currentModeId == mode.id) {
+                            HWND hwnd = g_minecraftHwnd.load();
+                            if (hwnd) { PostMessage(hwnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(mode.width, mode.height)); }
+                        }
+                    }
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(%d px)", mode.height);
+                } else {
+                    int tempHeight4 = mode.height;
+                    if (Spinner("##Height", &tempHeight4, 1, 1, screenHeight)) {
+                        std::lock_guard<std::mutex> lock(g_pendingDimensionChangeMutex);
+                        g_pendingDimensionChange.pending = true;
+                        g_pendingDimensionChange.modeId = mode.id;
+                        g_pendingDimensionChange.newWidth = 0;
+                        g_pendingDimensionChange.newHeight = tempHeight4;
+                        g_pendingDimensionChange.sendWmSize = (g_currentModeId == mode.id);
+                    }
                 }
                 ImGui::Columns(1);
 
@@ -2097,30 +2284,118 @@ if (ImGui::BeginTabItem("Modes")) {
 
                 if (!resolutionSupported) { ImGui::BeginDisabled(); }
 
+                int modeScreenW = GetCachedScreenWidth();
+                int modeScreenH = GetCachedScreenHeight();
+                if (modeScreenW < 1) modeScreenW = 1;
+                if (modeScreenH < 1) modeScreenH = 1;
+
+                bool useManualPixelSize = !mode.useRelativeSize;
+                if (ImGui::Checkbox("Manual pixel size##CustomMode", &useManualPixelSize)) {
+                    mode.useRelativeSize = !useManualPixelSize;
+
+                    if (mode.useRelativeSize) {
+                        mode.widthExpr.clear();
+                        mode.heightExpr.clear();
+
+                        float computedRelativeWidth = static_cast<float>(mode.width) / static_cast<float>(modeScreenW);
+                        float computedRelativeHeight = static_cast<float>(mode.height) / static_cast<float>(modeScreenH);
+
+                        mode.relativeWidth = (std::max)(0.01f, (std::min)(1.0f, computedRelativeWidth));
+                        mode.relativeHeight = (std::max)(0.01f, (std::min)(1.0f, computedRelativeHeight));
+
+                        int newWidth = static_cast<int>(mode.relativeWidth * static_cast<float>(modeScreenW));
+                        int newHeight = static_cast<int>(mode.relativeHeight * static_cast<float>(modeScreenH));
+                        if (newWidth < 1) newWidth = 1;
+                        if (newHeight < 1) newHeight = 1;
+                        mode.width = newWidth;
+                        mode.height = newHeight;
+                    } else {
+                        mode.relativeWidth = -1.0f;
+                        mode.relativeHeight = -1.0f;
+                    }
+
+                    g_configIsDirty = true;
+                }
+                ImGui::SameLine();
+                HelpMarker("Off = mode size is entered as a % of current game window size.\nOn = mode size is entered directly in pixels.");
+
                 ImGui::Columns(2, "dims", false);
 
                 ImGui::Text("Width");
                 ImGui::NextColumn();
-                int tempWidth5 = mode.width;
-                if (Spinner("##Width", &tempWidth5, 1, 1)) {
-                    std::lock_guard<std::mutex> lock(g_pendingDimensionChangeMutex);
-                    g_pendingDimensionChange.pending = true;
-                    g_pendingDimensionChange.modeId = mode.id;
-                    g_pendingDimensionChange.newWidth = tempWidth5;
-                    g_pendingDimensionChange.newHeight = 0;
-                    g_pendingDimensionChange.sendWmSize = (g_currentModeId == mode.id);
+                if (mode.useRelativeSize) {
+                    float widthPct = ((mode.relativeWidth >= 0.0f && mode.relativeWidth <= 1.0f)
+                                          ? mode.relativeWidth
+                                          : (static_cast<float>(mode.width) / static_cast<float>(modeScreenW))) *
+                                     100.0f;
+                    widthPct = (std::max)(1.0f, (std::min)(100.0f, widthPct));
+
+                    if (ImGui::SliderFloat("##WidthPercent", &widthPct, 1.0f, 100.0f, "%.1f%%")) {
+                        mode.useRelativeSize = true;
+                        mode.widthExpr.clear();
+                        mode.relativeWidth = widthPct / 100.0f;
+
+                        int newWidth = static_cast<int>(mode.relativeWidth * static_cast<float>(modeScreenW));
+                        if (newWidth < 1) newWidth = 1;
+                        mode.width = newWidth;
+                        g_configIsDirty = true;
+
+                        if (g_currentModeId == mode.id) {
+                            HWND hwnd = g_minecraftHwnd.load();
+                            if (hwnd) { PostMessage(hwnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(mode.width, mode.height)); }
+                        }
+                    }
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(%d px)", mode.width);
+                } else {
+                    int tempWidth5 = mode.width;
+                    if (Spinner("##Width", &tempWidth5, 1, 1)) {
+                        std::lock_guard<std::mutex> lock(g_pendingDimensionChangeMutex);
+                        g_pendingDimensionChange.pending = true;
+                        g_pendingDimensionChange.modeId = mode.id;
+                        g_pendingDimensionChange.newWidth = tempWidth5;
+                        g_pendingDimensionChange.newHeight = 0;
+                        g_pendingDimensionChange.sendWmSize = (g_currentModeId == mode.id);
+                    }
                 }
+
                 ImGui::NextColumn();
                 ImGui::Text("Height");
                 ImGui::NextColumn();
-                int tempHeight5 = mode.height;
-                if (Spinner("##Height", &tempHeight5, 1, 1)) {
-                    std::lock_guard<std::mutex> lock(g_pendingDimensionChangeMutex);
-                    g_pendingDimensionChange.pending = true;
-                    g_pendingDimensionChange.modeId = mode.id;
-                    g_pendingDimensionChange.newWidth = 0;
-                    g_pendingDimensionChange.newHeight = tempHeight5;
-                    g_pendingDimensionChange.sendWmSize = (g_currentModeId == mode.id);
+                if (mode.useRelativeSize) {
+                    float heightPct = ((mode.relativeHeight >= 0.0f && mode.relativeHeight <= 1.0f)
+                                           ? mode.relativeHeight
+                                           : (static_cast<float>(mode.height) / static_cast<float>(modeScreenH))) *
+                                      100.0f;
+                    heightPct = (std::max)(1.0f, (std::min)(100.0f, heightPct));
+
+                    if (ImGui::SliderFloat("##HeightPercent", &heightPct, 1.0f, 100.0f, "%.1f%%")) {
+                        mode.useRelativeSize = true;
+                        mode.heightExpr.clear();
+                        mode.relativeHeight = heightPct / 100.0f;
+
+                        int newHeight = static_cast<int>(mode.relativeHeight * static_cast<float>(modeScreenH));
+                        if (newHeight < 1) newHeight = 1;
+                        mode.height = newHeight;
+                        g_configIsDirty = true;
+
+                        if (g_currentModeId == mode.id) {
+                            HWND hwnd = g_minecraftHwnd.load();
+                            if (hwnd) { PostMessage(hwnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(mode.width, mode.height)); }
+                        }
+                    }
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(%d px)", mode.height);
+                } else {
+                    int tempHeight5 = mode.height;
+                    if (Spinner("##Height", &tempHeight5, 1, 1)) {
+                        std::lock_guard<std::mutex> lock(g_pendingDimensionChangeMutex);
+                        g_pendingDimensionChange.pending = true;
+                        g_pendingDimensionChange.modeId = mode.id;
+                        g_pendingDimensionChange.newWidth = 0;
+                        g_pendingDimensionChange.newHeight = tempHeight5;
+                        g_pendingDimensionChange.sendWmSize = (g_currentModeId == mode.id);
+                    }
                 }
                 ImGui::Columns(1);
 
@@ -2674,6 +2949,9 @@ if (ImGui::BeginTabItem("Modes")) {
     if (ImGui::Button("Add New Mode")) {
         ModeConfig newMode;
         newMode.id = "New Mode " + std::to_string(g_config.modes.size() + 1);
+        newMode.useRelativeSize = true;
+        newMode.relativeWidth = 1.0f;
+        newMode.relativeHeight = 1.0f;
         newMode.width = GetCachedScreenWidth();
         newMode.height = GetCachedScreenHeight();
         newMode.stretch.width = 300;
