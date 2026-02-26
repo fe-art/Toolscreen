@@ -2000,7 +2000,7 @@ void WriteDefaultConfig(const std::wstring& path) {
         Log("WARNING: Could not load embedded default config, creating minimal fallback config");
         defaultConfig.configVersion = GetConfigVersion();
         defaultConfig.defaultMode = "Fullscreen";
-        defaultConfig.guiHotkey = { VK_CONTROL, 'E' };
+        defaultConfig.guiHotkey = ConfigDefaults::GetDefaultGuiHotkey();
 
         // Create minimal Fullscreen mode
         ModeConfig fullscreenMode;

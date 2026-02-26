@@ -1735,12 +1735,24 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
                key == VK_MENU || key == VK_LMENU || key == VK_RMENU;
     };
 
+    const bool lctrl_down = (GetAsyncKeyState(VK_LCONTROL) & 0x8000) != 0;
+    const bool rctrl_down = (GetAsyncKeyState(VK_RCONTROL) & 0x8000) != 0;
+    const bool ctrl_down_now = lctrl_down || rctrl_down;
+
     // For trigger on release, skip exclusion key checks since user may have released modifiers
     // before or at the same time as the main key
     if (!triggerOnRelease) {
         // First check if any exclusion keys are pressed
         for (DWORD excluded_key : exclusionKeys) {
-            if (GetAsyncKeyState(excluded_key) & 0x8000) {
+            bool excludedPressed = false;
+            // Treat LCTRL and CTRL as equivalent in exclusions.
+            if (excluded_key == VK_CONTROL || excluded_key == VK_LCONTROL) {
+                excludedPressed = ctrl_down_now;
+            } else {
+                excludedPressed = (GetAsyncKeyState(excluded_key) & 0x8000) != 0;
+            }
+
+            if (excludedPressed) {
                 if (g_config.debug.showHotkeyDebug) { Log("[Hotkey] FAIL: Exclusion key " + std::to_string(excluded_key) + " is pressed"); }
                 return false;
             }
@@ -1801,6 +1813,8 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
         // left/right variants (after resolving from scan code / extended flag).
         if (main_key == VK_CONTROL && (wParam == VK_LCONTROL || wParam == VK_RCONTROL)) {
             main_key_pressed = true;
+        } else if (main_key == VK_LCONTROL && (wParam == VK_CONTROL || wParam == VK_RCONTROL)) {
+            main_key_pressed = true;
         } else if (main_key == VK_SHIFT && (wParam == VK_LSHIFT || wParam == VK_RSHIFT)) {
             main_key_pressed = true;
         } else if (main_key == VK_MENU && (wParam == VK_LMENU || wParam == VK_RMENU)) {
@@ -1810,7 +1824,13 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
 
     if (!main_key_pressed) {
         // Check if wParam is a generic modifier and main_key is a specific variant
-        if (wParam == VK_CONTROL && (main_key == VK_LCONTROL || main_key == VK_RCONTROL)) {
+        if ((wParam == VK_CONTROL || wParam == VK_RCONTROL) && main_key == VK_LCONTROL) {
+            if (triggerOnRelease) {
+                main_key_pressed = true;
+            } else {
+                main_key_pressed = ctrl_down_now;
+            }
+        } else if (wParam == VK_CONTROL && main_key == VK_RCONTROL) {
             if (triggerOnRelease) {
                 // For release triggers, we can't use GetAsyncKeyState (key is already released)
                 // Just accept the match - the hotkey was configured for this specific key
@@ -1847,15 +1867,12 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
     // released before or at the same time as the main key
     if (!triggerOnRelease) {
         // Check specific modifier states
-        bool lctrl_down = (GetAsyncKeyState(VK_LCONTROL) & 0x8000) != 0;
-        bool rctrl_down = (GetAsyncKeyState(VK_RCONTROL) & 0x8000) != 0;
         bool lshift_down = (GetAsyncKeyState(VK_LSHIFT) & 0x8000) != 0;
         bool rshift_down = (GetAsyncKeyState(VK_RSHIFT) & 0x8000) != 0;
         bool lalt_down = (GetAsyncKeyState(VK_LMENU) & 0x8000) != 0;
         bool ralt_down = (GetAsyncKeyState(VK_RMENU) & 0x8000) != 0;
 
         // Generic modifier state (either left or right)
-        bool ctrl_down_now = lctrl_down || rctrl_down;
         bool shift_down_now = lshift_down || rshift_down;
         bool alt_down_now = lalt_down || ralt_down;
 
@@ -1870,7 +1887,8 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
         }
 
         // Check specific modifier requirements
-        if (requires_lctrl && !lctrl_down) {
+        // Treat LCTRL and CTRL as equivalent requirements.
+        if (requires_lctrl && !ctrl_down_now) {
             if (s_enableHotkeyDebug) Log("[Hotkey] FAIL: Left Ctrl required but not pressed");
             return false;
         }

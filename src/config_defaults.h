@@ -253,8 +253,10 @@ constexpr bool CONFIG_DISABLE_FULLSCREEN_PROMPT = false;
 constexpr bool CONFIG_DISABLE_CONFIGURE_PROMPT = false;
 inline const std::string CONFIG_MIRROR_MATCH_COLORSPACE = "Auto";
 
-// Default GUI hotkey: LCtrl+I
-inline std::vector<DWORD> GetDefaultGuiHotkey() { return { VK_LCONTROL, 'I' }; }
+// Default GUI hotkey: LCtrl+I ([162, 73])
+constexpr DWORD CONFIG_GUI_HOTKEY_MODIFIER = VK_LCONTROL; // 162
+constexpr DWORD CONFIG_GUI_HOTKEY_KEY = 'I';              // 73
+inline std::vector<DWORD> GetDefaultGuiHotkey() { return { CONFIG_GUI_HOTKEY_MODIFIER, CONFIG_GUI_HOTKEY_KEY }; }
 
 // Default borderless toggle hotkey: unbound/disabled
 inline std::vector<DWORD> GetDefaultBorderlessHotkey() { return {}; }

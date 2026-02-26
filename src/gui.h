@@ -470,7 +470,7 @@ struct Config {
     EyeZoomConfig eyezoom;
     std::string defaultMode = "fullscreen";
     DebugGlobalConfig debug;
-    std::vector<DWORD> guiHotkey = { VK_CONTROL, 'E' };
+    std::vector<DWORD> guiHotkey = ConfigDefaults::GetDefaultGuiHotkey();
     // Hotkey to toggle borderless-windowed fullscreen for the game window.
     // Empty = disabled/unbound.
     std::vector<DWORD> borderlessHotkey = {};
