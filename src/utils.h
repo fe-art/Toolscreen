@@ -57,12 +57,8 @@ struct MirrorInstance {
     int final_w_back = 0, final_h_back = 0; // Dimensions of BACK final FBO (may differ during scale changes)
 
     // Track whether the mirror has actual filtered content (not empty)
-    // Used by static borders to avoid rendering when mirror has no matching pixels
-    // Both default to true so that borders render from the very first frame.
-    // The async PBO content detection will update to false once a readback proves no content.
-    // This avoids a 1-frame flicker where the border disappears then reappears.
-    bool hasFrameContent = true;      // Front buffer has content (read by render thread)
-    bool hasFrameContentBack = true;  // Back buffer has content (written by capture thread)
+    bool hasFrameContent = false;     // Front buffer has content (read by render thread)
+    bool hasFrameContentBack = false; // Back buffer has content (written by capture thread)
 
     // Cross-context GPU synchronization fences
     // These ensure the render thread waits for capture thread's GPU work to complete
