@@ -844,6 +844,22 @@ InputHandlerResult HandleActivate(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
     return { false, 0 };
 }
 
+InputHandlerResult HandleWmSizeModeDimensions(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, const std::string& currentModeId) {
+    if (uMsg != WM_SIZE) { return { false, 0 }; }
+    PROFILE_SCOPE("HandleWmSizeModeDimensions");
+
+    auto cfgSnap = GetConfigSnapshot();
+    const ModeConfig* mode = cfgSnap ? GetModeFromSnapshot(*cfgSnap, currentModeId) : nullptr;
+    if (!mode || mode->width <= 0 || mode->height <= 0) { return { false, 0 }; }
+
+    const int msgW = LOWORD(lParam);
+    const int msgH = HIWORD(lParam);
+    if (msgW == mode->width && msgH == mode->height) { return { false, 0 }; }
+
+    const LPARAM adjustedSize = MAKELPARAM(mode->width, mode->height);
+    return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, adjustedSize) };
+}
+
 InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, const std::string& currentModeId,
                                  const std::string& gameState) {
     switch (uMsg) {
@@ -1930,6 +1946,9 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     if (result.consumed) return result.result;
 
     result = HandleActivate(hWnd, uMsg, wParam, lParam, currentModeId);
+    if (result.consumed) return result.result;
+
+    result = HandleWmSizeModeDimensions(hWnd, uMsg, wParam, lParam, currentModeId);
     if (result.consumed) return result.result;
 
     result = HandleHotkeys(hWnd, uMsg, wParam, lParam, currentModeId, localGameState);
