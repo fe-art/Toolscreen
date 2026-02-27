@@ -1,6 +1,7 @@
 #include "utils.h"
 #include "gui.h"
 #include "logic_thread.h"
+#include "mirror_thread.h"
 #include "profiler.h"
 
 extern std::atomic<GLuint> g_cachedGameTextureId;
@@ -23,6 +24,7 @@ extern std::atomic<GLuint> g_cachedGameTextureId;
 #include <shared_mutex>
 #include <sstream>
 #include <thread>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -1006,10 +1008,46 @@ bool SwitchToMode(const std::string& newModeId, const std::string& source, bool 
     }
 
     {
+        std::vector<std::string> mirrorsToInvalidate;
+
         // Use config snapshot for thread-safe mode lookup (SwitchToMode is called from multiple threads)
         auto modeSnap = GetConfigSnapshot();
         const ModeConfig* fromMode = modeSnap ? GetModeFromSnapshot(*modeSnap, currentMode) : nullptr;
         const ModeConfig* toMode = modeSnap ? GetModeFromSnapshot(*modeSnap, newModeId) : nullptr;
+
+        if (modeSnap && fromMode && toMode && !EqualsIgnoreCase(fromMode->id, toMode->id)) {
+            auto collectModeMirrorIds = [](const Config& cfg, const ModeConfig* mode, std::unordered_set<std::string>& outMirrorIds) {
+                if (!mode) return;
+
+                outMirrorIds.reserve(outMirrorIds.size() + mode->mirrorIds.size() + mode->mirrorGroupIds.size());
+                for (const auto& mirrorId : mode->mirrorIds) {
+                    if (!mirrorId.empty()) { outMirrorIds.insert(mirrorId); }
+                }
+
+                for (const auto& groupName : mode->mirrorGroupIds) {
+                    for (const auto& group : cfg.mirrorGroups) {
+                        if (group.name != groupName) continue;
+                        for (const auto& item : group.mirrors) {
+                            if (!item.enabled || item.mirrorId.empty()) continue;
+                            outMirrorIds.insert(item.mirrorId);
+                        }
+                        break;
+                    }
+                }
+            };
+
+            std::unordered_set<std::string> fromMirrorIds;
+            std::unordered_set<std::string> toMirrorIds;
+            collectModeMirrorIds(*modeSnap, fromMode, fromMirrorIds);
+            collectModeMirrorIds(*modeSnap, toMode, toMirrorIds);
+
+            mirrorsToInvalidate.reserve(fromMirrorIds.size());
+            for (const auto& mirrorId : fromMirrorIds) {
+                if (toMirrorIds.find(mirrorId) == toMirrorIds.end()) { mirrorsToInvalidate.push_back(mirrorId); }
+            }
+        }
+
+        if (!mirrorsToInvalidate.empty()) { InvalidateMirrorTextureCaches(mirrorsToInvalidate); }
 
         if (!useAnimatedPosition) {
             if (fromMode) {

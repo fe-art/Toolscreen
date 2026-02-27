@@ -2149,4 +2149,34 @@ void UpdateMirrorCaptureSettings(const std::string& mirrorName, int captureWidth
     g_captureSignalCV.notify_one();
 }
 
+void InvalidateMirrorTextureCaches(const std::vector<std::string>& mirrorNames) {
+    if (mirrorNames.empty()) return;
+
+    std::unique_lock<std::shared_mutex> lock(g_mirrorInstancesMutex);
+    for (const auto& mirrorName : mirrorNames) {
+        auto it = g_mirrorInstances.find(mirrorName);
+        if (it == g_mirrorInstances.end()) continue;
+
+        MirrorInstance& inst = it->second;
+        inst.captureReady.store(false, std::memory_order_release);
+        inst.hasValidContent = false;
+        inst.hasFrameContent = false;
+        inst.hasFrameContentBack = false;
+        inst.capturedAsRawOutput = false;
+        inst.capturedAsRawOutputBack = false;
+        inst.cachedRenderState.isValid = false;
+        inst.cachedRenderStateBack.isValid = false;
+
+        // Force full reallocation/rebuild on next activation so stale mirror/static-border visuals cannot survive.
+        inst.fbo_w = 0;
+        inst.fbo_h = 0;
+        inst.final_w = 0;
+        inst.final_h = 0;
+        inst.final_w_back = 0;
+        inst.final_h_back = 0;
+
+        inst.forceUpdateFrames = 3;
+    }
+}
+
 

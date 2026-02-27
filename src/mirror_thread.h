@@ -151,6 +151,9 @@ void UpdateMirrorInputRegions(const std::string& mirrorName, const std::vector<M
 void UpdateMirrorCaptureSettings(const std::string& mirrorName, int captureWidth, int captureHeight, const MirrorBorderConfig& border,
                                  const MirrorColors& colors, float colorSensitivity, bool rawOutput, bool colorPassthrough);
 
+// Invalidate cached mirror textures/state for mirrors that are no longer active in the current mode.
+void InvalidateMirrorTextureCaches(const std::vector<std::string>& mirrorNames);
+
 void SetGlobalMirrorGammaMode(MirrorGammaMode mode);
 MirrorGammaMode GetGlobalMirrorGammaMode();
 
