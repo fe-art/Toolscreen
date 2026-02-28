@@ -1912,7 +1912,9 @@ void WriteDefaultConfig(const std::wstring& path) {
             }
         }
 
-        int horizontalMargin = ((screenWidth / 2) - (384 / 2)) / 10;
+        int eyezoomWindowWidth = defaultConfig.eyezoom.windowWidth;
+        if (eyezoomWindowWidth < 1) eyezoomWindowWidth = ConfigDefaults::EYEZOOM_WINDOW_WIDTH;
+        int horizontalMargin = ((screenWidth / 2) - (eyezoomWindowWidth / 2)) / 10;
         int verticalMargin = (screenHeight / 2) / 4;
         defaultConfig.eyezoom.horizontalMargin = horizontalMargin;
         defaultConfig.eyezoom.verticalMargin = verticalMargin;

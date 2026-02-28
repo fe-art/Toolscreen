@@ -1418,7 +1418,6 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
         }
 
         const int fullW = GetCachedWindowWidth(), fullH = GetCachedWindowHeight();
-        bool isFull = IsFullscreen();
 
         int windowWidth = 0, windowHeight = 0;
         {
@@ -1428,6 +1427,11 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                 windowHeight = rect.bottom - rect.top;
             }
         }
+
+        constexpr int kFullscreenTolPx = 1;
+        const bool hasWindowClientSize = (windowWidth > 0 && windowHeight > 0);
+        const bool isWindowedPresentation =
+            hasWindowClientSize && (windowWidth < (fullW - kFullscreenTolPx) || windowHeight < (fullH - kFullscreenTolPx));
 
         if (g_cachedGameTextureId.load() == UINT_MAX) {
             GLint gameTextureId = UINT_MAX;
@@ -1446,9 +1450,7 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
         // Note: Windows mouse speed application is now handled by the logic thread
         // Note: Hotkey secondary mode reset on world exit is now handled by the logic thread
 
-        if (!isFull) {
-            g_safeToCapture.store(false, std::memory_order_release);
-
+        if (isWindowedPresentation) {
             bool isPre113 = (g_gameVersion < GameVersion(1, 13, 0));
             if (isPre113) {
                 ModeViewportInfo viewport = GetCurrentModeViewport();
@@ -1506,19 +1508,17 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
             g_isTransitioningMode = true;
             Log("Mode transition detected (no animation): " + lastFrameModeIdCopy + " -> " + desiredModeId);
 
-            if (isFull) {
-                int modeWidth = 0, modeHeight = 0;
-                bool modeValid = false;
-                {
-                    const ModeConfig* newMode = GetMode(desiredModeId);
-                    if (newMode) {
-                        modeWidth = newMode->width;
-                        modeHeight = newMode->height;
-                        modeValid = true;
-                    }
+            int modeWidth = 0, modeHeight = 0;
+            bool modeValid = false;
+            {
+                const ModeConfig* newMode = GetMode(desiredModeId);
+                if (newMode) {
+                    modeWidth = newMode->width;
+                    modeHeight = newMode->height;
+                    modeValid = true;
                 }
-                if (modeValid) { PostMessage(hwnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(modeWidth, modeHeight)); }
             }
+            if (modeValid) { PostMessage(hwnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(modeWidth, modeHeight)); }
         }
 
         // Note: Video player update is now done in render_thread
@@ -1601,7 +1601,7 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
 
             const bool anyOtherCustomOutput = frameCfg.debug.fakeCursor || g_screenshotRequested.load(std::memory_order_relaxed);
 
-            const bool canSkipCustomRender = g_glInitialized.load(std::memory_order_acquire) && isFull && !needsDualRendering &&
+            const bool canSkipCustomRender = g_glInitialized.load(std::memory_order_acquire) && !needsDualRendering &&
                                              !IsModeTransitionActive() && modeSizesFullscreen &&
                                              stretchIsFullscreen && !borderVisible && !anyModeOverlaysConfigured &&
                                              !anyImGuiOrDebugOverlay && !anyOtherCustomOutput;
@@ -1752,11 +1752,11 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                     submission.context.eyeZoomSnapshotWidth = GetEyeZoomSnapshotWidth();
                     submission.context.eyeZoomSnapshotHeight = GetEyeZoomSnapshotHeight();
                     submission.context.showTextureGrid = frameCfg.debug.showTextureGrid;
-                    submission.context.isWindowed = !isFull;
-                    submission.context.isRawWindowedMode = !isFull;
+                    submission.context.isWindowed = isWindowedPresentation;
+                    submission.context.isRawWindowedMode = false;
                     submission.context.windowW = windowWidth;
                     submission.context.windowH = windowHeight;
-                    submission.context.welcomeToastIsFullscreen = isFull;
+                    submission.context.welcomeToastIsFullscreen = EqualsIgnoreCase(modeToRenderCopy.id, "Fullscreen");
                     submission.context.showWelcomeToast = true;
                     submission.isDualRenderingPath = hideAnimOnScreen;
 

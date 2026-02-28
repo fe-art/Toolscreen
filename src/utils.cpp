@@ -1152,25 +1152,6 @@ bool SwitchToMode(const std::string& newModeId, const std::string& source, bool 
     return true;
 }
 
-bool IsFullscreen() {
-    HWND hwnd = g_minecraftHwnd.load();
-    if (!hwnd) { return false; }
-
-    RECT r{};
-    if (!GetWindowRect(hwnd, &r)) { return false; }
-
-    RECT monRect{};
-    if (!GetMonitorRectForWindow(hwnd, monRect)) { return false; }
-
-    // Borderless windows can be off by a pixel due to DPI rounding or driver quirks.
-    const int tol = 1;
-    const bool leftOk = std::abs(r.left - monRect.left) <= tol;
-    const bool topOk = std::abs(r.top - monRect.top) <= tol;
-    const bool rightOk = std::abs(r.right - monRect.right) <= tol;
-    const bool bottomOk = std::abs(r.bottom - monRect.bottom) <= tol;
-    return leftOk && topOk && rightOk && bottomOk;
-}
-
 bool GetMonitorRectForWindow(HWND hwnd, RECT& outRect) {
     if (!hwnd) { return false; }
 

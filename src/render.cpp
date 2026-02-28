@@ -2725,17 +2725,17 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
     const bool wantAnyImGui = g_shouldRenderGui.load(std::memory_order_relaxed) || g_showPerformanceOverlay.load(std::memory_order_relaxed) ||
                               g_showProfiler.load(std::memory_order_relaxed) || g_showEyeZoom.load(std::memory_order_relaxed) ||
                               g_showTextureGrid.load(std::memory_order_relaxed);
+    const bool isFullscreenMode = EqualsIgnoreCase(modeToRender->id, "Fullscreen");
 
     bool wantWelcomeToast = false;
     {
-        const bool isFull = IsFullscreen();
         static bool s_prevFullscreen = false;
         static std::chrono::steady_clock::time_point s_fullscreenEnterTime{};
         auto now = std::chrono::steady_clock::now();
-        if (isFull && !s_prevFullscreen) { s_fullscreenEnterTime = now; }
-        s_prevFullscreen = isFull;
+        if (isFullscreenMode && !s_prevFullscreen) { s_fullscreenEnterTime = now; }
+        s_prevFullscreen = isFullscreenMode;
 
-        if (isFull && !g_configurePromptDismissedThisSession.load(std::memory_order_relaxed)) {
+        if (isFullscreenMode && !g_configurePromptDismissedThisSession.load(std::memory_order_relaxed)) {
             constexpr float kHoldSeconds = 10.0f;
             constexpr float kFadeSeconds = 1.5f;
             const float elapsed = std::chrono::duration_cast<std::chrono::duration<float>>(now - s_fullscreenEnterTime).count();
@@ -2819,7 +2819,7 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
             request.textureGridModeWidth = g_textureGridModeWidth.load(std::memory_order_relaxed);
             request.textureGridModeHeight = g_textureGridModeHeight.load(std::memory_order_relaxed);
 
-            request.welcomeToastIsFullscreen = IsFullscreen();
+            request.welcomeToastIsFullscreen = isFullscreenMode;
             request.showWelcomeToast = wantWelcomeToast;
 
             request.backgroundIsImage = (modeToRender->background.selectedMode == "image");

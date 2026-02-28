@@ -2165,7 +2165,9 @@ EyeZoomConfig GetDefaultEyeZoomConfigFromEmbedded() {
         int screenWidth = GetCachedWindowWidth();
         int screenHeight = GetCachedWindowHeight();
 
-        int horizontalMargin = ((screenWidth / 2) - (384 / 2)) / 20;
+        int eyezoomWindowWidth = eyezoom.windowWidth;
+        if (eyezoomWindowWidth < 1) eyezoomWindowWidth = ConfigDefaults::EYEZOOM_WINDOW_WIDTH;
+        int horizontalMargin = ((screenWidth / 2) - (eyezoomWindowWidth / 2)) / 20;
         int verticalMargin = (screenHeight / 2) / 4;
 
         eyezoom.horizontalMargin = horizontalMargin;
