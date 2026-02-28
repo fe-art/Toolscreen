@@ -417,7 +417,7 @@ struct KeyRebindsConfig {
     std::vector<KeyRebind> rebinds;
 };
 struct Config {
-    int configVersion = 1;
+    int configVersion = 2;
     std::vector<MirrorConfig> mirrors;
     std::vector<MirrorGroupConfig> mirrorGroups;
     std::vector<ImageConfig> images;
@@ -439,8 +439,8 @@ struct Config {
     int fpsLimitSleepThreshold = 1000;
     MirrorGammaMode mirrorGammaMode = MirrorGammaMode::Auto;
     // Useful if a specific overlay/driver hook layer is unstable when chained.
-    bool disableHookChaining = true;
-    HookChainingNextTarget hookChainingNextTarget = HookChainingNextTarget::LatestHook;
+    bool disableHookChaining = false;
+    HookChainingNextTarget hookChainingNextTarget = HookChainingNextTarget::OriginalFunction;
     bool allowCursorEscape = false;
     float mouseSensitivity = 1.0f;
     int windowsMouseSpeed = 0;                              // Windows mouse speed override (0 = disabled, 1-20 = override)

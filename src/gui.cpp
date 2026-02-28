@@ -2239,6 +2239,12 @@ void LoadConfig() {
             Log("Config version upgrade detected: v" + std::to_string(loadedConfigVersion) + " -> v" +
                 std::to_string(currentConfigVersion));
 
+            if (loadedConfigVersion == 1 && currentConfigVersion >= 2) {
+                g_config.disableHookChaining = false;
+                g_config.hookChainingNextTarget = HookChainingNextTarget::OriginalFunction;
+                g_configIsDirty = true;
+                Log("Applied v2 migration: disableHookChaining=false, hookChainingNextTarget=Original");
+            }
 
             g_config.configVersion = currentConfigVersion;
             g_configIsDirty = true;

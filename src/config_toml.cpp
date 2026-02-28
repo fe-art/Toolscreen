@@ -344,7 +344,7 @@ static MirrorGammaMode StringToMirrorGammaMode(const std::string& str) {
 static std::string HookChainingNextTargetToString(HookChainingNextTarget v) {
     switch (v) {
     case HookChainingNextTarget::OriginalFunction:
-        return "OriginalFunction";
+        return "Original";
     default:
         return "LatestHook";
     }
@@ -357,7 +357,7 @@ static HookChainingNextTarget StringToHookChainingNextTarget(const std::string& 
     if (str == "LatestHook" || str == "Latest" || str == "latest" || str == "latestHook" || str == "LATEST") {
         return HookChainingNextTarget::LatestHook;
     }
-    return HookChainingNextTarget::LatestHook;
+    return HookChainingNextTarget::OriginalFunction;
 }
 
 std::string MirrorBorderTypeToString(MirrorBorderType type) {

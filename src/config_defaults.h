@@ -163,14 +163,14 @@ constexpr DWORD KEY_REBIND_CUSTOM_OUTPUT_SCANCODE = 0;
 
 constexpr bool KEY_REBINDS_ENABLED = false;
 
-constexpr int DEFAULT_CONFIG_VERSION = 1;
+constexpr int DEFAULT_CONFIG_VERSION = 2;
 inline const std::string CONFIG_DEFAULT_MODE = "Fullscreen";
 inline const std::string CONFIG_FONT_PATH = R"(c:\Windows\Fonts\Arial.ttf)";
 constexpr int CONFIG_FPS_LIMIT = 0;
 constexpr int CONFIG_FPS_LIMIT_SLEEP_THRESHOLD = 1000;
 constexpr bool CONFIG_ALLOW_CURSOR_ESCAPE = false;
-constexpr bool CONFIG_DISABLE_HOOK_CHAINING = true;
-inline const std::string CONFIG_HOOK_CHAINING_NEXT_TARGET = "LatestHook";
+constexpr bool CONFIG_DISABLE_HOOK_CHAINING = false;
+inline const std::string CONFIG_HOOK_CHAINING_NEXT_TARGET = "Original";
 constexpr float CONFIG_MOUSE_SENSITIVITY = 1.0f;
 constexpr int CONFIG_WINDOWS_MOUSE_SPEED = 0;
 constexpr bool CONFIG_HIDE_ANIMATIONS_IN_GAME = false;
