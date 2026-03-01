@@ -1223,9 +1223,9 @@ void EyeZoomConfigToToml(const EyeZoomConfig& cfg, toml::table& out) {
     out.insert("stretchWidth", cfg.stretchWidth);
     out.insert("windowWidth", cfg.windowWidth);
     out.insert("windowHeight", cfg.windowHeight);
-    out.insert("horizontalMargin", cfg.horizontalMargin);
-    out.insert("verticalMargin", cfg.verticalMargin);
-    out.insert("useCustomPosition", cfg.useCustomPosition);
+    out.insert("zoomAreaWidth", cfg.zoomAreaWidth);
+    out.insert("zoomAreaHeight", cfg.zoomAreaHeight);
+    out.insert("useCustomSizePosition", cfg.useCustomSizePosition);
     out.insert("positionX", cfg.positionX);
     out.insert("positionY", cfg.positionY);
     out.insert("autoFontSize", cfg.autoFontSize);
@@ -1266,9 +1266,53 @@ void EyeZoomConfigFromToml(const toml::table& tbl, EyeZoomConfig& cfg) {
     cfg.stretchWidth = GetOr(tbl, "stretchWidth", ConfigDefaults::EYEZOOM_STRETCH_WIDTH);
     cfg.windowWidth = GetOr(tbl, "windowWidth", ConfigDefaults::EYEZOOM_WINDOW_WIDTH);
     cfg.windowHeight = GetOr(tbl, "windowHeight", ConfigDefaults::EYEZOOM_WINDOW_HEIGHT);
-    cfg.horizontalMargin = GetOr(tbl, "horizontalMargin", ConfigDefaults::EYEZOOM_HORIZONTAL_MARGIN);
-    cfg.verticalMargin = GetOr(tbl, "verticalMargin", ConfigDefaults::EYEZOOM_VERTICAL_MARGIN);
-    cfg.useCustomPosition = GetOr(tbl, "useCustomPosition", ConfigDefaults::EYEZOOM_USE_CUSTOM_POSITION);
+
+    int screenWidth = GetCachedWindowWidth();
+    int screenHeight = GetCachedWindowHeight();
+    int viewportX = (screenWidth > 0) ? ((screenWidth - cfg.windowWidth) / 2) : 0;
+    int autoHorizontalMargin = (viewportX > 0) ? (viewportX / 10) : 0;
+    int autoVerticalMargin = (screenHeight > 0) ? (screenHeight / 8) : 0;
+    int computedAutoZoomAreaWidth = viewportX - (2 * autoHorizontalMargin);
+    int computedAutoZoomAreaHeight = screenHeight - (2 * autoVerticalMargin);
+    if (computedAutoZoomAreaWidth < 1) {
+        computedAutoZoomAreaWidth = (screenWidth > 0) ? screenWidth : (std::max)(1, cfg.windowWidth);
+    }
+    if (computedAutoZoomAreaHeight < 1) {
+        computedAutoZoomAreaHeight = (screenHeight > 0) ? screenHeight : (std::max)(1, cfg.windowHeight);
+    }
+
+    bool hasZoomAreaWidth = tbl.contains("zoomAreaWidth");
+    bool hasZoomAreaHeight = tbl.contains("zoomAreaHeight");
+
+    int legacyHorizontalMargin = GetOr(tbl, "horizontalMargin", -1);
+    int legacyVerticalMargin = GetOr(tbl, "verticalMargin", -1);
+
+    if (hasZoomAreaWidth) {
+        int parsedZoomAreaWidth = GetOr(tbl, "zoomAreaWidth", computedAutoZoomAreaWidth);
+        cfg.zoomAreaWidth = (parsedZoomAreaWidth > 0) ? parsedZoomAreaWidth : computedAutoZoomAreaWidth;
+    } else if (legacyHorizontalMargin >= 0 && viewportX > 0) {
+        cfg.zoomAreaWidth = viewportX - (2 * legacyHorizontalMargin);
+    } else {
+        cfg.zoomAreaWidth = computedAutoZoomAreaWidth;
+    }
+
+    if (hasZoomAreaHeight) {
+        int parsedZoomAreaHeight = GetOr(tbl, "zoomAreaHeight", computedAutoZoomAreaHeight);
+        cfg.zoomAreaHeight = (parsedZoomAreaHeight > 0) ? parsedZoomAreaHeight : computedAutoZoomAreaHeight;
+    } else if (legacyVerticalMargin >= 0 && screenHeight > 0) {
+        cfg.zoomAreaHeight = screenHeight - (2 * legacyVerticalMargin);
+    } else {
+        cfg.zoomAreaHeight = computedAutoZoomAreaHeight;
+    }
+
+    if (cfg.zoomAreaWidth < 1) cfg.zoomAreaWidth = 1;
+    if (cfg.zoomAreaHeight < 1) cfg.zoomAreaHeight = 1;
+    if (screenWidth > 0 && cfg.zoomAreaWidth > screenWidth) cfg.zoomAreaWidth = screenWidth;
+    if (screenHeight > 0 && cfg.zoomAreaHeight > screenHeight) cfg.zoomAreaHeight = screenHeight;
+
+    cfg.useCustomSizePosition =
+        GetOr(tbl, "useCustomSizePosition", GetOr(tbl, "useCustomPosition", ConfigDefaults::EYEZOOM_USE_CUSTOM_SIZE_POSITION));
+
     cfg.positionX = GetOr(tbl, "positionX", ConfigDefaults::EYEZOOM_POSITION_X);
     cfg.positionY = GetOr(tbl, "positionY", ConfigDefaults::EYEZOOM_POSITION_Y);
     cfg.autoFontSize = GetOr(tbl, "autoFontSize", ConfigDefaults::EYEZOOM_AUTO_FONT_SIZE);
@@ -2167,11 +2211,20 @@ EyeZoomConfig GetDefaultEyeZoomConfigFromEmbedded() {
 
         int eyezoomWindowWidth = eyezoom.windowWidth;
         if (eyezoomWindowWidth < 1) eyezoomWindowWidth = ConfigDefaults::EYEZOOM_WINDOW_WIDTH;
+        int eyezoomTargetFinalX = (screenWidth - eyezoomWindowWidth) / 2;
+        if (eyezoomTargetFinalX < 1) eyezoomTargetFinalX = 1;
         int horizontalMargin = ((screenWidth / 2) - (eyezoomWindowWidth / 2)) / 20;
         int verticalMargin = (screenHeight / 2) / 4;
 
-        eyezoom.horizontalMargin = horizontalMargin;
-        eyezoom.verticalMargin = verticalMargin;
+        int defaultZoomAreaWidth = eyezoomTargetFinalX - (2 * horizontalMargin);
+        int defaultZoomAreaHeight = screenHeight - (2 * verticalMargin);
+        if (defaultZoomAreaWidth < 1) defaultZoomAreaWidth = 1;
+        if (defaultZoomAreaHeight < 1) defaultZoomAreaHeight = 1;
+
+        eyezoom.zoomAreaWidth = defaultZoomAreaWidth;
+        eyezoom.zoomAreaHeight = defaultZoomAreaHeight;
+        eyezoom.positionX = horizontalMargin;
+        eyezoom.positionY = verticalMargin;
 
     } catch (const std::exception& e) { Log("ERROR: Failed to parse embedded eyezoom: " + std::string(e.what())); }
 

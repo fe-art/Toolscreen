@@ -1460,36 +1460,52 @@ void handleEyeZoomMode(const GLState& s, float opacity, int animatedViewportX) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
 
+    int modeWidth = zoomConfig.windowWidth;
+    int targetViewportX = (fullW - modeWidth) / 2;
+
     int viewportX;
     if (animatedViewportX >= 0) {
         viewportX = animatedViewportX;
     } else {
-        int modeWidth = zoomConfig.windowWidth;
-        viewportX = (fullW - modeWidth) / 2;
+        viewportX = targetViewportX;
     }
 
-    if (viewportX <= 0) { return; }
+    int zoomOutputWidth = 0;
+    int zoomOutputHeight = 0;
+    int zoomX = 0;
+    int zoomY = 0;
 
-    int zoomOutputWidth = viewportX - (2 * zoomConfig.horizontalMargin);
+    if (zoomConfig.useCustomSizePosition) {
+        zoomOutputWidth = zoomConfig.zoomAreaWidth;
+        zoomOutputHeight = zoomConfig.zoomAreaHeight;
+        zoomX = zoomConfig.positionX;
+        zoomY = zoomConfig.positionY;
+    } else {
+        int autoHorizontalMargin = 0;
+        if (targetViewportX > 0) autoHorizontalMargin = targetViewportX / 10;
+
+        zoomOutputWidth = viewportX - (2 * autoHorizontalMargin);
+        int autoVerticalMargin = fullH / 8;
+        zoomOutputHeight = fullH - (2 * autoVerticalMargin);
+
+        zoomX = autoHorizontalMargin;
+        zoomY = (fullH - zoomOutputHeight) / 2;
+    }
+
+    if (zoomOutputWidth > fullW) zoomOutputWidth = fullW;
 
     if (zoomOutputWidth <= 20) {
         return;
     }
 
-    int zoomOutputHeight = fullH - (2 * zoomConfig.verticalMargin);
+    if (zoomOutputHeight > fullH) zoomOutputHeight = fullH;
 
-    int minHeight = (int)(0.2f * fullH);
-    if (zoomOutputHeight < minHeight) { zoomOutputHeight = minHeight; }
+    if (zoomOutputHeight < 1) { zoomOutputHeight = 1; }
 
-    int zoomX = zoomConfig.useCustomPosition ? zoomConfig.positionX : zoomConfig.horizontalMargin;
-    int zoomY = zoomConfig.useCustomPosition ? zoomConfig.positionY : zoomConfig.verticalMargin;
-
-    if (zoomConfig.useCustomPosition) {
-        int maxZoomX = (std::max)(0, fullW - zoomOutputWidth);
-        int maxZoomY = (std::max)(0, fullH - zoomOutputHeight);
-        zoomX = (std::max)(0, (std::min)(zoomX, maxZoomX));
-        zoomY = (std::max)(0, (std::min)(zoomY, maxZoomY));
-    }
+    int maxZoomX = (std::max)(0, fullW - zoomOutputWidth);
+    int maxZoomY = (std::max)(0, fullH - zoomOutputHeight);
+    zoomX = (std::max)(0, (std::min)(zoomX, maxZoomX));
+    zoomY = (std::max)(0, (std::min)(zoomY, maxZoomY));
 
     int zoomY_gl = fullH - zoomY - zoomOutputHeight;
 

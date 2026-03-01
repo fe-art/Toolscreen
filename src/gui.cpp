@@ -1914,10 +1914,19 @@ void WriteDefaultConfig(const std::wstring& path) {
 
         int eyezoomWindowWidth = defaultConfig.eyezoom.windowWidth;
         if (eyezoomWindowWidth < 1) eyezoomWindowWidth = ConfigDefaults::EYEZOOM_WINDOW_WIDTH;
+        int eyezoomTargetFinalX = (screenWidth - eyezoomWindowWidth) / 2;
+        if (eyezoomTargetFinalX < 1) eyezoomTargetFinalX = 1;
         int horizontalMargin = ((screenWidth / 2) - (eyezoomWindowWidth / 2)) / 10;
         int verticalMargin = (screenHeight / 2) / 4;
-        defaultConfig.eyezoom.horizontalMargin = horizontalMargin;
-        defaultConfig.eyezoom.verticalMargin = verticalMargin;
+        int defaultZoomAreaWidth = eyezoomTargetFinalX - (2 * horizontalMargin);
+        int defaultZoomAreaHeight = screenHeight - (2 * verticalMargin);
+        if (defaultZoomAreaWidth < 1) defaultZoomAreaWidth = 1;
+        if (defaultZoomAreaHeight < 1) defaultZoomAreaHeight = 1;
+
+        defaultConfig.eyezoom.zoomAreaWidth = defaultZoomAreaWidth;
+        defaultConfig.eyezoom.zoomAreaHeight = defaultZoomAreaHeight;
+        defaultConfig.eyezoom.positionX = horizontalMargin;
+        defaultConfig.eyezoom.positionY = verticalMargin;
 
         for (auto& image : defaultConfig.images) {
             if (image.name == "Ninjabrain Bot" && image.path.empty()) {

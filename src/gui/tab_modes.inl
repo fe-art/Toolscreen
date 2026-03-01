@@ -448,71 +448,103 @@ if (ImGui::BeginTabItem("Modes")) {
                 ImGui::Columns(1);
 
                 ImGui::Separator();
-                ImGui::Text("Margin Settings (Output)");
-                ImGui::Columns(2, "eyezoom_margin_cols", false);
-                ImGui::SetColumnWidth(0, 150);
-                ImGui::Text("Horizontal Margin");
-                ImGui::NextColumn();
-                int eyezoomModeWidth = mode.width;
-                int eyezoomTargetFinalX = (screenWidth - eyezoomModeWidth) / 2;
-                int maxHMargin = (int)((eyezoomTargetFinalX - 0.2f * g_config.eyezoom.stretchWidth) / 2.0f);
-                if (maxHMargin < 0) maxHMargin = 0;
-                if (Spinner("##EyeZoomHorizontalMargin", &g_config.eyezoom.horizontalMargin, 10, 0, maxHMargin)) g_configIsDirty = true;
-                ImGui::NextColumn();
-                ImGui::Text("Vertical Margin");
-                ImGui::NextColumn();
+                ImGui::Text("Placement");
+                if (ImGui::Checkbox("Use Custom Size & Position", &g_config.eyezoom.useCustomSizePosition)) { g_configIsDirty = true; }
+                ImGui::SameLine();
+                HelpMarker("Disabled: uses classic EyeZoom placement (left side, centered horizontally and vertically).\n"
+                           "Enabled: you can set custom zoom area size and X/Y position.");
+
                 int monitorHeight = GetCachedWindowHeight();
-                int maxVMargin = (int)((monitorHeight - 0.2f * monitorHeight) / 2.0f);
-                if (maxVMargin < 0) maxVMargin = 0;
-                if (Spinner("##EyeZoomVerticalMargin", &g_config.eyezoom.verticalMargin, 10, 0, maxVMargin)) g_configIsDirty = true;
+                if (monitorHeight < 1) monitorHeight = 1;
+                int monitorWidth = screenWidth;
+                if (monitorWidth < 1) monitorWidth = 1;
+
+                if (!g_config.eyezoom.useCustomSizePosition) {
+                    int eyezoomModeWidth = mode.width;
+                    int eyezoomTargetFinalX = (monitorWidth - eyezoomModeWidth) / 2;
+                    if (eyezoomTargetFinalX < 1) eyezoomTargetFinalX = 1;
+
+                    int autoHorizontalMargin = eyezoomTargetFinalX / 10;
+                    int autoZoomAreaWidth = eyezoomTargetFinalX - (2 * autoHorizontalMargin);
+                    if (autoZoomAreaWidth < 1) autoZoomAreaWidth = 1;
+
+                    int autoVerticalMargin = monitorHeight / 8;
+                    int autoZoomAreaHeight = monitorHeight - (2 * autoVerticalMargin);
+                    if (autoZoomAreaHeight < 1) autoZoomAreaHeight = 1;
+
+                    int autoPosY = (monitorHeight - autoZoomAreaHeight) / 2;
+                    ImGui::TextDisabled("Auto layout: X=%d  Y=%d  Width=%d  Height=%d", autoHorizontalMargin, autoPosY, autoZoomAreaWidth,
+                                        autoZoomAreaHeight);
+                }
+
+                ImGui::BeginDisabled(!g_config.eyezoom.useCustomSizePosition);
+
+                ImGui::Separator();
+                ImGui::Text("Zoom Area (Output)");
+                ImGui::Columns(2, "eyezoom_area_cols", false);
+                ImGui::SetColumnWidth(0, 150);
+                ImGui::Text("Zoom Area Width");
+                ImGui::NextColumn();
+                int maxZoomAreaWidth = monitorWidth;
+                int maxZoomAreaHeight = (std::max)(1, monitorHeight);
+                if (Spinner("##EyeZoomAreaWidth", &g_config.eyezoom.zoomAreaWidth, 10, 1, maxZoomAreaWidth)) g_configIsDirty = true;
+                ImGui::NextColumn();
+                ImGui::Text("Zoom Area Height");
+                ImGui::NextColumn();
+                if (Spinner("##EyeZoomAreaHeight", &g_config.eyezoom.zoomAreaHeight, 10, 1, maxZoomAreaHeight)) g_configIsDirty = true;
                 ImGui::Columns(1);
 
                 ImGui::Separator();
-                ImGui::Text("Placement");
-                if (ImGui::Checkbox("Use Custom Position", &g_config.eyezoom.useCustomPosition)) { g_configIsDirty = true; }
-                ImGui::SameLine();
-                HelpMarker("When enabled, EyeZoom clone output can be moved anywhere on screen using X/Y position instead of being fixed to the left-middle area.");
+                HelpMarker("Set the EyeZoom output rectangle size, then place it anywhere on screen using X/Y.");
 
-                if (g_config.eyezoom.useCustomPosition) {
-                    int estimatedZoomWidth = eyezoomTargetFinalX - (2 * g_config.eyezoom.horizontalMargin);
-                    if (estimatedZoomWidth < 1) estimatedZoomWidth = 1;
-
-                    int estimatedZoomHeight = monitorHeight - (2 * g_config.eyezoom.verticalMargin);
-                    int minZoomHeight = (int)(0.2f * monitorHeight);
-                    if (estimatedZoomHeight < minZoomHeight) estimatedZoomHeight = minZoomHeight;
-                    if (estimatedZoomHeight > monitorHeight) estimatedZoomHeight = monitorHeight;
-
-                    int maxPosX = (std::max)(0, screenWidth - estimatedZoomWidth);
-                    int maxPosY = (std::max)(0, monitorHeight - estimatedZoomHeight);
-
-                    if (g_config.eyezoom.positionX < 0) {
-                        g_config.eyezoom.positionX = 0;
-                        g_configIsDirty = true;
-                    }
-                    if (g_config.eyezoom.positionX > maxPosX) {
-                        g_config.eyezoom.positionX = maxPosX;
-                        g_configIsDirty = true;
-                    }
-                    if (g_config.eyezoom.positionY < 0) {
-                        g_config.eyezoom.positionY = 0;
-                        g_configIsDirty = true;
-                    }
-                    if (g_config.eyezoom.positionY > maxPosY) {
-                        g_config.eyezoom.positionY = maxPosY;
-                        g_configIsDirty = true;
-                    }
-
-                    ImGui::Columns(2, "eyezoom_position_cols", false);
-                    ImGui::SetColumnWidth(0, 150);
-                    ImGui::Text("Position X");
-                    ImGui::NextColumn();
-                    if (Spinner("##EyeZoomPositionX", &g_config.eyezoom.positionX, 10, 0, maxPosX)) g_configIsDirty = true;
-                    ImGui::NextColumn();
-                    ImGui::Text("Position Y");
-                    ImGui::NextColumn();
-                    if (Spinner("##EyeZoomPositionY", &g_config.eyezoom.positionY, 10, 0, maxPosY)) g_configIsDirty = true;
-                    ImGui::Columns(1);
+                int clampedZoomAreaWidth = g_config.eyezoom.zoomAreaWidth;
+                if (clampedZoomAreaWidth < 1) clampedZoomAreaWidth = 1;
+                if (clampedZoomAreaWidth > monitorWidth) clampedZoomAreaWidth = monitorWidth;
+                if (clampedZoomAreaWidth != g_config.eyezoom.zoomAreaWidth) {
+                    g_config.eyezoom.zoomAreaWidth = clampedZoomAreaWidth;
+                    g_configIsDirty = true;
                 }
+
+                int clampedZoomAreaHeight = g_config.eyezoom.zoomAreaHeight;
+                if (clampedZoomAreaHeight < 1) clampedZoomAreaHeight = 1;
+                if (clampedZoomAreaHeight > monitorHeight) clampedZoomAreaHeight = monitorHeight;
+                if (clampedZoomAreaHeight != g_config.eyezoom.zoomAreaHeight) {
+                    g_config.eyezoom.zoomAreaHeight = clampedZoomAreaHeight;
+                    g_configIsDirty = true;
+                }
+
+                int maxPosX = (std::max)(0, monitorWidth - g_config.eyezoom.zoomAreaWidth);
+                int maxPosY = (std::max)(0, monitorHeight - g_config.eyezoom.zoomAreaHeight);
+
+                if (g_config.eyezoom.positionX < 0) {
+                    g_config.eyezoom.positionX = 0;
+                    g_configIsDirty = true;
+                }
+                if (g_config.eyezoom.positionX > maxPosX) {
+                    g_config.eyezoom.positionX = maxPosX;
+                    g_configIsDirty = true;
+                }
+                if (g_config.eyezoom.positionY < 0) {
+                    g_config.eyezoom.positionY = 0;
+                    g_configIsDirty = true;
+                }
+                if (g_config.eyezoom.positionY > maxPosY) {
+                    g_config.eyezoom.positionY = maxPosY;
+                    g_configIsDirty = true;
+                }
+
+                ImGui::Columns(2, "eyezoom_position_cols", false);
+                ImGui::SetColumnWidth(0, 150);
+                ImGui::Text("Position X");
+                ImGui::NextColumn();
+                if (Spinner("##EyeZoomPositionX", &g_config.eyezoom.positionX, 10, 0, maxPosX)) g_configIsDirty = true;
+                ImGui::NextColumn();
+                ImGui::Text("Position Y");
+                ImGui::NextColumn();
+                if (Spinner("##EyeZoomPositionY", &g_config.eyezoom.positionY, 10, 0, maxPosY)) g_configIsDirty = true;
+                ImGui::Columns(1);
+
+                ImGui::EndDisabled();
 
                 ImGui::Separator();
                 ImGui::Text("Color Settings");

@@ -532,6 +532,11 @@ void ProcessPendingDimensionChange() {
             mode->relativeHeight = -1.0f;
         }
 
+        if (EqualsIgnoreCase(mode->id, "EyeZoom")) {
+            g_config.eyezoom.windowWidth = mode->width;
+            g_config.eyezoom.windowHeight = mode->height;
+        }
+
         const bool hasRelativeWidth = (mode->relativeWidth >= 0.0f && mode->relativeWidth <= 1.0f);
         const bool hasRelativeHeight = (mode->relativeHeight >= 0.0f && mode->relativeHeight <= 1.0f);
         if (!hasRelativeWidth && !hasRelativeHeight) { mode->useRelativeSize = false; }

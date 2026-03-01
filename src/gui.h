@@ -376,9 +376,9 @@ struct EyeZoomConfig {
     int stretchWidth = 810;
     int windowWidth = 384;
     int windowHeight = 16384;
-    int horizontalMargin = 0;
-    int verticalMargin = 0;
-    bool useCustomPosition = false;
+    int zoomAreaWidth = 0;
+    int zoomAreaHeight = 0;
+    bool useCustomSizePosition = false;
     int positionX = 0;
     int positionY = 0;
     bool autoFontSize = true;

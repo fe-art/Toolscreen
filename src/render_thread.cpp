@@ -1595,16 +1595,34 @@ static void RT_RenderEyeZoom(GLuint gameTexture, int requestViewportX, int fullW
     int viewportX = (requestViewportX >= 0) ? requestViewportX : targetViewportX;
     bool isTransitioningToEyeZoom = (viewportX < targetViewportX && !isTransitioningFromEyeZoom);
 
-    int stableZoomOutputWidth = targetViewportX - (2 * zoomConfig.horizontalMargin);
-    if (stableZoomOutputWidth <= 1) return;
+    int zoomOutputWidth = 0;
+    int zoomOutputHeight = 0;
+    int finalZoomX = 0;
+    int zoomY = 0;
 
-    int zoomOutputWidth = zoomConfig.slideZoomIn ? stableZoomOutputWidth : (viewportX - (2 * zoomConfig.horizontalMargin));
+    if (zoomConfig.useCustomSizePosition) {
+        zoomOutputWidth = zoomConfig.zoomAreaWidth;
+        zoomOutputHeight = zoomConfig.zoomAreaHeight;
+        finalZoomX = zoomConfig.positionX;
+        zoomY = zoomConfig.positionY;
+    } else {
+        int autoHorizontalMargin = 0;
+        if (targetViewportX > 0) autoHorizontalMargin = targetViewportX / 10;
+
+        zoomOutputWidth = targetViewportX - (2 * autoHorizontalMargin);
+        int autoVerticalMargin = fullH / 8;
+        zoomOutputHeight = fullH - (2 * autoVerticalMargin);
+
+        finalZoomX = autoHorizontalMargin;
+        zoomY = (fullH - zoomOutputHeight) / 2;
+    }
+
+    if (zoomOutputWidth > fullW) zoomOutputWidth = fullW;
 
     if (zoomOutputWidth <= 1) {
         return;
     }
 
-    int finalZoomX = zoomConfig.useCustomPosition ? zoomConfig.positionX : zoomConfig.horizontalMargin;
     int zoomX = finalZoomX;
 
     if (zoomConfig.slideZoomIn) {
@@ -1616,22 +1634,17 @@ static void RT_RenderEyeZoom(GLuint gameTexture, int requestViewportX, int fullW
         }
     }
 
-    int zoomOutputHeight = fullH - (2 * zoomConfig.verticalMargin);
-    int minHeight = (int)(0.2f * fullH);
-    if (zoomOutputHeight < minHeight) zoomOutputHeight = minHeight;
+    if (zoomOutputHeight > fullH) zoomOutputHeight = fullH;
+    if (zoomOutputHeight < 1) zoomOutputHeight = 1;
 
-    int zoomY = zoomConfig.useCustomPosition ? zoomConfig.positionY : zoomConfig.verticalMargin;
+    int maxZoomX = (std::max)(0, fullW - zoomOutputWidth);
+    int maxZoomY = (std::max)(0, fullH - zoomOutputHeight);
 
-    if (zoomConfig.useCustomPosition) {
-        int maxZoomX = (std::max)(0, fullW - zoomOutputWidth);
-        int maxZoomY = (std::max)(0, fullH - zoomOutputHeight);
-
-        bool isSlidingNow = zoomConfig.slideZoomIn && (isTransitioningToEyeZoom || isTransitioningFromEyeZoom);
-        if (!isSlidingNow) {
-            zoomX = (std::max)(0, (std::min)(zoomX, maxZoomX));
-        }
-        zoomY = (std::max)(0, (std::min)(zoomY, maxZoomY));
+    bool isSlidingNow = zoomConfig.slideZoomIn && (isTransitioningToEyeZoom || isTransitioningFromEyeZoom);
+    if (!isSlidingNow) {
+        zoomX = (std::max)(0, (std::min)(zoomX, maxZoomX));
     }
+    zoomY = (std::max)(0, (std::min)(zoomY, maxZoomY));
 
     int zoomY_gl = fullH - zoomY - zoomOutputHeight;
 
@@ -3426,16 +3439,32 @@ static void RenderThreadFunc(void* gameGLContext) {
                     bool isTransitioningFromEyeZoom = request.isTransitioningFromEyeZoom;
                     bool isTransitioningToEyeZoom = (viewportX < targetViewportX && !isTransitioningFromEyeZoom);
 
-                    int stableZoomOutputWidth = targetViewportX - (2 * zoomConfig.horizontalMargin);
-                    if (stableZoomOutputWidth <= 1) {
-                        zoomOutputWidth = 0;
+                    int zoomOutputHeight = 0;
+                    int finalZoomX = 0;
+                    int zoomY = 0;
+
+                    if (zoomConfig.useCustomSizePosition) {
+                        zoomOutputWidth = zoomConfig.zoomAreaWidth;
+                        zoomOutputHeight = zoomConfig.zoomAreaHeight;
+                        finalZoomX = zoomConfig.positionX;
+                        zoomY = zoomConfig.positionY;
                     } else {
-                        zoomOutputWidth = zoomConfig.slideZoomIn ? stableZoomOutputWidth : (viewportX - (2 * zoomConfig.horizontalMargin));
+                        int autoHorizontalMargin = 0;
+                        if (targetViewportX > 0) autoHorizontalMargin = targetViewportX / 10;
+
+                        zoomOutputWidth = targetViewportX - (2 * autoHorizontalMargin);
+                        int autoVerticalMargin = request.fullH / 8;
+                        zoomOutputHeight = request.fullH - (2 * autoVerticalMargin);
+
+                        finalZoomX = autoHorizontalMargin;
+                        zoomY = (request.fullH - zoomOutputHeight) / 2;
                     }
 
-                    if (viewportX > 0 && zoomOutputWidth > 20) {
+                    if (zoomOutputWidth > request.fullW) zoomOutputWidth = request.fullW;
+                    if (zoomOutputWidth <= 1) zoomOutputWidth = 0;
 
-                        int finalZoomX = zoomConfig.useCustomPosition ? zoomConfig.positionX : zoomConfig.horizontalMargin;
+                    if (zoomOutputWidth > 20) {
+
                         int zoomX = finalZoomX;
 
                         if (zoomConfig.slideZoomIn) {
@@ -3447,22 +3476,17 @@ static void RenderThreadFunc(void* gameGLContext) {
                             }
                         }
 
-                        int zoomOutputHeight = request.fullH - (2 * zoomConfig.verticalMargin);
-                        int minHeight = (int)(0.2f * request.fullH);
-                        if (zoomOutputHeight < minHeight) zoomOutputHeight = minHeight;
+                        if (zoomOutputHeight > request.fullH) zoomOutputHeight = request.fullH;
+                        if (zoomOutputHeight < 1) zoomOutputHeight = 1;
 
-                        int zoomY = zoomConfig.useCustomPosition ? zoomConfig.positionY : zoomConfig.verticalMargin;
+                        int maxZoomX = (std::max)(0, request.fullW - zoomOutputWidth);
+                        int maxZoomY = (std::max)(0, request.fullH - zoomOutputHeight);
 
-                        if (zoomConfig.useCustomPosition) {
-                            int maxZoomX = (std::max)(0, request.fullW - zoomOutputWidth);
-                            int maxZoomY = (std::max)(0, request.fullH - zoomOutputHeight);
-
-                            bool isSlidingNow = zoomConfig.slideZoomIn && (isTransitioningToEyeZoom || isTransitioningFromEyeZoom);
-                            if (!isSlidingNow) {
-                                zoomX = (std::max)(0, (std::min)(zoomX, maxZoomX));
-                            }
-                            zoomY = (std::max)(0, (std::min)(zoomY, maxZoomY));
+                        bool isSlidingNow = zoomConfig.slideZoomIn && (isTransitioningToEyeZoom || isTransitioningFromEyeZoom);
+                        if (!isSlidingNow) {
+                            zoomX = (std::max)(0, (std::min)(zoomX, maxZoomX));
                         }
+                        zoomY = (std::max)(0, (std::min)(zoomY, maxZoomY));
 
                         float pixelWidthOnScreen = zoomOutputWidth / (float)zoomConfig.cloneWidth;
                         int labelsPerSide = zoomConfig.cloneWidth / 2;
