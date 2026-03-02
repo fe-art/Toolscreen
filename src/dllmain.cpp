@@ -336,6 +336,8 @@ void RebuildHotkeyMainKeys_Internal() {
 
     addMainKey(g_config.borderlessHotkey);
 
+    addMainKey(g_config.keyRebinds.toggleHotkey);
+
     g_hotkeyMainKeys.insert(VK_ESCAPE);
 
     if (g_config.keyRebinds.enabled) {

@@ -619,8 +619,6 @@ InputHandlerResult HandleImageOverlaysToggle(HWND hWnd, UINT uMsg, WPARAM wParam
     }
     PROFILE_SCOPE("HandleImageOverlaysToggle");
 
-    if (g_showGui.load(std::memory_order_acquire)) { return { false, 0 }; }
-
     if (g_config.imageOverlaysHotkey.empty()) { return { false, 0 }; }
 
     if (IsHotkeyBindingActive() || IsRebindBindingActive()) { return { false, 0 }; }
@@ -680,8 +678,6 @@ InputHandlerResult HandleWindowOverlaysToggle(HWND hWnd, UINT uMsg, WPARAM wPara
     }
     PROFILE_SCOPE("HandleWindowOverlaysToggle");
 
-    if (g_showGui.load(std::memory_order_acquire)) { return { false, 0 }; }
-
     if (g_config.windowOverlaysHotkey.empty()) { return { false, 0 }; }
 
     if (IsHotkeyBindingActive() || IsRebindBindingActive()) { return { false, 0 }; }
@@ -728,6 +724,73 @@ InputHandlerResult HandleWindowOverlaysToggle(HWND hWnd, UINT uMsg, WPARAM wPara
         UnfocusWindowOverlay();
     }
 
+    return { true, 1 };
+}
+
+InputHandlerResult HandleKeyRebindsToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    switch (uMsg) {
+    case WM_KEYDOWN:
+    case WM_SYSKEYDOWN:
+    case WM_LBUTTONDOWN:
+    case WM_RBUTTONDOWN:
+    case WM_MBUTTONDOWN:
+    case WM_XBUTTONDOWN:
+        break;
+    default:
+        return { false, 0 };
+    }
+    PROFILE_SCOPE("HandleKeyRebindsToggle");
+
+    if (g_config.keyRebinds.toggleHotkey.empty()) { return { false, 0 }; }
+
+    if (IsHotkeyBindingActive() || IsRebindBindingActive()) { return { false, 0 }; }
+
+    DWORD vkCode = 0;
+    switch (uMsg) {
+    case WM_KEYDOWN:
+    case WM_SYSKEYDOWN: {
+        vkCode = static_cast<DWORD>(wParam);
+        vkCode = NormalizeModifierVkFromKeyMessage(vkCode, lParam);
+        break;
+    }
+    case WM_LBUTTONDOWN:
+        vkCode = VK_LBUTTON;
+        break;
+    case WM_RBUTTONDOWN:
+        vkCode = VK_RBUTTON;
+        break;
+    case WM_MBUTTONDOWN:
+        vkCode = VK_MBUTTON;
+        break;
+    case WM_XBUTTONDOWN: {
+        WORD xButton = GET_XBUTTON_WPARAM(wParam);
+        vkCode = (xButton == XBUTTON1) ? VK_XBUTTON1 : VK_XBUTTON2;
+        break;
+    }
+    default:
+        return { false, 0 };
+    }
+
+    if (!CheckHotkeyMatch(g_config.keyRebinds.toggleHotkey, vkCode)) { return { false, 0 }; }
+
+    static std::atomic<int64_t> s_lastToggleMs{ 0 };
+    auto now = std::chrono::steady_clock::now();
+    int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+    int64_t lastMs = s_lastToggleMs.load(std::memory_order_relaxed);
+    if (nowMs - lastMs < 250) { return { true, 1 }; }
+    s_lastToggleMs.store(nowMs, std::memory_order_relaxed);
+
+    g_config.keyRebinds.enabled = !g_config.keyRebinds.enabled;
+    g_configIsDirty = true;
+
+    {
+        std::lock_guard<std::mutex> hotkeyLock(g_hotkeyMainKeysMutex);
+        RebuildHotkeyMainKeys_Internal();
+    }
+
+    PublishConfigSnapshot();
+
+    (void)hWnd;
     return { true, 1 };
 }
 
@@ -2126,6 +2189,8 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     result = HandleImageOverlaysToggle(hWnd, uMsg, wParam, lParam);
     if (result.consumed) return result.result;
     result = HandleWindowOverlaysToggle(hWnd, uMsg, wParam, lParam);
+    if (result.consumed) return result.result;
+    result = HandleKeyRebindsToggle(hWnd, uMsg, wParam, lParam);
     if (result.consumed) return result.result;
 
     result = HandleNonFullscreenCheck(hWnd, uMsg, wParam, lParam);

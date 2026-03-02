@@ -427,6 +427,7 @@ struct KeyRebind {
 };
 struct KeyRebindsConfig {
     bool enabled = false;
+    std::vector<DWORD> toggleHotkey = {};
     std::vector<KeyRebind> rebinds;
 };
 struct Config {

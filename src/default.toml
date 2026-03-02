@@ -82,6 +82,7 @@ windowWidth = 384
 
 [keyRebinds]
 enabled = false
+toggleHotkey = [ ]
 rebinds = []
 
 [[hotkey]]

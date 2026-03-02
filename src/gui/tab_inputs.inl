@@ -262,8 +262,30 @@ if (ImGui::BeginTabItem("Inputs")) {
             ImGui::SameLine();
             HelpMarker("When enabled, configured key rebinds will intercept keyboard input and send the remapped key to the game instead.");
 
+            const ImVec4 rebindActiveGreen = ImVec4(0.20f, 1.00f, 0.20f, 1.00f);
+            const ImVec4 rebindDisabledRed = ImVec4(1.00f, 0.20f, 0.20f, 1.00f);
+            ImGui::TextDisabled("Status:");
+            ImGui::SameLine();
+            ImGui::TextColored(g_config.keyRebinds.enabled ? rebindActiveGreen : rebindDisabledRed, "%s",
+                               g_config.keyRebinds.enabled ? "ACTIVE" : "DISABLED");
+
             if (g_config.keyRebinds.enabled) {
                 ImGui::Spacing();
+                ImGui::SeparatorText("Rebind Toggle Hotkey");
+                std::string rebindToggleHotkeyStr = GetKeyComboString(g_config.keyRebinds.toggleHotkey);
+                const bool isBindingRebindToggle = (s_mainHotkeyToBind == -995);
+                const char* rebindToggleHotkeyButtonLabel =
+                    isBindingRebindToggle ? "[Press Keys...]"
+                                          : (rebindToggleHotkeyStr.empty() ? "[Click to Bind]" : rebindToggleHotkeyStr.c_str());
+                if (ImGui::Button(rebindToggleHotkeyButtonLabel, ImVec2(150, 0))) {
+                    s_mainHotkeyToBind = -995;
+                    s_altHotkeyToBind = { -1, -1 };
+                    s_exclusionToBind = { -1, -1 };
+                    MarkHotkeyBindingActive();
+                }
+                ImGui::SameLine();
+                HelpMarker("Toggles key rebinding ACTIVE/DISABLED at runtime.");
+
                 ImGui::Separator();
                 ImGui::Spacing();
 

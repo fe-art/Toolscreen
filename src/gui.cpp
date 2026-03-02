@@ -2727,6 +2727,8 @@ void RenderSettingsGUI() {
                     g_config.imageOverlaysHotkey = keys;
                 } else if (s_mainHotkeyToBind == -996) {
                     g_config.windowOverlaysHotkey = keys;
+                } else if (s_mainHotkeyToBind == -995) {
+                    g_config.keyRebinds.toggleHotkey = keys;
                 } else {
                     g_config.hotkeys[s_mainHotkeyToBind].keys = keys;
                 }

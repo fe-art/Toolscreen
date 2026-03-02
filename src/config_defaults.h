@@ -160,6 +160,7 @@ constexpr DWORD KEY_REBIND_CUSTOM_OUTPUT_UNICODE = 0;
 constexpr DWORD KEY_REBIND_CUSTOM_OUTPUT_SCANCODE = 0;
 
 constexpr bool KEY_REBINDS_ENABLED = false;
+inline std::vector<DWORD> GetDefaultKeyRebindsToggleHotkey() { return {}; }
 
 constexpr int DEFAULT_CONFIG_VERSION = 2;
 inline const std::string CONFIG_DEFAULT_MODE = "Fullscreen";

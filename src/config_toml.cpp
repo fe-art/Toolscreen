@@ -1471,6 +1471,10 @@ void KeyRebindFromToml(const toml::table& tbl, KeyRebind& cfg) {
 void KeyRebindsConfigToToml(const KeyRebindsConfig& cfg, toml::table& out) {
     out.insert("enabled", cfg.enabled);
 
+    toml::array toggleHotkeyArr;
+    for (const auto& key : cfg.toggleHotkey) { toggleHotkeyArr.push_back(static_cast<int64_t>(key)); }
+    out.insert("toggleHotkey", toggleHotkeyArr);
+
     toml::array rebindsArr;
     for (const auto& rebind : cfg.rebinds) {
         toml::table rebindTbl;
@@ -1482,6 +1486,15 @@ void KeyRebindsConfigToToml(const KeyRebindsConfig& cfg, toml::table& out) {
 
 void KeyRebindsConfigFromToml(const toml::table& tbl, KeyRebindsConfig& cfg) {
     cfg.enabled = GetOr(tbl, "enabled", ConfigDefaults::KEY_REBINDS_ENABLED);
+
+    cfg.toggleHotkey.clear();
+    const bool hasToggleHotkey = tbl.contains("toggleHotkey");
+    if (auto arr = GetArray(tbl, "toggleHotkey")) {
+        for (const auto& elem : *arr) {
+            if (auto val = elem.value<int64_t>()) { cfg.toggleHotkey.push_back(static_cast<DWORD>(*val)); }
+        }
+    }
+    if (!hasToggleHotkey) { cfg.toggleHotkey = ConfigDefaults::GetDefaultKeyRebindsToggleHotkey(); }
 
     cfg.rebinds.clear();
     if (auto arr = GetArray(tbl, "rebinds")) {
