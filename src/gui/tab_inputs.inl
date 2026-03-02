@@ -858,8 +858,18 @@ if (ImGui::BeginTabItem("Inputs")) {
                         DWORD outScan = showRebindInfo ? resolveTriggerScanFor(rb, vk) : 0;
 
                         const std::string primaryText = showRebindInfo ? typesValueForDisplay(rb, vk) : std::string(label);
-                           const std::string secondaryText = showRebindInfo ? normalizeMouseButtonLabel(scanCodeToDisplayName(outScan, triggerVK))
-                                                       : std::string();
+                        const std::string secondaryText = showRebindInfo ? normalizeMouseButtonLabel(scanCodeToDisplayName(outScan, triggerVK))
+                                                                          : std::string();
+                        auto equalsIgnoreCase = [](const std::string& a, const std::string& b) -> bool {
+                            if (a.size() != b.size()) return false;
+                            for (size_t i = 0; i < a.size(); ++i) {
+                                if (std::toupper(static_cast<unsigned char>(a[i])) != std::toupper(static_cast<unsigned char>(b[i]))) {
+                                    return false;
+                                }
+                            }
+                            return true;
+                        };
+                        const bool showSecondaryText = showRebindInfo && !secondaryText.empty() && !equalsIgnoreCase(primaryText, secondaryText);
 
                         ImFont* fLabel = g_keyboardLayoutPrimaryFont ? g_keyboardLayoutPrimaryFont : ImGui::GetFont();
                         auto snapPxText = [](float v) -> float { return floorf(v + 0.5f); };
@@ -886,7 +896,7 @@ if (ImGui::BeginTabItem("Inputs")) {
                             labelSz = fLabel->CalcTextSizeA(labelFontSize, FLT_MAX, 0.0f, primaryText.c_str());
                         }
 
-                        if (!showRebindInfo) {
+                        if (!showRebindInfo || !showSecondaryText) {
                             const float maxByHeight = textAvailH * 0.98f;
                             if (maxByHeight > 0.0f && labelFontSize > maxByHeight) {
                                 labelFontSize = snapFontSize(maxByHeight);
