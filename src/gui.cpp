@@ -2901,7 +2901,30 @@ void RenderSettingsGUI() {
         static uint64_t s_lastBindingInputSeqHotkeyBind = 0;
         if (ImGui::IsWindowAppearing()) { s_lastBindingInputSeqHotkeyBind = GetLatestBindingInputSequence(); }
 
+        static std::string s_hotkeyConflictMessage;
+
         auto finalize_bind = [&](const std::vector<DWORD>& keys) {
+            if (!keys.empty() && s_exclusionToBind.hotkey_idx == -1) {
+                std::string excludeLabel;
+                if (s_mainHotkeyToBind == -999) excludeLabel = "GUI Toggle";
+                else if (s_mainHotkeyToBind == -998) excludeLabel = "Borderless Toggle";
+                else if (s_mainHotkeyToBind == -997) excludeLabel = "Image Overlays Toggle";
+                else if (s_mainHotkeyToBind == -996) excludeLabel = "Window Overlays Toggle";
+                else if (s_mainHotkeyToBind == -995) excludeLabel = "Key Rebinds Toggle";
+                else if (s_mainHotkeyToBind >= 0) excludeLabel = "Mode Hotkey #" + std::to_string(s_mainHotkeyToBind + 1);
+                else if (s_sensHotkeyToBind != -1) excludeLabel = "Sensitivity Hotkey #" + std::to_string(s_sensHotkeyToBind + 1);
+                else if (s_altHotkeyToBind.hotkey_idx != -1) excludeLabel = "Mode Hotkey #" + std::to_string(s_altHotkeyToBind.hotkey_idx + 1) + " Alt #" + std::to_string(s_altHotkeyToBind.alt_idx + 1);
+
+                std::string conflict = FindHotkeyConflict(keys, excludeLabel);
+                if (!conflict.empty()) {
+                    s_hotkeyConflictMessage = "Already assigned to " + conflict;
+                    s_bindingKeys.clear();
+                    s_hadKeysPressed = false;
+                    return;
+                }
+            }
+            s_hotkeyConflictMessage.clear();
+
             if (s_mainHotkeyToBind != -1) {
                 if (s_mainHotkeyToBind == -999) {
                     g_config.guiHotkey = keys;
@@ -3059,13 +3082,17 @@ void RenderSettingsGUI() {
             }
         }
 
-        if (!currentlyPressed.empty()) { s_hadKeysPressed = true; }
+        if (!currentlyPressed.empty()) {
+            if (!s_hadKeysPressed) s_hotkeyConflictMessage.clear();
+            s_hadKeysPressed = true;
+        }
 
-        // If we had keys pressed and now all are released, finalize the binding
         if (s_hadKeysPressed && currentlyPressed.empty()) {
             finalize_bind(s_bindingKeys);
-            ImGui::EndPopup();
-            return;
+            if (s_hotkeyConflictMessage.empty()) {
+                ImGui::EndPopup();
+                return;
+            }
         }
 
         if (!s_bindingKeys.empty()) {
@@ -3074,6 +3101,9 @@ void RenderSettingsGUI() {
         } else {
             ImGui::Text("Current: [None]");
         }
+
+        if (!s_hotkeyConflictMessage.empty())
+            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", s_hotkeyConflictMessage.c_str());
 
         ImGui::EndPopup();
     }

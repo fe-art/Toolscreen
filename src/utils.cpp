@@ -1660,9 +1660,10 @@ DWORD WINAPI ImageMonitorThread(LPVOID lpParam) {
     }
 }
 
-bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::vector<DWORD>& exclusionKeys, bool triggerOnRelease) {
+bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::vector<DWORD>& exclusionKeys, bool triggerOnRelease, size_t minKeyCount) {
     PROFILE_SCOPE_CAT("Hotkey Match Check", "Game Logic");
     if (keys.empty()) return false;
+    if (keys.size() < minKeyCount) return false;
 
     auto isModifierKey = [](DWORD key) {
         return key == VK_CONTROL || key == VK_LCONTROL || key == VK_RCONTROL || key == VK_SHIFT || key == VK_LSHIFT || key == VK_RSHIFT ||
@@ -1886,6 +1887,66 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
     }
 
     return true;
+}
+
+static std::vector<DWORD> NormalizeKeysForComparison(const std::vector<DWORD>& keys) {
+    if (keys.empty()) return {};
+
+    auto normalizeModifier = [](DWORD k) -> DWORD {
+        if (k == VK_LCONTROL || k == VK_RCONTROL) return VK_CONTROL;
+        if (k == VK_LSHIFT || k == VK_RSHIFT) return VK_SHIFT;
+        if (k == VK_LMENU || k == VK_RMENU) return VK_MENU;
+        return k;
+    };
+
+    std::vector<DWORD> result;
+    result.reserve(keys.size());
+    for (size_t i = 0; i + 1 < keys.size(); ++i)
+        result.push_back(normalizeModifier(keys[i]));
+    std::sort(result.begin(), result.end());
+    result.push_back(normalizeModifier(keys.back()));
+    return result;
+}
+
+std::string FindHotkeyConflict(const std::vector<DWORD>& newKeys, const std::string& excludeLabel) {
+    if (newKeys.empty()) return "";
+
+    struct Entry {
+        const std::vector<DWORD>* keys;
+        std::string label;
+    };
+
+    std::vector<Entry> all;
+
+    auto add = [&](const std::vector<DWORD>& k, std::string lbl) {
+        if (!k.empty()) all.push_back({ &k, std::move(lbl) });
+    };
+
+    add(g_config.guiHotkey, "GUI Toggle");
+    add(g_config.borderlessHotkey, "Borderless Toggle");
+    add(g_config.imageOverlaysHotkey, "Image Overlays Toggle");
+    add(g_config.windowOverlaysHotkey, "Window Overlays Toggle");
+    add(g_config.keyRebinds.toggleHotkey, "Key Rebinds Toggle");
+
+    for (size_t i = 0; i < g_config.hotkeys.size(); ++i) {
+        const auto& hk = g_config.hotkeys[i];
+        add(hk.keys, "Mode Hotkey #" + std::to_string(i + 1));
+        for (size_t j = 0; j < hk.altSecondaryModes.size(); ++j)
+            add(hk.altSecondaryModes[j].keys, "Mode Hotkey #" + std::to_string(i + 1) + " Alt #" + std::to_string(j + 1));
+    }
+
+    for (size_t i = 0; i < g_config.sensitivityHotkeys.size(); ++i)
+        add(g_config.sensitivityHotkeys[i].keys, "Sensitivity Hotkey #" + std::to_string(i + 1));
+
+    auto normalized = NormalizeKeysForComparison(newKeys);
+
+    for (const auto& entry : all) {
+        if (entry.label == excludeLabel) continue;
+        if (NormalizeKeysForComparison(*entry.keys) == normalized)
+            return entry.label;
+    }
+
+    return "";
 }
 
 void GetRelativeCoords(const std::string& type, int relX, int relY, int w, int h, int containerW, int containerH, int& outX, int& outY) {

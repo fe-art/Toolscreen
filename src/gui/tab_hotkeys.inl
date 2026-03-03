@@ -244,6 +244,7 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                 }
                 if (alt_to_remove != -1) {
                     hotkey.altSecondaryModes.erase(hotkey.altSecondaryModes.begin() + alt_to_remove);
+                    SetHotkeySecondaryMode(i, hotkey.secondaryMode);
                     g_configIsDirty = true;
                 }
                 if (ImGui::Button("Add Alternative Mode")) {

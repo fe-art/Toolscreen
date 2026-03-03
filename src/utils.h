@@ -352,7 +352,9 @@ void LoadImageAsync(DecodedImageData::Type type, std::string id, std::string pat
 void LoadAllImages();
 
 bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::vector<DWORD>& exclusionKeys = {},
-                      bool triggerOnRelease = false);
+                      bool triggerOnRelease = false, size_t minKeyCount = 0);
+
+std::string FindHotkeyConflict(const std::vector<DWORD>& newKeys, const std::string& excludeLabel);
 
 void BackupConfigFile();
 
