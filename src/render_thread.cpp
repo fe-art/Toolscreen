@@ -236,6 +236,14 @@ static std::string g_eyeZoomFontPathCached = "";
 static float g_eyeZoomScaleFactor = 1.0f;
 static bool g_fontsValid = false;
 
+static float RT_ComputeGuiScaleFactorForHeight(int screenHeight) {
+    float scaleFactor = 1.0f;
+    if (screenHeight > 1080) { scaleFactor = static_cast<float>(screenHeight) / 1080.0f; }
+    scaleFactor = roundf(scaleFactor * 4.0f) / 4.0f;
+    if (scaleFactor < 1.0f) { scaleFactor = 1.0f; }
+    return scaleFactor;
+}
+
 static bool RT_IsFontStable(const std::string& fontPath, float sizePixels) {
     (void)sizePixels;
     if (fontPath.empty()) return false;
@@ -324,10 +332,7 @@ static bool RT_TryInitializeImGui(HWND hwnd, const Config& cfg) {
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
     const int screenHeight = GetCachedWindowHeight();
-    float scaleFactor = 1.0f;
-    if (screenHeight > 1080) { scaleFactor = static_cast<float>(screenHeight) / 1080.0f; }
-    scaleFactor = roundf(scaleFactor * 4.0f) / 4.0f;
-    if (scaleFactor < 1.0f) { scaleFactor = 1.0f; }
+    const float scaleFactor = RT_ComputeGuiScaleFactorForHeight(screenHeight);
     g_eyeZoomScaleFactor = scaleFactor;
 
     {
@@ -2861,10 +2866,7 @@ static void RenderThreadFunc(void* gameGLContext) {
                 io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
                 const int screenHeight = GetCachedWindowHeight();
-                float scaleFactor = 1.0f;
-                if (screenHeight > 1080) { scaleFactor = static_cast<float>(screenHeight) / 1080.0f; }
-                scaleFactor = roundf(scaleFactor * 4.0f) / 4.0f;
-                if (scaleFactor < 1.0f) { scaleFactor = 1.0f; }
+                const float scaleFactor = RT_ComputeGuiScaleFactorForHeight(screenHeight);
                 g_eyeZoomScaleFactor = scaleFactor;
 
                 auto fontCfg = GetConfigSnapshot();
@@ -3434,14 +3436,33 @@ static void RenderThreadFunc(void* gameGLContext) {
 
                 ImGui::SetCurrentContext(g_renderThreadImGuiContext);
 
-                if (g_eyeZoomFontNeedsReload.exchange(false)) {
+                const float runtimeScaleFactor = RT_ComputeGuiScaleFactorForHeight(GetCachedWindowHeight());
+                const float scaleDelta = runtimeScaleFactor - g_eyeZoomScaleFactor;
+                const bool scaleChanged = (scaleDelta > 0.001f) || (scaleDelta < -0.001f);
+                if (scaleChanged) {
+                    g_eyeZoomScaleFactor = runtimeScaleFactor;
+                    g_guiNeedsRecenter.store(true, std::memory_order_relaxed);
+                }
+
+                const bool shouldReloadFonts = g_eyeZoomFontNeedsReload.exchange(false) || scaleChanged;
+                if (shouldReloadFonts) {
                     std::string newFontPath = cfg.eyezoom.textFontPath.empty() ? cfg.fontPath : cfg.eyezoom.textFontPath;
 
-                    if (newFontPath != g_eyeZoomFontPathCached) {
-                        Log("Render Thread: Reloading EyeZoom font from " + newFontPath);
+                    if (scaleChanged || newFontPath != g_eyeZoomFontPathCached) {
+                        if (scaleChanged) {
+                            Log("Render Thread: Reloading GUI fonts/styles after resolution scale change to " +
+                                std::to_string(g_eyeZoomScaleFactor));
+                        } else {
+                            Log("Render Thread: Reloading EyeZoom font from " + newFontPath);
+                        }
                         ImGuiIO& io = ImGui::GetIO();
 
                         g_fontsValid = false;
+
+                        ImGui::StyleColorsDark();
+                        LoadTheme();
+                        ApplyAppearanceConfig();
+                        ImGui::GetStyle().ScaleAllSizes(g_eyeZoomScaleFactor);
 
                         io.Fonts->Clear();
 

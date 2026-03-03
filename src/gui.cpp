@@ -95,6 +95,17 @@ static std::atomic<bool> g_supporterTierTexturesDirty{ false };
 static std::mutex g_supporterTierTexturesMutex;
 static std::unordered_map<std::string, SupporterTierTextureEntry> g_supporterTierTextures;
 
+static float ComputeGuiScaleFactorFromCachedWindowSize() {
+    int screenHeight = GetCachedWindowHeight();
+    if (screenHeight < 1) screenHeight = 1;
+
+    float scaleFactor = 1.0f;
+    if (screenHeight > 1080) { scaleFactor = static_cast<float>(screenHeight) / 1080.0f; }
+    scaleFactor = roundf(scaleFactor * 4.0f) / 4.0f;
+    if (scaleFactor < 1.0f) { scaleFactor = 1.0f; }
+    return scaleFactor;
+}
+
 static bool HttpGetToString(const std::wstring& url, std::string& outBody, std::string& outError) {
     URL_COMPONENTS urlComp{};
     urlComp.dwStructSize = sizeof(urlComp);
@@ -512,9 +523,7 @@ void RegisterBindingInputEvent(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         vk = resolveVkFromKeyboardMessage(wParam, lParam);
         break;
     case WM_LBUTTONDOWN:
-        vk = VK_LBUTTON;
-        isMouseButton = true;
-        break;
+        return;
     case WM_RBUTTONDOWN:
         vk = VK_RBUTTON;
         isMouseButton = true;
@@ -2762,6 +2771,8 @@ static AltBindState s_altHotkeyToBind = { -1, -1 };
 static constexpr uint64_t kBindingActiveGraceMs = 250;
 static std::atomic<uint64_t> s_lastHotkeyBindingMarkMs{ 0 };
 static std::atomic<uint64_t> s_lastRebindBindingMarkMs{ 0 };
+static std::atomic<bool> s_hotkeyBindingUiActive{ false };
+static std::atomic<bool> s_rebindBindingUiActive{ false };
 
 static inline uint64_t NowMs_TickCount64() { return static_cast<uint64_t>(::GetTickCount64()); }
 
@@ -2770,23 +2781,33 @@ static bool IsHotkeyBindingActive_UiState() {
 }
 
 bool IsHotkeyBindingActive() {
+    if (g_showGui.load(std::memory_order_acquire) && s_hotkeyBindingUiActive.load(std::memory_order_acquire)) { return true; }
     const uint64_t last = s_lastHotkeyBindingMarkMs.load(std::memory_order_acquire);
     if (last == 0) return false;
     return (NowMs_TickCount64() - last) <= kBindingActiveGraceMs;
 }
 
 bool IsRebindBindingActive() {
+    if (g_showGui.load(std::memory_order_acquire) && s_rebindBindingUiActive.load(std::memory_order_acquire)) { return true; }
     const uint64_t last = s_lastRebindBindingMarkMs.load(std::memory_order_acquire);
     if (last == 0) return false;
     return (NowMs_TickCount64() - last) <= kBindingActiveGraceMs;
 }
 
 void ResetTransientBindingUiState() {
+    s_hotkeyBindingUiActive.store(false, std::memory_order_release);
+    s_rebindBindingUiActive.store(false, std::memory_order_release);
 }
 
-void MarkRebindBindingActive() { s_lastRebindBindingMarkMs.store(NowMs_TickCount64(), std::memory_order_release); }
+void MarkRebindBindingActive() {
+    s_rebindBindingUiActive.store(true, std::memory_order_release);
+    s_lastRebindBindingMarkMs.store(NowMs_TickCount64(), std::memory_order_release);
+}
 
-void MarkHotkeyBindingActive() { s_lastHotkeyBindingMarkMs.store(NowMs_TickCount64(), std::memory_order_release); }
+void MarkHotkeyBindingActive() {
+    s_hotkeyBindingUiActive.store(true, std::memory_order_release);
+    s_lastHotkeyBindingMarkMs.store(NowMs_TickCount64(), std::memory_order_release);
+}
 
 void RenderSettingsGUI() {
     PROFILE_SCOPE_CAT("Settings GUI Rendering", "ImGui");
@@ -3005,7 +3026,7 @@ void RenderSettingsGUI() {
 
         for (int vk = 1; vk < 0xFF; ++vk) {
             // Skip escape (used for cancel), generic modifiers, and Windows keys
-            if (vk == VK_ESCAPE || vk == VK_CONTROL || vk == VK_SHIFT || vk == VK_MENU || vk == VK_LWIN || vk == VK_RWIN ||
+            if (vk == VK_ESCAPE || vk == VK_LBUTTON || vk == VK_CONTROL || vk == VK_SHIFT || vk == VK_MENU || vk == VK_LWIN || vk == VK_RWIN ||
                 vk == VK_LCONTROL || vk == VK_RCONTROL || vk == VK_LSHIFT || vk == VK_RSHIFT || vk == VK_LMENU || vk == VK_RMENU) {
                 continue;
             }
@@ -3060,22 +3081,12 @@ void RenderSettingsGUI() {
     const int screenWidth = GetCachedWindowWidth();
     const int screenHeight = GetCachedWindowHeight();
 
-    int windowHeight = static_cast<int>(io.DisplaySize.y);
-    {
-        RECT clientRect{};
-        HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
-        if (GetWindowClientRectInScreen(hwnd, clientRect)) {
-            const int clientWidth = clientRect.right - clientRect.left;
-            const int clientHeight = clientRect.bottom - clientRect.top;
-            if (clientWidth > 0 && clientHeight > 0) {
-                windowHeight = clientHeight;
-            }
-        }
+    const float scaleFactor = ComputeGuiScaleFactorFromCachedWindowSize();
+    static float s_lastRuntimeScaleFactor = -1.0f;
+    if (s_lastRuntimeScaleFactor < 0.0f || fabsf(scaleFactor - s_lastRuntimeScaleFactor) > 0.001f) {
+        g_guiNeedsRecenter.store(true, std::memory_order_relaxed);
+        s_lastRuntimeScaleFactor = scaleFactor;
     }
-    float scaleFactor = 1.0f;
-    if (windowHeight > 1080) { scaleFactor = static_cast<float>(windowHeight) / 1080.0f; }
-    scaleFactor = roundf(scaleFactor * 4.0f) / 4.0f;
-    if (scaleFactor < 1.0f) { scaleFactor = 1.0f; }
 
     if (g_guiNeedsRecenter.exchange(false)) {
         ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
@@ -3217,11 +3228,7 @@ void InitializeImGuiContext(HWND hwnd) {
         ImGuiIO& io = ImGui::GetIO();
         (void)io;
 
-        const int screenHeight = GetCachedWindowHeight();
-        float scaleFactor = 1.0f;
-        if (screenHeight > 1080) { scaleFactor = static_cast<float>(screenHeight) / 1080.0f; }
-        scaleFactor = roundf(scaleFactor * 4.0f) / 4.0f;
-        if (scaleFactor < 1.0f) { scaleFactor = 1.0f; }
+        const float scaleFactor = ComputeGuiScaleFactorFromCachedWindowSize();
 
         std::string fontPath = g_config.fontPath;
         const float baseFontSize = 16.0f * scaleFactor;
@@ -3716,11 +3723,7 @@ void HandleConfigLoadFailed(HDC hDc, BOOL (*oWglSwapBuffers)(HDC)) {
 
         ImGuiIO& io = ImGui::GetIO();
         (void)io;
-        const int screenHeight = GetCachedWindowHeight();
-        float scaleFactor = 1.0f;
-        if (screenHeight > 1080) { scaleFactor = static_cast<float>(screenHeight) / 1080.0f; }
-        scaleFactor = roundf(scaleFactor * 4.0f) / 4.0f;
-        if (scaleFactor < 1.0f) { scaleFactor = 1.0f; }
+        float scaleFactor = ComputeGuiScaleFactorFromCachedWindowSize();
         scaleFactor *= 1.25f;
 
         std::string fontPath = g_config.fontPath;
