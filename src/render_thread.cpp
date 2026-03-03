@@ -1539,10 +1539,11 @@ static void StartVirtualCameraPBOReadback(GLuint obsTexture, int width, int heig
 static void StartVirtualCameraAsyncReadback(GLuint obsTexture, int width, int height) {
     if (obsTexture == 0 || width <= 0 || height <= 0) return;
     if (!IsVirtualCameraActive()) return;
-    if (!ShouldCaptureVirtualCameraFrame()) return;
 
     int outW, outH;
     GetVirtualCamScaledSize(width, height, 1.0f, outW, outH);
+    if (!EnsureVirtualCameraSize(static_cast<uint32_t>(outW), static_cast<uint32_t>(outH))) return;
+    if (!ShouldCaptureVirtualCameraFrame()) return;
 
     if (g_vcUseCompute && g_vcComputeProgram != 0) {
         StartVirtualCameraComputeReadback(obsTexture, width, height, outW, outH);

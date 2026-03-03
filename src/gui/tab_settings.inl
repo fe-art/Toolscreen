@@ -70,8 +70,12 @@ if (ImGui::BeginTabItem("Settings")) {
         g_config.debug.virtualCameraEnabled = vcEnabled;
         g_configIsDirty = true;
         if (vcEnabled) {
-            int screenW = GetSystemMetrics(SM_CXSCREEN);
-            int screenH = GetSystemMetrics(SM_CYSCREEN);
+            int screenW = GetCachedWindowWidth();
+            int screenH = GetCachedWindowHeight();
+            if (screenW <= 0 || screenH <= 0) {
+                screenW = GetSystemMetrics(SM_CXSCREEN);
+                screenH = GetSystemMetrics(SM_CYSCREEN);
+            }
             StartVirtualCamera(screenW, screenH);
         } else {
             StopVirtualCamera();

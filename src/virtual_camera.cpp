@@ -294,6 +294,33 @@ bool ShouldCaptureVirtualCameraFrame() {
     }
 }
 
+bool EnsureVirtualCameraSize(uint32_t width, uint32_t height) {
+    if ((width & 1U) != 0) { width -= 1; }
+    if ((height & 1U) != 0) { height -= 1; }
+    if (width < 2 || height < 2) { return false; }
+
+    uint32_t oldWidth = 0;
+    uint32_t oldHeight = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_vcMutex);
+        if (!g_vcState.active) { return false; }
+        oldWidth = g_vcState.width;
+        oldHeight = g_vcState.height;
+        if (g_vcState.width == width && g_vcState.height == height) { return true; }
+    }
+
+    Log("Virtual Camera: Resizing from " + std::to_string(oldWidth) + "x" + std::to_string(oldHeight) + " to " +
+        std::to_string(width) + "x" + std::to_string(height));
+
+    StopVirtualCamera();
+    if (!StartVirtualCamera(width, height)) {
+        Log("Virtual Camera: Resize failed - " + g_vcLastError);
+        return false;
+    }
+
+    return true;
+}
+
 bool WriteVirtualCameraFrame(const uint8_t* rgba_data, uint32_t width, uint32_t height, uint64_t timestamp) {
     if (!g_virtualCameraActive.load(std::memory_order_acquire)) { return false; }
 
