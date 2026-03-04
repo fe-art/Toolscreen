@@ -1435,6 +1435,7 @@ void handleEyeZoomMode(const GLState& s, float opacity, int animatedViewportX) {
 
     const int fullW = GetCachedWindowWidth();
     const int fullH = GetCachedWindowHeight();
+    if (fullW <= 0 || fullH <= 0) { return; }
 
     bool useSnapshot = g_isTransitioningFromEyeZoom.load(std::memory_order_acquire);
 
@@ -1892,6 +1893,7 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
         fullW = GetCachedWindowWidth();
         fullH = GetCachedWindowHeight();
     }
+    if (fullW <= 0 || fullH <= 0) { return; }
 
     // Single config snapshot for the entire frame - avoids repeated mutex acquisition
     auto configSnap = GetConfigSnapshot();
@@ -2957,6 +2959,7 @@ void RenderDebugBordersForMirror(const MirrorConfig* conf, Color captureColor, C
 
     const int fullW = GetCachedWindowWidth();
     const int fullH = GetCachedWindowHeight();
+    if (fullW <= 0 || fullH <= 0) return;
 
     GameViewportGeometry geo;
     {
@@ -3467,11 +3470,13 @@ void StartModeTransition(const std::string& fromModeId, const std::string& toMod
 
     HWND hwnd = g_minecraftHwnd.load();
     if (hwnd && wmWidth > 0 && wmHeight > 0) {
-        PostMessage(hwnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(wmWidth, wmHeight));
-        g_modeTransition.wmSizeSent = true;
-        g_modeTransition.lastSentWidth = wmWidth;
-        g_modeTransition.lastSentHeight = wmHeight;
-        LogCategory("animation", "[ANIMATION] WM_SIZE sent immediately: " + std::to_string(wmWidth) + "x" + std::to_string(wmHeight));
+        const bool posted = RequestWindowClientResize(hwnd, wmWidth, wmHeight, "mode_transition:start");
+        g_modeTransition.wmSizeSent = posted;
+        if (posted) {
+            g_modeTransition.lastSentWidth = wmWidth;
+            g_modeTransition.lastSentHeight = wmHeight;
+            LogCategory("animation", "[ANIMATION] WM_SIZE sent immediately: " + std::to_string(wmWidth) + "x" + std::to_string(wmHeight));
+        }
     }
 
     LogCategory("animation", "[ANIMATION] Starting mode transition (Game:" + GameTransitionTypeToString(toMode.gameTransition) +

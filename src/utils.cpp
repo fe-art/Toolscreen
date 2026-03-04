@@ -2207,17 +2207,68 @@ void BackupConfigFile() {
     }
 }
 
-void ToggleBorderlessWindowedFullscreen(HWND hwnd) {
-    if (!hwnd) { return; }
+UINT GetToolscreenBorderlessToggleMessageId() {
+    static const UINT s_msg = RegisterWindowMessageA("Toolscreen_BorderlessToggle");
+    return s_msg;
+}
 
-    // Guard with a mutex since this can be triggered from the window message thread.
+bool RequestWindowClientResize(HWND hwnd, int width, int height, const char* source) {
+    if (!hwnd || !IsWindow(hwnd) || width <= 0 || height <= 0) { return false; }
+
+    static std::mutex s_resizeRequestMutex;
+    static HWND s_lastHwnd = nullptr;
+    static int s_lastWidth = 0;
+    static int s_lastHeight = 0;
+    static ULONGLONG s_lastPostedMs = 0;
+
+    const ULONGLONG nowMs = GetTickCount64();
+
+    std::lock_guard<std::mutex> lock(s_resizeRequestMutex);
+
+    if (s_lastHwnd == hwnd && s_lastWidth == width && s_lastHeight == height && (nowMs - s_lastPostedMs) <= 50) { return true; }
+
+    if (!PostMessage(hwnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(width, height))) {
+        DWORD err = GetLastError();
+        std::string src = source ? source : "unknown";
+        Log("[WINDOW] Failed to post WM_SIZE resize request (" + src + "): " + std::to_string(width) + "x" + std::to_string(height) +
+            ", error=" + std::to_string(err));
+        return false;
+    }
+
+    s_lastHwnd = hwnd;
+    s_lastWidth = width;
+    s_lastHeight = height;
+    s_lastPostedMs = nowMs;
+
+    g_cachedGameTextureId.store(UINT_MAX);
+    return true;
+}
+
+void ToggleBorderlessWindowedFullscreen(HWND hwnd) {
+    if (!hwnd || !IsWindow(hwnd)) { return; }
+
+    const DWORD windowThreadId = GetWindowThreadProcessId(hwnd, nullptr);
+    const DWORD currentThreadId = GetCurrentThreadId();
+    if (windowThreadId != 0 && windowThreadId != currentThreadId) {
+        const UINT msg = GetToolscreenBorderlessToggleMessageId();
+        if (!PostMessage(hwnd, msg, 0, 0)) {
+            Log("[WINDOW] Failed to post borderless toggle request to window thread. Error=" + std::to_string(GetLastError()));
+        }
+        return;
+    }
+
+    struct BorderlessWindowState {
+        bool active = false;
+        bool saved = false;
+        DWORD savedStyle = 0;
+        DWORD savedExStyle = 0;
+    };
+
     static std::mutex s_borderlessMutex;
-    static bool s_borderlessActive = false;
-    static bool s_saved = false;
-    static DWORD s_savedStyle = 0;
-    static DWORD s_savedExStyle = 0;
+    static std::unordered_map<HWND, BorderlessWindowState> s_borderlessStateByHwnd;
 
     std::lock_guard<std::mutex> lock(s_borderlessMutex);
+    BorderlessWindowState& state = s_borderlessStateByHwnd[hwnd];
 
     RECT targetRect{};
     if (!GetMonitorRectForWindow(hwnd, targetRect)) {
@@ -2232,65 +2283,108 @@ void ToggleBorderlessWindowedFullscreen(HWND hwnd) {
     const int windowedX = targetRect.left + (targetW - windowedW) / 2;
     const int windowedY = targetRect.top + (targetH - windowedH) / 2;
 
-    if (!s_borderlessActive) {
-        // (We intentionally do not restore the previous placement on toggle-off.)
-        s_savedStyle = static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_STYLE));
-        s_savedExStyle = static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_EXSTYLE));
-        s_saved = true;
+    RECT beforeRect{};
+    if (!GetWindowRect(hwnd, &beforeRect)) { return; }
+
+    const int beforeW = beforeRect.right - beforeRect.left;
+    const int beforeH = beforeRect.bottom - beforeRect.top;
+
+    DWORD beforeStyle = static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_STYLE));
+    DWORD beforeExStyle = static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_EXSTYLE));
+
+    auto setWindowLongChecked = [&](int index, DWORD value) {
+        SetLastError(0);
+        LONG_PTR prev = SetWindowLongPtr(hwnd, index, static_cast<LONG_PTR>(value));
+        if (prev == 0 && GetLastError() != 0) {
+            Log("[WINDOW] SetWindowLongPtr failed (index=" + std::to_string(index) + ", error=" + std::to_string(GetLastError()) + ")");
+            return false;
+        }
+        return true;
+    };
+
+    auto rollbackWindowState = [&]() {
+        SetWindowLongPtr(hwnd, GWL_STYLE, static_cast<LONG_PTR>(beforeStyle));
+        SetWindowLongPtr(hwnd, GWL_EXSTYLE, static_cast<LONG_PTR>(beforeExStyle));
+        if (beforeW > 0 && beforeH > 0) {
+            SetWindowPos(hwnd, HWND_NOTOPMOST, beforeRect.left, beforeRect.top, beforeW, beforeH, SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+        } else {
+            SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOOWNERZORDER | SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE);
+        }
+    };
+
+    if (!state.active) {
+        state.savedStyle = beforeStyle;
+        state.savedExStyle = beforeExStyle;
+        state.saved = true;
 
         if (IsIconic(hwnd) || IsZoomed(hwnd)) {
             ShowWindow(hwnd, SW_RESTORE);
         }
 
-        // Keep it as a "window" (avoid WS_POPUP / WS_EX_TOPMOST) so drivers don't treat it as exclusive fullscreen,
-        {
-            DWORD style = static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_STYLE));
-            style &= ~(WS_POPUP | WS_CAPTION | WS_BORDER | WS_DLGFRAME | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU);
-            style |= WS_OVERLAPPED;
-            SetWindowLongPtr(hwnd, GWL_STYLE, static_cast<LONG_PTR>(style));
+        bool ok = true;
 
-            DWORD exStyle = static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_EXSTYLE));
-            exStyle &= ~(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_DLGMODALFRAME | WS_EX_STATICEDGE);
-            exStyle |= WS_EX_APPWINDOW;
-            SetWindowLongPtr(hwnd, GWL_EXSTYLE, static_cast<LONG_PTR>(exStyle));
+        DWORD style = beforeStyle;
+        style &= ~(WS_POPUP | WS_CAPTION | WS_BORDER | WS_DLGFRAME | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU);
+        style |= WS_OVERLAPPED;
+        if (style != beforeStyle) {
+            ok = setWindowLongChecked(GWL_STYLE, style);
         }
 
-        SetWindowPos(hwnd, HWND_NOTOPMOST, targetRect.left, targetRect.top, targetW, targetH, SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
-        g_cachedGameTextureId.store(UINT_MAX);
-        s_borderlessActive = true;
+        DWORD exStyle = beforeExStyle;
+        exStyle &= ~(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_DLGMODALFRAME | WS_EX_STATICEDGE);
+        exStyle |= WS_EX_APPWINDOW;
+        if (ok && exStyle != beforeExStyle) {
+            ok = setWindowLongChecked(GWL_EXSTYLE, exStyle);
+        }
 
+        if (ok) {
+            ok = SetWindowPos(hwnd, HWND_NOTOPMOST, targetRect.left, targetRect.top, targetW, targetH, SWP_NOOWNERZORDER | SWP_FRAMECHANGED) !=
+                 FALSE;
+            if (!ok) { Log("[WINDOW] SetWindowPos failed while enabling borderless. Error=" + std::to_string(GetLastError())); }
+        }
+
+        if (!ok) {
+            rollbackWindowState();
+            return;
+        }
+
+        g_cachedGameTextureId.store(UINT_MAX);
+        state.active = true;
         Log("[WINDOW] Toggled borderless ON (" + std::to_string(targetW) + "x" + std::to_string(targetH) + ")");
     } else {
         if (IsIconic(hwnd) || IsZoomed(hwnd)) {
             ShowWindow(hwnd, SW_RESTORE);
         }
 
-        if (s_saved) {
-            DWORD style = s_savedStyle;
-            style &= ~(WS_POPUP);
-            style |= WS_OVERLAPPEDWINDOW;
-            SetWindowLongPtr(hwnd, GWL_STYLE, static_cast<LONG_PTR>(style));
+        bool ok = true;
 
-            DWORD exStyle = s_savedExStyle;
-            exStyle &= ~(WS_EX_TOPMOST | WS_EX_TOOLWINDOW);
-            exStyle |= WS_EX_APPWINDOW;
-            SetWindowLongPtr(hwnd, GWL_EXSTYLE, static_cast<LONG_PTR>(exStyle));
-        } else {
-            DWORD style = static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_STYLE));
-            style &= ~(WS_POPUP);
-            style |= WS_OVERLAPPEDWINDOW;
-            SetWindowLongPtr(hwnd, GWL_STYLE, static_cast<LONG_PTR>(style));
-
-            DWORD exStyle = static_cast<DWORD>(GetWindowLongPtr(hwnd, GWL_EXSTYLE));
-            exStyle &= ~(WS_EX_TOPMOST);
-            exStyle |= WS_EX_APPWINDOW;
-            SetWindowLongPtr(hwnd, GWL_EXSTYLE, static_cast<LONG_PTR>(exStyle));
+        DWORD targetStyle = state.saved ? state.savedStyle : beforeStyle;
+        targetStyle &= ~(WS_POPUP);
+        targetStyle |= WS_OVERLAPPEDWINDOW;
+        if (targetStyle != beforeStyle) {
+            ok = setWindowLongChecked(GWL_STYLE, targetStyle);
         }
 
-        SetWindowPos(hwnd, HWND_NOTOPMOST, windowedX, windowedY, windowedW, windowedH, SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+        DWORD targetExStyle = state.saved ? state.savedExStyle : beforeExStyle;
+        targetExStyle &= ~(WS_EX_TOPMOST | WS_EX_TOOLWINDOW);
+        targetExStyle |= WS_EX_APPWINDOW;
+        if (ok && targetExStyle != beforeExStyle) {
+            ok = setWindowLongChecked(GWL_EXSTYLE, targetExStyle);
+        }
+
+        if (ok) {
+            ok = SetWindowPos(hwnd, HWND_NOTOPMOST, windowedX, windowedY, windowedW, windowedH, SWP_NOOWNERZORDER | SWP_FRAMECHANGED) !=
+                 FALSE;
+            if (!ok) { Log("[WINDOW] SetWindowPos failed while disabling borderless. Error=" + std::to_string(GetLastError())); }
+        }
+
+        if (!ok) {
+            rollbackWindowState();
+            return;
+        }
 
         g_cachedGameTextureId.store(UINT_MAX);
-        s_borderlessActive = false;
+        state.active = false;
         Log("[WINDOW] Toggled borderless OFF -> windowed centered (" + std::to_string(windowedW) + "x" + std::to_string(windowedH) + ")");
     }
 }

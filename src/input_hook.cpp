@@ -285,11 +285,17 @@ static LRESULT EncodeToolscreenVersionNumber() {
 InputHandlerResult HandleToolscreenQueryMessages(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     const UINT isInstalledMsg = GetToolscreenIsInstalledMessageId();
     const UINT getVersionMsg = GetToolscreenGetVersionMessageId();
-    if (uMsg != isInstalledMsg && uMsg != getVersionMsg) { return { false, 0 }; }
+    const UINT borderlessToggleMsg = GetToolscreenBorderlessToggleMessageId();
+    if (uMsg != isInstalledMsg && uMsg != getVersionMsg && uMsg != borderlessToggleMsg) { return { false, 0 }; }
     PROFILE_SCOPE("HandleToolscreenQueryMessages");
     (void)hWnd;
     (void)wParam;
     (void)lParam;
+
+    if (uMsg == borderlessToggleMsg) {
+        ToggleBorderlessWindowedFullscreen(hWnd);
+        return { true, 1 };
+    }
 
     if (uMsg == isInstalledMsg) {
         return { true, 1 };
@@ -1004,6 +1010,7 @@ InputHandlerResult HandleWmSizeModeDimensions(HWND hWnd, UINT uMsg, WPARAM wPara
     if (targetW <= 0 || targetH <= 0 || (msgW == targetW && msgH == targetH)) { return { false, 0 }; }
 
     const LPARAM adjustedSize = MAKELPARAM(targetW, targetH);
+    g_cachedGameTextureId.store(UINT_MAX);
     LRESULT forwarded = CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, adjustedSize);
 
     return { true, forwarded };

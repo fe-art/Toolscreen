@@ -29,6 +29,7 @@ extern std::atomic<bool> g_windowsMouseSpeedApplied;
 extern int g_originalWindowsMouseSpeed;
 
 extern std::atomic<bool> g_isShuttingDown;
+extern WNDPROC g_originalWndProc;
 
 extern PendingModeSwitch g_pendingModeSwitch;
 extern std::mutex g_pendingModeSwitchMutex;
@@ -313,7 +314,7 @@ void UpdateCachedScreenMetrics() {
 
         if (afterModeW > 0 && afterModeH > 0 && shouldEnforceModeSize && IsResolutionChangeSupported(g_gameVersion)) {
             HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
-            if (hwnd) { PostMessage(hwnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(afterModeW, afterModeH)); }
+            if (hwnd) { RequestWindowClientResize(hwnd, afterModeW, afterModeH, "logic_thread:screen_metrics"); }
         }
 
         // Publish updated snapshot so reader threads see the recalculated dimensions.
@@ -571,13 +572,15 @@ void ProcessPendingDimensionChange() {
 
         if (g_pendingDimensionChange.sendWmSize && g_currentModeId == g_pendingDimensionChange.modeId) {
             HWND hwnd = g_minecraftHwnd.load();
-            if (hwnd) { PostMessage(hwnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(mode->width, mode->height)); }
+            if (hwnd) { RequestWindowClientResize(hwnd, mode->width, mode->height, "logic_thread:pending_dimension"); }
         }
 
         if (g_pendingDimensionChange.sendWmSize && g_currentModeId == "Preemptive" && g_pendingDimensionChange.modeId == "EyeZoom" &&
             preemptiveMode) {
             HWND hwnd = g_minecraftHwnd.load();
-            if (hwnd) { PostMessage(hwnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(preemptiveMode->width, preemptiveMode->height)); }
+            if (hwnd) {
+                RequestWindowClientResize(hwnd, preemptiveMode->width, preemptiveMode->height, "logic_thread:preemptive_eyezoom_sync");
+            }
         }
 
         if (preemptiveWasResynced) { g_configIsDirty = true; }
@@ -624,12 +627,24 @@ static void CheckAutoBorderless() {
     HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
     if (!hwnd) { return; }
 
+    if (!g_config.autoBorderless) {
+        s_checked = true;
+        return;
+    }
+
+    if (g_originalWndProc == NULL) {
+        // Wait until SubclassedWndProc is active so the custom toggle message is handled on the window thread.
+        return;
+    }
+
+    const UINT toggleMsg = GetToolscreenBorderlessToggleMessageId();
+    if (!PostMessage(hwnd, toggleMsg, 0, 0)) {
+        Log("[LogicThread] Failed to queue auto-borderless message. Error=" + std::to_string(GetLastError()));
+        return;
+    }
+
     s_checked = true;
-
-    if (!g_config.autoBorderless) { return; }
-
-    ToggleBorderlessWindowedFullscreen(hwnd);
-    Log("[LogicThread] Auto-borderless applied");
+    Log("[LogicThread] Auto-borderless queued");
 }
 
 static void LogicThreadFunc() {

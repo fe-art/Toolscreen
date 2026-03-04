@@ -328,6 +328,8 @@ bool GetMonitorRectForWindow(HWND hwnd, RECT& outRect);
 bool GetMonitorSizeForWindow(HWND hwnd, int& outW, int& outH);
 bool GetWindowClientRectInScreen(HWND hwnd, RECT& outRect);
 
+UINT GetToolscreenBorderlessToggleMessageId();
+bool RequestWindowClientResize(HWND hwnd, int width, int height, const char* source = nullptr);
 void ToggleBorderlessWindowedFullscreen(HWND hwnd);
 bool IsCursorVisible();
 void WriteCurrentModeToFile(const std::string& modeId);

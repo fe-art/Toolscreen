@@ -737,6 +737,7 @@ static inline void ViewportHook_Impl(GLVIEWPORTPROC next, GLint x, GLint y, GLsi
 
     const int screenW = GetCachedWindowWidth();
     const int screenH = GetCachedWindowHeight();
+    if (screenW <= 0 || screenH <= 0) { return next(x, y, width, height); }
 
     // Check if mode transition animation is active (from snapshot - no lock needed)
     bool useAnimatedDimensions = transitionSnap.active;
@@ -1520,7 +1521,7 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                     modeValid = true;
                 }
             }
-            if (modeValid) { PostMessage(hwnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(modeWidth, modeHeight)); }
+            if (modeValid) { RequestWindowClientResize(hwnd, modeWidth, modeHeight, "swapbuffers:mode_transition_complete"); }
         }
 
         // Note: Video player update is now done in render_thread
