@@ -1045,6 +1045,8 @@ std::string VkToString(DWORD vk) {
                                                         { VK_DOWN, "DOWN" },
                                                         { VK_INSERT, "INSERT" },
                                                         { VK_DELETE, "DELETE" },
+                                                        { VK_NUMLOCK, "NUM LOCK" },
+                                                        { VK_PAUSE, "PAUSE" },
                                                         { VK_NUMPAD0, "NUM 0" },
                                                         { VK_NUMPAD1, "NUM 1" },
                                                         { VK_NUMPAD2, "NUM 2" },
