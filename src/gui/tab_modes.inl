@@ -631,8 +631,10 @@ if (ImGui::BeginTabItem("Modes")) {
                 ImGui::SetColumnWidth(0, 150);
                 ImGui::Text("Zoom Area Width");
                 ImGui::NextColumn();
-                int maxZoomAreaWidth = monitorWidth;
-                int maxZoomAreaHeight = (std::max)(1, monitorHeight);
+                constexpr int kEyeZoomMaxCustomDimension = 16384;
+                constexpr int kEyeZoomMaxCustomPosition = 16384;
+                int maxZoomAreaWidth = (std::max)(kEyeZoomMaxCustomDimension, g_config.eyezoom.zoomAreaWidth);
+                int maxZoomAreaHeight = (std::max)(kEyeZoomMaxCustomDimension, g_config.eyezoom.zoomAreaHeight);
                 if (Spinner("##EyeZoomAreaWidth", &g_config.eyezoom.zoomAreaWidth, 10, 1, maxZoomAreaWidth)) g_configIsDirty = true;
                 ImGui::NextColumn();
                 ImGui::Text("Zoom Area Height");
@@ -643,41 +645,8 @@ if (ImGui::BeginTabItem("Modes")) {
                 ImGui::Separator();
                 HelpMarker("Set the EyeZoom output rectangle size, then place it anywhere on screen using X/Y.");
 
-                int clampedZoomAreaWidth = g_config.eyezoom.zoomAreaWidth;
-                if (clampedZoomAreaWidth < 1) clampedZoomAreaWidth = 1;
-                if (clampedZoomAreaWidth > monitorWidth) clampedZoomAreaWidth = monitorWidth;
-                if (clampedZoomAreaWidth != g_config.eyezoom.zoomAreaWidth) {
-                    g_config.eyezoom.zoomAreaWidth = clampedZoomAreaWidth;
-                    g_configIsDirty = true;
-                }
-
-                int clampedZoomAreaHeight = g_config.eyezoom.zoomAreaHeight;
-                if (clampedZoomAreaHeight < 1) clampedZoomAreaHeight = 1;
-                if (clampedZoomAreaHeight > monitorHeight) clampedZoomAreaHeight = monitorHeight;
-                if (clampedZoomAreaHeight != g_config.eyezoom.zoomAreaHeight) {
-                    g_config.eyezoom.zoomAreaHeight = clampedZoomAreaHeight;
-                    g_configIsDirty = true;
-                }
-
-                int maxPosX = (std::max)(0, monitorWidth - g_config.eyezoom.zoomAreaWidth);
-                int maxPosY = (std::max)(0, monitorHeight - g_config.eyezoom.zoomAreaHeight);
-
-                if (g_config.eyezoom.positionX < 0) {
-                    g_config.eyezoom.positionX = 0;
-                    g_configIsDirty = true;
-                }
-                if (g_config.eyezoom.positionX > maxPosX) {
-                    g_config.eyezoom.positionX = maxPosX;
-                    g_configIsDirty = true;
-                }
-                if (g_config.eyezoom.positionY < 0) {
-                    g_config.eyezoom.positionY = 0;
-                    g_configIsDirty = true;
-                }
-                if (g_config.eyezoom.positionY > maxPosY) {
-                    g_config.eyezoom.positionY = maxPosY;
-                    g_configIsDirty = true;
-                }
+                int maxPosX = (std::max)(kEyeZoomMaxCustomPosition, g_config.eyezoom.positionX);
+                int maxPosY = (std::max)(kEyeZoomMaxCustomPosition, g_config.eyezoom.positionY);
 
                 ImGui::Columns(2, "eyezoom_position_cols", false);
                 ImGui::SetColumnWidth(0, 150);

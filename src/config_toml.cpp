@@ -1337,8 +1337,6 @@ void EyeZoomConfigFromToml(const toml::table& tbl, EyeZoomConfig& cfg) {
 
     if (cfg.zoomAreaWidth < 1) cfg.zoomAreaWidth = 1;
     if (cfg.zoomAreaHeight < 1) cfg.zoomAreaHeight = 1;
-    if (screenWidth > 0 && cfg.zoomAreaWidth > screenWidth) cfg.zoomAreaWidth = screenWidth;
-    if (screenHeight > 0 && cfg.zoomAreaHeight > screenHeight) cfg.zoomAreaHeight = screenHeight;
 
     cfg.useCustomSizePosition =
         GetOr(tbl, "useCustomSizePosition", GetOr(tbl, "useCustomPosition", ConfigDefaults::EYEZOOM_USE_CUSTOM_SIZE_POSITION));
