@@ -428,6 +428,7 @@ struct KeyRebind {
 };
 struct KeyRebindsConfig {
     bool enabled = false;
+    bool resolveRebindTargetsForHotkeys = ConfigDefaults::KEY_REBINDS_RESOLVE_REBIND_TARGETS_FOR_HOTKEYS;
     std::vector<DWORD> toggleHotkey = {};
     std::vector<KeyRebind> rebinds;
 };

@@ -1478,6 +1478,7 @@ void KeyRebindFromToml(const toml::table& tbl, KeyRebind& cfg) {
 
 void KeyRebindsConfigToToml(const KeyRebindsConfig& cfg, toml::table& out) {
     out.insert("enabled", cfg.enabled);
+    out.insert("resolveRebindTargetsForHotkeys", cfg.resolveRebindTargetsForHotkeys);
 
     toml::array toggleHotkeyArr;
     for (const auto& key : cfg.toggleHotkey) { toggleHotkeyArr.push_back(static_cast<int64_t>(key)); }
@@ -1494,6 +1495,8 @@ void KeyRebindsConfigToToml(const KeyRebindsConfig& cfg, toml::table& out) {
 
 void KeyRebindsConfigFromToml(const toml::table& tbl, KeyRebindsConfig& cfg) {
     cfg.enabled = GetOr(tbl, "enabled", ConfigDefaults::KEY_REBINDS_ENABLED);
+    cfg.resolveRebindTargetsForHotkeys =
+        GetOr(tbl, "resolveRebindTargetsForHotkeys", ConfigDefaults::KEY_REBINDS_RESOLVE_REBIND_TARGETS_FOR_HOTKEYS);
 
     cfg.toggleHotkey.clear();
     const bool hasToggleHotkey = tbl.contains("toggleHotkey");

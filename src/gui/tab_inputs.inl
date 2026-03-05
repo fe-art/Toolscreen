@@ -262,6 +262,12 @@ if (ImGui::BeginTabItem("Inputs")) {
             ImGui::SameLine();
             HelpMarker("When enabled, configured key rebinds will intercept keyboard input and send the remapped key to the game instead.");
 
+            if (ImGui::Checkbox("Resolve Rebind Targets For Hotkeys", &g_config.keyRebinds.resolveRebindTargetsForHotkeys)) {
+                g_configIsDirty = true;
+            }
+            ImGui::SameLine();
+            HelpMarker("When enabled, hotkeys can match the rebind target key for the pressed source key. Disable to only match the actual pressed key.");
+
             const ImVec4 rebindActiveGreen = ImVec4(0.20f, 1.00f, 0.20f, 1.00f);
             const ImVec4 rebindDisabledRed = ImVec4(1.00f, 0.20f, 0.20f, 1.00f);
             ImGui::TextDisabled("Status:");

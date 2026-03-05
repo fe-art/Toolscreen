@@ -1116,7 +1116,7 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
     const Config& cfg = *cfgSnap;
 
     DWORD rebindTargetVk = 0;
-    if (cfg.keyRebinds.enabled) {
+    if (cfg.keyRebinds.enabled && cfg.keyRebinds.resolveRebindTargetsForHotkeys) {
         for (const auto& rebind : cfg.keyRebinds.rebinds) {
             if (rebind.enabled && rebind.fromKey != 0 && rebind.toKey != 0 &&
                 (vkCode == rebind.fromKey || rawVkCode == rebind.fromKey)) {
