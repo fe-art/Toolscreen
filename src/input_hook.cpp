@@ -1628,6 +1628,42 @@ static UINT ResolveOutputScanCode(DWORD outputVk, UINT configuredScanCodeWithFla
     return configuredScanCodeWithFlags;
 }
 
+static bool IsMouseButtonVk(DWORD vk) {
+    return vk == VK_LBUTTON || vk == VK_RBUTTON || vk == VK_MBUTTON || vk == VK_XBUTTON1 || vk == VK_XBUTTON2;
+}
+
+static bool RebindCannotType(const KeyRebind& rebind) {
+    DWORD triggerVk = rebind.toKey;
+    if (triggerVk == 0) triggerVk = rebind.fromKey;
+    if (triggerVk == 0) return false;
+
+    UINT triggerScan = (rebind.useCustomOutput && rebind.customOutputScanCode != 0)
+        ? static_cast<UINT>(rebind.customOutputScanCode)
+        : GetScanCodeWithExtendedFlag(triggerVk);
+
+    if (triggerScan != 0 && (triggerScan & 0xFF00) == 0) {
+        UINT vkScan = GetScanCodeWithExtendedFlag(triggerVk);
+        if ((vkScan & 0xFF00) != 0 && ((vkScan & 0xFF) == (triggerScan & 0xFF))) { triggerScan = vkScan; }
+    }
+
+    if (IsModifierVk(triggerVk) || IsModifierScanCode(triggerScan)) return true;
+    if (IsMouseButtonVk(triggerVk)) return true;
+
+    switch (triggerVk) {
+    case VK_BACK:
+    case VK_CAPITAL:
+    case VK_DELETE:
+    case VK_HOME:
+    case VK_INSERT:
+    case VK_END:
+    case VK_PRIOR:
+    case VK_NEXT:
+        return true;
+    default:
+        return false;
+    }
+}
+
 static bool TryTranslateVkToChar(DWORD vkCode, bool shiftDown, WCHAR& outChar) {
     BYTE keyboardState[256] = {};
     if (shiftDown) keyboardState[VK_SHIFT] = 0x80;
@@ -2166,6 +2202,11 @@ InputHandlerResult HandleCharRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
             }
 
             if (!(rebind.useCustomOutput && rebind.customOutputVK != 0)) {
+                if (RebindCannotType(rebind)) {
+                    Log("[REBIND WM_CHAR] Consuming char code " + std::to_string(static_cast<unsigned int>(inputChar)) +
+                        " (trigger cannot type)");
+                    return { true, 0 };
+                }
                 return { false, 0 };
             }
 
