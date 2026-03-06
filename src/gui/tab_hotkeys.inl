@@ -260,9 +260,23 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                 if (Spinner("##debounce", &hotkey.debounce, 1, 0)) g_configIsDirty = true;
                 ImGui::Columns(1);
 
-                if (ImGui::Checkbox("Trigger on Release", &hotkey.triggerOnRelease)) { g_configIsDirty = true; }
+                if (hotkey.triggerOnHold) { ImGui::BeginDisabled(); }
+                if (ImGui::Checkbox("Trigger on Release", &hotkey.triggerOnRelease)) {
+                    g_configIsDirty = true;
+                }
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                    ImGui::SetTooltip(hotkey.triggerOnHold
+                        ? "Disabled while \"Trigger only when holding\" is active"
+                        : "When checked, the hotkey triggers when the key is released instead of pressed");
+                }
+                if (hotkey.triggerOnHold) { ImGui::EndDisabled(); }
+
+                if (ImGui::Checkbox("Trigger only when holding", &hotkey.triggerOnHold)) {
+                    if (hotkey.triggerOnHold) { hotkey.triggerOnRelease = false; }
+                    g_configIsDirty = true;
+                }
                 if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("When checked, the hotkey triggers when the key is released instead of pressed");
+                    ImGui::SetTooltip("When checked, the mode activates while the key is held and reverts to default when released");
                 }
 
                 if (ImGui::Checkbox("Block key from game", &hotkey.blockKeyFromGame)) { g_configIsDirty = true; }

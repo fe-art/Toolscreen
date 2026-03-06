@@ -92,6 +92,7 @@ debounce = 100
 keys = [ 90 ]
 mainMode = 'Fullscreen'
 secondaryMode = 'Thin'
+triggerOnHold = false
 triggerOnRelease = false
 
     [hotkey.conditions]
@@ -104,6 +105,7 @@ debounce = 100
 keys = [ 74 ]
 mainMode = 'Fullscreen'
 secondaryMode = 'EyeZoom'
+triggerOnHold = false
 triggerOnRelease = false
 
     [hotkey.conditions]
@@ -116,6 +118,7 @@ debounce = 100
 keys = [ 164 ]
 mainMode = 'Fullscreen'
 secondaryMode = 'Wide'
+triggerOnHold = false
 triggerOnRelease = false
 
     [hotkey.conditions]

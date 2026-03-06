@@ -1157,21 +1157,53 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
         }
 
         if (!conditionsMet) {
-            if (!(hotkey.allowExitToFullscreenRegardlessOfGameState && wouldExitToFullscreen)) {
+            bool allowBypass = (hotkey.allowExitToFullscreenRegardlessOfGameState && wouldExitToFullscreen) ||
+                               (hotkey.triggerOnHold && !isKeyDown); // Hold release must always revert
+            if (!allowBypass) {
                 if (s_enableHotkeyDebug) { Log("[Hotkey] SKIP: Game state conditions not met"); }
                 continue;
             }
             if (s_enableHotkeyDebug) {
-                Log("[Hotkey] BYPASS: Allowing exit to Fullscreen even though game state conditions are not met");
+                Log("[Hotkey] BYPASS: Allowing exit even though game state conditions are not met");
             }
         }
 
+        // Hold-mode helper: activate target mode on press, revert to default on release
+        auto handleHoldMode = [&](const std::string& targetMode, const std::string& hotkeyId, bool blockKey) -> InputHandlerResult {
+            if (isKeyDown) {
+                auto now = std::chrono::steady_clock::now();
+                bool debounced = false;
+                {
+                    std::lock_guard<std::mutex> tsLock(g_hotkeyTimestampsMutex);
+                    auto it = g_hotkeyTimestamps.find(hotkeyId);
+                    if (it != g_hotkeyTimestamps.end() &&
+                        std::chrono::duration_cast<std::chrono::milliseconds>(now - it->second).count() < hotkey.debounce) {
+                        debounced = true;
+                    } else {
+                        g_hotkeyTimestamps[hotkeyId] = now;
+                    }
+                }
+                if (!debounced && !targetMode.empty()) {
+                    if (s_enableHotkeyDebug) { Log("[Hotkey] HOLD DOWN: " + hotkeyId + " -> " + targetMode); }
+                    SwitchToMode(targetMode, "hotkey (hold)");
+                }
+            } else {
+                if (s_enableHotkeyDebug) { Log("[Hotkey] HOLD RELEASE: " + hotkeyId + " -> " + cfg.defaultMode); }
+                SwitchToMode(cfg.defaultMode, "hotkey (hold release)");
+            }
+            if (blockKey) return { true, 0 };
+            return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
+        };
+
         for (const auto& alt : hotkey.altSecondaryModes) {
-            bool matched = CheckHotkeyMatch(alt.keys, vkCode, hotkey.conditions.exclusions, hotkey.triggerOnRelease, s_bestMatchKeyCount);
-            bool matchedViaRebind = !matched && rebindTargetVk && CheckHotkeyMatch(alt.keys, rebindTargetVk, hotkey.conditions.exclusions, hotkey.triggerOnRelease, s_bestMatchKeyCount);
+            bool skipExclusions = hotkey.triggerOnRelease || (hotkey.triggerOnHold && !isKeyDown);
+            bool matched = CheckHotkeyMatch(alt.keys, vkCode, hotkey.conditions.exclusions, skipExclusions, s_bestMatchKeyCount);
+            bool matchedViaRebind = !matched && rebindTargetVk && CheckHotkeyMatch(alt.keys, rebindTargetVk, hotkey.conditions.exclusions, skipExclusions, s_bestMatchKeyCount);
             if (matched || matchedViaRebind) {
                 bool blockKey = hotkey.blockKeyFromGame || matchedViaRebind;
                 std::string hotkeyId = GetKeyComboString(alt.keys);
+
+                if (hotkey.triggerOnHold) { return handleHoldMode(alt.mode, hotkeyId, blockKey); }
 
                 // Handle trigger-on-release invalidation tracking
                 if (hotkey.triggerOnRelease) {
@@ -1237,11 +1269,17 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
         }
 
         {
-            bool matched = CheckHotkeyMatch(hotkey.keys, vkCode, hotkey.conditions.exclusions, hotkey.triggerOnRelease, s_bestMatchKeyCount);
-            bool matchedViaRebind = !matched && rebindTargetVk && CheckHotkeyMatch(hotkey.keys, rebindTargetVk, hotkey.conditions.exclusions, hotkey.triggerOnRelease, s_bestMatchKeyCount);
+            bool skipExclusions = hotkey.triggerOnRelease || (hotkey.triggerOnHold && !isKeyDown);
+            bool matched = CheckHotkeyMatch(hotkey.keys, vkCode, hotkey.conditions.exclusions, skipExclusions, s_bestMatchKeyCount);
+            bool matchedViaRebind = !matched && rebindTargetVk && CheckHotkeyMatch(hotkey.keys, rebindTargetVk, hotkey.conditions.exclusions, skipExclusions, s_bestMatchKeyCount);
             if (matched || matchedViaRebind) {
                 bool blockKey = hotkey.blockKeyFromGame || matchedViaRebind;
                 std::string hotkeyId = GetKeyComboString(hotkey.keys);
+
+                if (hotkey.triggerOnHold) {
+                    if (currentSecMode.empty()) { currentSecMode = GetHotkeySecondaryMode(hotkeyIdx); }
+                    return handleHoldMode(currentSecMode, hotkeyId, blockKey);
+                }
 
                 if (hotkey.triggerOnRelease) {
                     if (isKeyDown) {

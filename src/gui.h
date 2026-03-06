@@ -320,6 +320,7 @@ struct HotkeyConfig {
     HotkeyConditions conditions;
     int debounce = 100;
     bool triggerOnRelease = false; // When true, hotkey triggers on key release instead of key press
+    bool triggerOnHold = false;    // When true, hotkey activates on key press and deactivates on key release
 
     bool blockKeyFromGame = false;
 
