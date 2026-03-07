@@ -1,4 +1,4 @@
-﻿#include "gui.h"
+#include "gui.h"
 #include "config_toml.h"
 #include "expression_parser.h"
 #include "fake_cursor.h"
@@ -11,6 +11,7 @@
 #include "render.h"
 #include "render_thread.h"
 #include "resource.h"
+#include "translation.h"
 #include "json.hpp"
 #include "stb_image.h"
 #include "utils.h"
@@ -3240,6 +3241,93 @@ void RenderSettingsGUI() {
             float buttonWidth = ImGui::CalcTextSize(buttonLabel).x + ImGui::GetStyle().FramePadding.x * 2.0f;
 
             ImVec2 savedCursor = ImGui::GetCursorPos();
+
+            {
+                static GLuint s_languageTexture = 0;
+                static HGLRC s_languageLastCtx = NULL;
+                HGLRC currentCtx = wglGetCurrentContext();
+                if (currentCtx != s_languageLastCtx) {
+                    s_languageTexture = 0;
+                    s_languageLastCtx = currentCtx;
+                }
+
+                auto ensureLanguageTextureLoaded = [&]() {
+                    if (s_languageTexture != 0) return;
+
+                    HMODULE hModule = NULL;
+                    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                       (LPCWSTR)&g_showGui, &hModule);
+                    if (!hModule) return;
+
+                    HRSRC hResource = FindResourceW(hModule, MAKEINTRESOURCEW(IDR_LANGUAGE_PNG), RT_RCDATA);
+                    if (!hResource) return;
+
+                    HGLOBAL hData = LoadResource(hModule, hResource);
+                    if (!hData) return;
+
+                    DWORD dataSize = SizeofResource(hModule, hResource);
+                    const unsigned char* rawData = (const unsigned char*)LockResource(hData);
+                    if (!rawData || dataSize == 0) return;
+
+                    stbi_set_flip_vertically_on_load_thread(0);
+                    int w = 0, h = 0, channels = 0;
+                    unsigned char* pixels = stbi_load_from_memory(rawData, (int)dataSize, &w, &h, &channels, 4);
+                    if (!pixels || w <= 0 || h <= 0) {
+                        if (pixels) stbi_image_free(pixels);
+                        return;
+                    }
+
+                    glGenTextures(1, &s_languageTexture);
+                    glBindTexture(GL_TEXTURE_2D, s_languageTexture);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+                    glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+                    glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+                    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+                    glBindTexture(GL_TEXTURE_2D, 0);
+                    stbi_image_free(pixels);
+                };
+
+                ensureLanguageTextureLoaded();
+
+                if (s_languageTexture != 0) {
+                    float iconSize = ImGui::GetFrameHeight();
+                    float margin = ImGui::GetStyle().ItemSpacing.x;
+                    ImGui::SetCursorPos(ImVec2(ImGui::GetWindowContentRegionMax().x - buttonWidth - iconSize * 2 - margin * 2, 30.0f));
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1, 1, 1, 0.1f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1, 1, 1, 0.2f));
+                    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
+                    if (ImGui::ImageButton("##language", (ImTextureID)(intptr_t)s_languageTexture, ImVec2(iconSize, iconSize))) {
+                        ImGui::OpenPopup("##LanguagePopup");
+                    }
+                    ImGui::PopStyleVar();
+                    ImGui::PopStyleColor(3);
+
+                    if (ImGui::BeginPopup("##LanguagePopup")) {
+                        nlohmann::json langs = GetLangs();
+                        for (const auto& [langCode, langName] : langs.items()) {
+                            Log(langName.get<std::string>());
+                            bool isSelected = (g_config.lang == langCode);
+                            if (ImGui::Selectable(langName.get<std::string>().c_str(), isSelected)) {
+                                if (g_config.lang != langCode) {
+                                    g_config.lang = langCode;
+                                    LoadTranslation(langCode);
+                                    g_configIsDirty = true;
+                                }
+                            }
+                            if (isSelected) {
+                                ImGui::SetItemDefaultFocus();
+                            }
+                        }
+                        ImGui::EndPopup(); 
+                    }
+                }
+            }
 
             {
                 static GLuint s_discordTexture = 0;
