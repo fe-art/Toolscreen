@@ -11,7 +11,7 @@
 #include "render.h"
 #include "render_thread.h"
 #include "resource.h"
-#include "translation.h"
+#include "i18n.h"
 #include "json.hpp"
 #include "stb_image.h"
 #include "utils.h"

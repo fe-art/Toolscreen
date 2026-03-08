@@ -10,7 +10,7 @@
 #include "render_thread.h"
 #include "resource.h"
 #include "shared_contexts.h"
-#include "translation.h"
+#include "i18n.h"
 #include "hook_chain.h"
 #include "utils.h"
 #include "version.h"

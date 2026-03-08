@@ -1,4 +1,4 @@
-#include "translation.h"
+#include "i18n.h"
 
 #include "resource.h"
 #include "utils.h"
