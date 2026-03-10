@@ -1,4 +1,4 @@
-#include "gui.h"
+﻿#include "gui.h"
 #include "config_toml.h"
 #include "expression_parser.h"
 #include "fake_cursor.h"
@@ -12,6 +12,7 @@
 #include "render_thread.h"
 #include "resource.h"
 #include <nlohmann/json.hpp>
+#include "i18n.h"
 #include "stb_image.h"
 #include "utils.h"
 #include "virtual_camera.h"
@@ -690,7 +691,7 @@ static void ClearImageError(const std::string& key) {
 }
 
 static void HelpMarker(const char* desc) {
-    ImGui::TextDisabled("(?)");
+    ImGui::TextDisabled(trc("label.question_mark"));
     if (ImGui::BeginItemTooltip()) {
         ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
         ImGui::TextUnformatted(desc);
@@ -700,12 +701,12 @@ static void HelpMarker(const char* desc) {
 }
 
 static void SliderCtrlClickTip() {
-    ImGui::TextDisabled("Tip: Right-click any slider to input a specific value.");
+    ImGui::TextDisabled(trc("label.tip_right_click_slider"));
     ImGui::Spacing();
 }
 
 static void RawInputSensitivityNote() {
-    ImGui::TextDisabled("Note: Raw Input must always remain enabled in the game settings");
+    ImGui::TextDisabled(trc("label.note_raw_input"));
 }
 
 static bool ShouldForceSliderTextInputFromMouseShortcut(bool* shouldSpoofLeftClick) {
@@ -751,7 +752,7 @@ static bool SliderFloatDoubleClickInput(const char* label, float* v, float v_min
         io.MouseDown[ImGuiMouseButton_Left] = prevMouseDownLeft;
         io.MouseDownDuration[ImGuiMouseButton_Left] = prevMouseDownDurationLeft;
     }
-    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Right click to edit precisely"); }
+    if (ImGui::IsItemHovered()) { ImGui::SetTooltip(trc("tooltip.right_click_edit")); }
     return changed;
 }
 
@@ -779,7 +780,7 @@ static bool SliderIntDoubleClickInput(const char* label, int* v, int v_min, int 
         io.MouseDown[ImGuiMouseButton_Left] = prevMouseDownLeft;
         io.MouseDownDuration[ImGuiMouseButton_Left] = prevMouseDownDurationLeft;
     }
-    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Right click to edit precisely"); }
+    if (ImGui::IsItemHovered()) { ImGui::SetTooltip(trc("tooltip.right_click_edit")); }
     return changed;
 }
 
@@ -809,13 +810,13 @@ static void RenderTransitionSettingsHorizontalNoBackground(ModeConfig& mode, con
 
         ImGui::TableSetColumnIndex(0);
         ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.3f, 0.5f, 0.7f, 0.8f));
-        ImGui::Text("Viewport Animation");
+        ImGui::Text(trc("transition.viewport_animation"));
         ImGui::PopStyleColor();
         ImGui::Separator();
 
-        ImGui::Text("Type:");
+        ImGui::Text(trc("transition.type"));
         ImGui::SetNextItemWidth(-FLT_MIN);
-        const char* gameOptions[] = { "Cut", "Bounce" };
+        const char* gameOptions[] = { trc("transition.cut"), trc("transition.bounce") };
         int gameType = (mode.gameTransition == GameTransitionType::Cut) ? 0 : 1;
         if (ImGui::Combo(("##GameTrans" + idSuffix).c_str(), &gameType, gameOptions, IM_ARRAYSIZE(gameOptions))) {
             mode.gameTransition = (gameType == 0) ? GameTransitionType::Cut : GameTransitionType::Bounce;
@@ -824,28 +825,28 @@ static void RenderTransitionSettingsHorizontalNoBackground(ModeConfig& mode, con
 
         if (mode.gameTransition == GameTransitionType::Bounce) {
             ImGui::Spacing();
-            ImGui::Text("Duration:");
+            ImGui::Text(trc("transition.duration"));
             ImGui::SetNextItemWidth(-FLT_MIN);
             if (Spinner(("##GameDur" + idSuffix).c_str(), &mode.transitionDurationMs, 10, 50, 5000)) { g_configIsDirty = true; }
             ImGui::SameLine();
-            ImGui::TextDisabled("ms");
+            ImGui::TextDisabled(trc("transition.ms"));
 
             ImGui::Spacing();
-            ImGui::Text("Ease In:");
+            ImGui::Text(trc("transition.ease_in"));
             ImGui::SetNextItemWidth(-FLT_MIN);
             if (ImGui::SliderFloat(("##EaseIn" + idSuffix).c_str(), &mode.easeInPower, 1.0f, 6.0f, "%.1f")) { g_configIsDirty = true; }
 
-            ImGui::Text("Ease Out:");
+            ImGui::Text(trc("transition.ease_out"));
             ImGui::SetNextItemWidth(-FLT_MIN);
             if (ImGui::SliderFloat(("##EaseOut" + idSuffix).c_str(), &mode.easeOutPower, 1.0f, 6.0f, "%.1f")) { g_configIsDirty = true; }
 
             ImGui::Spacing();
-            ImGui::Text("Bounces:");
+            ImGui::Text(trc("transition.bounces"));
             ImGui::SetNextItemWidth(-FLT_MIN);
             if (Spinner(("##BounceCount" + idSuffix).c_str(), &mode.bounceCount, 1, 0, 10)) { g_configIsDirty = true; }
 
             if (mode.bounceCount > 0) {
-                ImGui::Text("Intensity:");
+                ImGui::Text(trc("transition.intensity"));
                 ImGui::SetNextItemWidth(-FLT_MIN);
                 float displayIntensity = mode.bounceIntensity * 100.0f;
                 if (ImGui::SliderFloat(("##BounceInt" + idSuffix).c_str(), &displayIntensity, 0.0f, 5.0f, "%.2f")) {
@@ -853,17 +854,16 @@ static void RenderTransitionSettingsHorizontalNoBackground(ModeConfig& mode, con
                     g_configIsDirty = true;
                 }
 
-                ImGui::Text("Bounce ms:");
+                ImGui::Text(trc("transition.bounce_ms"));
                 ImGui::SetNextItemWidth(-FLT_MIN);
                 if (Spinner(("##BounceDur" + idSuffix).c_str(), &mode.bounceDurationMs, 10, 20, 500)) { g_configIsDirty = true; }
             }
 
             ImGui::Spacing();
             ImGui::Separator();
-            if (ImGui::Checkbox(("Relative Stretching##" + idSuffix).c_str(), &mode.relativeStretching)) { g_configIsDirty = true; }
+            if (ImGui::Checkbox((tr("transition.relative_stretching") + "##" + idSuffix).c_str(), &mode.relativeStretching)) { g_configIsDirty = true; }
             if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("When enabled, viewport-relative overlays scale with the viewport during animation.\nWhen disabled, "
-                                  "overlays move with the viewport but keep their original size.");
+                ImGui::SetTooltip(trc("transition.tooltip.relative_streching"));
             }
         }
 
@@ -873,7 +873,7 @@ static void RenderTransitionSettingsHorizontalNoBackground(ModeConfig& mode, con
 
     ImGui::PopStyleVar();
 
-    ImGui::TextDisabled("Note: Fullscreen has no background. Transitions use the other mode's background.");
+    ImGui::TextDisabled(trc("transition.note.fullscreen_background"));
 }
 
 static void RenderTransitionSettingsHorizontal(ModeConfig& mode, const std::string& idSuffix) {
@@ -887,13 +887,13 @@ static void RenderTransitionSettingsHorizontal(ModeConfig& mode, const std::stri
 
         ImGui::TableSetColumnIndex(0);
         ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.3f, 0.5f, 0.7f, 0.8f));
-        ImGui::Text("Viewport Animation");
+        ImGui::Text(trc("transition.viewport_animation"));
         ImGui::PopStyleColor();
         ImGui::Separator();
 
-        ImGui::Text("Type:");
+        ImGui::Text(trc("transition.type"));
         ImGui::SetNextItemWidth(-FLT_MIN);
-        const char* gameOptions[] = { "Cut", "Bounce" };
+        const char* gameOptions[] = { trc("transition.cut"), trc("transition.bounce") };
         int gameType = (mode.gameTransition == GameTransitionType::Cut) ? 0 : 1;
         if (ImGui::Combo(("##GameTrans" + idSuffix).c_str(), &gameType, gameOptions, IM_ARRAYSIZE(gameOptions))) {
             mode.gameTransition = (gameType == 0) ? GameTransitionType::Cut : GameTransitionType::Bounce;
@@ -902,28 +902,28 @@ static void RenderTransitionSettingsHorizontal(ModeConfig& mode, const std::stri
 
         if (mode.gameTransition == GameTransitionType::Bounce) {
             ImGui::Spacing();
-            ImGui::Text("Duration:");
+            ImGui::Text(trc("transition.duration"));
             ImGui::SetNextItemWidth(-FLT_MIN);
             if (Spinner(("##GameDur" + idSuffix).c_str(), &mode.transitionDurationMs, 10, 50, 5000)) { g_configIsDirty = true; }
             ImGui::SameLine();
-            ImGui::TextDisabled("ms");
+            ImGui::TextDisabled(trc("transition.ms"));
 
             ImGui::Spacing();
-            ImGui::Text("Ease In:");
+            ImGui::Text(trc("transition.ease_in"));
             ImGui::SetNextItemWidth(-FLT_MIN);
             if (ImGui::SliderFloat(("##EaseIn" + idSuffix).c_str(), &mode.easeInPower, 1.0f, 6.0f, "%.1f")) { g_configIsDirty = true; }
 
-            ImGui::Text("Ease Out:");
+            ImGui::Text(trc("transition.ease_out"));
             ImGui::SetNextItemWidth(-FLT_MIN);
             if (ImGui::SliderFloat(("##EaseOut" + idSuffix).c_str(), &mode.easeOutPower, 1.0f, 6.0f, "%.1f")) { g_configIsDirty = true; }
 
             ImGui::Spacing();
-            ImGui::Text("Bounces:");
+            ImGui::Text(trc("transition.bounces"));
             ImGui::SetNextItemWidth(-FLT_MIN);
             if (Spinner(("##BounceCount" + idSuffix).c_str(), &mode.bounceCount, 1, 0, 10)) { g_configIsDirty = true; }
 
             if (mode.bounceCount > 0) {
-                ImGui::Text("Intensity:");
+                ImGui::Text(trc("transition.intensity"));
                 ImGui::SetNextItemWidth(-FLT_MIN);
                 float displayIntensity = mode.bounceIntensity * 100.0f;
                 if (ImGui::SliderFloat(("##BounceInt" + idSuffix).c_str(), &displayIntensity, 0.0f, 5.0f, "%.2f")) {
@@ -931,27 +931,26 @@ static void RenderTransitionSettingsHorizontal(ModeConfig& mode, const std::stri
                     g_configIsDirty = true;
                 }
 
-                ImGui::Text("Bounce ms:");
+                ImGui::Text(trc("transition.bounce_ms"));
                 ImGui::SetNextItemWidth(-FLT_MIN);
                 if (Spinner(("##BounceDur" + idSuffix).c_str(), &mode.bounceDurationMs, 10, 20, 500)) { g_configIsDirty = true; }
             }
 
             ImGui::Spacing();
             ImGui::Separator();
-            if (ImGui::Checkbox(("Relative Stretching##" + idSuffix).c_str(), &mode.relativeStretching)) { g_configIsDirty = true; }
+            if (ImGui::Checkbox((tr("transition.relative_stretching") + "##" + idSuffix).c_str(), &mode.relativeStretching)) { g_configIsDirty = true; }
             if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("When enabled, viewport-relative overlays scale with the viewport during animation.\nWhen disabled, "
-                                  "overlays move with the viewport but keep their original size.");
+                ImGui::SetTooltip(trc("transition.tooltip.relative_streching"));
             }
 
-            if (ImGui::Checkbox(("Skip X Animation##" + idSuffix).c_str(), &mode.skipAnimateX)) { g_configIsDirty = true; }
+            if (ImGui::Checkbox((tr("transition.skip_x_animation") + "##" + idSuffix).c_str(), &mode.skipAnimateX)) { g_configIsDirty = true; }
             if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("When enabled, the X axis (width) instantly jumps to target while Y animates.");
+                ImGui::SetTooltip(trc("transition.tooltip.skip_x_animation"));
             }
 
-            if (ImGui::Checkbox(("Skip Y Animation##" + idSuffix).c_str(), &mode.skipAnimateY)) { g_configIsDirty = true; }
+            if (ImGui::Checkbox((tr("transition.skip_y_animation") + "##" + idSuffix).c_str(), &mode.skipAnimateY)) { g_configIsDirty = true; }
             if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("When enabled, the Y axis (height) instantly jumps to target while X animates.");
+                ImGui::SetTooltip(trc("transition.tooltip.skip_y_animation"));
             }
         }
 
@@ -962,7 +961,7 @@ static void RenderTransitionSettingsHorizontal(ModeConfig& mode, const std::stri
     ImGui::PopStyleVar();
 
     ImGui::Spacing();
-    if (ImGui::Button(("Preview Transition##" + idSuffix).c_str())) {
+    if (ImGui::Button((tr("transition.preview_transition") + "##" + idSuffix).c_str())) {
         std::lock_guard<std::mutex> pendingLock(g_pendingModeSwitchMutex);
         g_pendingModeSwitch.pending = true;
         g_pendingModeSwitch.isPreview = true;
@@ -2751,7 +2750,7 @@ void RenderConfigErrorGUI() {
     ImVec2 center = ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
     ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(600, 0));
-    if (ImGui::Begin("Configuration Error", NULL,
+    if (ImGui::Begin(trc("error.configuration_error"), NULL,
                      ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove)) {
         static std::chrono::steady_clock::time_point s_lastCopyTime{};
         std::string errorMsg;
@@ -2770,12 +2769,12 @@ void RenderConfigErrorGUI() {
         bool show_feedback =
             std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - s_lastCopyTime).count() < 3;
 
-        float button_width_copy = ImGui::CalcTextSize("Copy Debug Info").x + ImGui::GetStyle().FramePadding.x * 2.0f;
-        float button_width_quit = ImGui::CalcTextSize("Quit").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+        float button_width_copy = ImGui::CalcTextSize(trc("button.copy_debug_info")).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+        float button_width_quit = ImGui::CalcTextSize(trc("button.quit")).x + ImGui::GetStyle().FramePadding.x * 2.0f;
         float total_button_width = button_width_copy + button_width_quit + ImGui::GetStyle().ItemSpacing.x;
         ImGui::SetCursorPosX((ImGui::GetWindowWidth() - total_button_width) * 0.5f);
 
-        if (ImGui::Button("Copy Debug Info")) {
+        if (ImGui::Button(trc("button.copy_debug_info"))) {
             std::string configContent = "ERROR: Could not read config.toml.";
             std::wstring configPath = g_toolscreenPath + L"\\config.toml";
             std::ifstream f(std::filesystem::path(configPath), std::ios::binary);
@@ -2798,7 +2797,7 @@ void RenderConfigErrorGUI() {
         }
 
         ImGui::SameLine();
-        if (ImGui::Button("Quit")) { exit(0); }
+        if (ImGui::Button(trc("button.quit"))) { exit(0); }
 
         if (show_feedback) {
             const char* feedback_text = "Debug info copied to clipboard!";
@@ -2874,26 +2873,34 @@ void RenderSettingsGUI() {
     PROFILE_SCOPE_CAT("Settings GUI Rendering", "ImGui");
     ResetTransientBindingUiState();
 
-    static const std::vector<std::pair<const char*, const char*>> relativeToOptions = { { "topLeftViewport", "Top Left (Viewport)" },
-                                                                                        { "topRightViewport", "Top Right (Viewport)" },
-                                                                                        { "bottomLeftViewport", "Bottom Left (Viewport)" },
-                                                                                        { "bottomRightViewport",
-                                                                                          "Bottom Right (Viewport)" },
-                                                                                        { "centerViewport", "Center (Viewport)" },
-                                                                                        { "pieLeft", "Pie-Chart Left" },
-                                                                                        { "pieRight", "Pie-Chart Right" },
-                                                                                        { "topLeftScreen", "Top Left (Screen)" },
-                                                                                        { "topRightScreen", "Top Right (Screen)" },
-                                                                                        { "bottomLeftScreen", "Bottom Left (Screen)" },
-                                                                                        { "bottomRightScreen", "Bottom Right (Screen)" },
-                                                                                        { "centerScreen", "Center (Screen)" } };
-    static const std::vector<std::pair<const char*, const char*>> imageRelativeToOptions = {
-        { "topLeftViewport", "Top Left (Viewport)" },       { "topRightViewport", "Top Right (Viewport)" },
-        { "bottomLeftViewport", "Bottom Left (Viewport)" }, { "bottomRightViewport", "Bottom Right (Viewport)" },
-        { "centerViewport", "Center (Viewport)" },          { "topLeftScreen", "Top Left (Screen)" },
-        { "topRightScreen", "Top Right (Screen)" },         { "bottomLeftScreen", "Bottom Left (Screen)" },
-        { "bottomRightScreen", "Bottom Right (Screen)" },   { "centerScreen", "Center (Screen)" }
-    };
+    static const std::vector<std::pair<const char*, const char*>>
+        relativeToOptions = {
+            {"topLeftViewport", trc("position.top_left_viewport")},
+            {"topRightViewport", trc("position.top_right_viewport")},
+            {"bottomLeftViewport", trc("position.bottom_left_viewport")},
+            {"bottomRightViewport", trc("position.bottom_right_viewport")},
+            {"centerViewport", trc("position.center_viewport")},
+            {"pieLeft", trc("position.pie_left")},
+            {"pieRight", trc("position.pie_right")},
+            {"topLeftScreen", trc("position.top_left_screen")},
+            {"topRightScreen", trc("position.top_right_screen")},
+            {"bottomLeftScreen", trc("position.bottom_left_screen")},
+            {"bottomRightScreen", trc("position.bottom_right_screen")},
+            {"centerScreen", trc("position.center_screen")}
+        };
+    static const std::vector<std::pair<const char*, const char*>>
+        imageRelativeToOptions = {
+            {"topLeftViewport", trc("position.top_left_viewport")},
+            {"topRightViewport", trc("position.top_right_viewport")},
+            {"bottomLeftViewport", trc("position.bottom_left_viewport")},
+            {"bottomRightViewport", trc("position.bottom_right_viewport")},
+            {"centerViewport", trc("position.center_viewport")},
+            {"topLeftScreen", trc("position.top_left_screen")},
+            {"topRightScreen", trc("position.top_right_screen")},
+            {"bottomLeftScreen", trc("position.bottom_left_screen")},
+            {"bottomRightScreen", trc("position.bottom_right_screen")},
+            {"centerScreen", trc("position.center_screen")}
+        };
     auto getFriendlyName = [&](const std::string& key, const std::vector<std::pair<const char*, const char*>>& options) {
         for (const auto& option : options) {
             if (key == option.first) return option.second;
@@ -2912,14 +2919,15 @@ void RenderSettingsGUI() {
     static const std::vector<const char*> guiGameStates = { "wall", "inworld,cursor_free", "inworld,cursor_grabbed", "title",
                                                             "generating" };
 
-    static const std::vector<std::pair<const char*, const char*>> gameStateDisplayNames = {
-        { "wall", "Wall Screen" },
-        { "inworld,cursor_free", "In World (Cursor Free)" },
-        { "inworld,cursor_grabbed", "In World (Cursor Grabbed)" },
-        { "title", "Title Screen" },
-        { "waiting", "Waiting Screen" },
-        { "generating", "World Generation" }
-    };
+    static const std::vector<std::pair<const char*, const char*>>
+        gameStateDisplayNames = {
+            {"wall", trc("game_state.wall")},
+            {"inworld,cursor_free", trc("game_state.inworld_free")},
+            {"inworld,cursor_grabbed", trc("game_state.inworld_grabbed")},
+            {"title", trc("game_state.title")},
+            {"waiting", trc("game_state.waiting")},
+            {"generating", trc("game_state.generating")}
+        };
 
     auto getGameStateFriendlyName = [&](const std::string& gameState) {
         for (const auto& pair : gameStateDisplayNames) {
@@ -2941,7 +2949,7 @@ void RenderSettingsGUI() {
             }
             s_bindingInitialized = true;
         }
-        ImGui::OpenPopup("Bind Hotkey");
+        ImGui::OpenPopup(trc("hotkeys.bind_hotkey"));
     } else {
         s_bindingKeys.clear();
         s_hadKeysPressed = false;
@@ -2949,11 +2957,11 @@ void RenderSettingsGUI() {
         s_bindingInitialized = false;
     }
 
-    if (ImGui::BeginPopupModal("Bind Hotkey", NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
-        ImGui::Text("Press a key or key combination.");
-        ImGui::Text("Release all keys to confirm.");
-        ImGui::Text("Press Backspace/Delete to clear.");
-        ImGui::Text("Press ESC to cancel.");
+    if (ImGui::BeginPopupModal(trc("hotkeys.bind_hotkey"), NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
+        ImGui::Text(trc("hotkeys.bind_hotkey.tooltip.prompt"));
+        ImGui::Text(trc("hotkeys.bind_hotkey.tooltip.confirm"));
+        ImGui::Text(trc("hotkeys.bind_hotkey.tooltip.clear"));
+        ImGui::Text(trc("hotkeys.bind_hotkey.tooltip.cancel"));
         ImGui::Separator();
 
         static uint64_t s_lastBindingInputSeqHotkeyBind = 0;
@@ -3057,7 +3065,7 @@ void RenderSettingsGUI() {
         {
             const bool canClear = (s_exclusionToBind.hotkey_idx == -1);
             if (!canClear) { ImGui::BeginDisabled(); }
-            if (ImGui::Button("Clear")) {
+            if (ImGui::Button(trc("button.clear"))) {
                 finalize_bind({});
                 ImGui::EndPopup();
                 return;
@@ -3065,7 +3073,7 @@ void RenderSettingsGUI() {
             if (!canClear) { ImGui::EndDisabled(); }
 
             ImGui::SameLine();
-            if (ImGui::Button("Cancel")) {
+            if (ImGui::Button(trc("button.cancel"))) {
                 Log("Binding cancelled from Cancel button.");
                 s_mainHotkeyToBind = -1;
                 s_sensHotkeyToBind = -1;
@@ -3161,9 +3169,9 @@ void RenderSettingsGUI() {
 
         if (!s_bindingKeys.empty()) {
             std::string combo = GetKeyComboString(s_bindingKeys);
-            ImGui::Text("Current: %s", combo.c_str());
+            ImGui::Text(tr("hotkeys.bind_hotkey.current", combo.c_str()).c_str());
         } else {
-            ImGui::Text("Current: [None]");
+            ImGui::Text(trc("hotkeys.bind_hotkey.current_none"));
         }
 
         if (!s_hotkeyConflictMessage.empty())
@@ -3236,10 +3244,97 @@ void RenderSettingsGUI() {
             auto now = std::chrono::steady_clock::now();
             bool showCopied = std::chrono::duration_cast<std::chrono::seconds>(now - s_lastScreenshotTime).count() < 3;
 
-            const char* buttonLabel = showCopied ? "Copied!" : "Screenshot";
+            const char* buttonLabel = showCopied ? trc("button.screenshot.copied") : trc("button.screenshot");
             float buttonWidth = ImGui::CalcTextSize(buttonLabel).x + ImGui::GetStyle().FramePadding.x * 2.0f;
 
             ImVec2 savedCursor = ImGui::GetCursorPos();
+
+            {
+                static GLuint s_languageTexture = 0;
+                static HGLRC s_languageLastCtx = NULL;
+                HGLRC currentCtx = wglGetCurrentContext();
+                if (currentCtx != s_languageLastCtx) {
+                    s_languageTexture = 0;
+                    s_languageLastCtx = currentCtx;
+                }
+
+                auto ensureLanguageTextureLoaded = [&]() {
+                    if (s_languageTexture != 0) return;
+
+                    HMODULE hModule = NULL;
+                    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                       (LPCWSTR)&g_showGui, &hModule);
+                    if (!hModule) return;
+
+                    HRSRC hResource = FindResourceW(hModule, MAKEINTRESOURCEW(IDR_LANGUAGE_PNG), RT_RCDATA);
+                    if (!hResource) return;
+
+                    HGLOBAL hData = LoadResource(hModule, hResource);
+                    if (!hData) return;
+
+                    DWORD dataSize = SizeofResource(hModule, hResource);
+                    const unsigned char* rawData = (const unsigned char*)LockResource(hData);
+                    if (!rawData || dataSize == 0) return;
+
+                    stbi_set_flip_vertically_on_load_thread(0);
+                    int w = 0, h = 0, channels = 0;
+                    unsigned char* pixels = stbi_load_from_memory(rawData, (int)dataSize, &w, &h, &channels, 4);
+                    if (!pixels || w <= 0 || h <= 0) {
+                        if (pixels) stbi_image_free(pixels);
+                        return;
+                    }
+
+                    glGenTextures(1, &s_languageTexture);
+                    glBindTexture(GL_TEXTURE_2D, s_languageTexture);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+                    glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+                    glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+                    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+                    glBindTexture(GL_TEXTURE_2D, 0);
+                    stbi_image_free(pixels);
+                };
+
+                ensureLanguageTextureLoaded();
+
+                if (s_languageTexture != 0) {
+                    float iconSize = ImGui::GetFrameHeight();
+                    float margin = ImGui::GetStyle().ItemSpacing.x;
+                    ImGui::SetCursorPos(ImVec2(ImGui::GetWindowContentRegionMax().x - buttonWidth - iconSize * 2 - margin * 2, 30.0f));
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1, 1, 1, 0.1f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1, 1, 1, 0.2f));
+                    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
+                    if (ImGui::ImageButton("##language", (ImTextureID)(intptr_t)s_languageTexture, ImVec2(iconSize, iconSize))) {
+                        ImGui::OpenPopup("##LanguagePopup");
+                    }
+                    ImGui::PopStyleVar();
+                    ImGui::PopStyleColor(3);
+
+                    if (ImGui::BeginPopup("##LanguagePopup")) {
+                        nlohmann::json langs = GetLangs();
+                        for (const auto& [langCode, langName] : langs.items()) {
+                            Log(langName.get<std::string>());
+                            bool isSelected = (g_config.lang == langCode);
+                            if (ImGui::Selectable(langName.get<std::string>().c_str(), isSelected)) {
+                                if (g_config.lang != langCode) {
+                                    g_config.lang = langCode;
+                                    LoadTranslation(langCode);
+                                    g_configIsDirty = true;
+                                }
+                            }
+                            if (isSelected) {
+                                ImGui::SetItemDefaultFocus();
+                            }
+                        }
+                        ImGui::EndPopup(); 
+                    }
+                }
+            }
 
             {
                 static GLuint s_discordTexture = 0;
@@ -3307,7 +3402,7 @@ void RenderSettingsGUI() {
                     ImGui::PopStyleVar();
                     ImGui::PopStyleColor(3);
                     if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip("Join the Toolscreen Discord");
+                        ImGui::SetTooltip(trc("tooltip.join_discord"));
                     }
                 }
             }
@@ -3324,12 +3419,12 @@ void RenderSettingsGUI() {
 
         {
             bool isAdvanced = !g_config.basicModeEnabled;
-            if (ImGui::RadioButton("Basic", !isAdvanced)) {
+            if (ImGui::RadioButton(trc("config_mode.basic"), !isAdvanced)) {
                 g_config.basicModeEnabled = true;
                 g_configIsDirty = true;
             }
             ImGui::SameLine();
-            if (ImGui::RadioButton("Advanced", isAdvanced)) {
+            if (ImGui::RadioButton(trc("config_mode.advanced"), isAdvanced)) {
                 g_config.basicModeEnabled = false;
                 g_configIsDirty = true;
             }
