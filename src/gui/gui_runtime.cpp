@@ -457,15 +457,19 @@ void RenderProfilerOverlay(bool showProfiler, bool showPerformanceOverlay) {
         ImGui::Text("%s", sectionTitle);
         ImGui::PopStyleColor();
 
-        if (ImGui::BeginTable("##ProfilerTable", 5, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoHostExtendX)) {
+        if (ImGui::BeginTable("##ProfilerTable", 7, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoHostExtendX)) {
             ImGui::TableSetupColumn("Section", ImGuiTableColumnFlags_WidthFixed, 280.0f);
             ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, 90.0f);
             ImGui::TableSetupColumn("Self", ImGuiTableColumnFlags_WidthFixed, 90.0f);
+            ImGui::TableSetupColumn("Calls/f", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+            ImGui::TableSetupColumn("Max", ImGuiTableColumnFlags_WidthFixed, 90.0f);
             ImGui::TableSetupColumn("Of Parent", ImGuiTableColumnFlags_WidthFixed, 70.0f);
             ImGui::TableSetupColumn("Of Total", ImGuiTableColumnFlags_WidthFixed, 60.0f);
 
             for (size_t i = 0; i < entries.size(); ++i) {
-                const auto& [name, entry] = entries[i];
+                const auto& path = entries[i].first;
+                const auto& entry = entries[i].second;
+                const std::string& displayName = entry.displayName.empty() ? path : entry.displayName;
 
                 ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex(0);
@@ -493,7 +497,7 @@ void RenderProfilerOverlay(bool showProfiler, bool showPerformanceOverlay) {
                     }
                 }
 
-                bool isUnspecified = (name == "[Unspecified]");
+                bool isUnspecified = (displayName == "[Unspecified]");
                 if (isUnspecified) {
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
                 } else if (entry.depth == 0) {
@@ -504,7 +508,7 @@ void RenderProfilerOverlay(bool showProfiler, bool showPerformanceOverlay) {
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.8f, 0.8f, 1.0f));
                 }
 
-                ImGui::Text("%s%s", indent.c_str(), name.c_str());
+                ImGui::Text("%s%s", indent.c_str(), displayName.c_str());
                 ImGui::PopStyleColor();
 
                 ImGui::TableSetColumnIndex(1);
@@ -522,6 +526,24 @@ void RenderProfilerOverlay(bool showProfiler, bool showPerformanceOverlay) {
                 }
 
                 ImGui::TableSetColumnIndex(3);
+                if (entry.rollingAverageCalls >= 100.0) {
+                    ImGui::Text("%.0f", entry.rollingAverageCalls);
+                } else if (entry.rollingAverageCalls >= 10.0) {
+                    ImGui::Text("%.1f", entry.rollingAverageCalls);
+                } else if (entry.rollingAverageCalls > 0.0) {
+                    ImGui::Text("%.2f", entry.rollingAverageCalls);
+                } else {
+                    ImGui::Text("0");
+                }
+
+                ImGui::TableSetColumnIndex(4);
+                if (entry.maxTimeInLastSecond >= 0.0001) {
+                    ImGui::Text("%.4fms", entry.maxTimeInLastSecond);
+                } else {
+                    ImGui::Text("<0.0001");
+                }
+
+                ImGui::TableSetColumnIndex(5);
                 if (entry.parentPercentage >= 1.0) {
                     ImGui::Text("%.0f%%", entry.parentPercentage);
                 } else if (entry.parentPercentage >= 0.1) {
@@ -530,7 +552,7 @@ void RenderProfilerOverlay(bool showProfiler, bool showPerformanceOverlay) {
                     ImGui::Text("<1%%");
                 }
 
-                ImGui::TableSetColumnIndex(4);
+                ImGui::TableSetColumnIndex(6);
                 if (entry.totalPercentage >= 1.0) {
                     ImGui::Text("%.0f%%", entry.totalPercentage);
                 } else if (entry.totalPercentage >= 0.1) {

@@ -2530,6 +2530,8 @@ static void RenderSameThreadImGui(const SameThreadOverlayState& request) {
                                       request.showTextureGrid || request.showEyeZoom;
     if (!shouldRenderAnyImGui) return;
 
+    Profiler::ScopedPause profilerPause(Profiler::GetInstance());
+
     HWND hwnd = g_minecraftHwnd.load();
     if (!hwnd) return;
     InitializeImGuiContext(hwnd);
@@ -2542,9 +2544,7 @@ static void RenderSameThreadImGui(const SameThreadOverlayState& request) {
     ImGuiInputQueue_DrainToImGui();
     ImGui::NewFrame();
 
-    if (request.showTextureGrid) {
-        RenderTextureGridOverlay(true, request.textureGridModeWidth, request.textureGridModeHeight);
-    }
+    if (request.showTextureGrid) { RenderTextureGridOverlay(true, request.textureGridModeWidth, request.textureGridModeHeight); }
 
     RenderCachedTextureGridLabels();
     RenderCachedEyeZoomTextLabels();
@@ -2554,13 +2554,15 @@ static void RenderSameThreadImGui(const SameThreadOverlayState& request) {
     RenderProfilerOverlay(request.showProfiler, request.showPerformanceOverlay);
 
     ImGuiInputQueue_PublishCaptureState();
-
     ImGui::Render();
     RenderImGuiWithStateProtection(true);
 }
 
 static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, const Config& cfg, const GLState& s) {
-    PrepareSameThreadOverlayState(s, request.fullW, request.fullH);
+    {
+        PROFILE_SCOPE_CAT("Prepare Overlay GL State", "Rendering");
+        PrepareSameThreadOverlayState(s, request.fullW, request.fullH);
+    }
 
     static uint64_t s_cachedActiveConfigVersion = 0;
     static std::string s_cachedActiveModeId;
@@ -2594,6 +2596,7 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
     if (needModeElements) {
         if (s_cachedActiveConfigVersion != cfgVersion || s_cachedActiveModeId != request.modeId ||
             s_cachedActiveImagesVisible != imagesVisible || s_cachedActiveWindowOverlaysVisible != windowOverlaysVisible) {
+            PROFILE_SCOPE_CAT("Collect Active Mode Elements", "Rendering");
             s_cachedActiveConfigVersion = cfgVersion;
             s_cachedActiveModeId = request.modeId;
             s_cachedActiveImagesVisible = imagesVisible;
@@ -2608,6 +2611,7 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
         needModeElements ? s_cachedActiveWindowOverlays : s_emptyWindowOverlays;
 
     if (!request.isRawWindowedMode && request.isTransitioningFromEyeZoom && cfg.eyezoom.slideMirrorsIn && !request.skipAnimation) {
+        PROFILE_SCOPE_CAT("Resolve EyeZoom Slide-Out Mirrors", "Rendering");
         std::vector<MirrorConfig> eyeZoomMirrors;
         std::vector<ImageConfig> unusedImages;
         std::vector<const WindowOverlayConfig*> unusedOverlays;
@@ -2627,6 +2631,7 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
 
     if (!request.isRawWindowedMode && !request.isTransitioningFromEyeZoom && request.fromSlideMirrorsIn && !request.fromModeId.empty() &&
         request.mirrorSlideProgress < 1.0f && !request.skipAnimation) {
+        PROFILE_SCOPE_CAT("Resolve Transition Slide-Out Mirrors", "Rendering");
         std::vector<MirrorConfig> fromModeMirrors;
         std::vector<ImageConfig> unusedImages;
         std::vector<const WindowOverlayConfig*> unusedOverlays;
@@ -2645,11 +2650,15 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
     }
 
     if (!request.isRawWindowedMode && request.showEyeZoom) {
+        PROFILE_SCOPE_CAT("EyeZoom Overlay", "Rendering");
         ClearEyeZoomTextLabels();
         handleEyeZoomMode(s, cfg.eyezoom, request.fullW, request.fullH, request.eyeZoomFadeOpacity,
                           request.eyeZoomAnimatedViewportX, request.isTransitioningFromEyeZoom, request.gameTextureId,
                           request.gameW, request.gameH);
-        PrepareSameThreadOverlayState(s, request.fullW, request.fullH);
+        {
+            PROFILE_SCOPE_CAT("Prepare Overlay GL State", "Rendering");
+            PrepareSameThreadOverlayState(s, request.fullW, request.fullH);
+        }
     } else {
         ClearEyeZoomTextLabels();
     }
@@ -2664,13 +2673,16 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
         int sourceH = 0;
         if (!mirrorsForCapture.empty() &&
             SelectSameThreadGameTexture(request.gameTextureId, request.gameW, request.gameH, sourceTexture, sourceW, sourceH)) {
+            PROFILE_SCOPE_CAT("Capture Mirror Sources", "Rendering");
             if (RenderMirrorCapturesOnCurrentThread(mirrorsForCapture, sourceTexture, sourceW, sourceH, request.fullW, request.fullH,
                                                    geo.finalX, geo.finalY, geo.finalW, geo.finalH)) {
+                PROFILE_SCOPE_CAT("Prepare Overlay GL State", "Rendering");
                 PrepareSameThreadOverlayState(s, request.fullW, request.fullH);
             }
         }
 
         if (!activeMirrors.empty()) {
+            PROFILE_SCOPE_CAT("Render Active Mirrors", "Rendering");
             const bool isEyeZoomMode = (request.modeId == "EyeZoom");
             RenderMirrorsDirect(activeMirrors, geo, request.fullW, request.fullH, request.overlayOpacity,
                                 request.excludeOnlyOnMyScreen, request.relativeStretching, request.transitionProgress,
@@ -2681,6 +2693,7 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
         }
 
         if (!eyeZoomSlideOutMirrors.empty()) {
+            PROFILE_SCOPE_CAT("Render EyeZoom Slide-Out Mirrors", "Rendering");
             RenderMirrorsDirect(eyeZoomSlideOutMirrors, geo, request.fullW, request.fullH, request.overlayOpacity,
                                 request.excludeOnlyOnMyScreen, request.relativeStretching, request.transitionProgress,
                                 request.mirrorSlideProgress, request.fromX, request.fromY, request.fromW, request.fromH,
@@ -2690,6 +2703,7 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
         }
 
         if (!genericSlideOutMirrors.empty()) {
+            PROFILE_SCOPE_CAT("Render Transition Slide-Out Mirrors", "Rendering");
             RenderMirrorsDirect(genericSlideOutMirrors, geo, request.fullW, request.fullH, request.overlayOpacity,
                                 request.excludeOnlyOnMyScreen, request.relativeStretching, request.transitionProgress,
                                 request.mirrorSlideProgress, request.fromX, request.fromY, request.fromW, request.fromH,
@@ -2699,12 +2713,14 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
     }
 
     if (!request.isRawWindowedMode && !activeImages.empty()) {
+        PROFILE_SCOPE_CAT("Render Active Images", "Rendering");
         RenderImagesDirect(activeImages, request.fullW, request.fullH, request.toX, request.toY, request.toW, request.toH,
                            request.gameW, request.gameH, request.relativeStretching, request.transitionProgress, request.fromX,
                            request.fromY, request.fromW, request.fromH, request.overlayOpacity, request.excludeOnlyOnMyScreen);
     }
 
     if (!activeWindowOverlays.empty()) {
+        PROFILE_SCOPE_CAT("Render Window Overlays", "Rendering");
         RenderWindowOverlaysDirect(activeWindowOverlays, request.fullW, request.fullH, request.toX, request.toY, request.toW,
                                    request.toH, request.gameW, request.gameH, request.relativeStretching, request.transitionProgress,
                                    request.fromX, request.fromY, request.fromW, request.fromH, request.overlayOpacity,
@@ -2712,7 +2728,10 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
     }
 
     RenderSameThreadImGui(request);
-    if (request.showWelcomeToast) { RenderWelcomeToast(request.welcomeToastIsFullscreen); }
+    if (request.showWelcomeToast) {
+        PROFILE_SCOPE_CAT("Render Welcome Toast", "Rendering");
+        RenderWelcomeToast(request.welcomeToastIsFullscreen);
+    }
 
     return !activeMirrors.empty() || !eyeZoomSlideOutMirrors.empty() || !genericSlideOutMirrors.empty() || !activeImages.empty() ||
            !activeWindowOverlays.empty() || request.shouldRenderGui || request.showPerformanceOverlay || request.showProfiler ||

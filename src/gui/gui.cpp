@@ -131,7 +131,6 @@ void RenderConfigErrorGUI() {
 }
 
 void RenderSettingsGUI() {
-    PROFILE_SCOPE_CAT("Settings GUI Rendering", "ImGui");
     ResetTransientBindingUiState();
 
     static const std::vector<std::pair<const char*, const char*>>

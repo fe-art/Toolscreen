@@ -3824,20 +3824,23 @@ static void RenderThreadFunc(void* gameGLContext) {
                     }
                 }
 
-                ImGui_ImplOpenGL3_NewFrame();
-                ImGui_ImplWin32_NewFrame();
+                {
+                    Profiler::ScopedPause profilerPause(Profiler::GetInstance());
 
-                // Feed queued input from the Win32 message thread into ImGui.
-                // Must happen before ImGui::NewFrame() to affect the current frame.
-                ImGuiInputQueue_DrainToImGui();
-                ImGui::NewFrame();
+                    ImGui_ImplOpenGL3_NewFrame();
+                    ImGui_ImplWin32_NewFrame();
 
-                if (request.showTextureGrid) {
-                    RenderTextureGridOverlay(true, request.textureGridModeWidth, request.textureGridModeHeight);
-                }
+                    // Feed queued input from the Win32 message thread into ImGui.
+                    // Must happen before ImGui::NewFrame() to affect the current frame.
+                    ImGuiInputQueue_DrainToImGui();
+                    ImGui::NewFrame();
 
-                // so they stay synchronized during transitions
-                if (request.showEyeZoom && request.eyeZoomFadeOpacity > 0.0f && g_fontsValid) {
+                    if (request.showTextureGrid) {
+                        RenderTextureGridOverlay(true, request.textureGridModeWidth, request.textureGridModeHeight);
+                    }
+
+                    // so they stay synchronized during transitions
+                    if (request.showEyeZoom && request.eyeZoomFadeOpacity > 0.0f && g_fontsValid) {
                     EyeZoomConfig zoomConfig = cfg.eyezoom;
 
                     int modeWidth = zoomConfig.windowWidth;
@@ -3956,21 +3959,22 @@ static void RenderThreadFunc(void* gameGLContext) {
                             }
                         }
                     }
+                    }
+
+                    RenderCachedTextureGridLabels();
+
+                    if (request.shouldRenderGui) { RenderSettingsGUI(); }
+
+                    RenderPerformanceOverlay(request.showPerformanceOverlay);
+
+                    RenderProfilerOverlay(request.showProfiler, request.showPerformanceOverlay);
+
+                    // Publish capture flags for the window thread (ESC handling, overlay keyboard forwarding, etc.)
+                    ImGuiInputQueue_PublishCaptureState();
+
+                    ImGui::Render();
+                    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
                 }
-
-                RenderCachedTextureGridLabels();
-
-                if (request.shouldRenderGui) { RenderSettingsGUI(); }
-
-                RenderPerformanceOverlay(request.showPerformanceOverlay);
-
-                RenderProfilerOverlay(request.showProfiler, request.showPerformanceOverlay);
-
-                // Publish capture flags for the window thread (ESC handling, overlay keyboard forwarding, etc.)
-                ImGuiInputQueue_PublishCaptureState();
-
-                ImGui::Render();
-                ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
             }
 
             if (shouldRenderWelcomeToast) { RenderWelcomeToast(request.welcomeToastIsFullscreen); }
