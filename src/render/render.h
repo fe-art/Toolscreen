@@ -50,6 +50,7 @@ struct MirrorRenderData {
     int screenW = 0;
     int screenH = 0;
     bool hasFrameContent = false;
+    bool useDynamicBorderComposite = false;
 };
 
 struct FilterShaderLocs {
@@ -58,6 +59,10 @@ struct FilterShaderLocs {
 
 struct RenderShaderLocs {
     GLint filterTexture, borderWidth, outputColor, borderColor, screenPixel;
+};
+
+struct RenderPassthroughShaderLocs {
+    GLint filterTexture, borderWidth, borderColor, screenPixel, opacity;
 };
 
 struct BackgroundShaderLocs {
@@ -131,6 +136,7 @@ struct GLState {
 
 extern GLuint g_filterProgram;
 extern GLuint g_renderProgram;
+extern GLuint g_renderPassthroughProgram;
 extern GLuint g_backgroundProgram;
 extern GLuint g_solidColorProgram;
 extern GLuint g_imageRenderProgram;
@@ -139,6 +145,7 @@ extern GLuint g_gradientProgram;
 
 extern FilterShaderLocs g_filterShaderLocs;
 extern RenderShaderLocs g_renderShaderLocs;
+extern RenderPassthroughShaderLocs g_renderPassthroughShaderLocs;
 extern BackgroundShaderLocs g_backgroundShaderLocs;
 extern SolidColorShaderLocs g_solidColorShaderLocs;
 extern ImageRenderShaderLocs g_imageRenderShaderLocs;

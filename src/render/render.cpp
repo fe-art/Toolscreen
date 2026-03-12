@@ -190,6 +190,7 @@ extern std::atomic<bool> g_graphicsHookDetected;
 
 GLuint g_filterProgram = 0;
 GLuint g_renderProgram = 0;
+GLuint g_renderPassthroughProgram = 0;
 GLuint g_backgroundProgram = 0;
 GLuint g_solidColorProgram = 0;
 GLuint g_imageRenderProgram = 0;
@@ -199,6 +200,7 @@ static GLuint g_staticBorderProgram = 0;
 
 FilterShaderLocs g_filterShaderLocs;
 RenderShaderLocs g_renderShaderLocs;
+RenderPassthroughShaderLocs g_renderPassthroughShaderLocs;
 BackgroundShaderLocs g_backgroundShaderLocs;
 SolidColorShaderLocs g_solidColorShaderLocs;
 ImageRenderShaderLocs g_imageRenderShaderLocs;
@@ -598,16 +600,35 @@ const char* render_frag_shader = R"(#version 330 core
 
     uniform sampler2D filterTexture;
     uniform int u_borderWidth;
-    uniform vec3 u_outputColor;
-    uniform vec3 u_borderColor;
+    uniform vec4 u_outputColor;
+    uniform vec4 u_borderColor;
     uniform vec2 u_screenPixel;
+
+    bool hasBorderSample(vec2 coord, vec2 pixel) {
+        return texture(filterTexture, coord + vec2(-pixel.x, -pixel.y)).a > 0.5 ||
+               texture(filterTexture, coord + vec2(0.0, -pixel.y)).a > 0.5 ||
+               texture(filterTexture, coord + vec2(pixel.x, -pixel.y)).a > 0.5 ||
+               texture(filterTexture, coord + vec2(-pixel.x, 0.0)).a > 0.5 ||
+               texture(filterTexture, coord + vec2(pixel.x, 0.0)).a > 0.5 ||
+               texture(filterTexture, coord + vec2(-pixel.x, pixel.y)).a > 0.5 ||
+               texture(filterTexture, coord + vec2(0.0, pixel.y)).a > 0.5 ||
+               texture(filterTexture, coord + vec2(pixel.x, pixel.y)).a > 0.5;
+    }
 
     void main() {
         float centerAlpha = texture(filterTexture, TexCoord).a;
 
         if (centerAlpha > 0.5) {
-            FragColor = vec4(u_outputColor, 1.0);
+            FragColor = u_outputColor;
             return;
+        }
+
+        if (u_borderWidth == 1) {
+            if (hasBorderSample(TexCoord, u_screenPixel)) {
+                FragColor = u_borderColor;
+                return;
+            }
+            discard;
         }
 
         
@@ -620,7 +641,61 @@ const char* render_frag_shader = R"(#version 330 core
                 float alpha = texture(filterTexture, TexCoord + offset).a;
 
                 if (alpha > 0.5) {
-                    FragColor = vec4(u_borderColor, 1.0);
+                    FragColor = u_borderColor;
+                    return;
+                }
+            }
+        }
+
+        discard;
+    })";
+
+const char* render_passthrough_frag_shader = R"(#version 330 core
+    out vec4 FragColor;
+    in vec2 TexCoord;
+
+    uniform sampler2D filterTexture;
+    uniform int u_borderWidth;
+    uniform vec4 u_borderColor;
+    uniform vec2 u_screenPixel;
+    uniform float u_opacity;
+
+    bool hasBorderSample(vec2 coord, vec2 pixel) {
+        return texture(filterTexture, coord + vec2(-pixel.x, -pixel.y)).a > 0.5 ||
+               texture(filterTexture, coord + vec2(0.0, -pixel.y)).a > 0.5 ||
+               texture(filterTexture, coord + vec2(pixel.x, -pixel.y)).a > 0.5 ||
+               texture(filterTexture, coord + vec2(-pixel.x, 0.0)).a > 0.5 ||
+               texture(filterTexture, coord + vec2(pixel.x, 0.0)).a > 0.5 ||
+               texture(filterTexture, coord + vec2(-pixel.x, pixel.y)).a > 0.5 ||
+               texture(filterTexture, coord + vec2(0.0, pixel.y)).a > 0.5 ||
+               texture(filterTexture, coord + vec2(pixel.x, pixel.y)).a > 0.5;
+    }
+
+    void main() {
+        vec4 centerColor = texture(filterTexture, TexCoord);
+
+        if (centerColor.a > 0.5) {
+            FragColor = vec4(centerColor.rgb, u_opacity);
+            return;
+        }
+
+        if (u_borderWidth == 1) {
+            if (hasBorderSample(TexCoord, u_screenPixel)) {
+                FragColor = u_borderColor;
+                return;
+            }
+            discard;
+        }
+
+        for (int x = -u_borderWidth; x <= u_borderWidth; x++) {
+            for (int y = -u_borderWidth; y <= u_borderWidth; y++) {
+                if (x == 0 && y == 0) continue;
+
+                vec2 offset = vec2(float(x), float(y)) * u_screenPixel;
+                float alpha = texture(filterTexture, TexCoord + offset).a;
+
+                if (alpha > 0.5) {
+                    FragColor = u_borderColor;
                     return;
                 }
             }
@@ -882,6 +957,7 @@ void InitializeShaders() {
     PROFILE_SCOPE_CAT("Shader Initialization", "GPU Operations");
     g_filterProgram = CreateShaderProgram(filter_vert_shader, filter_frag_shader);
     g_renderProgram = CreateShaderProgram(passthrough_vert_shader, render_frag_shader);
+    g_renderPassthroughProgram = CreateShaderProgram(passthrough_vert_shader, render_passthrough_frag_shader);
     g_backgroundProgram = CreateShaderProgram(passthrough_vert_shader, background_frag_shader);
     g_solidColorProgram = CreateShaderProgram(solid_vert_shader, solid_color_frag_shader);
     g_imageRenderProgram = CreateShaderProgram(passthrough_vert_shader, image_render_frag_shader);
@@ -889,7 +965,8 @@ void InitializeShaders() {
     g_gradientProgram = CreateShaderProgram(passthrough_vert_shader, gradient_frag_shader);
     g_staticBorderProgram = CreateShaderProgram(passthrough_vert_shader, static_border_frag_shader);
 
-    if (!g_filterProgram || !g_renderProgram || !g_backgroundProgram || !g_solidColorProgram || !g_imageRenderProgram ||
+    if (!g_filterProgram || !g_renderProgram || !g_renderPassthroughProgram || !g_backgroundProgram || !g_solidColorProgram ||
+        !g_imageRenderProgram ||
         !g_passthroughProgram || !g_gradientProgram || !g_staticBorderProgram) {
         Log("FATAL: Failed to create one or more shader programs. Aborting shader initialization.");
         return;
@@ -906,6 +983,12 @@ void InitializeShaders() {
     g_renderShaderLocs.outputColor = glGetUniformLocation(g_renderProgram, "u_outputColor");
     g_renderShaderLocs.borderColor = glGetUniformLocation(g_renderProgram, "u_borderColor");
     g_renderShaderLocs.screenPixel = glGetUniformLocation(g_renderProgram, "u_screenPixel");
+
+    g_renderPassthroughShaderLocs.filterTexture = glGetUniformLocation(g_renderPassthroughProgram, "filterTexture");
+    g_renderPassthroughShaderLocs.borderWidth = glGetUniformLocation(g_renderPassthroughProgram, "u_borderWidth");
+    g_renderPassthroughShaderLocs.borderColor = glGetUniformLocation(g_renderPassthroughProgram, "u_borderColor");
+    g_renderPassthroughShaderLocs.screenPixel = glGetUniformLocation(g_renderPassthroughProgram, "u_screenPixel");
+    g_renderPassthroughShaderLocs.opacity = glGetUniformLocation(g_renderPassthroughProgram, "u_opacity");
 
     g_backgroundShaderLocs.backgroundTexture = glGetUniformLocation(g_backgroundProgram, "backgroundTexture");
     g_backgroundShaderLocs.opacity = glGetUniformLocation(g_backgroundProgram, "u_opacity");
@@ -942,6 +1025,10 @@ void InitializeShaders() {
     glUseProgram(g_renderProgram);
     glUniform1i(g_renderShaderLocs.filterTexture, 0);
 
+    glUseProgram(g_renderPassthroughProgram);
+    glUniform1i(g_renderPassthroughShaderLocs.filterTexture, 0);
+    glUniform1f(g_renderPassthroughShaderLocs.opacity, 1.0f);
+
     glUseProgram(g_backgroundProgram);
     glUniform1i(g_backgroundShaderLocs.backgroundTexture, 0);
 
@@ -969,6 +1056,10 @@ void CleanupShaders() {
     if (g_renderProgram) {
         glDeleteProgram(g_renderProgram);
         g_renderProgram = 0;
+    }
+    if (g_renderPassthroughProgram) {
+        glDeleteProgram(g_renderPassthroughProgram);
+        g_renderPassthroughProgram = 0;
     }
     if (g_backgroundProgram) {
         glDeleteProgram(g_backgroundProgram);
@@ -1229,6 +1320,10 @@ void CleanupGPUResources() {
         for (auto const& [k, v] : g_mirrorInstances) {
             if (v.fboTexture) {
                 glDeleteTextures(1, &v.fboTexture);
+                while (glGetError() != GL_NO_ERROR) {}
+            }
+            if (v.tempCaptureTexture) {
+                glDeleteTextures(1, &v.tempCaptureTexture);
                 while (glGetError() != GL_NO_ERROR) {}
             }
             // Clean up back-buffer texture used by capture thread
@@ -1521,8 +1616,8 @@ void InitializeGPUResources() {
 
     InitializeShaders();
 
-    if (!g_filterProgram || !g_renderProgram || !g_backgroundProgram || !g_solidColorProgram || !g_imageRenderProgram ||
-        !g_passthroughProgram) {
+    if (!g_filterProgram || !g_renderProgram || !g_renderPassthroughProgram || !g_backgroundProgram || !g_solidColorProgram ||
+        !g_imageRenderProgram || !g_passthroughProgram) {
         Log("FATAL: Failed to create one or more shader programs. Aborting GPU resource initialization.");
         glBindFramebuffer(GL_FRAMEBUFFER, last_framebuffer);
         glBindVertexArray(last_vertex_array);
@@ -1911,6 +2006,34 @@ static void RenderCachedEyeZoomTextLabels() {
 
 static bool SelectSameThreadGameTexture(GLuint preferredTexture, int preferredW, int preferredH, GLuint& outTexture, int& outW,
                                         int& outH) {
+    const bool sameThreadMirrorPipeline = g_sameThreadMirrorPipelineActive.load(std::memory_order_acquire);
+    if (sameThreadMirrorPipeline) {
+        if (preferredTexture != 0 && preferredTexture != UINT_MAX && preferredW > 0 && preferredH > 0) {
+            outTexture = preferredTexture;
+            outW = preferredW;
+            outH = preferredH;
+            return true;
+        }
+
+        outTexture = GetReadyGameTexture();
+        outW = GetReadyGameWidth();
+        outH = GetReadyGameHeight();
+        if (outTexture != 0 && outW > 0 && outH > 0) { return true; }
+
+        outTexture = GetFallbackGameTexture();
+        outW = GetFallbackGameWidth();
+        outH = GetFallbackGameHeight();
+        if (outTexture != 0 && outW > 0 && outH > 0) { return true; }
+
+        outTexture = GetSafeReadTexture();
+        if (outTexture != 0 && IsSampleableTexture2D(outTexture, &outW, &outH)) { return true; }
+
+        outTexture = 0;
+        outW = 0;
+        outH = 0;
+        return false;
+    }
+
     if (preferredTexture != 0 && preferredTexture != UINT_MAX && preferredW > 0 && preferredH > 0 &&
     IsSampleableTexture2DCached(preferredTexture, preferredW, preferredH)) {
         outTexture = preferredTexture;
@@ -2001,6 +2124,7 @@ static void RenderMirrorsDirect(const std::vector<MirrorConfig>& activeMirrors, 
     const bool wantsEyeZoomSlide =
         cfg.eyezoom.slideMirrorsIn && hasEyeZoomAnimatedPosition && isEyeZoomMode && isEyeZoomTransitioning;
     const float eyeZoomSlideProgress = wantsEyeZoomSlide ? static_cast<float>(eyeZoomAnimatedViewportX) / targetViewportX : 1.0f;
+    const bool sameThreadMirrorPipeline = g_sameThreadMirrorPipelineActive.load(std::memory_order_acquire);
 
     std::unordered_set<std::string> sourceMirrorNames;
     if (!fromModeId.empty() && (fromSlideMirrorsIn || toSlideMirrorsIn || cfg.eyezoom.slideMirrorsIn)) {
@@ -2024,6 +2148,7 @@ static void RenderMirrorsDirect(const std::vector<MirrorConfig>& activeMirrors, 
     std::vector<MirrorRenderData> mirrorsToRender;
     mirrorsToRender.reserve(activeMirrors.size());
     std::vector<GLsync> pendingFences;
+    if (!sameThreadMirrorPipeline) { pendingFences.reserve(activeMirrors.size()); }
 
     {
         std::shared_lock<std::shared_mutex> mirrorLock(g_mirrorInstancesMutex);
@@ -2037,12 +2162,20 @@ static void RenderMirrorsDirect(const std::vector<MirrorConfig>& activeMirrors, 
             if (it == g_mirrorInstances.end()) continue;
             const MirrorInstance& inst = it->second;
             if (!inst.hasValidContent) continue;
+            const bool useDynamicBorderComposite =
+                sameThreadMirrorPipeline && conf.border.type == MirrorBorderType::Dynamic && conf.border.dynamicThickness == 1 &&
+                !inst.capturedAsRawOutput;
 
             MirrorRenderData data{};
             data.config = &conf;
             float scaleX = conf.output.separateScale ? conf.output.scaleX : conf.output.scale;
             float scaleY = conf.output.separateScale ? conf.output.scaleY : conf.output.scale;
-            if (inst.finalTexture != 0 && inst.final_w > 0 && inst.final_h > 0) {
+            if (useDynamicBorderComposite) {
+                data.texture = inst.fboTexture;
+                data.tex_w = inst.fbo_w;
+                data.tex_h = inst.fbo_h;
+                data.useDynamicBorderComposite = true;
+            } else if (inst.finalTexture != 0 && inst.final_w > 0 && inst.final_h > 0) {
                 data.texture = inst.finalTexture;
                 data.tex_w = inst.final_w;
                 data.tex_h = inst.final_h;
@@ -2054,7 +2187,9 @@ static void RenderMirrorsDirect(const std::vector<MirrorConfig>& activeMirrors, 
             data.outW = static_cast<int>(inst.fbo_w * scaleX);
             data.outH = static_cast<int>(inst.fbo_h * scaleY);
             data.hasFrameContent = inst.hasFrameContent;
-            data.gpuFence = inst.gpuFence;
+            if (!sameThreadMirrorPipeline) {
+                data.gpuFence = inst.gpuFence;
+            }
 
             const auto& cache = inst.cachedRenderState;
             const bool cacheMatchesCurrentGeo =
@@ -2077,13 +2212,15 @@ static void RenderMirrorsDirect(const std::vector<MirrorConfig>& activeMirrors, 
         }
     }
 
-    for (GLsync fence : pendingFences) {
-        if (fence && glIsSync(fence)) { glWaitSync(fence, 0, GL_TIMEOUT_IGNORED); }
-    }
-
     if (mirrorsToRender.empty()) return;
 
-    glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT);
+    const bool needsCrossContextMirrorSync = !pendingFences.empty();
+    if (needsCrossContextMirrorSync) {
+        for (GLsync fence : pendingFences) {
+            if (fence && glIsSync(fence)) { glWaitSync(fence, 0, GL_TIMEOUT_IGNORED); }
+        }
+        glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT);
+    }
 
     glBindVertexArray(g_vao);
     glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
@@ -2091,24 +2228,105 @@ static void RenderMirrorsDirect(const std::vector<MirrorConfig>& activeMirrors, 
     glEnable(GL_BLEND);
     glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 
-    glUseProgram(g_backgroundProgram);
-
     GLuint lastBoundMirrorTexture = 0;
     float lastMirrorOpacity = -1.0f;
+    GLuint lastMirrorProgram = 0;
+    bool renderUniformsValid = false;
+    int lastRenderBorderWidth = -1;
+    float lastRenderOutputColor[4] = { -1.0f, -1.0f, -1.0f, -1.0f };
+    float lastRenderBorderColor[4] = { -1.0f, -1.0f, -1.0f, -1.0f };
+    float lastRenderScreenPixelX = -1.0f;
+    float lastRenderScreenPixelY = -1.0f;
+    bool renderPassthroughUniformsValid = false;
+    int lastRenderPassthroughBorderWidth = -1;
+    float lastRenderPassthroughBorderColor[4] = { -1.0f, -1.0f, -1.0f, -1.0f };
+    float lastRenderPassthroughScreenPixelX = -1.0f;
+    float lastRenderPassthroughScreenPixelY = -1.0f;
+    float lastRenderPassthroughOpacity = -1.0f;
+
+    auto bindMirrorProgram = [&](GLuint program) {
+        if (lastMirrorProgram != program) {
+            glUseProgram(program);
+            lastMirrorProgram = program;
+            lastBoundMirrorTexture = 0;
+            lastMirrorOpacity = -1.0f;
+        }
+    };
 
     for (auto& renderData : mirrorsToRender) {
         const MirrorConfig& conf = *renderData.config;
         const float effectiveOpacity = modeOpacity * conf.opacity;
         if (effectiveOpacity <= 0.0f) continue;
-        if (!IsSampleableTexture2DCached(renderData.texture, renderData.tex_w, renderData.tex_h)) {
+        if (!sameThreadMirrorPipeline && !IsSampleableTexture2DCached(renderData.texture, renderData.tex_w, renderData.tex_h)) {
             LogInvalidTextureSampleThrottled("mirror_texture:" + conf.name, renderData.texture, renderData.tex_w, renderData.tex_h);
             continue;
         }
 
-        if (lastMirrorOpacity != effectiveOpacity) {
-            glUniform1f(g_backgroundShaderLocs.opacity, effectiveOpacity);
-            lastMirrorOpacity = effectiveOpacity;
+        if (renderData.useDynamicBorderComposite) {
+            const float screenPixelX = 1.0f / static_cast<float>((std::max)(1, renderData.outW));
+            const float screenPixelY = 1.0f / static_cast<float>((std::max)(1, renderData.outH));
+
+            if (conf.colorPassthrough) {
+                bindMirrorProgram(g_renderPassthroughProgram);
+                const float borderColor[4] = { conf.colors.border.r, conf.colors.border.g, conf.colors.border.b,
+                                               conf.colors.border.a * effectiveOpacity };
+                if (!renderPassthroughUniformsValid || lastRenderPassthroughBorderWidth != conf.border.dynamicThickness) {
+                    glUniform1i(g_renderPassthroughShaderLocs.borderWidth, conf.border.dynamicThickness);
+                    lastRenderPassthroughBorderWidth = conf.border.dynamicThickness;
+                }
+                if (!renderPassthroughUniformsValid || lastRenderPassthroughBorderColor[0] != borderColor[0] ||
+                    lastRenderPassthroughBorderColor[1] != borderColor[1] || lastRenderPassthroughBorderColor[2] != borderColor[2] ||
+                    lastRenderPassthroughBorderColor[3] != borderColor[3]) {
+                    glUniform4f(g_renderPassthroughShaderLocs.borderColor, borderColor[0], borderColor[1], borderColor[2],
+                                borderColor[3]);
+                    memcpy(lastRenderPassthroughBorderColor, borderColor, sizeof(borderColor));
+                }
+                if (!renderPassthroughUniformsValid || lastRenderPassthroughScreenPixelX != screenPixelX ||
+                    lastRenderPassthroughScreenPixelY != screenPixelY) {
+                    glUniform2f(g_renderPassthroughShaderLocs.screenPixel, screenPixelX, screenPixelY);
+                    lastRenderPassthroughScreenPixelX = screenPixelX;
+                    lastRenderPassthroughScreenPixelY = screenPixelY;
+                }
+                if (!renderPassthroughUniformsValid || lastRenderPassthroughOpacity != effectiveOpacity) {
+                    glUniform1f(g_renderPassthroughShaderLocs.opacity, effectiveOpacity);
+                    lastRenderPassthroughOpacity = effectiveOpacity;
+                }
+                renderPassthroughUniformsValid = true;
+            } else {
+                bindMirrorProgram(g_renderProgram);
+                const float outputColor[4] = { conf.colors.output.r, conf.colors.output.g, conf.colors.output.b,
+                                               conf.colors.output.a * effectiveOpacity };
+                const float borderColor[4] = { conf.colors.border.r, conf.colors.border.g, conf.colors.border.b,
+                                               conf.colors.border.a * effectiveOpacity };
+                if (!renderUniformsValid || lastRenderBorderWidth != conf.border.dynamicThickness) {
+                    glUniform1i(g_renderShaderLocs.borderWidth, conf.border.dynamicThickness);
+                    lastRenderBorderWidth = conf.border.dynamicThickness;
+                }
+                if (!renderUniformsValid || lastRenderOutputColor[0] != outputColor[0] || lastRenderOutputColor[1] != outputColor[1] ||
+                    lastRenderOutputColor[2] != outputColor[2] || lastRenderOutputColor[3] != outputColor[3]) {
+                    glUniform4f(g_renderShaderLocs.outputColor, outputColor[0], outputColor[1], outputColor[2], outputColor[3]);
+                    memcpy(lastRenderOutputColor, outputColor, sizeof(outputColor));
+                }
+                if (!renderUniformsValid || lastRenderBorderColor[0] != borderColor[0] || lastRenderBorderColor[1] != borderColor[1] ||
+                    lastRenderBorderColor[2] != borderColor[2] || lastRenderBorderColor[3] != borderColor[3]) {
+                    glUniform4f(g_renderShaderLocs.borderColor, borderColor[0], borderColor[1], borderColor[2], borderColor[3]);
+                    memcpy(lastRenderBorderColor, borderColor, sizeof(borderColor));
+                }
+                if (!renderUniformsValid || lastRenderScreenPixelX != screenPixelX || lastRenderScreenPixelY != screenPixelY) {
+                    glUniform2f(g_renderShaderLocs.screenPixel, screenPixelX, screenPixelY);
+                    lastRenderScreenPixelX = screenPixelX;
+                    lastRenderScreenPixelY = screenPixelY;
+                }
+                renderUniformsValid = true;
+            }
+        } else {
+            bindMirrorProgram(g_backgroundProgram);
+            if (lastMirrorOpacity != effectiveOpacity) {
+                glUniform1f(g_backgroundShaderLocs.opacity, effectiveOpacity);
+                lastMirrorOpacity = effectiveOpacity;
+            }
         }
+
         if (lastBoundMirrorTexture != renderData.texture) {
             BindTextureDirect(GL_TEXTURE_2D, renderData.texture);
             lastBoundMirrorTexture = renderData.texture;

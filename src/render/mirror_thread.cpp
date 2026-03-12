@@ -334,10 +334,29 @@ uniform int u_borderWidth;
 uniform vec4 u_outputColor;
 uniform vec4 u_borderColor;
 uniform vec2 u_screenPixel;
+
+bool hasBorderSample(vec2 coord, vec2 pixel) {
+    return texture(filterTexture, coord + vec2(-pixel.x, -pixel.y)).a > 0.5 ||
+           texture(filterTexture, coord + vec2(0.0, -pixel.y)).a > 0.5 ||
+           texture(filterTexture, coord + vec2(pixel.x, -pixel.y)).a > 0.5 ||
+           texture(filterTexture, coord + vec2(-pixel.x, 0.0)).a > 0.5 ||
+           texture(filterTexture, coord + vec2(pixel.x, 0.0)).a > 0.5 ||
+           texture(filterTexture, coord + vec2(-pixel.x, pixel.y)).a > 0.5 ||
+           texture(filterTexture, coord + vec2(0.0, pixel.y)).a > 0.5 ||
+           texture(filterTexture, coord + vec2(pixel.x, pixel.y)).a > 0.5;
+}
+
 void main() {
     if (texture(filterTexture, TexCoord).a > 0.5) {
         FragColor = u_outputColor;
         return;
+    }
+    if (u_borderWidth == 1) {
+        if (hasBorderSample(TexCoord, u_screenPixel)) {
+            FragColor = u_borderColor;
+            return;
+        }
+        discard;
     }
     float maxA = 0.0;
     for (int x = -u_borderWidth; x <= u_borderWidth; x++) {
@@ -361,11 +380,30 @@ uniform sampler2D filterTexture;
 uniform int u_borderWidth;
 uniform vec4 u_borderColor;
 uniform vec2 u_screenPixel;
+
+bool hasBorderSample(vec2 coord, vec2 pixel) {
+    return texture(filterTexture, coord + vec2(-pixel.x, -pixel.y)).a > 0.5 ||
+           texture(filterTexture, coord + vec2(0.0, -pixel.y)).a > 0.5 ||
+           texture(filterTexture, coord + vec2(pixel.x, -pixel.y)).a > 0.5 ||
+           texture(filterTexture, coord + vec2(-pixel.x, 0.0)).a > 0.5 ||
+           texture(filterTexture, coord + vec2(pixel.x, 0.0)).a > 0.5 ||
+           texture(filterTexture, coord + vec2(-pixel.x, pixel.y)).a > 0.5 ||
+           texture(filterTexture, coord + vec2(0.0, pixel.y)).a > 0.5 ||
+           texture(filterTexture, coord + vec2(pixel.x, pixel.y)).a > 0.5;
+}
+
 void main() {
     vec4 texColor = texture(filterTexture, TexCoord);
     if (texColor.a > 0.5) {
         FragColor = vec4(texColor.rgb, 1.0);
         return;
+    }
+    if (u_borderWidth == 1) {
+        if (hasBorderSample(TexCoord, u_screenPixel)) {
+            FragColor = u_borderColor;
+            return;
+        }
+        discard;
     }
     float maxA = 0.0;
     for (int x = -u_borderWidth; x <= u_borderWidth; x++) {
@@ -379,6 +417,74 @@ void main() {
         FragColor = u_borderColor;
     } else {
         discard;
+    }
+})";
+
+static const char* mt_dilate_horizontal_frag_shader = R"(#version 330 core
+out vec4 FragColor;
+in vec2 TexCoord;
+uniform sampler2D sourceTexture;
+uniform int u_borderWidth;
+uniform vec2 u_screenPixel;
+void main() {
+    float maxA = 0.0;
+    for (int x = -u_borderWidth; x <= u_borderWidth; x++) {
+        vec2 offset = vec2(float(x) * u_screenPixel.x, 0.0);
+        maxA = max(maxA, texture(sourceTexture, TexCoord + offset).a);
+    }
+    FragColor = vec4(maxA, 0.0, 0.0, 1.0);
+})";
+
+static const char* mt_dilate_vertical_frag_shader = R"(#version 330 core
+out vec4 FragColor;
+in vec2 TexCoord;
+uniform sampler2D sourceTexture;
+uniform sampler2D dilateTexture;
+uniform int u_borderWidth;
+uniform vec2 u_screenPixel;
+uniform vec4 u_outputColor;
+uniform vec4 u_borderColor;
+void main() {
+    float centerAlpha = texture(sourceTexture, TexCoord).a;
+    if (centerAlpha > 0.5) {
+        FragColor = u_outputColor;
+        return;
+    }
+    float maxA = 0.0;
+    for (int y = -u_borderWidth; y <= u_borderWidth; y++) {
+        vec2 offset = vec2(0.0, float(y) * u_screenPixel.y);
+        maxA = max(maxA, texture(dilateTexture, TexCoord + offset).r);
+    }
+    if (maxA > 0.5) {
+        FragColor = u_borderColor;
+    } else {
+        FragColor = vec4(0.0, 0.0, 0.0, 0.0);
+    }
+})";
+
+static const char* mt_dilate_vertical_passthrough_frag_shader = R"(#version 330 core
+out vec4 FragColor;
+in vec2 TexCoord;
+uniform sampler2D sourceTexture;
+uniform sampler2D dilateTexture;
+uniform int u_borderWidth;
+uniform vec2 u_screenPixel;
+uniform vec4 u_borderColor;
+void main() {
+    vec4 centerColor = texture(sourceTexture, TexCoord);
+    if (centerColor.a > 0.5) {
+        FragColor = vec4(centerColor.rgb, 1.0);
+        return;
+    }
+    float maxA = 0.0;
+    for (int y = -u_borderWidth; y <= u_borderWidth; y++) {
+        vec2 offset = vec2(0.0, float(y) * u_screenPixel.y);
+        maxA = max(maxA, texture(dilateTexture, TexCoord + offset).r);
+    }
+    if (maxA > 0.5) {
+        FragColor = u_borderColor;
+    } else {
+        FragColor = vec4(0.0, 0.0, 0.0, 0.0);
     }
 })";
 
@@ -458,6 +564,9 @@ static GLuint mt_passthroughProgram = 0;
 static GLuint mt_backgroundProgram = 0;
 static GLuint mt_renderProgram = 0;
 static GLuint mt_renderPassthroughProgram = 0;
+static GLuint mt_dilateHorizontalProgram = 0;
+static GLuint mt_dilateVerticalProgram = 0;
+static GLuint mt_dilateVerticalPassthroughProgram = 0;
 static GLuint mt_staticBorderProgram = 0;
 
 struct MT_FilterShaderLocs {
@@ -486,6 +595,15 @@ struct MT_RenderShaderLocs {
 struct MT_RenderPassthroughShaderLocs {
     GLint filterTexture = -1, borderWidth = -1, borderColor = -1, screenPixel = -1;
 };
+struct MT_DilateHorizontalShaderLocs {
+    GLint sourceTexture = -1, borderWidth = -1, screenPixel = -1;
+};
+struct MT_DilateVerticalShaderLocs {
+    GLint sourceTexture = -1, dilateTexture = -1, borderWidth = -1, screenPixel = -1, outputColor = -1, borderColor = -1;
+};
+struct MT_DilateVerticalPassthroughShaderLocs {
+    GLint sourceTexture = -1, dilateTexture = -1, borderWidth = -1, screenPixel = -1, borderColor = -1;
+};
 struct MT_StaticBorderShaderLocs {
     GLint shape = -1, borderColor = -1, thickness = -1, radius = -1, size = -1;
 };
@@ -495,6 +613,9 @@ static MT_PassthroughShaderLocs mt_passthroughShaderLocs;
 static MT_BackgroundShaderLocs mt_backgroundShaderLocs;
 static MT_RenderShaderLocs mt_renderShaderLocs;
 static MT_RenderPassthroughShaderLocs mt_renderPassthroughShaderLocs;
+static MT_DilateHorizontalShaderLocs mt_dilateHorizontalShaderLocs;
+static MT_DilateVerticalShaderLocs mt_dilateVerticalShaderLocs;
+static MT_DilateVerticalPassthroughShaderLocs mt_dilateVerticalPassthroughShaderLocs;
 static MT_StaticBorderShaderLocs mt_staticBorderShaderLocs;
 
 static MT_FilterPassthroughShaderLocs mt_filterPassthroughShaderLocs;
@@ -550,10 +671,14 @@ static bool MT_InitializeShaders() {
     mt_backgroundProgram = MT_CreateShaderProgram(mt_passthrough_vert_shader, mt_background_frag_shader);
     mt_renderProgram = MT_CreateShaderProgram(mt_passthrough_vert_shader, mt_render_frag_shader);
     mt_renderPassthroughProgram = MT_CreateShaderProgram(mt_passthrough_vert_shader, mt_render_passthrough_frag_shader);
+    mt_dilateHorizontalProgram = MT_CreateShaderProgram(mt_passthrough_vert_shader, mt_dilate_horizontal_frag_shader);
+    mt_dilateVerticalProgram = MT_CreateShaderProgram(mt_passthrough_vert_shader, mt_dilate_vertical_frag_shader);
+    mt_dilateVerticalPassthroughProgram = MT_CreateShaderProgram(mt_passthrough_vert_shader, mt_dilate_vertical_passthrough_frag_shader);
     mt_staticBorderProgram = MT_CreateShaderProgram(mt_passthrough_vert_shader, mt_static_border_frag_shader);
 
     if (!mt_filterProgram || !mt_filterPassthroughProgram || !mt_passthroughProgram || !mt_backgroundProgram || !mt_renderProgram ||
-        !mt_renderPassthroughProgram || !mt_staticBorderProgram) {
+        !mt_renderPassthroughProgram || !mt_dilateHorizontalProgram || !mt_dilateVerticalProgram ||
+        !mt_dilateVerticalPassthroughProgram || !mt_staticBorderProgram) {
         Log("Mirror Thread: FATAL - Failed to create basic shader programs");
         return false;
     }
@@ -590,6 +715,23 @@ static bool MT_InitializeShaders() {
     mt_renderPassthroughShaderLocs.borderColor = glGetUniformLocation(mt_renderPassthroughProgram, "u_borderColor");
     mt_renderPassthroughShaderLocs.screenPixel = glGetUniformLocation(mt_renderPassthroughProgram, "u_screenPixel");
 
+    mt_dilateHorizontalShaderLocs.sourceTexture = glGetUniformLocation(mt_dilateHorizontalProgram, "sourceTexture");
+    mt_dilateHorizontalShaderLocs.borderWidth = glGetUniformLocation(mt_dilateHorizontalProgram, "u_borderWidth");
+    mt_dilateHorizontalShaderLocs.screenPixel = glGetUniformLocation(mt_dilateHorizontalProgram, "u_screenPixel");
+
+    mt_dilateVerticalShaderLocs.sourceTexture = glGetUniformLocation(mt_dilateVerticalProgram, "sourceTexture");
+    mt_dilateVerticalShaderLocs.dilateTexture = glGetUniformLocation(mt_dilateVerticalProgram, "dilateTexture");
+    mt_dilateVerticalShaderLocs.borderWidth = glGetUniformLocation(mt_dilateVerticalProgram, "u_borderWidth");
+    mt_dilateVerticalShaderLocs.screenPixel = glGetUniformLocation(mt_dilateVerticalProgram, "u_screenPixel");
+    mt_dilateVerticalShaderLocs.outputColor = glGetUniformLocation(mt_dilateVerticalProgram, "u_outputColor");
+    mt_dilateVerticalShaderLocs.borderColor = glGetUniformLocation(mt_dilateVerticalProgram, "u_borderColor");
+
+    mt_dilateVerticalPassthroughShaderLocs.sourceTexture = glGetUniformLocation(mt_dilateVerticalPassthroughProgram, "sourceTexture");
+    mt_dilateVerticalPassthroughShaderLocs.dilateTexture = glGetUniformLocation(mt_dilateVerticalPassthroughProgram, "dilateTexture");
+    mt_dilateVerticalPassthroughShaderLocs.borderWidth = glGetUniformLocation(mt_dilateVerticalPassthroughProgram, "u_borderWidth");
+    mt_dilateVerticalPassthroughShaderLocs.screenPixel = glGetUniformLocation(mt_dilateVerticalPassthroughProgram, "u_screenPixel");
+    mt_dilateVerticalPassthroughShaderLocs.borderColor = glGetUniformLocation(mt_dilateVerticalPassthroughProgram, "u_borderColor");
+
     mt_staticBorderShaderLocs.shape = glGetUniformLocation(mt_staticBorderProgram, "u_shape");
     mt_staticBorderShaderLocs.borderColor = glGetUniformLocation(mt_staticBorderProgram, "u_borderColor");
     mt_staticBorderShaderLocs.thickness = glGetUniformLocation(mt_staticBorderProgram, "u_thickness");
@@ -615,6 +757,17 @@ static bool MT_InitializeShaders() {
 
     glUseProgram(mt_renderPassthroughProgram);
     glUniform1i(mt_renderPassthroughShaderLocs.filterTexture, 0);
+
+    glUseProgram(mt_dilateHorizontalProgram);
+    glUniform1i(mt_dilateHorizontalShaderLocs.sourceTexture, 0);
+
+    glUseProgram(mt_dilateVerticalProgram);
+    glUniform1i(mt_dilateVerticalShaderLocs.sourceTexture, 0);
+    glUniform1i(mt_dilateVerticalShaderLocs.dilateTexture, 1);
+
+    glUseProgram(mt_dilateVerticalPassthroughProgram);
+    glUniform1i(mt_dilateVerticalPassthroughShaderLocs.sourceTexture, 0);
+    glUniform1i(mt_dilateVerticalPassthroughShaderLocs.dilateTexture, 1);
 
     glUseProgram(0);
 
@@ -646,6 +799,18 @@ static void MT_CleanupShaders() {
     if (mt_renderPassthroughProgram) {
         glDeleteProgram(mt_renderPassthroughProgram);
         mt_renderPassthroughProgram = 0;
+    }
+    if (mt_dilateHorizontalProgram) {
+        glDeleteProgram(mt_dilateHorizontalProgram);
+        mt_dilateHorizontalProgram = 0;
+    }
+    if (mt_dilateVerticalProgram) {
+        glDeleteProgram(mt_dilateVerticalProgram);
+        mt_dilateVerticalProgram = 0;
+    }
+    if (mt_dilateVerticalPassthroughProgram) {
+        glDeleteProgram(mt_dilateVerticalPassthroughProgram);
+        mt_dilateVerticalPassthroughProgram = 0;
     }
     if (mt_staticBorderProgram) {
         glDeleteProgram(mt_staticBorderProgram);
@@ -1066,6 +1231,31 @@ struct MT_RenderToBufferStateCache {
     float renderPassthroughScreenPixelX = 0.0f;
     float renderPassthroughScreenPixelY = 0.0f;
     bool renderPassthroughScreenPixelValid = false;
+
+    int dilateHorizontalBorderWidth = 0;
+    bool dilateHorizontalBorderWidthValid = false;
+    float dilateHorizontalScreenPixelX = 0.0f;
+    float dilateHorizontalScreenPixelY = 0.0f;
+    bool dilateHorizontalScreenPixelValid = false;
+
+    int dilateVerticalBorderWidth = 0;
+    bool dilateVerticalBorderWidthValid = false;
+    float dilateVerticalScreenPixelX = 0.0f;
+    float dilateVerticalScreenPixelY = 0.0f;
+    bool dilateVerticalScreenPixelValid = false;
+    Color dilateVerticalOutputColor{};
+    bool dilateVerticalOutputColorValid = false;
+    Color dilateVerticalBorderColor{};
+    bool dilateVerticalBorderColorValid = false;
+
+    int dilateVerticalPassthroughBorderWidth = 0;
+    bool dilateVerticalPassthroughBorderWidthValid = false;
+    float dilateVerticalPassthroughScreenPixelX = 0.0f;
+    float dilateVerticalPassthroughScreenPixelY = 0.0f;
+    bool dilateVerticalPassthroughScreenPixelValid = false;
+    Color dilateVerticalPassthroughBorderColor{};
+    bool dilateVerticalPassthroughBorderColorValid = false;
+
     GLuint sourceRectAttribBuffer = 0;
     bool sourceRectAttribBufferValid = false;
 };
@@ -1286,10 +1476,181 @@ static int MT_UploadSourceRectInstances(MT_SourceRectGpuCacheEntry& gpuCache, co
     return static_cast<int>(instanceCount);
 }
 
+static bool MT_CanRenderMirrorDirectToFinal(const ThreadedMirrorConfig& conf, bool useRawOutput, bool writeToBack) {
+    if (writeToBack) { return false; }
+    if (useRawOutput) { return true; }
+    if (conf.borderType == MirrorBorderType::Static) { return true; }
+    return conf.borderType == MirrorBorderType::Dynamic && conf.dynamicBorderThickness <= 0;
+}
+
+static bool MT_CanCompositeDynamicBorderOnScreen(const ThreadedMirrorConfig& conf, bool useRawOutput, bool writeToBack) {
+    return !writeToBack && !useRawOutput && conf.borderType == MirrorBorderType::Dynamic && conf.dynamicBorderThickness == 1;
+}
+
+static bool MT_ShouldUseSeparableDynamicBorder(const ThreadedMirrorConfig& conf, bool useRawOutput) {
+    return !useRawOutput && conf.borderType == MirrorBorderType::Dynamic && conf.dynamicBorderThickness > 1;
+}
+
+static bool MT_EnsureTempCaptureTexture(MirrorInstance* inst, int width, int height) {
+    if (!inst || width <= 0 || height <= 0) { return false; }
+
+    if (inst->tempCaptureTexture == 0) {
+        glGenTextures(1, &inst->tempCaptureTexture);
+        inst->tempCaptureTextureW = 0;
+        inst->tempCaptureTextureH = 0;
+    }
+
+    if (inst->tempCaptureTextureW == width && inst->tempCaptureTextureH == height) { return true; }
+
+    BindTextureDirect(GL_TEXTURE_2D, inst->tempCaptureTexture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, width, height, 0, GL_RED, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    BindTextureDirect(GL_TEXTURE_2D, 0);
+
+    inst->tempCaptureTextureW = width;
+    inst->tempCaptureTextureH = height;
+    return true;
+}
+
+static bool MT_RenderSeparableDynamicBorder(MirrorInstance* inst, const ThreadedMirrorConfig& conf, GLuint captureTexture,
+                                            GLuint captureTempFbo, GLuint captureFinalFbo, GLuint* lastTempTextureId,
+                                            GLuint finalTexture, int finalW, int finalH,
+                                            MT_RenderToBufferStateCache* stateCache) {
+    if (!inst || captureTempFbo == 0 || captureFinalFbo == 0 || finalTexture == 0 || !MT_EnsureTempCaptureTexture(inst, finalW, finalH)) {
+        return false;
+    }
+
+    const float screenPixelX = 1.0f / static_cast<float>((std::max)(1, finalW));
+    const float screenPixelY = 1.0f / static_cast<float>((std::max)(1, finalH));
+
+    if (lastTempTextureId == nullptr || *lastTempTextureId != inst->tempCaptureTexture) {
+        glBindFramebuffer(GL_FRAMEBUFFER, captureTempFbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, inst->tempCaptureTexture, 0);
+        if (lastTempTextureId) { *lastTempTextureId = inst->tempCaptureTexture; }
+        if (stateCache) {
+            stateCache->framebufferValid = false;
+            stateCache->textureValid = false;
+        }
+    }
+
+    MT_BindFramebufferCached(captureTempFbo, stateCache);
+    MT_SetViewportCached(0, 0, finalW, finalH, stateCache);
+    MT_SetBlendEnabledCached(false, stateCache);
+
+    glActiveTexture(GL_TEXTURE0);
+    BindTextureDirect(GL_TEXTURE_2D, captureTexture);
+    MT_UseProgramCached(mt_dilateHorizontalProgram, stateCache);
+    if (!stateCache || !stateCache->dilateHorizontalBorderWidthValid ||
+        stateCache->dilateHorizontalBorderWidth != conf.dynamicBorderThickness) {
+        glUniform1i(mt_dilateHorizontalShaderLocs.borderWidth, conf.dynamicBorderThickness);
+        if (stateCache) {
+            stateCache->dilateHorizontalBorderWidth = conf.dynamicBorderThickness;
+            stateCache->dilateHorizontalBorderWidthValid = true;
+        }
+    }
+    if (!stateCache || !stateCache->dilateHorizontalScreenPixelValid || stateCache->dilateHorizontalScreenPixelX != screenPixelX ||
+        stateCache->dilateHorizontalScreenPixelY != screenPixelY) {
+        glUniform2f(mt_dilateHorizontalShaderLocs.screenPixel, screenPixelX, screenPixelY);
+        if (stateCache) {
+            stateCache->dilateHorizontalScreenPixelX = screenPixelX;
+            stateCache->dilateHorizontalScreenPixelY = screenPixelY;
+            stateCache->dilateHorizontalScreenPixelValid = true;
+        }
+    }
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    MT_BindFramebufferCached(captureFinalFbo, stateCache);
+
+    glActiveTexture(GL_TEXTURE0);
+    BindTextureDirect(GL_TEXTURE_2D, captureTexture);
+    glActiveTexture(GL_TEXTURE1);
+    BindTextureDirect(GL_TEXTURE_2D, inst->tempCaptureTexture);
+
+    if (conf.colorPassthrough) {
+        MT_UseProgramCached(mt_dilateVerticalPassthroughProgram, stateCache);
+        if (!stateCache || !stateCache->dilateVerticalPassthroughBorderWidthValid ||
+            stateCache->dilateVerticalPassthroughBorderWidth != conf.dynamicBorderThickness) {
+            glUniform1i(mt_dilateVerticalPassthroughShaderLocs.borderWidth, conf.dynamicBorderThickness);
+            if (stateCache) {
+                stateCache->dilateVerticalPassthroughBorderWidth = conf.dynamicBorderThickness;
+                stateCache->dilateVerticalPassthroughBorderWidthValid = true;
+            }
+        }
+        if (!stateCache || !stateCache->dilateVerticalPassthroughScreenPixelValid ||
+            stateCache->dilateVerticalPassthroughScreenPixelX != screenPixelX ||
+            stateCache->dilateVerticalPassthroughScreenPixelY != screenPixelY) {
+            glUniform2f(mt_dilateVerticalPassthroughShaderLocs.screenPixel, screenPixelX, screenPixelY);
+            if (stateCache) {
+                stateCache->dilateVerticalPassthroughScreenPixelX = screenPixelX;
+                stateCache->dilateVerticalPassthroughScreenPixelY = screenPixelY;
+                stateCache->dilateVerticalPassthroughScreenPixelValid = true;
+            }
+        }
+        if (!stateCache || !stateCache->dilateVerticalPassthroughBorderColorValid ||
+            !MT_ColorEquals(stateCache->dilateVerticalPassthroughBorderColor, conf.borderColor)) {
+            glUniform4f(mt_dilateVerticalPassthroughShaderLocs.borderColor, conf.borderColor.r, conf.borderColor.g,
+                        conf.borderColor.b, conf.borderColor.a);
+            if (stateCache) {
+                stateCache->dilateVerticalPassthroughBorderColor = conf.borderColor;
+                stateCache->dilateVerticalPassthroughBorderColorValid = true;
+            }
+        }
+    } else {
+        MT_UseProgramCached(mt_dilateVerticalProgram, stateCache);
+        if (!stateCache || !stateCache->dilateVerticalBorderWidthValid ||
+            stateCache->dilateVerticalBorderWidth != conf.dynamicBorderThickness) {
+            glUniform1i(mt_dilateVerticalShaderLocs.borderWidth, conf.dynamicBorderThickness);
+            if (stateCache) {
+                stateCache->dilateVerticalBorderWidth = conf.dynamicBorderThickness;
+                stateCache->dilateVerticalBorderWidthValid = true;
+            }
+        }
+        if (!stateCache || !stateCache->dilateVerticalScreenPixelValid || stateCache->dilateVerticalScreenPixelX != screenPixelX ||
+            stateCache->dilateVerticalScreenPixelY != screenPixelY) {
+            glUniform2f(mt_dilateVerticalShaderLocs.screenPixel, screenPixelX, screenPixelY);
+            if (stateCache) {
+                stateCache->dilateVerticalScreenPixelX = screenPixelX;
+                stateCache->dilateVerticalScreenPixelY = screenPixelY;
+                stateCache->dilateVerticalScreenPixelValid = true;
+            }
+        }
+        if (!stateCache || !stateCache->dilateVerticalOutputColorValid ||
+            !MT_ColorEquals(stateCache->dilateVerticalOutputColor, conf.outputColor)) {
+            glUniform4f(mt_dilateVerticalShaderLocs.outputColor, conf.outputColor.r, conf.outputColor.g, conf.outputColor.b,
+                        conf.outputColor.a);
+            if (stateCache) {
+                stateCache->dilateVerticalOutputColor = conf.outputColor;
+                stateCache->dilateVerticalOutputColorValid = true;
+            }
+        }
+        if (!stateCache || !stateCache->dilateVerticalBorderColorValid ||
+            !MT_ColorEquals(stateCache->dilateVerticalBorderColor, conf.borderColor)) {
+            glUniform4f(mt_dilateVerticalShaderLocs.borderColor, conf.borderColor.r, conf.borderColor.g, conf.borderColor.b,
+                        conf.borderColor.a);
+            if (stateCache) {
+                stateCache->dilateVerticalBorderColor = conf.borderColor;
+                stateCache->dilateVerticalBorderColorValid = true;
+            }
+        }
+    }
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    glActiveTexture(GL_TEXTURE1);
+    BindTextureDirect(GL_TEXTURE_2D, 0);
+    glActiveTexture(GL_TEXTURE0);
+    BindTextureDirect(GL_TEXTURE_2D, finalTexture);
+    if (stateCache) { stateCache->textureValid = false; }
+    return true;
+}
+
 static bool RenderMirrorToBuffer(MirrorInstance* inst, const ThreadedMirrorConfig& conf, GLuint validCopyTexture, GLuint captureVAO,
-                                 GLuint captureVBO, MT_SourceRectGpuCacheEntry& sourceRectGpuCache, GLuint captureFbo, GLuint captureFinalFbo,
-                                 MirrorGammaMode gammaMode, int gameW,
-                                 int gameH, bool writeToBack, MT_RenderToBufferStateCache* stateCache = nullptr,
+                                 GLuint captureVBO, MT_SourceRectGpuCacheEntry& sourceRectGpuCache, GLuint captureFbo,
+                                 GLuint captureTempFbo, GLuint* captureTempTextureId, GLuint captureFinalFbo,
+                                 MirrorGammaMode gammaMode, int gameW, int gameH, bool writeToBack,
+                                 MT_RenderToBufferStateCache* stateCache = nullptr,
                                  bool fixedStateAlreadyPrepared = false) {
     PROFILE_SCOPE_CAT("Capture Single Mirror", "Mirror Thread");
 
@@ -1298,8 +1659,17 @@ static bool RenderMirrorToBuffer(MirrorInstance* inst, const ThreadedMirrorConfi
     const int finalW = writeToBack ? inst->final_w_back : inst->final_w;
     const int finalH = writeToBack ? inst->final_h_back : inst->final_h;
 
-    MT_BindFramebufferCached(captureFbo, stateCache);
-    MT_SetViewportCached(0, 0, inst->fbo_w, inst->fbo_h, stateCache);
+    bool useRawOutput = inst->desiredRawOutput.load(std::memory_order_acquire);
+    bool useColorPassthrough = conf.colorPassthrough;
+    const bool renderDirectToFinal =
+        captureFinalFbo != 0 && finalTexture != 0 && MT_CanRenderMirrorDirectToFinal(conf, useRawOutput, writeToBack);
+
+    const GLuint initialTargetFbo = renderDirectToFinal ? captureFinalFbo : captureFbo;
+    const int initialTargetW = renderDirectToFinal ? finalW : inst->fbo_w;
+    const int initialTargetH = renderDirectToFinal ? finalH : inst->fbo_h;
+
+    MT_BindFramebufferCached(initialTargetFbo, stateCache);
+    MT_SetViewportCached(0, 0, initialTargetW, initialTargetH, stateCache);
 
     if (!fixedStateAlreadyPrepared) {
         glDisable(GL_DEPTH_TEST);
@@ -1311,13 +1681,10 @@ static bool RenderMirrorToBuffer(MirrorInstance* inst, const ThreadedMirrorConfi
         glBindBuffer(GL_ARRAY_BUFFER, captureVBO);
     }
 
-    MT_SetClearColorCached(0.0f, 0.0f, 0.0f, 0.0f, stateCache);
+    MT_SetClearColorCached(0.0f, 0.0f, 0.0f, (renderDirectToFinal && useRawOutput) ? 1.0f : 0.0f, stateCache);
     glClear(GL_COLOR_BUFFER_BIT);
 
     MT_BindTextureCached(validCopyTexture, stateCache);
-
-    bool useRawOutput = inst->desiredRawOutput.load(std::memory_order_acquire);
-    bool useColorPassthrough = conf.colorPassthrough;
 
     if (useRawOutput) {
         MT_UseProgramCached(mt_passthroughProgram, stateCache);
@@ -1420,8 +1787,10 @@ static bool RenderMirrorToBuffer(MirrorInstance* inst, const ThreadedMirrorConfi
         MT_SetBlendEnabledCached(true, stateCache);
     }
 
-    int padding = (conf.borderType == MirrorBorderType::Dynamic) ? conf.dynamicBorderThickness : 0;
-    MT_SetViewportCached(padding, padding, conf.captureWidth, conf.captureHeight, stateCache);
+    int padding = renderDirectToFinal ? 0 : ((conf.borderType == MirrorBorderType::Dynamic) ? conf.dynamicBorderThickness : 0);
+    const int drawWidth = renderDirectToFinal ? finalW : conf.captureWidth;
+    const int drawHeight = renderDirectToFinal ? finalH : conf.captureHeight;
+    MT_SetViewportCached(padding, padding, drawWidth, drawHeight, stateCache);
     const int instanceCount = MT_UploadSourceRectInstances(sourceRectGpuCache, conf, gameW, gameH, stateCache);
     glDrawArraysInstanced(GL_TRIANGLES, 0, 6, instanceCount);
 
@@ -1436,16 +1805,21 @@ static bool RenderMirrorToBuffer(MirrorInstance* inst, const ThreadedMirrorConfi
         }
     }
 
+    if (renderDirectToFinal || MT_CanCompositeDynamicBorderOnScreen(conf, useRawOutput, writeToBack)) { return true; }
+
     // This produces screen-ready content so render thread just needs to blit.
     // Use the mirror-thread-local FBO (framebuffer objects may not be shared across contexts).
     if (captureFinalFbo != 0 && finalTexture != 0) {
         PROFILE_SCOPE_CAT("Apply Border Shader", "Mirror Thread");
 
+        if (MT_ShouldUseSeparableDynamicBorder(conf, useRawOutput)) {
+            return MT_RenderSeparableDynamicBorder(inst, conf, captureTexture, captureTempFbo, captureFinalFbo,
+                                                  captureTempTextureId, finalTexture, finalW, finalH, stateCache);
+        }
+
         if (useRawOutput) {
             MT_BindFramebufferCached(captureFinalFbo, stateCache);
             MT_SetViewportCached(0, 0, finalW, finalH, stateCache);
-            MT_SetClearColorCached(0.0f, 0.0f, 0.0f, 1.0f, stateCache);
-            glClear(GL_COLOR_BUFFER_BIT);
 
             MT_BindTextureCached(captureTexture, stateCache);
             MT_UseProgramCached(mt_backgroundProgram, stateCache);
@@ -1461,8 +1835,6 @@ static bool RenderMirrorToBuffer(MirrorInstance* inst, const ThreadedMirrorConfi
             // Static border will be rendered later in render_thread.cpp on top of the mirror
             MT_BindFramebufferCached(captureFinalFbo, stateCache);
             MT_SetViewportCached(0, 0, finalW, finalH, stateCache);
-            MT_SetClearColorCached(0.0f, 0.0f, 0.0f, 0.0f, stateCache);
-            glClear(GL_COLOR_BUFFER_BIT);
 
             MT_BindTextureCached(captureTexture, stateCache);
             MT_UseProgramCached(mt_backgroundProgram, stateCache);
@@ -1563,8 +1935,10 @@ static bool RenderMirrorToBuffer(MirrorInstance* inst, const ThreadedMirrorConfi
 // Framebuffer objects are not reliably shared between WGL contexts across all drivers.
 struct MT_MirrorFbos {
     GLuint backFbo = 0;
+    GLuint tempBackFbo = 0;
     GLuint finalBackFbo = 0;
     GLuint lastBackTex = 0;
+    GLuint lastTempTex = 0;
     GLuint lastFinalBackTex = 0;
 
     // Async PBO for content detection (replaces synchronous glReadPixels)
@@ -1942,6 +2316,7 @@ static void MirrorCaptureThreadFunc(void* unused) {
                             }
                             if (!stillExists) {
                                 if (it->second.backFbo) { glDeleteFramebuffers(1, &it->second.backFbo); }
+                                if (it->second.tempBackFbo) { glDeleteFramebuffers(1, &it->second.tempBackFbo); }
                                 if (it->second.finalBackFbo) { glDeleteFramebuffers(1, &it->second.finalBackFbo); }
                                 if (it->second.contentDetectionPBO) { glDeleteBuffers(1, &it->second.contentDetectionPBO); }
                                 if (it->second.contentReadbackFence && glIsSync(it->second.contentReadbackFence)) {
@@ -1980,6 +2355,7 @@ static void MirrorCaptureThreadFunc(void* unused) {
                 // Get mirror instance (unique lock - capture thread writes to instance)
                 MirrorInstance* inst = nullptr;
                 GLuint localBackFbo = 0;
+                GLuint localTempBackFbo = 0;
                 GLuint localFinalBackFbo = 0;
                 {
                     std::unique_lock<std::shared_mutex> lock(g_mirrorInstancesMutex);
@@ -2039,6 +2415,7 @@ static void MirrorCaptureThreadFunc(void* unused) {
                     // NOTE: We must NOT rely on inst->fboBack / inst->finalFboBack being usable in this context.
                     MT_MirrorFbos& fb = mt_fbos[conf.name];
                     if (fb.backFbo == 0) { glGenFramebuffers(1, &fb.backFbo); }
+                    if (fb.tempBackFbo == 0) { glGenFramebuffers(1, &fb.tempBackFbo); }
                     if (fb.finalBackFbo == 0) { glGenFramebuffers(1, &fb.finalBackFbo); }
 
                     if (fb.lastBackTex != inst->fboTextureBack) {
@@ -2062,10 +2439,13 @@ static void MirrorCaptureThreadFunc(void* unused) {
                     }
 
                     localBackFbo = fb.backFbo;
+                    localTempBackFbo = fb.tempBackFbo;
                     localFinalBackFbo = fb.finalBackFbo;
                 }
 
-                if (!inst || !inst->fboTextureBack || !inst->finalTextureBack || localBackFbo == 0 || localFinalBackFbo == 0) continue;
+                if (!inst || !inst->fboTextureBack || !inst->finalTextureBack || localBackFbo == 0 || localTempBackFbo == 0 ||
+                    localFinalBackFbo == 0)
+                    continue;
 
                 if (inst->captureReady.load(std::memory_order_acquire)) continue;
 
@@ -2109,8 +2489,9 @@ static void MirrorCaptureThreadFunc(void* unused) {
 
                 debugSamplePixel(conf, validTexture, gameW, gameH);
 
+                MT_MirrorFbos& fb = mt_fbos[conf.name];
                 RenderMirrorToBuffer(inst, conf, validTexture, captureVAO, captureVBO, sourceRectGpuCaches[conf.name], localBackFbo,
-                                     localFinalBackFbo, gammaMode, gameW, gameH, true);
+                                     localTempBackFbo, &fb.lastTempTex, localFinalBackFbo, gammaMode, gameW, gameH, true);
 
                 // The result will be harvested on the NEXT frame (non-blocking).
                 if (!inst->desiredRawOutput.load(std::memory_order_acquire)) {
@@ -2229,6 +2610,7 @@ static void MirrorCaptureThreadFunc(void* unused) {
         // Cleanup mirror-thread local FBOs and PBOs
         for (auto& kv : mt_fbos) {
             if (kv.second.backFbo) { glDeleteFramebuffers(1, &kv.second.backFbo); }
+            if (kv.second.tempBackFbo) { glDeleteFramebuffers(1, &kv.second.tempBackFbo); }
             if (kv.second.finalBackFbo) { glDeleteFramebuffers(1, &kv.second.finalBackFbo); }
             if (kv.second.contentDetectionPBO) { glDeleteBuffers(1, &kv.second.contentDetectionPBO); }
             if (kv.second.contentReadbackFence && glIsSync(kv.second.contentReadbackFence)) { glDeleteSync(kv.second.contentReadbackFence); }
@@ -2530,6 +2912,7 @@ bool RenderMirrorCapturesOnCurrentThread(const std::vector<ThreadedMirrorConfig>
 
         MT_MirrorFbos& fb = g_sameThreadMirrorFbos[conf.name];
         if (fb.backFbo == 0) { glGenFramebuffers(1, &fb.backFbo); }
+        if (fb.tempBackFbo == 0) { glGenFramebuffers(1, &fb.tempBackFbo); }
         if (fb.finalBackFbo == 0) { glGenFramebuffers(1, &fb.finalBackFbo); }
 
         if (fb.lastBackTex != inst->fboTexture) {
@@ -2544,8 +2927,8 @@ bool RenderMirrorCapturesOnCurrentThread(const std::vector<ThreadedMirrorConfig>
         }
 
     RenderMirrorToBuffer(inst, conf, sourceTexture, g_sameThreadCaptureVAO, g_sameThreadCaptureVBO,
-                 g_sameThreadSourceRectGpuCaches[conf.name], fb.backFbo, fb.finalBackFbo, gammaMode, gameW, gameH, false,
-                 &stateCache, true);
+                 g_sameThreadSourceRectGpuCaches[conf.name], fb.backFbo, fb.tempBackFbo, &fb.lastTempTex, fb.finalBackFbo,
+                 gammaMode, gameW, gameH, false, &stateCache, true);
 
         inst->hasFrameContent = true;
         ComputeMirrorRenderCache(inst, conf, gameW, gameH, screenW, screenH, finalX, finalY, finalW, finalH, false);
