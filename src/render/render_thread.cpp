@@ -11,6 +11,9 @@
 #include "common/utils.h"
 #include "features/virtual_camera.h"
 #include "features/window_overlay.h"
+#include "features/ninjabrainClient.h"
+#include "features/minecraft_font.h"
+#include <Shlwapi.h>
 #include <unordered_map>
 #include <set>
 #include <thread>
@@ -324,6 +327,8 @@ static ImFont* g_eyeZoomTextFont = nullptr;
 static std::string g_eyeZoomFontPathCached = "";
 static float g_eyeZoomScaleFactor = 1.0f;
 static bool g_fontsValid = false;
+static ImFont* g_ninjabrainFont = nullptr;
+static float g_ninjabrainFontSize = 64.0f;
 
 static float RT_ComputeGuiScaleFactorForWindowSize(int screenWidth, int screenHeight) {
     if (screenWidth < 1) screenWidth = 1;
@@ -405,6 +410,44 @@ static ImFont* RT_AddFontWithArialFallback(ImFontAtlas* atlas, const std::string
     return atlas->AddFontDefault();
 }
 
+static ImFont* RT_AddNBFont(ImFontAtlas* atlas, const std::string& customPath, float sizePixels,
+                            int oversampleH = 1, int oversampleV = 1) {
+    if (!atlas) return nullptr;
+    ImFontConfig fontCfg;
+    fontCfg.OversampleH = oversampleH;
+    fontCfg.OversampleV = oversampleV;
+    auto resolvePath = [](const std::string& p) -> std::string {
+        if (p.empty()) return p;
+        std::wstring wp = Utf8ToWide(p);
+        if (PathIsRelativeW(wp.c_str()) && !g_toolscreenPath.empty())
+            return WideToUtf8(g_toolscreenPath + L"\\" + wp);
+        return p;
+    };
+    if (!customPath.empty()) {
+        std::string resolved = resolvePath(customPath);
+        if (RT_IsFontStable(resolved, sizePixels)) {
+            if (ImFont* f = RT_SafeAddFontFromFileTTF(atlas, resolved.c_str(), sizePixels, &fontCfg))
+                return f;
+        }
+    }
+    {
+        void* buf = IM_ALLOC(g_minecraftFont_ttf_len);
+        if (buf) {
+            memcpy(buf, g_minecraftFont_ttf, g_minecraftFont_ttf_len);
+            fontCfg.FontDataOwnedByAtlas = true;
+            ImFont* f = atlas->AddFontFromMemoryTTF(buf, (int)g_minecraftFont_ttf_len, sizePixels, &fontCfg);
+            if (f) return f;
+        }
+    }
+    const std::string& arial = ConfigDefaults::CONFIG_FONT_PATH;
+    if (RT_IsFontStable(arial, sizePixels)) {
+        if (ImFont* f = RT_SafeAddFontFromFileTTF(atlas, arial.c_str(), sizePixels, &fontCfg))
+            return f;
+    }
+    return atlas->AddFontDefault();
+}
+
+
 static void RT_ResetStyleAndApplyAppearance(float scaleFactor) {
     ImGui::GetStyle() = ImGuiStyle();
     ImGui::StyleColorsDark();
@@ -446,6 +489,7 @@ static bool RT_TryInitializeImGui(HWND hwnd, const Config& cfg) {
         std::string eyeZoomFontPath = cfg.eyezoom.textFontPath.empty() ? cfg.fontPath : cfg.eyezoom.textFontPath;
         g_eyeZoomTextFont = RT_AddFontWithArialFallback(io.Fonts, eyeZoomFontPath, 80.0f * scaleFactor, "EyeZoom font", &g_eyeZoomFontPathCached);
         if (g_eyeZoomFontPathCached.empty()) { g_eyeZoomFontPathCached = ConfigDefaults::CONFIG_FONT_PATH; }
+        { float nbSize = 64.0f * scaleFactor; g_ninjabrainFont = RT_AddNBFont(io.Fonts, cfg.ninjabrainOverlay.customFontPath, nbSize); g_ninjabrainFontSize = nbSize; }
     }
 
     RT_ResetStyleAndApplyAppearance(scaleFactor);
@@ -3105,6 +3149,7 @@ static void RenderThreadFunc(void* gameGLContext) {
                 const Config& fontCfgRef = *fontCfg;
                 std::string fontPath = fontCfgRef.fontPath;
                 (void)RT_AddFontWithArialFallback(io.Fonts, fontPath, 16.0f * scaleFactor, "base font");
+                { float nbSize = 64.0f * scaleFactor; g_ninjabrainFont = RT_AddNBFont(io.Fonts, fontCfgRef.ninjabrainOverlay.customFontPath, nbSize); g_ninjabrainFontSize = nbSize; }
 
                 std::string eyeZoomFontPath =
                     fontCfgRef.eyezoom.textFontPath.empty() ? fontCfgRef.fontPath : fontCfgRef.eyezoom.textFontPath;
@@ -3535,8 +3580,19 @@ static void RenderThreadFunc(void* gameGLContext) {
 
             const bool hasAnyVisibleOverlay = hasVisibleMirrors || hasVisibleImages || hasVisibleWindowOverlays;
 
+            const bool nbOverlayActive = [&]() {
+                auto nbCfg = GetConfigSnapshot();
+                if (!nbCfg || !nbCfg->ninjabrainOverlay.enabled) return false;
+                if (!g_windowOverlaysVisible.load(std::memory_order_acquire)) return false;
+                const auto& nb = nbCfg->ninjabrainOverlay;
+                // onlyOnMyScreen: hidden from OBS (excludeOnlyOnMyScreen = OBS pass)
+                if (request.excludeOnlyOnMyScreen && nb.onlyOnMyScreen) return false;
+                // onlyOnObs: hidden from screen (excludeOnlyOnMyScreen=false = screen pass)
+                if (!request.excludeOnlyOnMyScreen && nb.onlyOnObs) return false;
+                return true;
+            }();
             bool shouldRenderAnyImGui = request.shouldRenderGui || request.showPerformanceOverlay || request.showProfiler ||
-                                        request.showEyeZoom || request.showTextureGrid;
+                                        request.showEyeZoom || request.showTextureGrid || nbOverlayActive;
 
             // Some systems can start the render thread before a valid HWND is published,
             // which previously meant the GUI never initialized (Ctrl+I would do nothing, then ESC could crash).
@@ -3778,6 +3834,8 @@ static void RenderThreadFunc(void* gameGLContext) {
 
                         (void)RT_AddFontWithArialFallback(io.Fonts, cfg.fontPath, 16.0f * g_eyeZoomScaleFactor, "base font");
 
+                        { float nbSize = 64.0f * g_eyeZoomScaleFactor; g_ninjabrainFont = RT_AddNBFont(io.Fonts, cfg.ninjabrainOverlay.customFontPath, nbSize); g_ninjabrainFontSize = nbSize; }
+
                         g_eyeZoomTextFont = RT_AddFontWithArialFallback(io.Fonts, newFontPath, 80.0f * g_eyeZoomScaleFactor, "EyeZoom font",
                                                                         &g_eyeZoomFontPathCached);
                         if (g_eyeZoomFontPathCached.empty()) { g_eyeZoomFontPathCached = ConfigDefaults::CONFIG_FONT_PATH; }
@@ -3963,6 +4021,12 @@ static void RenderThreadFunc(void* gameGLContext) {
                 if (request.shouldRenderGui) { RenderSettingsGUI(); }
 
                 RenderPerformanceOverlay(request.showPerformanceOverlay);
+		
+                // NinjabrainBot overlay (rendered in ImGui space)
+                if (nbOverlayActive) {
+                    auto nbCfg = GetConfigSnapshot();
+                    if (nbCfg) RenderNinjabrainOverlay(nbCfg->ninjabrainOverlay, g_ninjabrainFont);
+                }
 
                 RenderProfilerOverlay(request.showProfiler, request.showPerformanceOverlay);
 
@@ -4713,6 +4777,10 @@ FrameRenderRequest BuildObsFrameRequest(const ObsFrameContext& ctx, bool isDualR
 
     return req;
 }
+
+ImFont* GetNinjabrainFont() { return g_ninjabrainFont; }
+float   GetNinjabrainFontSize() { return g_ninjabrainFontSize; }
+
 
 
 

@@ -1,4 +1,7 @@
 #include "render.h"
+#include "features/ninjabrain_data.h"
+#include "features/boat_icons.h"
+#include "features/minecraft_font.h"
 #include "features/fake_cursor.h"
 #include "gui/gui.h"
 #include "runtime/logic_thread.h"
@@ -3867,3 +3870,437 @@ ModeTransitionState GetModeTransitionState() {
 
 
 
+
+
+// NinjabrainBot Overlay
+
+static ImU32 NBGradientColor(double probability)
+{
+    
+    if (probability < 0.0) probability = 0.0;
+    if (probability > 1.0) probability = 1.0;
+
+    static const float H[3] = { 0.0000f, 0.1667f, 0.3731f };
+    static const float S[3] = { 1.0f,    1.0f,    1.0f    };
+    static const float V[3] = { 1.0f,    1.0f,    0.808f  };
+
+    float p = (float)probability * 2.0f; 
+    int i0 = (int)std::floor(p);
+    int i1 = (int)std::ceil(p);
+    
+    if (i0 < 0) i0 = 0; if (i0 > 2) i0 = 2;
+    if (i1 < 0) i1 = 0; if (i1 > 2) i1 = 2;
+    float t = p - std::floor(p); 
+
+    
+    float h0 = H[i0], h1 = H[i1];
+    float h;
+    if (std::abs(h1 - h0) < 0.5f) {
+        h = h1 * t + h0 * (1.0f - t);
+    } else {
+        if (h1 < h0) h1 += 1.0f; else h0 += 1.0f;
+        h = h1 * t + h0 * (1.0f - t);
+        if (h > 1.0f) h -= 1.0f;
+    }
+    float s = S[i1] * t + S[i0] * (1.0f - t);
+    float v = V[i1] * t + V[i0] * (1.0f - t);
+
+    // HSV -> RGB
+    float c = v * s;
+    float x = c * (1.0f - std::abs(std::fmod(h * 6.0f, 2.0f) - 1.0f));
+    float m = v - c;
+    float r, g, b;
+    int sector = (int)(h * 6.0f);
+    if      (sector == 0) { r=c; g=x; b=0; }
+    else if (sector == 1) { r=x; g=c; b=0; }
+    else if (sector == 2) { r=0; g=c; b=x; }
+    else if (sector == 3) { r=0; g=x; b=c; }
+    else if (sector == 4) { r=x; g=0; b=c; }
+    else                  { r=c; g=0; b=x; }
+    return IM_COL32((int)((r+m)*255.0f), (int)((g+m)*255.0f), (int)((b+m)*255.0f), 255);
+}
+
+
+// Order: [0]=gray(NONE/ERROR), [1]=blue(MEASURING), [2]=green(VALID), [3]=red(ERROR)
+static GLuint s_boatIconTex[4] = {0, 0, 0, 0};
+static bool   s_boatIconsLoaded = false;
+
+static void EnsureBoatIconsLoaded()
+{
+    if (s_boatIconsLoaded) return;
+    s_boatIconsLoaded = true;
+
+    struct { const uint8_t* data; int len; int idx; } srcs[] = {
+        { g_boatIcon_gray_png,    g_boatIcon_gray_png_len,    0 },
+        { g_boatIcon_blue_png,    g_boatIcon_blue_png_len,    1 },
+        { g_boatIcon_green_png,   g_boatIcon_green_png_len,   2 },
+        { g_boatIcon_red_png,     g_boatIcon_red_png_len,     3 },
+    };
+    for (auto& s : srcs) {
+        int w, h, ch;
+        unsigned char* px = stbi_load_from_memory(s.data, s.len, &w, &h, &ch, 4);
+        if (!px) continue;
+        glGenTextures(1, &s_boatIconTex[s.idx]);
+        glBindTexture(GL_TEXTURE_2D, s_boatIconTex[s.idx]);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
+        stbi_image_free(px);
+    }
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+#include <algorithm>
+
+void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font)
+{
+    if (!ImGui::GetCurrentContext()) return;
+
+    // Mode filtering — only render if current mode is in allowedModes (or list is empty)
+    if (!nb.allowedModes.empty()) {
+        std::string curMode;
+        { std::lock_guard<std::mutex> lk(g_modeIdMutex); curMode = g_currentModeId; }
+        bool allowed = false;
+        for (const auto& m : nb.allowedModes) { if (m == curMode) { allowed = true; break; } }
+        if (!allowed) return;
+    }
+
+    EnsureBoatIconsLoaded();
+
+    NinjabrainData data;
+    {
+        std::lock_guard<std::mutex> lock(g_ninjabrainMutex);
+        data = g_ninjabrainData;
+    }
+
+    const bool hasTriangulation = data.validPrediction &&
+        (data.resultType == "TRIANGULATION" || data.resultType == "DIVINE");
+    const bool boatError = (data.boatState == "ERROR");
+    const bool showForBoat = nb.alwaysShowBoat || boatError;
+    if (!hasTriangulation && !showForBoat) return;
+
+    ImDrawList* drawList = ImGui::GetForegroundDrawList();
+    if (!font || !font->IsLoaded()) font = ImGui::GetFont();
+
+    const float scale  = (nb.overlayScale > 0.01f) ? nb.overlayScale : 1.0f;
+    const float fs    = GetNinjabrainFontSize() * scale;
+    const float lineH = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, "Ag").y;
+    const float colGap = nb.colSpacing * scale;
+    const int outlineR = nb.outlineWidth;
+    const float padX   = (8.0f + (float)outlineR) * scale;
+    const float padY   = (8.0f + (float)outlineR) * scale;
+    const float rowH   = lineH + nb.rowSpacing * scale;
+
+    auto toImU32 = [](const Color& c) -> ImU32 {
+        return IM_COL32((int)(c.r*255),(int)(c.g*255),(int)(c.b*255),(int)(c.a*255));
+    };
+    ImU32 textCol     = toImU32(nb.textColor);    
+    ImU32 dataCol     = toImU32(nb.dataColor);     
+    ImU32 negCoordCol = toImU32(nb.negCoordColor); 
+
+    int boatIconIdx = 0;
+    if      (data.boatState == "MEASURING") boatIconIdx = 1;
+    else if (data.boatState == "VALID")     boatIconIdx = 2;
+    else if (data.boatState == "ERROR")     boatIconIdx = 3;
+    GLuint boatTex = s_boatIconTex[boatIconIdx];
+
+    struct SegRow {
+        char  text[80];
+        ImU32 color;       
+        ImU32 part1Color;  
+        float xOffset;     
+    };
+    struct Col {
+        char   header[32];
+        SegRow rows[4];  
+        float  width;
+        int    rowCount;
+        bool   isBoatIcon;
+    };
+    Col cols[10];
+    int numCols = 0;
+    int numRows = (nb.shownPredictions >= 1 && nb.shownPredictions <= 3) ? nb.shownPredictions : 1;
+    if (data.predictionCount > 0 && numRows > data.predictionCount) numRows = data.predictionCount;
+    const bool boatOnly = !hasTriangulation && showForBoat;
+    if (boatOnly) numRows = 1;
+    if (numRows < 1) return;
+
+    auto initCol = [&](Col& c, const char* hdr, int rows) {
+        c.rowCount   = rows;
+        c.isBoatIcon = false;
+        snprintf(c.header, sizeof(c.header), "%s", hdr);
+        c.width = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, c.header).x;
+        for (int i = 0; i < 4; i++) {
+            c.rows[i].text[0]    = 0;
+            c.rows[i].color      = dataCol;
+            c.rows[i].part1Color = textCol;
+            c.rows[i].xOffset    = 0;
+        }
+    };
+    auto measureRow = [&](Col& c, int ri) {
+        c.width = (std::max)(c.width, font->CalcTextSizeA(fs, FLT_MAX, 0.0f, c.rows[ri].text).x);
+    };
+
+    for (const auto& colCfg : nb.columns) {
+        if (!colCfg.show) continue;
+        if (numCols >= 10) break;
+        if (colCfg.id == "angle_change" || colCfg.id == "eyes") continue;
+        if (boatOnly && colCfg.id != "boat") continue;
+
+        Col& c = cols[numCols];
+
+        if (colCfg.id == "coords") {
+            initCol(c, colCfg.header.c_str(), numRows);
+            for (int i = 0; i < numRows; i++) {
+                int bx = data.predictions[i].chunkX * 16 + 4;
+                int bz = data.predictions[i].chunkZ * 16 + 4;
+                snprintf(c.rows[i].text, sizeof(c.rows[i].text), "(%d, %d)", bx, bz);
+                if (nb.negCoordColorEnabled && (bx < 0) != (bz < 0)) {
+                    char part1[32];
+                    snprintf(part1, sizeof(part1), "(%d, ", bx);
+                    c.rows[i].xOffset    = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, part1).x;
+                    c.rows[i].part1Color = (bx < 0) ? negCoordCol : dataCol;
+                    c.rows[i].color      = (bz < 0) ? negCoordCol : dataCol;
+                } else {
+                    bool anyNeg = nb.negCoordColorEnabled && (bx < 0 || bz < 0);
+                    c.rows[i].color   = anyNeg ? negCoordCol : dataCol;
+                    c.rows[i].xOffset = 0;
+                }
+                measureRow(c, i);
+            }
+        } else if (colCfg.id == "certainty") {
+            initCol(c, colCfg.header.c_str(), numRows);
+            for (int i = 0; i < numRows; i++) {
+                snprintf(c.rows[i].text, sizeof(c.rows[i].text), "%.1f%%", data.predictions[i].certainty * 100.0);
+                c.rows[i].color = NBGradientColor(data.predictions[i].certainty);
+                measureRow(c, i);
+            }
+        } else if (colCfg.id == "distance") {
+            initCol(c, colCfg.header.c_str(), numRows);
+            for (int i = 0; i < numRows; i++) {
+                snprintf(c.rows[i].text, sizeof(c.rows[i].text), "%.0f", data.predictions[i].overworldDistance);
+                c.rows[i].color = dataCol;
+                measureRow(c, i);
+            }
+        } else if (colCfg.id == "nether") {
+            initCol(c, colCfg.header.c_str(), numRows);
+            for (int i = 0; i < numRows; i++) {
+                int bx = data.predictions[i].chunkX * 16 + 4;
+                int bz = data.predictions[i].chunkZ * 16 + 4;
+                int nx = (int)std::round(bx / 8.0);
+                int nz = (int)std::round(bz / 8.0);
+                snprintf(c.rows[i].text, sizeof(c.rows[i].text), "(%d, %d)", nx, nz);
+                if (nb.negCoordColorEnabled && (nx < 0) != (nz < 0)) {
+                    char part1[32];
+                    snprintf(part1, sizeof(part1), "(%d, ", nx);
+                    c.rows[i].xOffset    = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, part1).x;
+                    c.rows[i].part1Color = (nx < 0) ? negCoordCol : dataCol;
+                    c.rows[i].color      = (nz < 0) ? negCoordCol : dataCol;
+                } else {
+                    bool anyNeg = nb.negCoordColorEnabled && (nx < 0 || nz < 0);
+                    c.rows[i].color   = anyNeg ? negCoordCol : dataCol;
+                    c.rows[i].xOffset = 0;
+                }
+                measureRow(c, i);
+            }
+        } else if (colCfg.id == "angle") {
+
+            if (data.eyeCount == 0) {
+                initCol(c, colCfg.header.c_str(), 1);
+                snprintf(c.rows[0].text, sizeof(c.rows[0].text), "-");
+                c.rows[0].color = textCol;
+                measureRow(c, 0);
+            } else {
+                int totalRows = numRows + 1;
+                if (totalRows > 4) totalRows = 4;
+                initCol(c, colCfg.header.c_str(), totalRows);
+
+                for (int i = 0; i < numRows; i++) {
+                    if (data.predAngles[i].valid) {
+                        double nc    = data.predAngles[i].neededCorrection;
+                        double absNc = std::abs(nc);
+                        if (absNc < 0.05) {
+                            snprintf(c.rows[i].text, sizeof(c.rows[i].text),
+                                     "%.2f", data.predAngles[i].actualAngle);
+                            c.rows[i].color   = dataCol;
+                            c.rows[i].xOffset = 0;
+                        } else {
+                            const char* arrow = (nc > 0) ? "-> " : "<- ";
+                            char part1[32];
+                            snprintf(part1, sizeof(part1), "%.2f ", data.predAngles[i].actualAngle);
+                            c.rows[i].xOffset    = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, part1).x;
+                            c.rows[i].part1Color = dataCol;
+                            snprintf(c.rows[i].text, sizeof(c.rows[i].text),
+                                     "%.2f (%s%.1f)", data.predAngles[i].actualAngle, arrow, absNc);
+                            c.rows[i].color = NBGradientColor(1.0 - absNc / 180.0);
+                        }
+                    } else {
+                        snprintf(c.rows[i].text, sizeof(c.rows[i].text), "%.2f", data.lastAngle);
+                        c.rows[i].color   = dataCol;
+                        c.rows[i].xOffset = 0;
+                    }
+                    measureRow(c, i);
+                }
+
+                // NB 1.5.2+: correctionIncrements is in the API JSON directly.
+                // NB 1.5.1:  correctionIncrements not in API — recover via
+                //             round(correction / change_per_click)
+                //             where change_per_click depends on the user's NB adjustment type.
+                {
+                    int infoIdx = numRows;
+                    auto& ft = data.throws[data.eyeCount - 1];
+
+                    const ImU32 posCol = IM_COL32(0x75, 0xCC, 0x6C, 255); // ADJUSTMENT_POSITIVE
+                    const ImU32 negCol = IM_COL32(0xCC, 0x6E, 0x72, 255); // ADJUSTMENT_NEGATIVE
+
+                    int correctionIncrements = 0;
+                    if (ft.hasCorrectionIncrements) {
+                        // NB 1.5.2+: integer directly from API
+                        correctionIncrements = ft.correctionIncrements;
+                    } else {
+                        // NB 1.5.1: integer counter accumulated in client (±1 per SSE event).
+                        // No division, no floating point error, spam-safe.
+                        correctionIncrements = data.correctionIncrements151;
+                    }
+
+                    if (correctionIncrements == 0) {
+                        snprintf(c.rows[infoIdx].text, sizeof(c.rows[infoIdx].text),
+                                 "%.2f", ft.angleWithoutCorrection);
+                        c.rows[infoIdx].color   = textCol;
+                        c.rows[infoIdx].xOffset = 0;
+                    } else {
+                        char basePart[32];
+                        snprintf(basePart, sizeof(basePart), "%.2f ", ft.angleWithoutCorrection);
+                        c.rows[infoIdx].xOffset    = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, basePart).x;
+                        c.rows[infoIdx].part1Color = textCol;
+                        snprintf(c.rows[infoIdx].text, sizeof(c.rows[infoIdx].text),
+                                 "%.2f %+d", ft.angleWithoutCorrection, correctionIncrements);
+                        c.rows[infoIdx].color = (correctionIncrements > 0) ? posCol : negCol;
+                    }
+                    measureRow(c, infoIdx);
+                }
+            }
+        } else if (colCfg.id == "boat") {
+            initCol(c, colCfg.header.c_str(), 1);
+            c.isBoatIcon = (boatTex != 0);
+            if (c.isBoatIcon) {
+                c.width = (std::max)(c.width, rowH);
+            } else {
+                snprintf(c.rows[0].text, sizeof(c.rows[0].text), "%s", data.boatState.c_str());
+                ImU32 boatCol = IM_COL32(160, 160, 160, 255);
+                if      (data.boatState == "MEASURING") boatCol = IM_COL32(100, 160, 255, 255);
+                else if (data.boatState == "VALID")     boatCol = IM_COL32(80,  220, 80,  255);
+                else if (data.boatState == "ERROR")     boatCol = IM_COL32(255, 80,  80,  255);
+                c.rows[0].color = boatCol;
+                measureRow(c, 0);
+            }
+        } else {
+            continue;
+        }
+        numCols++;
+    }
+
+    if (numCols == 0) return;
+
+    int maxRows = 0;
+    for (int ci = 0; ci < numCols; ci++) maxRows = (std::max)(maxRows, cols[ci].rowCount);
+    float totalW = padX * 2.0f;
+    for (int ci = 0; ci < numCols; ci++) totalW += cols[ci].width + (ci < numCols - 1 ? colGap : 0.0f);
+    float totalH = padY * 2.0f + rowH * (float)(maxRows) + lineH;
+
+    int sw = GetCachedWindowWidth();
+    int sh = GetCachedWindowHeight();
+    const auto& geo = g_lastFrameGeometry;
+
+    int oxI = 0, oyI = 0;
+    GetRelativeCoordsForImageWithViewport(
+        nb.relativeTo, nb.x, nb.y,
+        (int)totalW, (int)totalH,
+        geo.finalX, geo.finalY, geo.finalW, geo.finalH,
+        sw, sh,
+        oxI, oyI);
+    float ox = (float)oxI, oy = (float)oyI;
+
+    if (nb.bgEnabled) {
+        ImU32 bgCol = IM_COL32(0, 0, 0, (int)(nb.bgOpacity * nb.overlayOpacity * 255));
+        drawList->AddRectFilled(ImVec2(ox, oy), ImVec2(ox + totalW, oy + totalH), bgCol, 3.0f);
+    }
+
+    const float opacityMul = (nb.overlayOpacity < 1.0f) ? nb.overlayOpacity : 1.0f;
+    auto applyOpacity = [&](ImU32 col) -> ImU32 {
+        if (opacityMul >= 1.0f) return col;
+        int a = (int)(((col >> 24) & 0xFF) * opacityMul);
+        return (col & 0x00FFFFFF) | ((ImU32)a << 24);
+    };
+
+    auto drawText = [&](float sz, ImVec2 pos, ImU32 col, const char* txt) {
+        col = applyOpacity(col);
+        if (outlineR > 0) {
+            int outA = (int)(220 * opacityMul);
+            ImU32 outCol = IM_COL32(0, 0, 0, outA);
+            int r2 = outlineR * outlineR;
+            for (int dy = -outlineR; dy <= outlineR; dy++) {
+                for (int dx = -outlineR; dx <= outlineR; dx++) {
+                    if (dx == 0 && dy == 0) continue;
+                    if (dx * dx + dy * dy > r2) continue;
+                    drawList->AddText(font, sz,
+                        ImVec2(pos.x + (float)dx, pos.y + (float)dy),
+                        outCol, txt);
+                }
+            }
+        }
+        drawList->AddText(font, sz, pos, col, txt);
+    };
+
+    float cx = ox + padX;
+    for (int ci = 0; ci < numCols; ci++) {
+        Col& col = cols[ci];
+        float hw = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, col.header).x;
+        drawText(fs, ImVec2(cx + (col.width - hw) / 2.0f, oy + padY), textCol, col.header);
+
+        for (int ri = 0; ri < col.rowCount; ri++) {
+            float ry = oy + padY + rowH * (float)(ri + 1);
+
+            if (col.isBoatIcon && ri == 0) {
+                float iconSz = rowH;
+                float ix = cx + (col.width - iconSz) / 2.0f;
+                ImU32 iconTint = IM_COL32(255, 255, 255, (int)(255 * opacityMul));
+                drawList->AddImage(
+                    (ImTextureID)(intptr_t)boatTex,
+                    ImVec2(ix, ry), ImVec2(ix + iconSz, ry + iconSz),
+                    ImVec2(0, 1), ImVec2(1, 0),
+                    iconTint
+                );
+            } else {
+                
+                float rw = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, col.rows[ri].text).x;
+                float rx = cx + (col.width - rw) / 2.0f;
+                if (col.rows[ri].xOffset > 0.0f) {
+                    const char* full = col.rows[ri].text;
+                   
+                    const char* splitPtr = full;
+                    while (*splitPtr) {
+                        const char* next = splitPtr + 1;
+                        while ((*next & 0xC0) == 0x80) ++next;
+                        float w = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, full, splitPtr).x;
+                        if (w >= col.rows[ri].xOffset) break;
+                        splitPtr = next;
+                    }
+    
+                    char part1[64] = {};
+                    int len1 = (int)(splitPtr - full);
+                    if (len1 > 63) len1 = 63;
+                    memcpy(part1, full, len1);
+                    drawText(fs, ImVec2(rx, ry), col.rows[ri].part1Color, part1);
+
+                    float part1W = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, part1).x;
+                    drawText(fs, ImVec2(rx + part1W, ry), col.rows[ri].color, splitPtr);
+                } else {
+                    drawText(fs, ImVec2(rx, ry), col.rows[ri].color, col.rows[ri].text);
+                }
+            }
+        }
+        cx += col.width + colGap;
+    }
+}

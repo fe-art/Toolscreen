@@ -433,6 +433,50 @@ struct KeyRebindsConfig {
     std::vector<DWORD> toggleHotkey = {};
     std::vector<KeyRebind> rebinds;
 };
+
+//NinjabrainBot Overlay
+struct NinjabrainColumn {
+    std::string id;      
+    std::string header; 
+    bool        show = true;
+};
+
+struct NinjabrainOverlayConfig {
+    bool  enabled        = true;
+    int   x              = 5;
+    int   y              = -5;
+    std::string relativeTo     = "bottomLeftScreen";
+    std::string customFontPath = "";
+    float fontSize             = 64.0f;
+    bool  bgEnabled            = true;
+    float bgOpacity            = 0.6f;
+    int   outlineWidth         = 1;
+    Color textColor      = { 0.549f, 0.549f, 0.549f, 1.0f };
+    Color dataColor      = { 1.0f,  1.0f,  1.0f,  1.0f };
+    Color negCoordColor  = { 1.0f,  0.45f, 0.45f, 1.0f };
+    bool  negCoordColorEnabled = false;
+    Color certaintyColor = { 0.31f, 0.86f, 0.31f, 1.0f };
+    std::vector<std::string> allowedModes;
+    float overlayOpacity = 1.0f;
+    float overlayScale   = 0.30f;
+    bool  onlyOnMyScreen = false;
+    bool  onlyOnObs      = false;
+    bool  showEyeOverlay = true;
+    int   shownPredictions = 1;
+    bool  showAllPreds   = false;
+    int   angleDisplay   = 1;
+    float rowSpacing     = 10.0f;
+    float colSpacing     = 30.0f;
+    bool  alwaysShowBoat = false;
+    std::vector<NinjabrainColumn> columns = {
+        {"coords",    "Location", true},
+        {"certainty", "%",        true},
+        {"distance",  "Dist.",    true},
+        {"nether",    "Nether",   true},
+        {"angle",     "Angle",    true},
+        {"boat",      "Boat",     false}
+    };
+};
 struct Config {
     int configVersion = 2;
     std::vector<MirrorConfig> mirrors;
@@ -470,6 +514,7 @@ struct Config {
     bool basicModeEnabled = false;
     bool disableFullscreenPrompt = false;
     bool disableConfigurePrompt = false;
+    NinjabrainOverlayConfig ninjabrainOverlay;
 };
 struct GameViewportGeometry {
     int gameW = 0, gameH = 0;

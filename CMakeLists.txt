@@ -253,6 +253,13 @@ add_library(${PROJECT_NAME} SHARED
     ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/resource.rc
 )
 
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/features/Minecraft.ttf"
+        "$<TARGET_FILE_DIR:${PROJECT_NAME}>/Minecraft.ttf"
+    COMMENT "Copying Minecraft.ttf to output directory"
+)
+
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" PREFIX "Source Files" FILES
     ${TOOLSCREEN_SOURCES}
     ${TOOLSCREEN_HEADERS}

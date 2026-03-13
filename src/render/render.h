@@ -284,3 +284,7 @@ void GetAnimatedModePosition(int& outX, int& outY);
 bool WaitForOverlayBlitFence();
 
 
+
+struct NinjabrainOverlayConfig;
+struct ImFont;
+void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font);

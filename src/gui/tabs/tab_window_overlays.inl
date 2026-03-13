@@ -402,9 +402,263 @@ if (ImGui::BeginTabItem(trc("tabs.window_overlays"))) {
         ImGui::EndPopup();
     }
 
+    // NinjabrainBot Overlay
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+    ImGui::Text("NinjabrainBot Overlay");
+    ImGui::Spacing();
+    {
+        auto& nb = g_config.ninjabrainOverlay;
+        bool changed = false;
+
+        static char nbFontBuf[512] = {};
+        static bool nbFontBufInit = false;
+        if (!nbFontBufInit || std::string(nbFontBuf) != nb.customFontPath) {
+            strncpy_s(nbFontBuf, nb.customFontPath.c_str(), sizeof(nbFontBuf) - 1);
+            nbFontBufInit = true;
+        }
+
+        changed |= ImGui::Checkbox("Enable overlay##nb", &nb.enabled);
+
+        if (nb.enabled) {
+        ImGui::Spacing();
+
+        {
+            std::string preview = nb.allowedModes.empty() ? "All modes" : "";
+            if (!nb.allowedModes.empty()) {
+                for (size_t mi = 0; mi < nb.allowedModes.size(); ++mi) {
+                    if (mi > 0) preview += ", ";
+                    preview += nb.allowedModes[mi];
+                }
+                if (preview.size() > 40) preview = preview.substr(0, 37) + "...";
+            }
+            bool modesNodeOpen = ImGui::TreeNodeEx("##nbModesNode", ImGuiTreeNodeFlags_SpanAvailWidth, "Show in modes: %s", preview.c_str());
+            if (modesNodeOpen) {
+                bool allModes = nb.allowedModes.empty();
+                if (ImGui::Checkbox("All modes##nbAllModes", &allModes)) {
+                    nb.allowedModes.clear(); changed = true;
+                }
+                ImGui::Separator();
+                for (auto& mode : g_config.modes) {
+                    bool inList = false;
+                    for (auto& m : nb.allowedModes) if (m == mode.id) { inList = true; break; }
+                    std::string cbLabel = mode.id + "##nbMode_" + mode.id;
+                    if (ImGui::Checkbox(cbLabel.c_str(), &inList)) {
+                        if (inList) nb.allowedModes.push_back(mode.id);
+                        else        nb.allowedModes.erase(std::remove(nb.allowedModes.begin(), nb.allowedModes.end(), mode.id), nb.allowedModes.end());
+                        changed = true;
+                    }
+                }
+                ImGui::TreePop();
+            }
+        }
+        ImGui::Spacing();
+
+        // Rendering
+        ImGui::SeparatorText("Rendering");
+
+        if (ImGui::SliderFloat("Opacity##nb", &nb.overlayOpacity, 0.0f, 1.0f)) changed = true;
+        if (ImGui::Checkbox("Only on my screen##nb", &nb.onlyOnMyScreen)) {
+            if (nb.onlyOnMyScreen) nb.onlyOnObs = false;
+            changed = true;
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("When enabled, the NinjabrainBot overlay will not be captured by OBS");
+        if (ImGui::Checkbox("Only on OBS##nb", &nb.onlyOnObs)) {
+            if (nb.onlyOnObs) nb.onlyOnMyScreen = false;
+            changed = true;
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("When enabled, the NinjabrainBot overlay is only visible in OBS, not on your screen");
+
+        ImGui::Columns(2, "nb_render_cols", false);
+        ImGui::SetColumnWidth(0, 120);
+
+        ImGui::Text("X");
+        ImGui::NextColumn();
+        if (Spinner("##nb_x", &nb.x)) changed = true;
+        ImGui::NextColumn();
+
+        ImGui::Text("Y");
+        ImGui::NextColumn();
+        if (Spinner("##nb_y", &nb.y)) changed = true;
+        ImGui::NextColumn();
+
+        ImGui::Text("Scale");
+        ImGui::NextColumn();
+        float scalePercent = nb.overlayScale * 100.0f;
+        ImGui::SetNextItemWidth(250);
+        if (ImGui::SliderFloat("##nbScale", &scalePercent, 5.0f, 100.0f, "%.0f%%")) {
+            nb.overlayScale = scalePercent / 100.0f; changed = true;
+        }
+        ImGui::NextColumn();
+
+        ImGui::Text("Relative To");
+        ImGui::NextColumn();
+        const char* current_rel_to = getFriendlyName(nb.relativeTo, imageRelativeToOptions);
+        ImGui::SetNextItemWidth(150);
+        if (ImGui::BeginCombo("##nb_rel_to", current_rel_to)) {
+            for (const auto& option : imageRelativeToOptions) {
+                if (ImGui::Selectable(option.second, nb.relativeTo == option.first)) {
+                    nb.relativeTo = option.first; changed = true;
+                }
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::NextColumn();
+
+        ImGui::Columns(1);
+
+        // Appearance
+        ImGui::SeparatorText("Appearance");
+
+        ImGui::Columns(2, "nb_appear_cols", false);
+        ImGui::SetColumnWidth(0, 120);
+
+        ImGui::Text("Outline width");
+        ImGui::NextColumn();
+        if (Spinner("##nbOutline", &nb.outlineWidth, 1, 0, 10)) changed = true;
+        ImGui::NextColumn();
+
+        ImGui::Columns(1);
+
+        ImGui::Text("Custom font:");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(300);
+        if (ImGui::InputText("##nbCustomFont", nbFontBuf, sizeof(nbFontBuf))) {
+            nb.customFontPath = nbFontBuf;
+            changed = true; g_eyeZoomFontNeedsReload.store(true);
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("(.ttf/.otf)");
+
+        // Background
+        ImGui::SeparatorText("Background");
+
+        if (ImGui::Checkbox("Enable Background##nb", &nb.bgEnabled)) changed = true;
+        ImGui::BeginDisabled(!nb.bgEnabled);
+        ImGui::SetNextItemWidth(250);
+        if (ImGui::SliderFloat("BG Opacity##nb", &nb.bgOpacity, 0.f, 1.f, "%.2f")) changed = true;
+        ImGui::EndDisabled();
+
+        // Colors
+        ImGui::SeparatorText("Colors");
+
+        if (ImGui::ColorEdit3("Headers##nb", &nb.textColor.r))  changed = true;
+        if (ImGui::ColorEdit3("Data##nb",    &nb.dataColor.r))  changed = true;
+        if (ImGui::Checkbox("Color negative coords differently##nb", &nb.negCoordColorEnabled)) changed = true;
+        if (nb.negCoordColorEnabled) {
+            if (ImGui::ColorEdit3("Negative coords##nb", &nb.negCoordColor.r)) changed = true;
+        }
+        ImGui::Spacing();
+
+        // Eye Throws Overlay
+        ImGui::SeparatorText("Eye Throws Overlay");
+
+        if (ImGui::Checkbox("Always show boat state##nb", &nb.alwaysShowBoat)) {
+            changed = true;
+            if (nb.alwaysShowBoat) {
+                for (auto& col : nb.columns) {
+                    if (col.id == "boat") { col.show = true; break; }
+                }
+            }
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Show boat icon even before a stronghold is triangulated");
+        ImGui::Spacing();
+
+        ImGui::Columns(2, "nb_eye_cols", false);
+        ImGui::SetColumnWidth(0, 120);
+        ImGui::Text("Predictions");
+        ImGui::NextColumn();
+        if (Spinner("##nbShownPreds", &nb.shownPredictions, 1, 1, 3)) changed = true;
+        ImGui::NextColumn();
+        ImGui::Text("Row spacing");
+        ImGui::NextColumn();
+        ImGui::SetNextItemWidth(120.f);
+        if (ImGui::SliderFloat("##nbRowSpacing", &nb.rowSpacing, 0.0f, 30.0f, "%.0f px")) changed = true;
+        ImGui::NextColumn();
+        ImGui::Text("Column spacing");
+        ImGui::NextColumn();
+        ImGui::SetNextItemWidth(120.f);
+        if (ImGui::SliderFloat("##nbColSpacing", &nb.colSpacing, 0.0f, 60.0f, "%.0f px")) changed = true;
+        ImGui::NextColumn();
+        ImGui::Columns(1);
+        ImGui::Spacing();
+
+        ImGui::Text("Columns");
+        ImGui::Spacing();
+        if (ImGui::BeginTable("##nbCols", 4,
+            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit))
+        {
+            ImGui::TableSetupColumn("#",      ImGuiTableColumnFlags_WidthFixed,   22.f);
+            ImGui::TableSetupColumn("Show",   ImGuiTableColumnFlags_WidthFixed,   44.f);
+            ImGui::TableSetupColumn("Header", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Order",  ImGuiTableColumnFlags_WidthFixed,   80.f);
+            ImGui::TableHeadersRow();
+
+            int moveFrom = -1, moveTo = -1;
+            for (int ci = 0; ci < (int)nb.columns.size(); ci++) {
+                auto& col = nb.columns[ci];
+                ImGui::TableNextRow();
+                ImGui::PushID(ci);
+
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextDisabled("%d", ci + 1);
+
+                ImGui::TableSetColumnIndex(1);
+                bool show = col.show;
+                if (ImGui::Checkbox("##show", &show)) { col.show = show; changed = true; }
+
+                ImGui::TableSetColumnIndex(2);
+                char buf[32]; strncpy_s(buf, col.header.c_str(), sizeof(buf) - 1);
+                ImGui::SetNextItemWidth(-1);
+                if (ImGui::InputText("##hdr", buf, sizeof(buf))) { col.header = buf; changed = true; }
+
+                ImGui::TableSetColumnIndex(3);
+                if (ci == 0) ImGui::BeginDisabled();
+                if (ImGui::Button("Up##col"))   { moveFrom = ci; moveTo = ci - 1; changed = true; }
+                if (ci == 0) ImGui::EndDisabled();
+                ImGui::SameLine();
+                if (ci == (int)nb.columns.size() - 1) ImGui::BeginDisabled();
+                if (ImGui::Button("Down##col")) { moveFrom = ci; moveTo = ci + 1; changed = true; }
+                if (ci == (int)nb.columns.size() - 1) ImGui::EndDisabled();
+
+                ImGui::PopID();
+            }
+            if (moveFrom >= 0 && moveTo >= 0 && moveTo < (int)nb.columns.size())
+                std::swap(nb.columns[moveFrom], nb.columns[moveTo]);
+
+            ImGui::EndTable();
+        }
+        ImGui::Spacing();
+
+        } // nb.enabled
+
+        ImGui::Spacing();
+        if (ImGui::Button("Reset NinjabrainBot Overlay to Defaults")) {
+            ImGui::OpenPopup("Reset NinjabrainBot Overlay?");
+        }
+        if (ImGui::BeginPopupModal("Reset NinjabrainBot Overlay?", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::Text("Reset all NinjabrainBot overlay settings to defaults?");
+            ImGui::Separator();
+            if (ImGui::Button("Confirm", ImVec2(120, 0))) {
+                nb = NinjabrainOverlayConfig{};
+                changed = true;
+                nbFontBufInit = false;
+                g_eyeZoomFontNeedsReload.store(true);
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel", ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
+            ImGui::EndPopup();
+        }
+
+        if (changed) g_configIsDirty = true;
+    }
+
     ImGui::EndTabItem();
 } else {
     g_windowOverlayDragMode.store(false);
 }
-
-

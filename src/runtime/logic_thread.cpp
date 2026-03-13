@@ -1,4 +1,5 @@
 #include "logic_thread.h"
+#include "features/ninjabrainClient.h"
 #include "common/expression_parser.h"
 #include "gui/gui.h"
 #include "render/mirror_thread.h"
@@ -713,6 +714,7 @@ void StartLogicThread() {
     s_screenMetricsRecalcRequested.store(true, std::memory_order_relaxed);
 
     g_logicThread = std::thread(LogicThreadFunc);
+    std::thread(ninjabrainClient).detach();
     g_logicThreadRunning.store(true);
 
     LogCategory("init", "[LogicThread] Logic thread started");

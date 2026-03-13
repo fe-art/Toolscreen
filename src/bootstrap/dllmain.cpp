@@ -13,6 +13,7 @@
 #include "common/i18n.h"
 #include "hooks/hook_chain.h"
 #include "common/utils.h"
+#include "features/minecraft_font.h"
 #include "version.h"
 #include "features/virtual_camera.h"
 #include "features/window_overlay.h"
@@ -2058,6 +2059,20 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             std::wstring logsDir = g_toolscreenPath + L"\\logs";
             CreateDirectoryW(logsDir.c_str(), NULL);
 
+            // Extract bundled Minecraft.ttf if not already present
+            {
+                std::wstring fontDest = g_toolscreenPath + L"\\Minecraft.ttf";
+                if (GetFileAttributesW(fontDest.c_str()) == INVALID_FILE_ATTRIBUTES) {
+                    HANDLE hFile = CreateFileW(fontDest.c_str(), GENERIC_WRITE, 0, NULL,
+                                               CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+                    if (hFile != INVALID_HANDLE_VALUE) {
+                        DWORD written = 0;
+                        WriteFile(hFile, g_minecraftFont_ttf, (DWORD)g_minecraftFont_ttf_len, &written, NULL);
+                        CloseHandle(hFile);
+                    }
+                }
+            }
+
             std::wstring latestLogPath = logsDir + L"\\latest.log";
 
             if (GetFileAttributesW(latestLogPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
@@ -2145,6 +2160,14 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         }
 
         LoadConfig();
+
+        // Set default NB font path to the absolute path so the user can copy it
+        // to the UI font field. Only set if not already configured.
+        if (!g_toolscreenPath.empty() &&
+            g_config.ninjabrainOverlay.customFontPath.empty()) {
+            g_config.ninjabrainOverlay.customFontPath =
+                WideToUtf8(g_toolscreenPath + L"\\Minecraft.ttf");
+        }
 
         LoadLangs();
         LogCategory("init", "Languages list loaded.");

@@ -1588,6 +1588,48 @@ void ConfigToToml(const Config& config, toml::table& out) {
     EyeZoomConfigToToml(config.eyezoom, eyezoomTbl);
     out.insert("eyezoom", eyezoomTbl);
 
+    // NinjabrainBot overlay config
+    {
+        toml::table nb;
+        auto& o = config.ninjabrainOverlay;
+        nb.insert("enabled",              o.enabled);
+        nb.insert("x",                    o.x);
+        nb.insert("y",                    o.y);
+        nb.insert("relativeTo",           o.relativeTo);
+        nb.insert("fontSize",             o.fontSize);
+        nb.insert("bgEnabled",            o.bgEnabled);
+        nb.insert("bgOpacity",            o.bgOpacity);
+        nb.insert("outlineWidth",         o.outlineWidth);
+        nb.insert("textColor",            ColorToTomlArray(o.textColor));
+        nb.insert("dataColor",            ColorToTomlArray(o.dataColor));
+        nb.insert("negCoordColor",        ColorToTomlArray(o.negCoordColor));
+        nb.insert("negCoordColorEnabled", o.negCoordColorEnabled);
+        nb.insert("certaintyColor",       ColorToTomlArray(o.certaintyColor));
+        nb.insert("showEyeOverlay",       o.showEyeOverlay);
+        nb.insert("shownPredictions",     o.shownPredictions);
+        nb.insert("showAllPreds",         o.showAllPreds);
+        nb.insert("alwaysShowBoat",       o.alwaysShowBoat);
+        nb.insert("angleDisplay",         o.angleDisplay);
+        nb.insert("rowSpacing",           o.rowSpacing);
+        nb.insert("colSpacing",           o.colSpacing);
+        nb.insert("customFontPath",       o.customFontPath);
+        nb.insert("overlayOpacity",       o.overlayOpacity);
+        nb.insert("overlayScale",         o.overlayScale);
+        nb.insert("onlyOnMyScreen",       o.onlyOnMyScreen);
+        nb.insert("onlyOnObs",            o.onlyOnObs);
+        { toml::array arr; for (auto& m : o.allowedModes) arr.push_back(m); nb.insert("allowedModes", arr); }
+        toml::array colArr;
+        for (auto& col : o.columns) {
+            toml::table ct;
+            ct.insert("id",     col.id);
+            ct.insert("header", col.header);
+            ct.insert("show",   col.show);
+            colArr.push_back(ct);
+        }
+        nb.insert("columns", colArr);
+        out.insert("ninjabrainOverlay", nb);
+    }
+
     toml::table cursorsTbl;
     CursorsConfigToToml(config.cursors, cursorsTbl);
     out.insert("cursors", cursorsTbl);
@@ -1719,6 +1761,61 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
     if (auto t = GetTable(tbl, "debug")) { DebugGlobalConfigFromToml(*t, config.debug); }
 
     if (auto t = GetTable(tbl, "eyezoom")) { EyeZoomConfigFromToml(*t, config.eyezoom); }
+
+    // NinjabrainBot overlay config
+    if (auto nb = tbl.get_as<toml::table>("ninjabrainOverlay")) {
+        auto& c = config.ninjabrainOverlay;
+        c.enabled              = GetOr(*nb, "enabled",              true);
+        c.x                    = GetOr(*nb, "x",                    5);
+        c.y                    = GetOr(*nb, "y",                    -5);
+        c.relativeTo           = GetStringOr(*nb, "relativeTo",     "bottomLeftScreen");
+        c.bgEnabled            = GetOr(*nb, "bgEnabled",            true);
+        c.bgOpacity            = GetOr(*nb, "bgOpacity",            0.6f);
+        c.outlineWidth         = GetOr(*nb, "outlineWidth",         1);
+        c.textColor            = ColorFromTomlArray(nb->get_as<toml::array>("textColor"),      Color{0.549f,0.549f,0.549f,1.0f}); // #8C8C8C
+        c.dataColor            = ColorFromTomlArray(nb->get_as<toml::array>("dataColor"),      Color{1.0f,1.0f,1.0f,1.0f});
+        c.negCoordColor        = ColorFromTomlArray(nb->get_as<toml::array>("negCoordColor"),  Color{1.0f,0.45f,0.45f,1.0f});
+        c.negCoordColorEnabled = GetOr(*nb, "negCoordColorEnabled", false);
+        c.certaintyColor       = ColorFromTomlArray(nb->get_as<toml::array>("certaintyColor"), Color{0.31f,0.86f,0.31f,1.0f});
+        c.showEyeOverlay       = GetOr(*nb, "showEyeOverlay",       true);
+        c.shownPredictions     = GetOr(*nb, "shownPredictions",     1);
+        c.showAllPreds         = GetOr(*nb, "showAllPreds",         false);
+        c.alwaysShowBoat       = GetOr(*nb, "alwaysShowBoat",       false);
+        c.angleDisplay         = GetOr(*nb, "angleDisplay",         1);
+        c.rowSpacing           = GetOr(*nb, "rowSpacing",           10.0f);
+        c.colSpacing           = GetOr(*nb, "colSpacing",           30.0f);
+        c.customFontPath       = GetStringOr(*nb, "customFontPath", "");
+        c.overlayOpacity       = GetOr(*nb, "overlayOpacity",       1.0f);
+        c.overlayScale         = GetOr(*nb, "overlayScale",         0.30f);
+        c.onlyOnMyScreen       = GetOr(*nb, "onlyOnMyScreen",       false);
+        c.onlyOnObs            = GetOr(*nb, "onlyOnObs",            false);
+        if (auto* arr = nb->get_as<toml::array>("allowedModes")) {
+            c.allowedModes.clear();
+            for (auto& el : *arr) { if (auto* s = el.as_string()) c.allowedModes.push_back(s->get()); }
+        }
+        if (auto cols = nb->get_as<toml::array>("columns")) {
+            c.columns.clear();
+            for (auto& elem : *cols) {
+                if (auto ct = elem.as_table()) {
+                    NinjabrainColumn col;
+                    if (auto v = ct->get_as<std::string>("id"))     col.id     = v->get();
+                    if (auto v = ct->get_as<std::string>("header")) col.header = v->get();
+                    col.show = GetOr(*ct, "show", true);
+                    c.columns.push_back(col);
+                }
+            }
+        }
+        if (c.columns.empty()) {
+            c.columns = {
+                {"coords",    "Location", true},
+                {"certainty", "%",        true},
+                {"distance",  "Dist.",    true},
+                {"nether",    "Nether",   true},
+                {"angle",     "Angle",    true},
+                {"boat",      "Boat",     false},
+            };
+        }
+    }
 
     if (auto t = GetTable(tbl, "cursors")) { CursorsConfigFromToml(*t, config.cursors); }
 

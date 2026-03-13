@@ -226,3 +226,7 @@ void SubmitObsFrameContext(const ObsFrameSubmission& submission);
 FrameRenderRequest BuildObsFrameRequest(const ObsFrameContext& ctx, bool isDualRenderingPath);
 
 
+
+struct ImFont;
+ImFont* GetNinjabrainFont();
+float   GetNinjabrainFontSize();
