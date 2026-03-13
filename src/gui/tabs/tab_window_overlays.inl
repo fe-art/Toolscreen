@@ -406,7 +406,7 @@ if (ImGui::BeginTabItem(trc("tabs.window_overlays"))) {
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
-    ImGui::Text("NinjabrainBot Overlay");
+    ImGui::Text("%s", trc("ninjabrain.title"));
     ImGui::Spacing();
     {
         auto& nb = g_config.ninjabrainOverlay;
@@ -419,13 +419,13 @@ if (ImGui::BeginTabItem(trc("tabs.window_overlays"))) {
             nbFontBufInit = true;
         }
 
-        changed |= ImGui::Checkbox("Enable overlay##nb", &nb.enabled);
+        changed |= ImGui::Checkbox((std::string(trc("ninjabrain.enable")) + "##nb").c_str(), &nb.enabled);
 
         if (nb.enabled) {
         ImGui::Spacing();
 
         {
-            std::string preview = nb.allowedModes.empty() ? "All modes" : "";
+            std::string preview = nb.allowedModes.empty() ? trc("ninjabrain.all_modes") : "";
             if (!nb.allowedModes.empty()) {
                 for (size_t mi = 0; mi < nb.allowedModes.size(); ++mi) {
                     if (mi > 0) preview += ", ";
@@ -436,7 +436,7 @@ if (ImGui::BeginTabItem(trc("tabs.window_overlays"))) {
             bool modesNodeOpen = ImGui::TreeNodeEx("##nbModesNode", ImGuiTreeNodeFlags_SpanAvailWidth, "Show in modes: %s", preview.c_str());
             if (modesNodeOpen) {
                 bool allModes = nb.allowedModes.empty();
-                if (ImGui::Checkbox("All modes##nbAllModes", &allModes)) {
+                if (ImGui::Checkbox((std::string(trc("ninjabrain.all_modes")) + "##nbAllModes").c_str(), &allModes)) {
                     nb.allowedModes.clear(); changed = true;
                 }
                 ImGui::Separator();
@@ -456,36 +456,36 @@ if (ImGui::BeginTabItem(trc("tabs.window_overlays"))) {
         ImGui::Spacing();
 
         // Rendering
-        ImGui::SeparatorText("Rendering");
+        ImGui::SeparatorText(trc("ninjabrain.rendering"));
 
-        if (ImGui::SliderFloat("Opacity##nb", &nb.overlayOpacity, 0.0f, 1.0f)) changed = true;
-        if (ImGui::Checkbox("Only on my screen##nb", &nb.onlyOnMyScreen)) {
+        if (ImGui::SliderFloat((std::string(trc("ninjabrain.opacity")) + "##nb").c_str(), &nb.overlayOpacity, 0.0f, 1.0f)) changed = true;
+        if (ImGui::Checkbox((std::string(trc("ninjabrain.only_on_my_screen")) + "##nb").c_str(), &nb.onlyOnMyScreen)) {
             if (nb.onlyOnMyScreen) nb.onlyOnObs = false;
             changed = true;
         }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("When enabled, the NinjabrainBot overlay will not be captured by OBS");
-        if (ImGui::Checkbox("Only on OBS##nb", &nb.onlyOnObs)) {
+            ImGui::SetTooltip("%s", trc("ninjabrain.tooltip_only_on_my_screen"));
+        if (ImGui::Checkbox((std::string(trc("ninjabrain.only_on_obs")) + "##nb").c_str(), &nb.onlyOnObs)) {
             if (nb.onlyOnObs) nb.onlyOnMyScreen = false;
             changed = true;
         }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("When enabled, the NinjabrainBot overlay is only visible in OBS, not on your screen");
+            ImGui::SetTooltip("%s", trc("ninjabrain.tooltip_only_on_obs"));
 
         ImGui::Columns(2, "nb_render_cols", false);
         ImGui::SetColumnWidth(0, 120);
 
-        ImGui::Text("X");
+        ImGui::Text("%s", trc("ninjabrain.pos_x"));
         ImGui::NextColumn();
         if (Spinner("##nb_x", &nb.x)) changed = true;
         ImGui::NextColumn();
 
-        ImGui::Text("Y");
+        ImGui::Text("%s", trc("ninjabrain.pos_y"));
         ImGui::NextColumn();
         if (Spinner("##nb_y", &nb.y)) changed = true;
         ImGui::NextColumn();
 
-        ImGui::Text("Scale");
+        ImGui::Text("%s", trc("ninjabrain.scale"));
         ImGui::NextColumn();
         float scalePercent = nb.overlayScale * 100.0f;
         ImGui::SetNextItemWidth(250);
@@ -494,7 +494,7 @@ if (ImGui::BeginTabItem(trc("tabs.window_overlays"))) {
         }
         ImGui::NextColumn();
 
-        ImGui::Text("Relative To");
+        ImGui::Text("%s", trc("ninjabrain.relative_to"));
         ImGui::NextColumn();
         const char* current_rel_to = getFriendlyName(nb.relativeTo, imageRelativeToOptions);
         ImGui::SetNextItemWidth(150);
@@ -511,19 +511,19 @@ if (ImGui::BeginTabItem(trc("tabs.window_overlays"))) {
         ImGui::Columns(1);
 
         // Appearance
-        ImGui::SeparatorText("Appearance");
+        ImGui::SeparatorText(trc("ninjabrain.appearance"));
 
         ImGui::Columns(2, "nb_appear_cols", false);
         ImGui::SetColumnWidth(0, 120);
 
-        ImGui::Text("Outline width");
+        ImGui::Text("%s", trc("ninjabrain.outline_width"));
         ImGui::NextColumn();
         if (Spinner("##nbOutline", &nb.outlineWidth, 1, 0, 10)) changed = true;
         ImGui::NextColumn();
 
         ImGui::Columns(1);
 
-        ImGui::Text("Custom font:");
+        ImGui::Text("%s", trc("ninjabrain.custom_font"));
         ImGui::SameLine();
         ImGui::SetNextItemWidth(300);
         if (ImGui::InputText("##nbCustomFont", nbFontBuf, sizeof(nbFontBuf))) {
@@ -531,32 +531,32 @@ if (ImGui::BeginTabItem(trc("tabs.window_overlays"))) {
             changed = true; g_eyeZoomFontNeedsReload.store(true);
         }
         ImGui::SameLine();
-        ImGui::TextDisabled("(.ttf/.otf)");
+        ImGui::TextDisabled("%s", trc("ninjabrain.custom_font_hint"));
 
         // Background
-        ImGui::SeparatorText("Background");
+        ImGui::SeparatorText(trc("ninjabrain.background"));
 
-        if (ImGui::Checkbox("Enable Background##nb", &nb.bgEnabled)) changed = true;
+        if (ImGui::Checkbox((std::string(trc("ninjabrain.enable_background")) + "##nb").c_str(), &nb.bgEnabled)) changed = true;
         ImGui::BeginDisabled(!nb.bgEnabled);
         ImGui::SetNextItemWidth(250);
-        if (ImGui::SliderFloat("BG Opacity##nb", &nb.bgOpacity, 0.f, 1.f, "%.2f")) changed = true;
+        if (ImGui::SliderFloat((std::string(trc("ninjabrain.bg_opacity")) + "##nb").c_str(), &nb.bgOpacity, 0.f, 1.f, "%.2f")) changed = true;
         ImGui::EndDisabled();
 
         // Colors
-        ImGui::SeparatorText("Colors");
+        ImGui::SeparatorText(trc("ninjabrain.colors"));
 
-        if (ImGui::ColorEdit3("Headers##nb", &nb.textColor.r))  changed = true;
-        if (ImGui::ColorEdit3("Data##nb",    &nb.dataColor.r))  changed = true;
-        if (ImGui::Checkbox("Color negative coords differently##nb", &nb.negCoordColorEnabled)) changed = true;
+        if (ImGui::ColorEdit3((std::string(trc("ninjabrain.color_headers")) + "##nb").c_str(), &nb.textColor.r))  changed = true;
+        if (ImGui::ColorEdit3((std::string(trc("ninjabrain.color_data")) + "##nb").c_str(), &nb.dataColor.r))  changed = true;
+        if (ImGui::Checkbox((std::string(trc("ninjabrain.color_neg_coords")) + "##nb").c_str(), &nb.negCoordColorEnabled)) changed = true;
         if (nb.negCoordColorEnabled) {
-            if (ImGui::ColorEdit3("Negative coords##nb", &nb.negCoordColor.r)) changed = true;
+            if (ImGui::ColorEdit3((std::string(trc("ninjabrain.color_neg_coords_value")) + "##nb").c_str(), &nb.negCoordColor.r)) changed = true;
         }
         ImGui::Spacing();
 
         // Eye Throws Overlay
-        ImGui::SeparatorText("Eye Throws Overlay");
+        ImGui::SeparatorText(trc("ninjabrain.throws"));
 
-        if (ImGui::Checkbox("Always show boat state##nb", &nb.alwaysShowBoat)) {
+        if (ImGui::Checkbox((std::string(trc("ninjabrain.always_show_boat")) + "##nb").c_str(), &nb.alwaysShowBoat)) {
             changed = true;
             if (nb.alwaysShowBoat) {
                 for (auto& col : nb.columns) {
@@ -565,21 +565,21 @@ if (ImGui::BeginTabItem(trc("tabs.window_overlays"))) {
             }
         }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Show boat icon even before a stronghold is triangulated");
+            ImGui::SetTooltip("%s", trc("ninjabrain.tooltip_always_show_boat"));
         ImGui::Spacing();
 
         ImGui::Columns(2, "nb_eye_cols", false);
         ImGui::SetColumnWidth(0, 120);
-        ImGui::Text("Predictions");
+        ImGui::Text("%s", trc("ninjabrain.predictions"));
         ImGui::NextColumn();
         if (Spinner("##nbShownPreds", &nb.shownPredictions, 1, 1, 3)) changed = true;
         ImGui::NextColumn();
-        ImGui::Text("Row spacing");
+        ImGui::Text("%s", trc("ninjabrain.row_spacing"));
         ImGui::NextColumn();
         ImGui::SetNextItemWidth(120.f);
         if (ImGui::SliderFloat("##nbRowSpacing", &nb.rowSpacing, 0.0f, 30.0f, "%.0f px")) changed = true;
         ImGui::NextColumn();
-        ImGui::Text("Column spacing");
+        ImGui::Text("%s", trc("ninjabrain.col_spacing"));
         ImGui::NextColumn();
         ImGui::SetNextItemWidth(120.f);
         if (ImGui::SliderFloat("##nbColSpacing", &nb.colSpacing, 0.0f, 60.0f, "%.0f px")) changed = true;
@@ -587,7 +587,7 @@ if (ImGui::BeginTabItem(trc("tabs.window_overlays"))) {
         ImGui::Columns(1);
         ImGui::Spacing();
 
-        ImGui::Text("Columns");
+        ImGui::Text("%s", trc("ninjabrain.columns"));
         ImGui::Spacing();
         if (ImGui::BeginTable("##nbCols", 4,
             ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit))
@@ -637,13 +637,13 @@ if (ImGui::BeginTabItem(trc("tabs.window_overlays"))) {
         } // nb.enabled
 
         ImGui::Spacing();
-        if (ImGui::Button("Reset NinjabrainBot Overlay to Defaults")) {
-            ImGui::OpenPopup("Reset NinjabrainBot Overlay?");
+        if (ImGui::Button(trc("ninjabrain.reset_button"))) {
+            ImGui::OpenPopup(trc("ninjabrain.reset_title"));
         }
-        if (ImGui::BeginPopupModal("Reset NinjabrainBot Overlay?", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::Text("Reset all NinjabrainBot overlay settings to defaults?");
+        if (ImGui::BeginPopupModal(trc("ninjabrain.reset_title"), NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::Text("%s", trc("ninjabrain.reset_confirm"));
             ImGui::Separator();
-            if (ImGui::Button("Confirm", ImVec2(120, 0))) {
+            if (ImGui::Button(trc("button.confirm_reset"), ImVec2(120, 0))) {
                 nb = NinjabrainOverlayConfig{};
                 changed = true;
                 nbFontBufInit = false;
@@ -651,7 +651,7 @@ if (ImGui::BeginTabItem(trc("tabs.window_overlays"))) {
                 ImGui::CloseCurrentPopup();
             }
             ImGui::SameLine();
-            if (ImGui::Button("Cancel", ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
+            if (ImGui::Button(trc("button.cancel"), ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
             ImGui::EndPopup();
         }
 
