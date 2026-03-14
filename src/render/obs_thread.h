@@ -32,6 +32,8 @@ void ClearObsOverride();
 
 bool ShouldUpdateObsTextureNow();
 
+int GetObsTargetFramerate();
+
 void ResetObsTextureUpdateSchedule();
 
 void EnableObsOverride();

@@ -3,6 +3,9 @@
 #include "gui/gui.h"
 #include "mirror_thread.h"
 #include "common/utils.h"
+
+#include <chrono>
+#include <cmath>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -42,18 +45,65 @@ struct ObsRedirectValidationEntry {
 static constexpr size_t OBS_REDIRECT_VALIDATION_CACHE_SIZE = 8;
 static ObsRedirectValidationEntry g_obsRedirectValidationCache[OBS_REDIRECT_VALIDATION_CACHE_SIZE]{};
 static size_t g_obsRedirectValidationCacheNext = 0;
-static std::atomic<uint64_t> g_obsNextTextureUpdateTickMs{ 0 };
+static std::atomic<uint64_t> g_obsNextTextureUpdateTickUs{ 0 };
+static std::atomic<uint64_t> g_obsLastGameCaptureSampleTickUs{ 0 };
+static std::atomic<uint64_t> g_obsSmoothedGameCaptureIntervalUs{ 0 };
 
-static int ClampObsFramerateValue(int value) {
-    if (value < 15) { return 15; }
-    if (value > 120) { return 120; }
+static constexpr int OBS_TARGET_DEFAULT_FPS = 60;
+static constexpr int OBS_TARGET_MIN_FPS = 15;
+static constexpr int OBS_TARGET_MAX_FPS = 360;
+static constexpr int OBS_TARGET_HEADROOM_FPS = 1;
+static constexpr uint64_t OBS_TARGET_MIN_INTERVAL_US = 1000;
+static constexpr uint64_t OBS_TARGET_STALE_TIMEOUT_US = 2ull * 1000ull * 1000ull;
+
+static uint64_t GetObsSteadyNowUs() {
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+static int ClampObsTargetFramerateValue(int value) {
+    if (value < OBS_TARGET_MIN_FPS) { return OBS_TARGET_MIN_FPS; }
+    if (value > OBS_TARGET_MAX_FPS) { return OBS_TARGET_MAX_FPS; }
     return value;
 }
 
-static int GetConfiguredObsFramerate() {
-    auto cfgSnapshot = GetConfigSnapshot();
-    if (!cfgSnapshot) { return ConfigDefaults::CONFIG_OBS_FRAMERATE; }
-    return ClampObsFramerateValue(cfgSnapshot->obsFramerate);
+static int RoundUpToNearestFive(int value) {
+    return ((value + 4) / 5) * 5;
+}
+
+static uint64_t BlendObsGameCaptureIntervalUs(uint64_t currentUs, uint64_t newUs) {
+    if (currentUs == 0) { return newUs; }
+    return ((currentUs * 3ull) + newUs) / 4ull;
+}
+
+static void RecordObsGameCaptureSample() {
+    const uint64_t nowUs = GetObsSteadyNowUs();
+    const uint64_t previousUs = g_obsLastGameCaptureSampleTickUs.exchange(nowUs, std::memory_order_acq_rel);
+    if (previousUs == 0 || nowUs <= previousUs) { return; }
+
+    const uint64_t intervalUs = nowUs - previousUs;
+    if (intervalUs < OBS_TARGET_MIN_INTERVAL_US) { return; }
+    if (intervalUs >= OBS_TARGET_STALE_TIMEOUT_US) {
+        g_obsSmoothedGameCaptureIntervalUs.store(0, std::memory_order_release);
+        return;
+    }
+
+    uint64_t expectedUs = g_obsSmoothedGameCaptureIntervalUs.load(std::memory_order_acquire);
+    for (;;) {
+        const uint64_t desiredUs = BlendObsGameCaptureIntervalUs(expectedUs, intervalUs);
+        if (g_obsSmoothedGameCaptureIntervalUs.compare_exchange_weak(expectedUs, desiredUs, std::memory_order_acq_rel,
+                                                                     std::memory_order_acquire)) {
+            return;
+        }
+    }
+}
+
+static int CalculateObsTargetFramerate(uint64_t intervalUs) {
+    if (intervalUs == 0) { return OBS_TARGET_DEFAULT_FPS; }
+
+    const double sampledFps = 1000000.0 / static_cast<double>(intervalUs);
+    const int fpsWithHeadroom = static_cast<int>(std::ceil(sampledFps + static_cast<double>(OBS_TARGET_HEADROOM_FPS)));
+    return ClampObsTargetFramerateValue(RoundUpToNearestFive(fpsWithHeadroom));
 }
 
 static bool IsObsRedirectAttachmentValidated(GLuint texture, int width, int height) {
@@ -80,24 +130,36 @@ static void ClearObsRedirectAttachmentValidationCache() {
 }
 
 bool ShouldUpdateObsTextureNow() {
-    const uint64_t nowMs = GetTickCount64();
-    const uint64_t intervalMs = (1000ull + static_cast<uint64_t>(GetConfiguredObsFramerate()) - 1ull) /
-                                static_cast<uint64_t>(GetConfiguredObsFramerate());
+    const uint64_t nowUs = GetObsSteadyNowUs();
+    const int targetFramerate = GetObsTargetFramerate();
+    const uint64_t intervalUs = (1000000ull + static_cast<uint64_t>(targetFramerate) - 1ull) /
+                                static_cast<uint64_t>(targetFramerate);
 
-    uint64_t expectedMs = g_obsNextTextureUpdateTickMs.load(std::memory_order_acquire);
+    uint64_t expectedUs = g_obsNextTextureUpdateTickUs.load(std::memory_order_acquire);
     for (;;) {
-        if (expectedMs != 0 && nowMs < expectedMs) { return false; }
+        if (expectedUs != 0 && nowUs < expectedUs) { return false; }
 
-        const uint64_t desiredMs = nowMs + intervalMs;
-        if (g_obsNextTextureUpdateTickMs.compare_exchange_weak(expectedMs, desiredMs, std::memory_order_acq_rel,
+        const uint64_t desiredUs = nowUs + intervalUs;
+        if (g_obsNextTextureUpdateTickUs.compare_exchange_weak(expectedUs, desiredUs, std::memory_order_acq_rel,
                                                                std::memory_order_acquire)) {
             return true;
         }
     }
 }
 
+int GetObsTargetFramerate() {
+    const uint64_t lastSampleUs = g_obsLastGameCaptureSampleTickUs.load(std::memory_order_acquire);
+    const uint64_t smoothedIntervalUs = g_obsSmoothedGameCaptureIntervalUs.load(std::memory_order_acquire);
+    if (lastSampleUs == 0 || smoothedIntervalUs == 0) { return OBS_TARGET_DEFAULT_FPS; }
+
+    const uint64_t nowUs = GetObsSteadyNowUs();
+    if (nowUs > lastSampleUs && (nowUs - lastSampleUs) >= OBS_TARGET_STALE_TIMEOUT_US) { return OBS_TARGET_DEFAULT_FPS; }
+
+    return CalculateObsTargetFramerate(smoothedIntervalUs);
+}
+
 void ResetObsTextureUpdateSchedule() {
-    g_obsNextTextureUpdateTickMs.store(0, std::memory_order_release);
+    g_obsNextTextureUpdateTickUs.store(0, std::memory_order_release);
 }
 
 static GLuint SelectObsRedirectTexture(GLsync& outFence, bool& outNeedsFenceWait) {
@@ -117,6 +179,8 @@ static void APIENTRY Hook_glBlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX
         glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &readFBO);
 
         if (readFBO == 0) {
+            RecordObsGameCaptureSample();
+
             GLsync obsFence = nullptr;
             bool needsFenceWait = false;
             GLuint obsTexture = SelectObsRedirectTexture(obsFence, needsFenceWait);

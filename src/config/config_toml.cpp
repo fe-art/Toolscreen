@@ -1561,7 +1561,6 @@ void ConfigToToml(const Config& config, toml::table& out) {
     out.insert("mouseSensitivity", config.mouseSensitivity);
     out.insert("windowsMouseSpeed", config.windowsMouseSpeed);
     out.insert("hideAnimationsInGame", config.hideAnimationsInGame);
-    out.insert("obsFramerate", config.obsFramerate);
     out.insert("keyRepeatStartDelay", config.keyRepeatStartDelay);
     out.insert("keyRepeatDelay", config.keyRepeatDelay);
     out.insert("basicModeEnabled", config.basicModeEnabled);
@@ -1835,7 +1834,6 @@ bool SaveConfigToTomlFile(const Config& config, const std::wstring& path) {
                                                  "mouseSensitivity",
                                                  "windowsMouseSpeed",
                                                  "hideAnimationsInGame",
-                                                 "obsFramerate",
                                                  "keyRepeatStartDelay",
                                                  "keyRepeatDelay",
                                                  "basicModeEnabled",

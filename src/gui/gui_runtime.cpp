@@ -5,6 +5,7 @@
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_win32.h"
 #include "platform/resource.h"
+#include "render/obs_thread.h"
 #include "render/render.h"
 #include "runtime/logic_thread.h"
 #include "third_party/stb_image.h"
@@ -432,6 +433,7 @@ void RenderPerformanceOverlay(bool showPerformanceOverlay) {
     static auto lastOverlayUpdate = std::chrono::steady_clock::now();
     static float cachedFrameTime = 0.0f;
     static float cachedOriginalFrameTime = 0.0f;
+    static int cachedObsTargetFramerate = ConfigDefaults::CONFIG_OBS_FRAMERATE;
 
     auto currentTime = std::chrono::steady_clock::now();
     auto timeSinceLastUpdate = std::chrono::duration_cast<std::chrono::milliseconds>(currentTime - lastOverlayUpdate);
@@ -439,6 +441,7 @@ void RenderPerformanceOverlay(bool showPerformanceOverlay) {
     if (timeSinceLastUpdate.count() >= 500) {
         cachedFrameTime = static_cast<float>(g_lastFrameTimeMs.load());
         cachedOriginalFrameTime = static_cast<float>(g_originalFrameTimeMs.load());
+        cachedObsTargetFramerate = GetObsTargetFramerate();
         lastOverlayUpdate = currentTime;
     }
 
@@ -449,6 +452,7 @@ void RenderPerformanceOverlay(bool showPerformanceOverlay) {
                      ImGuiWindowFlags_AlwaysAutoResize);
     ImGui::Text("Render Hook Overhead: %.2f ms", cachedFrameTime);
     ImGui::Text("Original Frame Time: %.2f ms", cachedOriginalFrameTime);
+    ImGui::Text("OBS Target Framerate: %d fps", cachedObsTargetFramerate);
     ImGui::End();
 }
 

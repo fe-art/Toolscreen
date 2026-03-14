@@ -12,7 +12,6 @@ mirrorMatchColorspace = 'Auto'
 guiHotkey = [162, 73]
 borderlessHotkey = [ ]
 hideAnimationsInGame = true
-obsFramerate = 60
 disableFullscreenPrompt = false
 disableConfigurePrompt = false
 keyRepeatDelay = 0

@@ -24,17 +24,6 @@ if (ImGui::BeginTabItem(trc("tabs.settings"))) {
     ImGui::SameLine();
     HelpMarker(trc("tooltip.hide_animations_in_game"));
 
-    ImGui::Text(trc("settings.obs_framerate"));
-    ImGui::SetNextItemWidth(600);
-    int obsFramerateValue = g_config.obsFramerate;
-    if (ImGui::SliderInt("##obsFramerate", &obsFramerateValue, 15, 120, "%d fps")) {
-        g_config.obsFramerate = obsFramerateValue;
-        ResetObsTextureUpdateSchedule();
-        g_configIsDirty = true;
-    }
-    ImGui::SameLine();
-    HelpMarker(trc("settings.tooltip.obs_framerate"));
-
     ImGui::Spacing();
     ImGui::SeparatorText(trc("hotkeys.window_hotkeys"));
 
