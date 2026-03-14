@@ -11,7 +11,6 @@
 #include "common/profiler.h"
 #include "render/obs_thread.h"
 #include "render/render.h"
-#include "render/render_thread.h"
 #include "platform/resource.h"
 #include <nlohmann/json.hpp>
 #include "common/i18n.h"

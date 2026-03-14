@@ -7,9 +7,7 @@
 #include "render/obs_thread.h"
 #include "common/profiler.h"
 #include "render/render.h"
-#include "render/render_thread.h"
 #include "platform/resource.h"
-#include "render/shared_contexts.h"
 #include "common/i18n.h"
 #include "hooks/hook_chain.h"
 #include "common/utils.h"
@@ -186,8 +184,6 @@ std::atomic<bool> g_allImagesLoaded{ false };
 std::atomic<bool> g_isTransitioningMode{ false };
 std::atomic<bool> g_skipViewportAnimation{ false };
 std::atomic<int> g_wmMouseMoveCount{ 0 };
-
-static std::atomic<HGLRC> g_lastSeenGameGLContext{ NULL };
 
 ModeTransitionAnimation g_modeTransition;
 std::mutex g_modeTransitionMutex;
@@ -1523,25 +1519,11 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                 LogCategory("init", "[RENDER] GLEW Initialized successfully.");
                 g_glewLoaded = true;
 
-                g_lastSeenGameGLContext.store(wglGetCurrentContext(), std::memory_order_release);
-
                 g_welcomeToastVisible.store(true);
 
                 CursorTextures::LoadCursorTextures();
 
-                // Initialize shared OpenGL contexts for all worker threads (render, mirror)
-                // This must be done BEFORE any thread starts to ensure all contexts are in the same share group
-                HGLRC currentContext = wglGetCurrentContext();
-                if (currentContext) {
-                    if (InitializeSharedContexts(currentContext, hDc)) {
-                        LogCategory("init", "[RENDER] Shared contexts initialized - GPU texture sharing enabled for all threads");
-                    } else {
-                        Log("[RENDER] Shared context initialization failed - starting worker threads in fallback mode");
-                    }
-
-                    // Screen render/mirror workers are started lazily when the active pipeline needs them.
-                    StartObsHookThread();
-                }
+                if (wglGetCurrentContext()) { StartObsHookThread(); }
 
                 AttemptAggressiveGlViewportHook();
 
@@ -1566,95 +1548,6 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
             }
         }
 
-        {
-            HGLRC currentContext = wglGetCurrentContext();
-            HGLRC lastContext = g_lastSeenGameGLContext.load(std::memory_order_acquire);
-            const uint64_t nowMs = GetTickCount64();
-
-            // Some environments (mods/overlays/drivers) can temporarily switch WGL contexts or alternate between
-            // multiple contexts. Restarting shared contexts/threads immediately in that case can cause severe lag
-            // and make mirrors/overlays appear to "stop" (threads never stabilize). Debounce restarts.
-            static HGLRC s_pendingContext = NULL;
-            static uint64_t s_pendingSinceMs = 0;
-            static uint64_t s_lastRestartMs = 0;
-            constexpr uint64_t kContextStableMs = 250;
-            constexpr uint64_t kMinRestartIntervalMs = 2000;
-
-            const bool contextChanged = (currentContext && lastContext && currentContext != lastContext);
-            if (contextChanged) {
-                if (s_pendingContext != currentContext) {
-                    s_pendingContext = currentContext;
-                    s_pendingSinceMs = nowMs;
-                }
-
-                const bool stableLongEnough = (s_pendingSinceMs != 0) && ((nowMs - s_pendingSinceMs) >= kContextStableMs);
-                const bool restartAllowed = (s_lastRestartMs == 0) || ((nowMs - s_lastRestartMs) >= kMinRestartIntervalMs);
-                if (stableLongEnough && restartAllowed) {
-                    Log("[RENDER] Detected stable WGL context change - restarting shared contexts/threads");
-                    s_lastRestartMs = nowMs;
-                    s_pendingContext = NULL;
-                    s_pendingSinceMs = 0;
-
-                    StopObsHookThread();
-                    StopMirrorCaptureThread();
-                    StopRenderThread();
-
-                    CleanupSharedContexts();
-
-                    if (InitializeSharedContexts(currentContext, hDc)) {
-                        Log("[RENDER] Reinitialized shared contexts after context change");
-                    } else {
-                        Log("[RENDER] Failed to reinitialize shared contexts after context change - restarting threads in fallback mode");
-                    }
-
-                    // Screen render/mirror workers are restarted lazily by the active pipeline.
-                    StartObsHookThread();
-
-                    InvalidateTrackedGameTextureId(false);
-                    g_lastSeenGameGLContext.store(currentContext, std::memory_order_release);
-                }
-            } else {
-                s_pendingContext = NULL;
-                s_pendingSinceMs = 0;
-                if (currentContext && (!lastContext)) {
-                    g_lastSeenGameGLContext.store(currentContext, std::memory_order_release);
-                }
-            }
-
-            // Thread health watchdog (rate-limited): if a worker thread crashed/exited, try restarting it.
-            // This helps recover from transient driver/ImGui/font/etc crashes that would otherwise leave mirrors black.
-            {
-                static uint64_t s_lastHealthRestartAttemptMs = 0;
-                constexpr uint64_t kHealthRestartIntervalMs = 2000;
-                if (currentContext && (s_lastHealthRestartAttemptMs == 0 || (nowMs - s_lastHealthRestartAttemptMs) >= kHealthRestartIntervalMs)) {
-                    s_lastHealthRestartAttemptMs = nowMs;
-
-                    // Only restart capture thread when something actually consumes captures.
-                    const bool needCaptureForMirrors = (g_activeMirrorCaptureCount.load(std::memory_order_acquire) > 0);
-                    const bool needCaptureForEyeZoom = g_showEyeZoom.load(std::memory_order_relaxed) ||
-                                                       g_isTransitioningFromEyeZoom.load(std::memory_order_relaxed);
-                    const bool needCaptureForObsOrVc = g_graphicsHookDetected.load(std::memory_order_acquire) || IsVirtualCameraActive();
-                    const bool needCapture = needCaptureForMirrors || needCaptureForEyeZoom || needCaptureForObsOrVc;
-                    const bool sameThreadRenderPipeline = g_config.debug.sameThreadRenderPipeline;
-                    const bool synchronousMirrorPipeline = UseSynchronousMirrorPipeline();
-                    const bool renderThreadNeeded = !sameThreadRenderPipeline;
-                    const bool mirrorThreadNeeded = needCapture && !sameThreadRenderPipeline && !synchronousMirrorPipeline;
-
-                    if (!renderThreadNeeded && g_renderThreadRunning.load(std::memory_order_acquire)) {
-                        StopRenderThread();
-                    }
-                    if (!mirrorThreadNeeded && g_mirrorCaptureRunning.load(std::memory_order_acquire)) {
-                        StopMirrorCaptureThread();
-                    }
-
-                    if (renderThreadNeeded && !g_renderThreadRunning.load(std::memory_order_acquire)) { StartRenderThread(currentContext); }
-                    if (mirrorThreadNeeded && !g_mirrorCaptureRunning.load(std::memory_order_acquire)) {
-                        StartMirrorCaptureThread(currentContext);
-                    }
-                }
-            }
-        }
-
         // Start logic thread if not already running (handles OBS detection, hotkey resets, etc.)
         if (!g_logicThreadRunning.load() && g_configLoaded.load()) { StartLogicThread(); }
 
@@ -1675,12 +1568,9 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
             const bool needCaptureForEyeZoom = g_showEyeZoom.load(std::memory_order_relaxed) ||
                                                g_isTransitioningFromEyeZoom.load(std::memory_order_relaxed);
             const bool needCaptureForObsOrVc = g_graphicsHookDetected.load(std::memory_order_acquire) || IsVirtualCameraActive();
-            const bool synchronousMirrorPipeline = UseSynchronousMirrorPipeline();
-            g_sameThreadMirrorPipelineActive.store(synchronousMirrorPipeline, std::memory_order_release);
 
             const bool needCapture = needCaptureForMirrors || needCaptureForEyeZoom || needCaptureForObsOrVc;
-            const bool needAsyncCaptureCopy = needCaptureForEyeZoom || needCaptureForObsOrVc ||
-                                              (needCaptureForMirrors && !synchronousMirrorPipeline);
+            const bool needAsyncCaptureCopy = needCaptureForEyeZoom || needCaptureForObsOrVc;
             if (needAsyncCaptureCopy) {
                 static auto s_lastMirrorOnlyCaptureSubmit = std::chrono::steady_clock::time_point{};
                 static int s_lastMirrorOnlyW = 0;
@@ -1715,19 +1605,6 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                             }
                         }
 
-                        // Sync screen/game geometry for capture thread to compute render cache.
-                        const int fullW_capture = GetCachedWindowWidth();
-                        const int fullH_capture = GetCachedWindowHeight();
-                        g_captureScreenW.store(fullW_capture, std::memory_order_release);
-                        g_captureScreenH.store(fullH_capture, std::memory_order_release);
-                        g_captureGameW.store(viewport.width, std::memory_order_release);
-                        g_captureGameH.store(viewport.height, std::memory_order_release);
-
-                        g_captureFinalX.store(viewport.stretchX, std::memory_order_release);
-                        g_captureFinalY.store(viewport.stretchY, std::memory_order_release);
-                        g_captureFinalW.store(viewport.stretchWidth, std::memory_order_release);
-                        g_captureFinalH.store(viewport.stretchHeight, std::memory_order_release);
-
                         // SubmitFrameCapture already inserts its own fences and flushes after them;
                         // avoid an extra glFlush here (it can reduce FPS by forcing more driver work per frame).
                         if (allowCaptureThisFrame) {
@@ -1737,9 +1614,6 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                 }
             }
         }
-
-        // Mark safe capture window - capture thread can now safely read the game texture
-        g_safeToCapture.store(true, std::memory_order_release);
 
         bool shouldCheckSubclass = (g_gameVersion < GameVersion(1, 13, 0)) || (g_originalWndProc == NULL);
 
@@ -1808,9 +1682,7 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
             g_obsPre113Windowed.store(false, std::memory_order_release);
         }
 
-        const bool shouldUseObsOverride =
-            g_graphicsHookDetected.load(std::memory_order_acquire) &&
-            (!frameCfg.debug.sameThreadRenderPipeline || frameCfg.debug.sameThreadDedicatedObsTexture);
+        const bool shouldUseObsOverride = g_graphicsHookDetected.load(std::memory_order_acquire);
         if (shouldUseObsOverride) {
             EnableObsOverride();
         } else {
@@ -1820,7 +1692,6 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
 
         if (g_configLoadFailed.load()) {
             Log("Configuration load failed");
-            g_safeToCapture.store(false, std::memory_order_release);
             HandleConfigLoadFailed(hDc, next);
             return next(hDc);
         }
@@ -1978,12 +1849,9 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                 }
 
                 if (frameCfg.debug.delayRenderingUntilFinished) { glFinish(); }
-                if (frameCfg.debug.delayRenderingUntilBlitted) { WaitForOverlayBlitFence(); }
 
                 auto swapStartTime = std::chrono::high_resolution_clock::now();
                 BOOL result = next(hDc);
-
-                g_safeToCapture.store(false, std::memory_order_release);
 
                 auto swapEndTime = std::chrono::high_resolution_clock::now();
                 std::chrono::duration<double, std::milli> swapDuration = swapEndTime - swapStartTime;
@@ -2010,7 +1878,6 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
 
             if (!g_glInitialized.load(std::memory_order_acquire)) {
                 Log("FATAL: GPU resource initialization failed. Aborting custom render for this frame.");
-                g_safeToCapture.store(false, std::memory_order_release);
                 return next(hDc);
             }
         }
@@ -2053,61 +1920,7 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
         bool hideAnimOnScreen = frameCfg.hideAnimationsInGame && IsModeTransitionActive();
         {
             PROFILE_SCOPE_CAT("Normal Mode Handling", "Rendering");
-
-            const bool useRenderThreadDualRendering = !frameCfg.debug.sameThreadRenderPipeline && needsDualRendering;
-            if (useRenderThreadDualRendering) {
-                // Submit animated frame to render thread for OBS capture using helper function
-                {
-                    PROFILE_SCOPE_CAT("Submit OBS Frame", "OBS");
-
-                    if (!g_renderThreadRunning.load(std::memory_order_acquire)) {
-                        HGLRC gameContext = wglGetCurrentContext();
-                        if (gameContext) { StartRenderThread(gameContext); }
-                    }
-
-                    const bool shouldThrottleObsFrames = g_graphicsHookDetected.load(std::memory_order_acquire);
-                    if (!shouldThrottleObsFrames || ShouldUpdateObsTextureNow()) {
-                        ObsFrameSubmission submission;
-                        submission.context.fullW = fullW;
-                        submission.context.fullH = fullH;
-                        submission.context.gameW = current_gameW;
-                        submission.context.gameH = current_gameH;
-                        submission.context.gameTextureId = g_cachedGameTextureId.load();
-                        submission.context.modeId = modeToRenderCopy.id;
-                        submission.context.relativeStretching = modeToRenderCopy.relativeStretching;
-                        submission.context.bgR = modeToRenderCopy.background.color.r;
-                        submission.context.bgG = modeToRenderCopy.background.color.g;
-                        submission.context.bgB = modeToRenderCopy.background.color.b;
-                        submission.context.shouldRenderGui = shouldRenderGui;
-                        submission.context.showPerformanceOverlay = showPerformanceOverlay;
-                        submission.context.showProfiler = showProfiler;
-                        submission.context.isEyeZoom = isEyeZoom;
-                        submission.context.isTransitioningFromEyeZoom = isTransitioningFromEyeZoom;
-                        submission.context.eyeZoomAnimatedViewportX = eyeZoomAnimatedViewportX;
-                        submission.context.eyeZoomSnapshotTexture = GetEyeZoomSnapshotTexture();
-                        submission.context.eyeZoomSnapshotWidth = GetEyeZoomSnapshotWidth();
-                        submission.context.eyeZoomSnapshotHeight = GetEyeZoomSnapshotHeight();
-                        submission.context.showTextureGrid = frameCfg.debug.showTextureGrid;
-                        submission.context.isWindowed = isWindowedPresentation;
-                        submission.context.isRawWindowedMode = false;
-                        submission.context.windowW = windowWidth;
-                        submission.context.windowH = windowHeight;
-                        submission.context.preferDirectGameTexture = false;
-                        submission.context.welcomeToastIsFullscreen = EqualsIgnoreCase(modeToRenderCopy.id, "Fullscreen");
-                        submission.context.showWelcomeToast = false;
-                        submission.isDualRenderingPath = hideAnimOnScreen;
-
-                        SubmitObsFrameContext(submission);
-                    }
-                }
-
-                PROFILE_SCOPE_CAT("Render for Screen", "Rendering");
-                RenderMode(&modeToRenderCopy, s, current_gameW, current_gameH, hideAnimOnScreen, false);
-
-            } else {
-                RenderMode(&modeToRenderCopy, s, current_gameW, current_gameH, hideAnimOnScreen, false);
-
-            }
+            RenderMode(&modeToRenderCopy, s, current_gameW, current_gameH, hideAnimOnScreen, false);
         }
 
         // All ImGui rendering is handled by render thread (via FrameRenderRequest ImGui state fields)
@@ -2126,8 +1939,10 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
             }
         }
 
-        if (frameCfg.debug.sameThreadRenderPipeline && frameCfg.debug.sameThreadDedicatedObsTexture &&
-            g_graphicsHookDetected.load(std::memory_order_acquire) && ShouldUpdateObsTextureNow()) {
+        const bool shouldRenderObsHookFrame =
+            g_graphicsHookDetected.load(std::memory_order_acquire) && ShouldUpdateObsTextureNow();
+        const bool shouldRenderVirtualCameraFrame = IsVirtualCameraActive() && ShouldCaptureVirtualCameraFrame();
+        if (needsDualRendering && (shouldRenderObsHookFrame || shouldRenderVirtualCameraFrame)) {
             PROFILE_SCOPE_CAT("Capture Same-Thread OBS Frame", "OBS");
             RenderSameThreadObsFrame(&modeToRenderCopy, s, current_gameW, current_gameH, false);
         }
@@ -2198,13 +2013,8 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
 
         if (frameCfg.debug.delayRenderingUntilFinished) { glFinish(); }
 
-        // Optionally wait for the async overlay blit fence to complete before SwapBuffers
-        if (frameCfg.debug.delayRenderingUntilBlitted) { WaitForOverlayBlitFence(); }
-
         auto swapStartTime = std::chrono::high_resolution_clock::now();
         BOOL result = next(hDc);
-
-        g_safeToCapture.store(false, std::memory_order_release);
 
         auto swapEndTime = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double, std::milli> swapDuration = swapEndTime - swapStartTime;
@@ -2509,8 +2319,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 
         // Stop background threads
         StopWindowCaptureThread();
-
-        CleanupSharedContexts();
 
         Log("Background threads stopped.");
 

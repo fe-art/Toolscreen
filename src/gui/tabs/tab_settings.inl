@@ -164,19 +164,6 @@ if (ImGui::BeginTabItem(trc("tabs.settings"))) {
         if (ImGui::Checkbox(trc("settings.delay_rendering_until_finished"), &g_config.debug.delayRenderingUntilFinished)) { g_configIsDirty = true; }
         ImGui::SameLine();
         HelpMarker(trc("settings.tooltip.delay_rendering_until_finished"));
-        if (ImGui::Checkbox(trc("settings.delay_rendering_until_blitted"), &g_config.debug.delayRenderingUntilBlitted)) { g_configIsDirty = true; }
-        ImGui::SameLine();
-        HelpMarker(trc("settings.tooltip.delay_rendering_until_blitted"));
-        bool useSharedContext = g_config.debug.useSharedContext;
-        if (ImGui::Checkbox(trc("settings.use_shared_context"), &useSharedContext)) {
-            g_config.debug.SetUseSharedContext(useSharedContext);
-            g_sameThreadMirrorPipelineActive.store(g_config.debug.sameThreadRenderPipeline, std::memory_order_release);
-            StopMirrorCaptureThread();
-            StopRenderThread();
-            g_configIsDirty = true;
-        }
-        ImGui::SameLine();
-        HelpMarker(trc("settings.tooltip.use_shared_context"));
         ImGui::Spacing();
         if (ImGui::Checkbox(trc("settings.show_performance_overlay"), &g_config.debug.showPerformanceOverlay)) { g_configIsDirty = true; }
         if (ImGui::Checkbox(trc("settings.show_profiler"), &g_config.debug.showProfiler)) { g_configIsDirty = true; }

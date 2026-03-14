@@ -346,17 +346,7 @@ struct DebugGlobalConfig {
     bool fakeCursor = false;
     bool showTextureGrid = false;
     bool delayRenderingUntilFinished = false;
-    bool delayRenderingUntilBlitted = false;  // Wait on async overlay blit fence before SwapBuffers
-    bool useSharedContext = false;            // False uses the same-thread path; true uses the shared-context worker threads
-    bool sameThreadRenderPipeline = true;     // Derived from useSharedContext for existing runtime code
-    bool sameThreadDedicatedObsTexture = true; // Derived from useSharedContext for existing runtime code
     bool virtualCameraEnabled = false;        // Output to OBS Virtual Camera driver
-
-    void SetUseSharedContext(bool enabled) {
-        useSharedContext = enabled;
-        sameThreadRenderPipeline = !enabled;
-        sameThreadDedicatedObsTexture = !enabled;
-    }
 
     bool logModeSwitch = false;
     bool logAnimation = false;

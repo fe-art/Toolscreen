@@ -34,16 +34,16 @@ struct MirrorInstance;
 struct UserImageInstance;
 
 // Cached mirror render data to minimize lock contention
-// All border rendering is now done by mirror_thread - render_thread just blits finalTexture
+// All border rendering is done in the mirror capture pass before final composition.
 struct MirrorRenderData {
     GLuint texture;
     int tex_w, tex_h;
     const MirrorConfig* config;
-    // Pre-computed from render cache (populated by capture thread)
+    // Pre-computed from cached mirror geometry.
     float vertices[24];
     int outW, outH;
     bool cacheValid;
-    // GPU fence for cross-context synchronization - copied from instance during lock
+    // GPU fence copied from the mirror instance during collection.
     GLsync gpuFence;
     int screenX = 0;
     int screenY = 0;
@@ -103,6 +103,7 @@ struct GLState {
     GLint p;
     GLint t;
     GLint t0;
+    GLint t1;
     GLint ab;
     GLint va;
     GLint fb;
@@ -147,12 +148,13 @@ extern ImageRenderShaderLocs g_imageRenderShaderLocs;
 extern PassthroughShaderLocs g_passthroughShaderLocs;
 extern GradientShaderLocs g_gradientShaderLocs;
 
-// --- Global GUI State for Render Thread ---
-// These atomics are set by main thread and read by render.cpp to populate FrameRenderRequest
+// --- Global GUI State for Rendering ---
+// These atomics are set by the main thread and read by render.cpp to populate FrameRenderRequest.
 extern std::atomic<bool> g_shouldRenderGui;
 extern std::atomic<bool> g_showPerformanceOverlay;
 extern std::atomic<bool> g_showProfiler;
 extern std::atomic<bool> g_showEyeZoom;
+extern std::atomic<bool> g_eyeZoomFontNeedsReload;
 extern std::atomic<float> g_eyeZoomFadeOpacity;
 extern std::atomic<int> g_eyeZoomAnimatedViewportX;
 extern std::atomic<bool> g_isTransitioningFromEyeZoom;
@@ -160,7 +162,7 @@ extern std::atomic<bool> g_showTextureGrid;
 extern std::atomic<int> g_textureGridModeWidth;
 extern std::atomic<int> g_textureGridModeHeight;
 
-// Used by dllmain.cpp to pass snapshot texture to OBS render thread
+// Used by dllmain.cpp to pass the snapshot texture to OBS capture.
 GLuint GetEyeZoomSnapshotTexture();
 int GetEyeZoomSnapshotWidth();
 int GetEyeZoomSnapshotHeight();
@@ -224,7 +226,7 @@ void UploadDecodedImageToGPU_Internal(const DecodedImageData& imgData);
 void InitializeGPUResources();
 void CreateMirrorGPUResources(const MirrorConfig& conf);
 
-// Mirror Capture Thread functions are declared in mirror_thread.h
+// Mirror capture helpers are declared in mirror_thread.h
 
 void InvalidateConfigLookupCaches();
 
@@ -297,9 +299,5 @@ void RenderTextureGridOverlay(bool showTextureGrid, int modeWidth = 0, int modeH
 void RenderCachedTextureGridLabels();
 
 void GetAnimatedModePosition(int& outX, int& outY);
-
-// Wait for the async overlay blit fence to complete (for delayRenderingUntilBlitted setting)
-// Returns true if fence was waited on, false if no fence was pending
-bool WaitForOverlayBlitFence();
 
 

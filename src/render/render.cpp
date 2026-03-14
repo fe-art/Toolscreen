@@ -5,7 +5,6 @@
 #include "mirror_thread.h"
 #include "obs_thread.h"
 #include "common/profiler.h"
-#include "render_thread.h"
 #include "gui/imgui_input_queue.h"
 #include "third_party/stb_image.h"
 #include "common/utils.h"
@@ -233,6 +232,7 @@ std::atomic<bool> g_shouldRenderGui{ false };
 std::atomic<bool> g_showPerformanceOverlay{ false };
 std::atomic<bool> g_showProfiler{ false };
 std::atomic<bool> g_showEyeZoom{ false };
+std::atomic<bool> g_eyeZoomFontNeedsReload{ false };
 std::atomic<float> g_eyeZoomFadeOpacity{ 1.0f };
 std::atomic<int> g_eyeZoomAnimatedViewportX{ -1 };
 std::atomic<bool> g_isTransitioningFromEyeZoom{ false };
@@ -276,6 +276,12 @@ static int g_sameThreadObsComposeW = 0;
 static int g_sameThreadObsComposeH = 0;
 static int g_sameThreadObsComposePublishedIndex = -1;
 static int g_sameThreadObsComposeWriteIndex = 0;
+static GLuint g_sameThreadVirtualCameraScaleFBO = 0;
+static GLuint g_sameThreadVirtualCameraScaleTexture = 0;
+static int g_sameThreadVirtualCameraScaleW = 0;
+static int g_sameThreadVirtualCameraScaleH = 0;
+static GLuint g_sameThreadVirtualCameraReadFBO = 0;
+static std::vector<uint8_t> g_sameThreadVirtualCameraPixels;
 
 GLuint g_fullscreenQuadVAO = 0;
 GLuint g_fullscreenQuadVBO = 0;
@@ -292,20 +298,6 @@ std::atomic<bool> g_glInitialized{ false };
 std::atomic<bool> g_isGameFocused{ true };
 GameViewportGeometry g_lastFrameGeometry;
 std::mutex g_geometryMutex;
-
-// Fence for async overlay blit - created after blit, waited on before SwapBuffers if setting enabled
-static std::atomic<GLsync> g_overlayBlitFence{ nullptr };
-
-static void PublishOverlayCompletionFence() {
-    GLsync oldFence = g_overlayBlitFence.exchange(nullptr, std::memory_order_acq_rel);
-    if (oldFence && glIsSync(oldFence)) { glDeleteSync(oldFence); }
-
-    GLsync newFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-    g_overlayBlitFence.store(newFence, std::memory_order_release);
-
-    // Ensure the overlay commands and the completion fence are submitted before SwapBuffers.
-    glFlush();
-}
 
 std::string s_hoveredImageName = "";
 std::string s_draggedImageName = "";
@@ -1207,8 +1199,16 @@ void SaveGLState(GLState* s) {
         } else {
             glActiveTexture(GL_TEXTURE0);
             glGetIntegerv(GL_TEXTURE_BINDING_2D, &s->t0);
-            glActiveTexture(s->at);
         }
+
+        if (s->at == GL_TEXTURE1) {
+            s->t1 = s->t;
+        } else {
+            glActiveTexture(GL_TEXTURE1);
+            glGetIntegerv(GL_TEXTURE_BINDING_2D, &s->t1);
+        }
+
+        glActiveTexture(s->at);
 
         s->fb = s->draw_fb;
     }
@@ -1253,7 +1253,9 @@ void RestoreGLState(const GLState& s) {
 
         glActiveTexture(GL_TEXTURE0);
         BindTextureDirect(GL_TEXTURE_2D, s.t0);
-        if (s.at != GL_TEXTURE0) {
+        glActiveTexture(GL_TEXTURE1);
+        BindTextureDirect(GL_TEXTURE_2D, s.t1);
+        if (s.at != GL_TEXTURE0 && s.at != GL_TEXTURE1) {
             glActiveTexture(s.at);
             BindTextureDirect(GL_TEXTURE_2D, s.t);
         } else {
@@ -1332,10 +1334,6 @@ static void PrepareSameThreadOverlayState(const GLState& s, int fullW, int fullH
 void CleanupGPUResources() {
     Log("CleanupGPUResources: Starting cleanup...");
 
-    if (g_mirrorCaptureRunning.load(std::memory_order_acquire)) {
-        StopMirrorCaptureThread();
-    }
-
     CleanupCaptureTexture();
 
     HGLRC currentContext = wglGetCurrentContext();
@@ -1366,7 +1364,7 @@ void CleanupGPUResources() {
                 glDeleteFramebuffers(1, &v.fbo);
                 while (glGetError() != GL_NO_ERROR) {}
             }
-            // Clean up back-buffer FBO used by capture thread
+            // Clean up the back-buffer FBO used by mirror capture.
             if (v.fboBack) {
                 glDeleteFramebuffers(1, &v.fboBack);
                 while (glGetError() != GL_NO_ERROR) {}
@@ -1404,7 +1402,7 @@ void CleanupGPUResources() {
                 glDeleteTextures(1, &v.tempCaptureTexture);
                 while (glGetError() != GL_NO_ERROR) {}
             }
-            // Clean up back-buffer texture used by capture thread
+            // Clean up the back-buffer texture used by mirror capture.
             if (v.fboTextureBack) {
                 glDeleteTextures(1, &v.fboTextureBack);
                 while (glGetError() != GL_NO_ERROR) {}
@@ -1436,6 +1434,24 @@ void CleanupGPUResources() {
                 g_sameThreadObsComposeTextures[i] = 0;
             }
         }
+        if (g_sameThreadVirtualCameraScaleTexture) {
+            glDeleteTextures(1, &g_sameThreadVirtualCameraScaleTexture);
+            while (glGetError() != GL_NO_ERROR) {}
+            g_sameThreadVirtualCameraScaleTexture = 0;
+        }
+        if (g_sameThreadVirtualCameraScaleFBO) {
+            glDeleteFramebuffers(1, &g_sameThreadVirtualCameraScaleFBO);
+            while (glGetError() != GL_NO_ERROR) {}
+            g_sameThreadVirtualCameraScaleFBO = 0;
+        }
+        if (g_sameThreadVirtualCameraReadFBO) {
+            glDeleteFramebuffers(1, &g_sameThreadVirtualCameraReadFBO);
+            while (glGetError() != GL_NO_ERROR) {}
+            g_sameThreadVirtualCameraReadFBO = 0;
+        }
+        g_sameThreadVirtualCameraScaleW = 0;
+        g_sameThreadVirtualCameraScaleH = 0;
+        g_sameThreadVirtualCameraPixels.clear();
         g_sameThreadObsComposePublishedIndex = -1;
         g_sameThreadObsComposeWriteIndex = 0;
         g_sameThreadObsComposeW = 0;
@@ -1813,96 +1829,6 @@ static void DeleteMirrorFramebuffer(GLuint& fbo, GLuint& texture) {
     }
 }
 
-static bool EnsureMirrorAsyncGPUResources(MirrorInstance& inst) {
-    inst.final_w_back = inst.final_w;
-    inst.final_h_back = inst.final_h;
-
-    const bool frontBackReady = (inst.fboBack != 0 && inst.fboTextureBack != 0);
-    if (!frontBackReady) {
-        DeleteMirrorFramebuffer(inst.fboBack, inst.fboTextureBack);
-        if (!CreateMirrorFramebuffer(inst.fboBack, inst.fboTextureBack, inst.fbo_w, inst.fbo_h, GL_NEAREST)) {
-            DeleteMirrorFramebuffer(inst.fboBack, inst.fboTextureBack);
-            return false;
-        }
-    }
-
-    const bool finalBackReady = (inst.finalFboBack != 0 && inst.finalTextureBack != 0);
-    if (!finalBackReady) {
-        DeleteMirrorFramebuffer(inst.finalFboBack, inst.finalTextureBack);
-        if (!CreateMirrorFramebuffer(inst.finalFboBack, inst.finalTextureBack, inst.final_w_back, inst.final_h_back, GL_NEAREST)) {
-            DeleteMirrorFramebuffer(inst.finalFboBack, inst.finalTextureBack);
-            return false;
-        }
-    }
-
-    inst.cachedRenderStateBack.isValid = false;
-    return true;
-}
-
-static void ReleaseMirrorAsyncGPUResources(MirrorInstance& inst) {
-    DeleteMirrorFramebuffer(inst.fboBack, inst.fboTextureBack);
-    DeleteMirrorFramebuffer(inst.finalFboBack, inst.finalTextureBack);
-
-    if (inst.gpuFenceBack && glIsSync(inst.gpuFenceBack)) { glDeleteSync(inst.gpuFenceBack); }
-    inst.gpuFenceBack = nullptr;
-    inst.captureReady.store(false, std::memory_order_release);
-    inst.hasFrameContentBack = false;
-    inst.capturedAsRawOutputBack = false;
-    inst.final_w_back = inst.final_w;
-    inst.final_h_back = inst.final_h;
-    inst.cachedRenderStateBack.isValid = false;
-}
-
-static bool UpdateMirrorAsyncResourceMode(const std::vector<MirrorConfig>* activeMirrors, bool sameThreadRenderPipeline) {
-    static bool s_asyncResourceModeInitialized = false;
-    static bool s_lastSameThreadRenderPipeline = false;
-
-    if (activeMirrors == nullptr && s_asyncResourceModeInitialized && s_lastSameThreadRenderPipeline == sameThreadRenderPipeline) {
-        return true;
-    }
-
-    GLint lastFramebuffer = 0;
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &lastFramebuffer);
-    GLint lastTexture = 0;
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &lastTexture);
-
-    bool success = true;
-    {
-        std::unique_lock<std::shared_mutex> lock(g_mirrorInstancesMutex);
-        if (sameThreadRenderPipeline) {
-            for (auto& [name, inst] : g_mirrorInstances) {
-                ReleaseMirrorAsyncGPUResources(inst);
-            }
-        } else if (activeMirrors != nullptr) {
-            for (const auto& mirror : *activeMirrors) {
-                auto it = g_mirrorInstances.find(mirror.name);
-                if (it == g_mirrorInstances.end()) { continue; }
-                if (!EnsureMirrorAsyncGPUResources(it->second)) {
-                    Log("ERROR: Failed to allocate async back buffers for mirror '" + mirror.name + "'");
-                    success = false;
-                    break;
-                }
-            }
-        } else {
-            for (auto& [name, inst] : g_mirrorInstances) {
-                if (!EnsureMirrorAsyncGPUResources(inst)) {
-                    Log("ERROR: Failed to allocate async back buffers for mirror '" + name + "'");
-                    success = false;
-                    break;
-                }
-            }
-        }
-    }
-
-    glBindFramebuffer(GL_FRAMEBUFFER, lastFramebuffer);
-    BindTextureDirect(GL_TEXTURE_2D, lastTexture);
-    if (success) {
-        s_asyncResourceModeInitialized = true;
-        s_lastSameThreadRenderPipeline = sameThreadRenderPipeline;
-    }
-    return success;
-}
-
 void CreateMirrorGPUResources(const MirrorConfig& conf) {
     PROFILE_SCOPE_CAT("Create Mirror GPU Resources", "GPU Operations");
 
@@ -1932,7 +1858,7 @@ void CreateMirrorGPUResources(const MirrorConfig& conf) {
 
     bool frontComplete = CreateMirrorFramebuffer(inst.fbo, inst.fboTexture, inst.fbo_w, inst.fbo_h, GL_NEAREST);
 
-    // Create final (screen-ready) FBOs - capture thread renders with borders here
+    // Create final screen-ready FBOs for mirror composition.
     float scaleX = conf.output.separateScale ? conf.output.scaleX : conf.output.scale;
     float scaleY = conf.output.separateScale ? conf.output.scaleY : conf.output.scale;
     inst.final_w = static_cast<int>(inst.fbo_w * scaleX);
@@ -1941,10 +1867,8 @@ void CreateMirrorGPUResources(const MirrorConfig& conf) {
     inst.final_h_back = inst.final_h;
 
     bool finalFrontComplete = CreateMirrorFramebuffer(inst.finalFbo, inst.finalTexture, inst.final_w, inst.final_h, GL_NEAREST);
-    const bool needsAsyncBackBuffers = !UseSynchronousMirrorPipeline();
-    const bool backComplete = !needsAsyncBackBuffers || EnsureMirrorAsyncGPUResources(inst);
 
-    if (frontComplete && finalFrontComplete && backComplete) {
+    if (frontComplete && finalFrontComplete) {
         inst.captureReady.store(false, std::memory_order_relaxed);
         inst.hasValidContent = false;
         // Initialize rawOutput state from config for proper initial synchronization
@@ -1952,8 +1876,7 @@ void CreateMirrorGPUResources(const MirrorConfig& conf) {
         inst.capturedAsRawOutput = conf.rawOutput;
         inst.capturedAsRawOutputBack = conf.rawOutput;
         g_mirrorInstances[conf.name] = inst;
-        const char* bufferingMode = needsAsyncBackBuffers ? "double-buffered" : "single-buffered";
-        LogCategory("init", "Created " + std::string(bufferingMode) + " GPU resources for mirror '" + conf.name + "' (FBO: " +
+        LogCategory("init", "Created single-buffered GPU resources for mirror '" + conf.name + "' (FBO: " +
                                 std::to_string(inst.fbo) + ", FinalFBO: " + std::to_string(inst.finalFbo) + " [" +
                                 std::to_string(inst.final_w) + "x" + std::to_string(inst.final_h) + "])");
     } else {
@@ -1968,7 +1891,7 @@ void CreateMirrorGPUResources(const MirrorConfig& conf) {
     BindTextureDirect(GL_TEXTURE_2D, last_texture);
 }
 
-// MirrorRenderData struct is now defined in render.h for sharing with render_thread.cpp
+// MirrorRenderData is defined in render.h so both render units can share the layout.
 
 static bool IsSampleableTexture2D(GLuint texture, int* outW = nullptr, int* outH = nullptr) {
     if (outW) *outW = 0;
@@ -2097,36 +2020,7 @@ static void RenderCachedEyeZoomTextLabels() {
 
 static bool SelectSameThreadGameTexture(GLuint preferredTexture, int preferredW, int preferredH, GLuint& outTexture, int& outW,
                                         int& outH) {
-    const bool sameThreadMirrorPipeline = g_sameThreadMirrorPipelineActive.load(std::memory_order_acquire);
-    if (sameThreadMirrorPipeline) {
-        if (preferredTexture != 0 && preferredTexture != UINT_MAX && preferredW > 0 && preferredH > 0) {
-            outTexture = preferredTexture;
-            outW = preferredW;
-            outH = preferredH;
-            return true;
-        }
-
-        outTexture = GetReadyGameTexture();
-        outW = GetReadyGameWidth();
-        outH = GetReadyGameHeight();
-        if (outTexture != 0 && outW > 0 && outH > 0) { return true; }
-
-        outTexture = GetFallbackGameTexture();
-        outW = GetFallbackGameWidth();
-        outH = GetFallbackGameHeight();
-        if (outTexture != 0 && outW > 0 && outH > 0) { return true; }
-
-        outTexture = GetSafeReadTexture();
-        if (outTexture != 0 && IsSampleableTexture2D(outTexture, &outW, &outH)) { return true; }
-
-        outTexture = 0;
-        outW = 0;
-        outH = 0;
-        return false;
-    }
-
-    if (preferredTexture != 0 && preferredTexture != UINT_MAX && preferredW > 0 && preferredH > 0 &&
-    IsSampleableTexture2DCached(preferredTexture, preferredW, preferredH)) {
+    if (preferredTexture != 0 && preferredTexture != UINT_MAX && preferredW > 0 && preferredH > 0) {
         outTexture = preferredTexture;
         outW = preferredW;
         outH = preferredH;
@@ -2136,12 +2030,12 @@ static bool SelectSameThreadGameTexture(GLuint preferredTexture, int preferredW,
     outTexture = GetReadyGameTexture();
     outW = GetReadyGameWidth();
     outH = GetReadyGameHeight();
-    if (outTexture != 0 && outW > 0 && outH > 0 && IsSampleableTexture2DCached(outTexture, outW, outH)) { return true; }
+    if (outTexture != 0 && outW > 0 && outH > 0) { return true; }
 
     outTexture = GetFallbackGameTexture();
     outW = GetFallbackGameWidth();
     outH = GetFallbackGameHeight();
-    if (outTexture != 0 && outW > 0 && outH > 0 && IsSampleableTexture2DCached(outTexture, outW, outH)) { return true; }
+    if (outTexture != 0 && outW > 0 && outH > 0) { return true; }
 
     outTexture = GetSafeReadTexture();
     if (outTexture != 0 && IsSampleableTexture2D(outTexture, &outW, &outH)) { return true; }
@@ -2215,8 +2109,6 @@ static void RenderMirrorsDirect(const std::vector<MirrorConfig>& activeMirrors, 
     const bool wantsEyeZoomSlide =
         cfg.eyezoom.slideMirrorsIn && hasEyeZoomAnimatedPosition && isEyeZoomMode && isEyeZoomTransitioning;
     const float eyeZoomSlideProgress = wantsEyeZoomSlide ? static_cast<float>(eyeZoomAnimatedViewportX) / targetViewportX : 1.0f;
-    const bool sameThreadMirrorPipeline = g_sameThreadMirrorPipelineActive.load(std::memory_order_acquire);
-
     std::unordered_set<std::string> sourceMirrorNames;
     if (!fromModeId.empty() && (fromSlideMirrorsIn || toSlideMirrorsIn || cfg.eyezoom.slideMirrorsIn)) {
         sourceMirrorNames.reserve(activeMirrors.size());
@@ -2238,8 +2130,6 @@ static void RenderMirrorsDirect(const std::vector<MirrorConfig>& activeMirrors, 
 
     std::vector<MirrorRenderData> mirrorsToRender;
     mirrorsToRender.reserve(activeMirrors.size());
-    std::vector<GLsync> pendingFences;
-    if (!sameThreadMirrorPipeline) { pendingFences.reserve(activeMirrors.size()); }
 
     {
         PROFILE_SCOPE_CAT("Collect Mirror Render Data", "Rendering");
@@ -2255,8 +2145,7 @@ static void RenderMirrorsDirect(const std::vector<MirrorConfig>& activeMirrors, 
             const MirrorInstance& inst = it->second;
             if (!inst.hasValidContent) continue;
             const bool useDynamicBorderComposite =
-                sameThreadMirrorPipeline && conf.border.type == MirrorBorderType::Dynamic && conf.border.dynamicThickness == 1 &&
-                !inst.capturedAsRawOutput;
+                conf.border.type == MirrorBorderType::Dynamic && conf.border.dynamicThickness == 1 && !inst.capturedAsRawOutput;
 
             MirrorRenderData data{};
             data.config = &conf;
@@ -2279,9 +2168,6 @@ static void RenderMirrorsDirect(const std::vector<MirrorConfig>& activeMirrors, 
             data.outW = static_cast<int>(inst.fbo_w * scaleX);
             data.outH = static_cast<int>(inst.fbo_h * scaleY);
             data.hasFrameContent = inst.hasFrameContent;
-            if (!sameThreadMirrorPipeline) {
-                data.gpuFence = inst.gpuFence;
-            }
 
             const auto& cache = inst.cachedRenderState;
             const bool cacheMatchesCurrentGeo =
@@ -2300,20 +2186,10 @@ static void RenderMirrorsDirect(const std::vector<MirrorConfig>& activeMirrors, 
             }
 
             mirrorsToRender.push_back(data);
-            if (data.gpuFence) { pendingFences.push_back(data.gpuFence); }
         }
     }
 
     if (mirrorsToRender.empty()) return;
-
-    const bool needsCrossContextMirrorSync = !pendingFences.empty();
-    if (needsCrossContextMirrorSync) {
-        PROFILE_SCOPE_CAT("Wait Mirror Fences", "Rendering");
-        for (GLsync fence : pendingFences) {
-            if (fence && glIsSync(fence)) { glWaitSync(fence, 0, GL_TIMEOUT_IGNORED); }
-        }
-        glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT);
-    }
 
     glBindVertexArray(g_vao);
     glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
@@ -2352,10 +2228,6 @@ static void RenderMirrorsDirect(const std::vector<MirrorConfig>& activeMirrors, 
             const MirrorConfig& conf = *renderData.config;
             const float effectiveOpacity = modeOpacity * conf.opacity;
             if (effectiveOpacity <= 0.0f) continue;
-            if (!sameThreadMirrorPipeline && !IsSampleableTexture2DCached(renderData.texture, renderData.tex_w, renderData.tex_h)) {
-                LogInvalidTextureSampleThrottled("mirror_texture:" + conf.name, renderData.texture, renderData.tex_w, renderData.tex_h);
-                continue;
-            }
 
             if (renderData.useDynamicBorderComposite) {
                 const float screenPixelX = 1.0f / static_cast<float>((std::max)(1, renderData.outW));
@@ -3372,6 +3244,119 @@ static void EnsureSameThreadObsComposeTarget(int fullW, int fullH) {
     g_sameThreadObsComposeWriteIndex = 0;
 }
 
+static void EnsureSameThreadVirtualCameraScaleTarget(int outW, int outH) {
+    if (outW <= 0 || outH <= 0) { return; }
+    if (g_sameThreadVirtualCameraScaleW == outW && g_sameThreadVirtualCameraScaleH == outH &&
+        g_sameThreadVirtualCameraScaleFBO != 0 && g_sameThreadVirtualCameraScaleTexture != 0) {
+        return;
+    }
+
+    if (g_sameThreadVirtualCameraScaleFBO == 0) { glGenFramebuffers(1, &g_sameThreadVirtualCameraScaleFBO); }
+    if (g_sameThreadVirtualCameraScaleTexture != 0) { glDeleteTextures(1, &g_sameThreadVirtualCameraScaleTexture); }
+
+    glGenTextures(1, &g_sameThreadVirtualCameraScaleTexture);
+    BindTextureDirect(GL_TEXTURE_2D, g_sameThreadVirtualCameraScaleTexture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, outW, outH, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, g_sameThreadVirtualCameraScaleFBO);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_sameThreadVirtualCameraScaleTexture, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    BindTextureDirect(GL_TEXTURE_2D, 0);
+
+    g_sameThreadVirtualCameraScaleW = outW;
+    g_sameThreadVirtualCameraScaleH = outH;
+}
+
+static GLuint PrepareSameThreadVirtualCameraTexture(GLuint srcTexture, int srcW, int srcH, int outW, int outH) {
+    if (srcTexture == 0 || srcW <= 0 || srcH <= 0 || outW <= 0 || outH <= 0) { return 0; }
+    if (srcW == outW && srcH == outH) { return srcTexture; }
+
+    EnsureSameThreadVirtualCameraScaleTarget(outW, outH);
+    if (g_sameThreadVirtualCameraScaleFBO == 0 || g_sameThreadVirtualCameraScaleTexture == 0) { return 0; }
+    if (g_sameThreadVirtualCameraReadFBO == 0) { glGenFramebuffers(1, &g_sameThreadVirtualCameraReadFBO); }
+
+    GLint previousReadFbo = 0;
+    GLint previousDrawFbo = 0;
+    GLint previousViewport[4] = {};
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFbo);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDrawFbo);
+    glGetIntegerv(GL_VIEWPORT, previousViewport);
+
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, g_sameThreadVirtualCameraReadFBO);
+    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, srcTexture, 0);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_sameThreadVirtualCameraScaleFBO);
+
+    if (oglViewport) {
+        oglViewport(0, 0, outW, outH);
+    } else {
+        glViewport(0, 0, outW, outH);
+    }
+    glDisable(GL_SCISSOR_TEST);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    const float scaleX = static_cast<float>(outW) / static_cast<float>(srcW);
+    const float scaleY = static_cast<float>(outH) / static_cast<float>(srcH);
+    const float fitScale = (std::min)(scaleX, scaleY);
+
+    int fitW = static_cast<int>(static_cast<float>(srcW) * fitScale + 0.5f);
+    int fitH = static_cast<int>(static_cast<float>(srcH) * fitScale + 0.5f);
+    fitW = (std::max)(1, (std::min)(fitW, outW));
+    fitH = (std::max)(1, (std::min)(fitH, outH));
+
+    const int dstX = (outW - fitW) / 2;
+    const int dstY = (outH - fitH) / 2;
+    glBlitFramebuffer(0, 0, srcW, srcH, dstX, dstY, dstX + fitW, dstY + fitH, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, previousReadFbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, previousDrawFbo);
+    if (oglViewport) {
+        oglViewport(previousViewport[0], previousViewport[1], previousViewport[2], previousViewport[3]);
+    } else {
+        glViewport(previousViewport[0], previousViewport[1], previousViewport[2], previousViewport[3]);
+    }
+
+    return g_sameThreadVirtualCameraScaleTexture;
+}
+
+static void SubmitSameThreadVirtualCameraFrame(GLuint srcTexture, int srcW, int srcH) {
+    if (!IsVirtualCameraActive() || !ShouldCaptureVirtualCameraFrame()) { return; }
+
+    uint32_t vcWidth = 0;
+    uint32_t vcHeight = 0;
+    if (!GetVirtualCameraResolution(vcWidth, vcHeight) || vcWidth < 2 || vcHeight < 2) { return; }
+
+    int outW = static_cast<int>(vcWidth);
+    int outH = static_cast<int>(vcHeight);
+    if ((outW & 1) != 0) { --outW; }
+    if ((outH & 1) != 0) { --outH; }
+    if (outW <= 0 || outH <= 0) { return; }
+
+    GLuint readTexture = PrepareSameThreadVirtualCameraTexture(srcTexture, srcW, srcH, outW, outH);
+    if (readTexture == 0) { return; }
+    if (g_sameThreadVirtualCameraReadFBO == 0) { glGenFramebuffers(1, &g_sameThreadVirtualCameraReadFBO); }
+
+    GLint previousReadFbo = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFbo);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, g_sameThreadVirtualCameraReadFBO);
+    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, readTexture, 0);
+
+    g_sameThreadVirtualCameraPixels.resize(static_cast<size_t>(outW) * static_cast<size_t>(outH) * 4u);
+    glReadPixels(0, 0, outW, outH, GL_RGBA, GL_UNSIGNED_BYTE, g_sameThreadVirtualCameraPixels.data());
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, previousReadFbo);
+
+    LARGE_INTEGER counter;
+    LARGE_INTEGER frequency;
+    QueryPerformanceCounter(&counter);
+    QueryPerformanceFrequency(&frequency);
+    const uint64_t timestamp = (counter.QuadPart * 10000000ULL) / frequency.QuadPart;
+    WriteVirtualCameraFrame(g_sameThreadVirtualCameraPixels.data(), static_cast<uint32_t>(outW), static_cast<uint32_t>(outH), timestamp);
+}
+
 static GLuint ResolveModeBackgroundTextureId(const std::string& modeId) {
     std::lock_guard<std::mutex> bgLock(g_backgroundTexturesMutex);
     auto bgTexIt = g_backgroundTextures.find(modeId);
@@ -3723,6 +3708,11 @@ bool RenderSameThreadObsFrame(const ModeConfig* modeToRender, const GLState& s, 
         SetObsOverrideTexture(g_sameThreadObsComposeTextures[composeIndex], fullW, fullH);
         g_sameThreadObsComposePublishedIndex = composeIndex;
         g_sameThreadObsComposeWriteIndex = (composeIndex + 1) % SAME_THREAD_OBS_BUFFER_COUNT;
+    }
+
+    {
+        PROFILE_SCOPE_CAT("Capture Virtual Camera Frame", "OBS");
+        SubmitSameThreadVirtualCameraFrame(g_sameThreadObsComposeTextures[composeIndex], fullW, fullH);
     }
 
     return true;
@@ -4091,8 +4081,7 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
         glDisable(GL_BLEND);
     }
 
-    // Note: Active elements (mirrors/images/overlays) are collected on the render thread
-    // via RT_CollectActiveElements. Here we only check if mirrors exist for thread startup
+    // Active elements are collected earlier; here we only check whether mirror resources are needed.
     bool hasMirrors = !modeToRender->mirrorIds.empty() || !modeToRender->mirrorGroupIds.empty();
 
     {
@@ -4116,7 +4105,7 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
         PROFILE_SCOPE_CAT("Optimized Path", "Rendering");
         currentGeo = { current_gameW, current_gameH, 0, 0, fullW, fullH };
 
-        // animations are rendered asynchronously by the render thread and never appear on the backbuffer.
+        // Animations are composed in the overlay pass and never appear on the backbuffer.
     } else {
         PROFILE_SCOPE_CAT("Non-Optimized Path", "Rendering");
         int finalX, finalY, finalW, finalH;
@@ -4446,50 +4435,17 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
         g_lastFrameGeometry = currentGeo;
     }
 
-    const bool sameThreadRenderPipeline = g_config.debug.sameThreadRenderPipeline;
-    const bool synchronousMirrorPipeline = UseSynchronousMirrorPipeline();
-    g_sameThreadMirrorPipelineActive.store(synchronousMirrorPipeline, std::memory_order_release);
-    if (!UpdateMirrorAsyncResourceMode(nullptr, synchronousMirrorPipeline)) {
-        glBindFramebuffer(GL_FRAMEBUFFER, s.fb);
-        if (oglViewport)
-            oglViewport(0, 0, fullW, fullH);
-        else
-            glViewport(0, 0, fullW, fullH);
-        return;
-    }
-    if (g_mirrorCaptureRunning.load(std::memory_order_acquire)) {
-        StopMirrorCaptureThread();
-    }
-    if (sameThreadRenderPipeline) {
-        if (g_renderThreadRunning.load(std::memory_order_acquire)) {
-            StopRenderThread();
-        }
-    }
-
-    // Start capture/render threads and update game state for mirror capture
+    // Update game state for mirror capture.
     if (hasMirrors) {
-        PROFILE_SCOPE_CAT("Mirror Thread Management", "Rendering");
+        PROFILE_SCOPE_CAT("Mirror Management", "Rendering");
 
-        // Update game state for capture thread
-        g_captureGameTexture.store(gameTextureToUse);
-        g_captureGameW.store(current_gameW);
-        g_captureGameH.store(current_gameH);
-
-        // Lazy auto-start capture thread when game texture is available
+        // Lazy auto-start OBS hook work when the game texture is available.
         if (!useFramebufferFallback && g_graphicsHookDetected.load()) { StartObsHookThread(); }
 
-        const bool renderThreadNeeded = !sameThreadRenderPipeline;
-
-        // Auto-start render thread when the async screen path or OBS/virtual-camera path needs it.
-        if (renderThreadNeeded && !g_renderThreadRunning.load()) {
-            HGLRC gameContext = wglGetCurrentContext();
-            if (gameContext) { StartRenderThread(gameContext); }
-        }
-
         // NOTE: Mirror capture config updates are now handled by logic_thread (UpdateActiveMirrorConfigs)
-        // This avoids doing the config collection work on every frame of the main render thread
+        // This avoids doing the config collection work on every frame of the render path.
 
-        // FRAMEBUFFER FALLBACK MODE: Capture directly on main thread when game texture unavailable
+        // Framebuffer fallback mode: capture directly on the current thread when the game texture is unavailable.
         if (useFramebufferFallback) {
             auto now = std::chrono::steady_clock::now();
 
@@ -4696,9 +4652,8 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
     else
         glViewport(0, 0, fullW, fullH);
 
-    if (g_config.debug.sameThreadRenderPipeline &&
-        (g_showGui.load(std::memory_order_relaxed) || g_imageDragMode.load(std::memory_order_relaxed) ||
-         g_windowOverlayDragMode.load(std::memory_order_relaxed))) {
+    if (g_showGui.load(std::memory_order_relaxed) || g_imageDragMode.load(std::memory_order_relaxed) ||
+        g_windowOverlayDragMode.load(std::memory_order_relaxed)) {
         HWND hwnd = g_minecraftHwnd.load();
         if (hwnd) { InitializeImGuiContext(hwnd); }
     }
@@ -4950,7 +4905,7 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
 
     float overlayOpacity = 1.0f;
 
-    // If there's nothing to draw, avoid waking the render thread and avoid compositing a fullscreen overlay texture.
+    // If there's nothing to draw, avoid compositing a fullscreen overlay texture.
     const bool wantOverlayElements = hasMirrors ||
                                     (g_imageOverlaysVisible.load(std::memory_order_acquire) && !modeToRender->imageIds.empty()) ||
                                     (g_windowOverlaysVisible.load(std::memory_order_acquire) && !modeToRender->windowOverlayIds.empty());
@@ -4975,14 +4930,7 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
         }
     }
 
-    const bool wantAsyncOverlayThisFrame = wantOverlayElements || wantAnyImGui || wantWelcomeToast;
-
-    if (!sameThreadRenderPipeline && wantAsyncOverlayThisFrame && !g_renderThreadRunning.load(std::memory_order_acquire)) {
-        HGLRC gameContext = wglGetCurrentContext();
-        if (gameContext) { StartRenderThread(gameContext); }
-    }
-
-    const bool canRenderOverlayThisFrame = wantAsyncOverlayThisFrame && (sameThreadRenderPipeline || g_renderThreadRunning.load());
+    const bool wantOverlayThisFrame = wantOverlayElements || wantAnyImGui || wantWelcomeToast;
     const auto populateOverlayState = [&](auto& target) {
         target.fullW = (std::max)(1, fullW);
         target.fullH = (std::max)(1, fullH);
@@ -5057,146 +5005,15 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
             (transitionState.active && transitionState.moveProgress < 1.0f) ? transitionState.moveProgress : 1.0f;
     };
 
-    const auto captureMirrorsSynchronously = [&]() {
-        if (!synchronousMirrorPipeline || !hasMirrors || useFramebufferFallback) { return false; }
+    const uint64_t mirrorCaptureFrameTag = BeginSameThreadMirrorCaptureFrame();
+    if (wantOverlayThisFrame && configSnap) {
+        PROFILE_SCOPE_CAT("Immediate Overlay Render", "Rendering");
 
-        std::vector<ThreadedMirrorConfig> activeMirrorConfigs;
-        {
-            std::lock_guard<std::mutex> lock(g_threadedMirrorConfigMutex);
-            if (g_threadedMirrorConfigs.empty()) { return false; }
-            activeMirrorConfigs = g_threadedMirrorConfigs;
-        }
-
-        GLuint sourceTexture = 0;
-        int sourceW = 0;
-        int sourceH = 0;
-        if (!SelectSameThreadGameTexture(gameTextureToUse, current_gameW, current_gameH, sourceTexture, sourceW, sourceH)) {
-            return false;
-        }
-
-        return RenderMirrorCapturesOnCurrentThread(activeMirrorConfigs, sourceTexture, sourceW, sourceH, fullW, fullH,
-                                                   currentGeo.finalX, currentGeo.finalY, currentGeo.finalW, currentGeo.finalH);
-    };
-
-    if (sameThreadRenderPipeline) {
-        const uint64_t mirrorCaptureFrameTag = BeginSameThreadMirrorCaptureFrame();
-        if (wantAsyncOverlayThisFrame && configSnap) {
-            PROFILE_SCOPE_CAT("Immediate Overlay Render", "Rendering");
-
-            SameThreadOverlayState request;
-            populateOverlayState(request);
-            request.allowMirrorCaptureReuse = true;
-            request.mirrorCaptureFrameTag = mirrorCaptureFrameTag;
-
-            const bool renderedOverlay = RenderSameThreadOverlayPass(request, *configSnap, s);
-            if (renderedOverlay && g_config.debug.delayRenderingUntilBlitted) {
-                PublishOverlayCompletionFence();
-            }
-        }
-    } else if (canRenderOverlayThisFrame) {
-        PROFILE_SCOPE_CAT("Async Overlay Submit/Blit", "Rendering");
-
-        if (captureMirrorsSynchronously()) {
-            PROFILE_SCOPE_CAT("Prepare Overlay GL State", "Rendering");
-            PrepareSameThreadOverlayState(s, fullW, fullH);
-        }
-
-        {
-            PROFILE_SCOPE_CAT("Submit Frame For Rendering", "Rendering");
-            // Submit current frame's data to render thread (non-blocking)
-            // Render thread will look up active mirrors/images/overlays from g_config
-            static uint64_t s_frameNumber = 0;
-            s_frameNumber++;
-
-            FrameRenderRequest request;
-            request.frameNumber = s_frameNumber;
-            populateOverlayState(request);
-            request.obsDetected = g_graphicsHookDetected.load();
-
-            request.backgroundIsImage = (modeToRender->background.selectedMode == "image");
-            request.bgR = modeToRender->background.color.r;
-            request.bgG = modeToRender->background.color.g;
-            request.bgB = modeToRender->background.color.b;
-            request.borderEnabled = modeToRender->border.enabled;
-            request.borderR = modeToRender->border.color.r;
-            request.borderG = modeToRender->border.color.g;
-            request.borderB = modeToRender->border.color.b;
-            request.borderWidth = modeToRender->border.width;
-            request.borderRadius = modeToRender->border.radius;
-
-            request.transitioningToFullscreen = isAnimating && EqualsIgnoreCase(modeToRender->id, "Fullscreen");
-            if (!transitionState.fromModeId.empty()) {
-                const ModeConfig* fromMode = GetMode_Internal(transitionState.fromModeId);
-                if (fromMode && request.transitioningToFullscreen) {
-                    request.fromBackgroundIsImage = (fromMode->background.selectedMode == "image");
-                    request.fromBgR = fromMode->background.color.r;
-                    request.fromBgG = fromMode->background.color.g;
-                    request.fromBgB = fromMode->background.color.b;
-                    request.fromBorderEnabled = fromMode->border.enabled;
-                    request.fromBorderR = fromMode->border.color.r;
-                    request.fromBorderG = fromMode->border.color.g;
-                    request.fromBorderB = fromMode->border.color.b;
-                    request.fromBorderWidth = fromMode->border.width;
-                    request.fromBorderRadius = fromMode->border.radius;
-                }
-            }
-
-            if (isAnimating && transitionState.gameTransition == GameTransitionType::Bounce) {
-                if (transitionState.fromWidth != transitionState.targetWidth) { request.letterboxExtendX = 1; }
-                if (transitionState.fromHeight != transitionState.targetHeight) { request.letterboxExtendY = 1; }
-            }
-
-            SubmitFrameForRendering(request);
-        }
-
-        {
-            // Note: EyeZoom rendering is now done entirely on the render thread via RT_RenderEyeZoom
-            // using the synchronized ready frame from mirror thread for flicker-free capture
-
-            // This introduces 1 frame of latency for overlays but keeps the main thread fast
-            CompletedRenderFrame completed = GetCompletedRenderFrame();
-            GLuint completedTexture = completed.texture;
-            if (completedTexture != 0) {
-                PROFILE_SCOPE_CAT("Blit Async Overlay Result", "Rendering");
-
-                // Wait on the render thread's fence to ensure texture is fully rendered
-                // glWaitSync is a GPU-side wait that doesn't block the CPU like glFinish
-                GLsync fence = completed.fence;
-                // NOTE: Under very high FPS / scheduler jitter, a fence can be rotated out and deleted
-                // by the render thread before we reach glWaitSync (TOCTOU). glIsSync guards against
-                if (fence && glIsSync(fence)) { glWaitSync(fence, 0, GL_TIMEOUT_IGNORED); }
-
-                // Memory barrier to ensure we see the latest texture data from render thread
-                glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT | GL_FRAMEBUFFER_BARRIER_BIT);
-
-                glBindVertexArray(g_fullscreenQuadVAO);
-                glActiveTexture(GL_TEXTURE0);
-                BindTextureDirect(GL_TEXTURE_2D, completedTexture);
-
-                glUseProgram(g_backgroundProgram);
-                glUniform1f(g_backgroundShaderLocs.opacity, 1.0f);
-
-                // The render_thread output is NOT premultiplied (ImGui OpenGL3 backend + our shaders output straight alpha).
-                glEnable(GL_BLEND);
-                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-                glDrawArrays(GL_TRIANGLES, 0, 6);
-
-                glDisable(GL_BLEND);
-
-                // Publish a consumer fence for this specific completed FBO.
-                // This prevents the render thread from reusing/clearing the same texture while the GPU
-                if (completed.fboIndex >= 0) {
-                    GLsync consumerFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-                    SubmitRenderFBOConsumerFence(completed.fboIndex, consumerFence);
-                }
-
-                // Publish a fence for the completed overlay presentation so SwapBuffers can optionally wait on it.
-                if (g_config.debug.delayRenderingUntilBlitted) {
-                    PublishOverlayCompletionFence();
-                }
-            }
-        }
+        SameThreadOverlayState request;
+        populateOverlayState(request);
+        request.allowMirrorCaptureReuse = true;
+        request.mirrorCaptureFrameTag = mirrorCaptureFrameTag;
+        RenderSameThreadOverlayPass(request, *configSnap, s);
     }
 
     if (g_showGui && !g_currentlyEditingMirror.empty()) {
@@ -5338,13 +5155,14 @@ void RenderTextureGridOverlay(bool showTextureGrid, int modeWidth, int modeHeigh
     // Collect all Toolscreen-owned texture IDs for the "OURS" label
     std::unordered_set<GLuint> ourTextureIds;
     {
-        // Render thread FBO textures (scale, virtual cam, eye zoom snapshot, etc.)
-        std::vector<GLuint> rtExcludeIds;
-        GetRenderThreadCalibrationExcludeTextureIds(rtExcludeIds);
-        for (GLuint id : rtExcludeIds) { if (id != 0) ourTextureIds.insert(id); }
-
         // Scene FBO texture
         if (g_sceneTexture != 0) ourTextureIds.insert(g_sceneTexture);
+
+        // Same-thread OBS and virtual-camera helper textures
+        for (GLuint textureId : g_sameThreadObsComposeTextures) {
+            if (textureId != 0) { ourTextureIds.insert(textureId); }
+        }
+        if (g_sameThreadVirtualCameraScaleTexture != 0) { ourTextureIds.insert(g_sameThreadVirtualCameraScaleTexture); }
 
         // OBS textures
         GLuint obsOverride = g_obsOverrideTexture.load(std::memory_order_acquire);
@@ -6056,16 +5874,6 @@ void GetAnimatedModePosition(int& outX, int& outY) {
             outY = screenH / 2;
         }
     }
-}
-
-bool WaitForOverlayBlitFence() {
-    GLsync fence = g_overlayBlitFence.exchange(nullptr, std::memory_order_acq_rel);
-    if (fence) {
-        glClientWaitSync(fence, GL_SYNC_FLUSH_COMMANDS_BIT, GL_TIMEOUT_IGNORED);
-        glDeleteSync(fence);
-        return true;
-    }
-    return false;
 }
 
 ModeTransitionState GetModeTransitionState() {

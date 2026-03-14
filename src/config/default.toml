@@ -37,10 +37,8 @@ enabled = false
     cursorSize = 32
 
 [debug]
-delayRenderingUntilBlitted = false
 delayRenderingUntilFinished = false
 fakeCursor = false
-useSharedContext = false
 logAnimation = false
 logFileMonitor = false
 logGui = false

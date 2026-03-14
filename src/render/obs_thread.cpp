@@ -2,7 +2,6 @@
 #include "common/profiler.h"
 #include "gui/gui.h"
 #include "mirror_thread.h"
-#include "render_thread.h"
 #include "common/utils.h"
 #include <mutex>
 #include <thread>
@@ -101,18 +100,9 @@ void ResetObsTextureUpdateSchedule() {
     g_obsNextTextureUpdateTickMs.store(0, std::memory_order_release);
 }
 
-static GLuint SelectObsRedirectTexture(bool allowDedicatedObsTexture, GLsync& outFence, bool& outNeedsFenceWait) {
+static GLuint SelectObsRedirectTexture(GLsync& outFence, bool& outNeedsFenceWait) {
     outFence = nullptr;
     outNeedsFenceWait = false;
-
-    if (allowDedicatedObsTexture) {
-        GLuint obsTexture = GetCompletedObsTexture();
-        if (obsTexture != 0) {
-            outFence = GetCompletedObsFence();
-            outNeedsFenceWait = true;
-            return obsTexture;
-        }
-    }
 
     GLuint overrideTexture = g_obsOverrideTexture.load(std::memory_order_acquire);
     if (overrideTexture != 0) { return overrideTexture; }
@@ -127,11 +117,9 @@ static void APIENTRY Hook_glBlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX
         glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &readFBO);
 
         if (readFBO == 0) {
-            const bool sameThreadRenderPipeline = g_sameThreadMirrorPipelineActive.load(std::memory_order_acquire);
-            const bool allowDedicatedObsTexture = !sameThreadRenderPipeline || g_renderThreadRunning.load(std::memory_order_acquire);
             GLsync obsFence = nullptr;
             bool needsFenceWait = false;
-            GLuint obsTexture = SelectObsRedirectTexture(allowDedicatedObsTexture, obsFence, needsFenceWait);
+            GLuint obsTexture = SelectObsRedirectTexture(obsFence, needsFenceWait);
             const GLuint overrideTexture = g_obsOverrideTexture.load(std::memory_order_acquire);
             const bool usingOverrideTexture = (overrideTexture != 0 && obsTexture == overrideTexture);
             const int overrideWidth = usingOverrideTexture ? g_obsOverrideWidth.load(std::memory_order_acquire) : 0;
@@ -303,7 +291,7 @@ void StartObsHookThread() {
     g_obsHookActive.store(true);
     g_obsHookInitialized.store(true);
 
-    // Enable the OBS override so the hook redirects captures to our render thread texture
+    // Enable the OBS override so the hook redirects captures to our composed override texture.
     g_obsOverrideEnabled.store(true, std::memory_order_release);
 
     Log("OBS Hook: Successfully hooked glBlitFramebuffer");
