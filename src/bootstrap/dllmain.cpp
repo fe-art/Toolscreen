@@ -15,6 +15,7 @@
 #include "version.h"
 #include "features/virtual_camera.h"
 #include "features/window_overlay.h"
+#include "features/ninjabrainClient.h"
 
 #include "MinHook.h"
 #include <array>
@@ -224,6 +225,7 @@ std::atomic<bool> g_gameWindowActive{ false };
 std::thread g_monitorThread;
 std::thread g_imageMonitorThread;
 static std::thread g_hookCompatThread;
+static std::thread g_ninjabrainThread;
 static std::atomic<bool> g_stopHookCompat{ false };
 HANDLE g_resizeThread = NULL;
 std::atomic<bool> g_stopMonitoring{ false };
@@ -2221,6 +2223,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         // initialization (locale facets, errno, etc.). CreateThread skips CRT init which
         g_monitorThread = std::thread([]() { FileMonitorThread(nullptr); });
         g_imageMonitorThread = std::thread([]() { ImageMonitorThread(nullptr); });
+        g_ninjabrainThread = std::thread(ninjabrainClient);
 
         StartWindowCaptureThread();
 
@@ -2335,6 +2338,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         // Stop hook compatibility monitor thread
         g_stopHookCompat.store(true, std::memory_order_release);
         if (g_hookCompatThread.joinable()) { g_hookCompatThread.join(); }
+        stopNinjabrainClient();
+        if (g_ninjabrainThread.joinable()) { g_ninjabrainThread.join(); }
+        
 
         // Stop background threads
         StopWindowCaptureThread();

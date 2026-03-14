@@ -10,3 +10,9 @@
 #define IDR_LANG_LANGS         106
 #define IDR_LANG_EN            107
 #define IDR_LANG_ZH_CN         108
+
+#define IDR_BOAT_GRAY          109
+#define IDR_BOAT_BLUE          110
+#define IDR_BOAT_GREEN         111
+#define IDR_BOAT_RED           112
+#define IDR_MINECRAFT_FONT     113

@@ -1,73 +1,20 @@
 #include "ninjabrainClient.h"
 #include "ninjabrain_data.h"
 
-#include <winsock2.h>
-#include <ws2tcpip.h>
+#include <windows.h>
+#include <curl/curl.h>
 #include <nlohmann/json.hpp>
 #include <string>
-#include <thread>
+#include <atomic>
 #include <chrono>
+#include <thread>
 
-#pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "libcurl.lib")
 
-static const char* NB_HOST = "127.0.0.1";
-static const int   NB_PORT = 52533;
+static const char* NB_STRONGHOLD_URL = "http://127.0.0.1:52533/api/v1/stronghold/events";
+static const char* NB_BOAT_URL       = "http://127.0.0.1:52533/api/v1/boat/events";
 
-// Read one SSE stream until disconnected, calling callback for each event data
-static void readSSEStream(SOCKET sock, const char* path,
-                          std::function<void(const std::string&)> onEvent)
-{
-    std::string request =
-        std::string("GET ") + path + " HTTP/1.1\r\n"
-        "Host: 127.0.0.1\r\n"
-        "Accept: text/event-stream\r\n"
-        "Cache-Control: no-cache\r\n"
-        "Connection: keep-alive\r\n"
-        "\r\n";
-    send(sock, request.c_str(), (int)request.size(), 0);
-
-    std::string lineBuf;
-    char ch;
-    bool headersDone = false;
-    std::string dataLine;
-
-    while (true) {
-        int r = recv(sock, &ch, 1, 0);
-        if (r <= 0) break;
-        if (ch == '\n') {
-            if (!lineBuf.empty() && lineBuf.back() == '\r') lineBuf.pop_back();
-            if (!headersDone) {
-                if (lineBuf.empty()) headersDone = true;
-                lineBuf.clear();
-                continue;
-            }
-            if (lineBuf.rfind("data: ", 0) == 0)
-                dataLine = lineBuf.substr(6);
-            else if (lineBuf.empty() && !dataLine.empty()) {
-                onEvent(dataLine);
-                dataLine.clear();
-            }
-            lineBuf.clear();
-        } else {
-            lineBuf += ch;
-        }
-    }
-}
-
-static SOCKET connectToNB()
-{
-    SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock == INVALID_SOCKET) return INVALID_SOCKET;
-    sockaddr_in server{};
-    server.sin_family = AF_INET;
-    server.sin_port   = htons(NB_PORT);
-    inet_pton(AF_INET, NB_HOST, &server.sin_addr);
-    if (connect(sock, (sockaddr*)&server, sizeof(server)) < 0) {
-        closesocket(sock);
-        return INVALID_SOCKET;
-    }
-    return sock;
-}
+static std::atomic<bool> g_running{ true };
 
 static void parseStrongholdEvent(const std::string& json)
 {
@@ -80,18 +27,16 @@ static void parseStrongholdEvent(const std::string& json)
         g_ninjabrainData.resultType = resultType;
 
         if (resultType == "NONE" || resultType == "FAILED") {
-            // Reset prediction data but keep boat
-            std::string bs = g_ninjabrainData.boatState;
-            double ba = g_ninjabrainData.boatAngle;
-            bool hba = g_ninjabrainData.hasBoatAngle;
-            g_ninjabrainData = NinjabrainData{};
-            g_ninjabrainData.boatState  = bs;
-            g_ninjabrainData.boatAngle  = ba;
+            std::string bs  = g_ninjabrainData.boatState;
+            double      ba  = g_ninjabrainData.boatAngle;
+            bool        hba = g_ninjabrainData.hasBoatAngle;
+            g_ninjabrainData              = NinjabrainData{};
+            g_ninjabrainData.boatState    = bs;
+            g_ninjabrainData.boatAngle    = ba;
             g_ninjabrainData.hasBoatAngle = hba;
             return;
         }
 
-        // Player position (for nether coords and per-prediction angle)
         double playerHorizAngle = 0.0;
         if (j.contains("playerPosition") && j["playerPosition"].is_object() && !j["playerPosition"].empty()) {
             auto& pp = j["playerPosition"];
@@ -105,16 +50,15 @@ static void parseStrongholdEvent(const std::string& json)
             g_ninjabrainData.hasPlayerPos = false;
         }
 
-        // Eye throws — parse full per-throw data including correctionIncrements (NB 1.5.2+)
         auto& throwArr = j["eyeThrows"];
-        int eyeCount = (int)throwArr.size();
+        int eyeCount   = (int)throwArr.size();
         if (eyeCount > 8) eyeCount = 8;
 
-        int    prevEyeCount      = g_ninjabrainData.eyeCount;
+        int    prevEyeCount       = g_ninjabrainData.eyeCount;
         double prevLastCorrection = (prevEyeCount > 0)
             ? g_ninjabrainData.throws[prevEyeCount - 1].correction : 0.0;
 
-        g_ninjabrainData.eyeCount = eyeCount;
+        g_ninjabrainData.eyeCount       = eyeCount;
         g_ninjabrainData.hasAngleChange = false;
         g_ninjabrainData.hasCorrection  = false;
         g_ninjabrainData.hasNetherAngle = false;
@@ -134,23 +78,14 @@ static void parseStrongholdEvent(const std::string& json)
             }
         }
 
-        // For NB 1.5.1 (no correctionIncrements in API):
-        // Each hotkey press fires exactly one SSE event and changes correction by exactly
-        // one step. So we count ±1 per event instead of dividing — no floating point error,
-        // works correctly no matter how fast the hotkey is spammed.
         if (eyeCount > 0 && !g_ninjabrainData.throws[eyeCount - 1].hasCorrectionIncrements) {
             double newCorrection = g_ninjabrainData.throws[eyeCount - 1].correction;
             if (eyeCount != prevEyeCount) {
-                // New throw added — reset counter (correction starts at whatever NB set it to)
                 g_ninjabrainData.correctionIncrements151 = 0;
             } else {
-                // Same throw, correction changed: exactly one click happened.
                 double delta = newCorrection - prevLastCorrection;
-                if (delta > 1e-9)
-                    g_ninjabrainData.correctionIncrements151++;
-                else if (delta < -1e-9)
-                    g_ninjabrainData.correctionIncrements151--;
-                // delta == 0: player position update only, no click — do nothing
+                if (delta > 1e-9)       g_ninjabrainData.correctionIncrements151++;
+                else if (delta < -1e-9) g_ninjabrainData.correctionIncrements151--;
             }
         }
 
@@ -169,9 +104,12 @@ static void parseStrongholdEvent(const std::string& json)
             }
         }
 
+<<<<<<< HEAD
         // Predictions + per-prediction angle adjustment
+=======
+>>>>>>> ff0ea79 (ninjabrainClient: switch to libcurl and minor cleanup)
         auto& preds = j["predictions"];
-        int count = 0;
+        int count   = 0;
         g_ninjabrainData.validPrediction = false;
         for (auto& p : preds) {
             if (count >= 5) break;
@@ -180,7 +118,6 @@ static void parseStrongholdEvent(const std::string& json)
             g_ninjabrainData.predictions[count].certainty         = p.value("certainty", 0.0);
             g_ninjabrainData.predictions[count].overworldDistance = p.value("overworldDistance", 0.0);
 
-            // Compute the angle the player needs to turn to face this prediction
             if (g_ninjabrainData.hasPlayerPos) {
                 static const double kPi = 3.14159265358979323846;
                 double bx = g_ninjabrainData.predictions[count].chunkX * 16.0 + 4.0;
@@ -189,7 +126,7 @@ static void parseStrongholdEvent(const std::string& json)
                 double zDiff = bz - g_ninjabrainData.playerZ;
                 double angleToStructure = -std::atan2(xDiff, zDiff) * 180.0 / kPi;
                 double angleDiff = std::fmod(angleToStructure - playerHorizAngle, 360.0);
-                while (angleDiff > 180.0)  angleDiff -= 360.0;
+                while (angleDiff >  180.0) angleDiff -= 360.0;
                 while (angleDiff < -180.0) angleDiff += 360.0;
                 g_ninjabrainData.predAngles[count].actualAngle      = angleToStructure;
                 g_ninjabrainData.predAngles[count].neededCorrection = angleDiff;
@@ -227,15 +164,39 @@ static void parseBoatEvent(const std::string& json)
     } catch (...) {}
 }
 
-// Stronghold SSE thread
-static void strongholdThread()
+
+struct SSEContext
 {
-    while (true) {
-        SOCKET sock = connectToNB();
-        if (sock == INVALID_SOCKET) {
-            std::this_thread::sleep_for(std::chrono::seconds(3));
-            continue;
+    std::function<void(const std::string&)> onEvent;
+    std::function<void()>                   onDisconnect;
+    std::string                             lineBuf;
+    std::string                             dataLine;
+};
+
+static size_t curlWriteCallback(char* ptr, size_t size, size_t nmemb, void* userdata)
+{
+    SSEContext* ctx   = reinterpret_cast<SSEContext*>(userdata);
+    size_t      total = size * nmemb;
+
+    for (size_t i = 0; i < total; i++) {
+        char ch = ptr[i];
+        if (ch == '\n') {
+            // Strip trailing CR
+            if (!ctx->lineBuf.empty() && ctx->lineBuf.back() == '\r')
+                ctx->lineBuf.pop_back();
+
+            if (ctx->lineBuf.rfind("data: ", 0) == 0) {
+                ctx->dataLine = ctx->lineBuf.substr(6);
+            } else if (ctx->lineBuf.empty() && !ctx->dataLine.empty()) {
+                // Blank line = end of SSE event
+                ctx->onEvent(ctx->dataLine);
+                ctx->dataLine.clear();
+            }
+            ctx->lineBuf.clear();
+        } else {
+            ctx->lineBuf += ch;
         }
+<<<<<<< HEAD
         readSSEStream(sock, "/api/v1/stronghold/events", parseStrongholdEvent);
         closesocket(sock);
         {
@@ -249,39 +210,189 @@ static void strongholdThread()
             g_ninjabrainData.hasBoatAngle = hba;
         }
         std::this_thread::sleep_for(std::chrono::seconds(3));
+=======
+>>>>>>> ff0ea79 (ninjabrainClient: switch to libcurl and minor cleanup)
     }
+
+    
+    return g_running.load(std::memory_order_relaxed) ? total : 0;
 }
 
-// Boat SSE thread
-static void boatThread()
+static void runSSEStream(const char* url,
+                         std::function<void(const std::string&)> onEvent,
+                         std::function<void()>                   onDisconnect)
 {
-    while (true) {
-        SOCKET sock = connectToNB();
-        if (sock == INVALID_SOCKET) {
+    SSEContext ctx;
+    ctx.onEvent      = onEvent;
+    ctx.onDisconnect = onDisconnect;
+
+    while (g_running.load(std::memory_order_relaxed))
+    {
+        CURL* curl = curl_easy_init();
+        if (!curl) {
             std::this_thread::sleep_for(std::chrono::seconds(3));
             continue;
         }
-        readSSEStream(sock, "/api/v1/boat/events", parseBoatEvent);
-        closesocket(sock);
-        {
-            std::lock_guard<std::mutex> lock(g_ninjabrainMutex);
-            g_ninjabrainData.boatState    = "NONE";
-            g_ninjabrainData.hasBoatAngle = false;
-        }
-        std::this_thread::sleep_for(std::chrono::seconds(3));
+
+        curl_easy_setopt(curl, CURLOPT_URL,            url);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION,  curlWriteCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA,      &ctx);
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT,        0L);
+        curl_easy_setopt(curl, CURLOPT_TCP_KEEPALIVE,  1L);
+
+        struct curl_slist* headers = nullptr;
+        headers = curl_slist_append(headers, "Accept: text/event-stream");
+        headers = curl_slist_append(headers, "Cache-Control: no-cache");
+        headers = curl_slist_append(headers, "Connection: keep-alive");
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+        ctx.lineBuf.clear();
+        ctx.dataLine.clear();
+
+        curl_easy_perform(curl);  
+
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(curl);
+
+        onDisconnect();
+
+        if (g_running.load(std::memory_order_relaxed))
+            std::this_thread::sleep_for(std::chrono::seconds(3));
     }
 }
 
 void ninjabrainClient()
 {
-    WSADATA wsa;
-    WSAStartup(MAKEWORD(2, 2), &wsa);
+    curl_global_init(CURL_GLOBAL_DEFAULT);
 
-    // Launch boat thread as detached
-    std::thread(boatThread).detach();
+    auto strongholdDisconnect = []() {
+        std::lock_guard<std::mutex> lock(g_ninjabrainMutex);
+        std::string bs  = g_ninjabrainData.boatState;
+        double      ba  = g_ninjabrainData.boatAngle;
+        bool        hba = g_ninjabrainData.hasBoatAngle;
+        g_ninjabrainData              = NinjabrainData{};
+        g_ninjabrainData.boatState    = bs;
+        g_ninjabrainData.boatAngle    = ba;
+        g_ninjabrainData.hasBoatAngle = hba;
+    };
 
-    // Run stronghold thread on this thread
-    strongholdThread();
+    auto boatDisconnect = []() {
+        std::lock_guard<std::mutex> lock(g_ninjabrainMutex);
+        g_ninjabrainData.boatState    = "NONE";
+        g_ninjabrainData.hasBoatAngle = false;
+    };
 
-    WSACleanup();
+    CURLM* multi = curl_multi_init();
+
+    SSEContext ctxStronghold{ parseStrongholdEvent, strongholdDisconnect, {}, {} };
+    SSEContext ctxBoat      { parseBoatEvent,        boatDisconnect,       {}, {} };
+
+    auto makeHandle = [&](const char* url, SSEContext& ctx) -> CURL* {
+        CURL* curl = curl_easy_init();
+        if (!curl) return nullptr;
+
+        struct curl_slist* headers = nullptr;
+        headers = curl_slist_append(headers, "Accept: text/event-stream");
+        headers = curl_slist_append(headers, "Cache-Control: no-cache");
+        headers = curl_slist_append(headers, "Connection: keep-alive");
+
+        curl_easy_setopt(curl, CURLOPT_URL,            url);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION,  curlWriteCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA,      &ctx);
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT,        0L);
+        curl_easy_setopt(curl, CURLOPT_TCP_KEEPALIVE,  1L);
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER,     headers);
+        curl_easy_setopt(curl, CURLOPT_PRIVATE,        headers);
+
+        curl_multi_add_handle(multi, curl);
+        return curl;
+    };
+
+    struct HandleState {
+        CURL*       curl       = nullptr;
+        SSEContext* ctx        = nullptr;
+        const char* url        = nullptr;
+        std::function<void()> onDisconnect;
+        DWORD       retryAt    = 0;
+        bool        inMulti    = false;
+    };
+
+    HandleState states[2];
+    states[0] = { nullptr, &ctxStronghold, NB_STRONGHOLD_URL, strongholdDisconnect, 0, false };
+    states[1] = { nullptr, &ctxBoat,       NB_BOAT_URL,       boatDisconnect,       0, false };
+
+    while (g_running.load(std::memory_order_relaxed))
+    {
+        DWORD now = GetTickCount();
+
+        for (auto& s : states) {
+            if (!s.inMulti && (DWORD)(now - s.retryAt) < 0x80000000u) {
+                s.ctx->lineBuf.clear();
+                s.ctx->dataLine.clear();
+                s.curl = makeHandle(s.url, *s.ctx);
+                if (s.curl) s.inMulti = true;
+            }
+        }
+
+        int running = 0;
+        curl_multi_perform(multi, &running);
+
+        int msgsLeft = 0;
+        CURLMsg* msg;
+        while ((msg = curl_multi_info_read(multi, &msgsLeft)) != nullptr) {
+            if (msg->msg != CURLMSG_DONE) continue;
+            CURL* done = msg->easy_handle;
+
+            for (auto& s : states) {
+                if (s.curl != done) continue;
+
+                char* priv = nullptr;
+                curl_easy_getinfo(done, CURLINFO_PRIVATE, &priv);
+                if (priv) curl_slist_free_all(reinterpret_cast<struct curl_slist*>(priv));
+
+                curl_multi_remove_handle(multi, done);
+                curl_easy_cleanup(done);
+                s.curl    = nullptr;
+                s.inMulti = false;
+
+                s.onDisconnect();
+                s.retryAt = GetTickCount() + 3000;
+                break;
+            }
+        }
+
+        long curlTimeout = 5;
+        curl_multi_timeout(multi, &curlTimeout);
+        if (curlTimeout < 0 || curlTimeout > 5) curlTimeout = 5;
+
+        struct timeval tv{ 0, curlTimeout * 1000 };
+        int maxfd = -1;
+        fd_set r, w, e;
+        FD_ZERO(&r); FD_ZERO(&w); FD_ZERO(&e);
+        curl_multi_fdset(multi, &r, &w, &e, &maxfd);
+        if (maxfd >= 0)
+            select(maxfd + 1, &r, &w, &e, &tv);
+        else
+            Sleep(static_cast<DWORD>(curlTimeout));
+    }
+
+    // Cleanup
+    for (auto& s : states) {
+        if (s.curl) {
+            char* priv = nullptr;
+            curl_easy_getinfo(s.curl, CURLINFO_PRIVATE, &priv);
+            if (priv) curl_slist_free_all(reinterpret_cast<struct curl_slist*>(priv));
+            curl_multi_remove_handle(multi, s.curl);
+            curl_easy_cleanup(s.curl);
+        }
+    }
+    curl_multi_cleanup(multi);
+    curl_global_cleanup();
+}
+
+void stopNinjabrainClient()
+{
+    g_running.store(false, std::memory_order_relaxed);
 }

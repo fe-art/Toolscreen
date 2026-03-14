@@ -1,7 +1,6 @@
 #include "render.h"
+#include "platform/resource.h"
 #include "features/ninjabrain_data.h"
-#include "features/boat_icons.h"
-#include "features/minecraft_font.h"
 #include "features/fake_cursor.h"
 #include "gui/gui.h"
 #include "runtime/logic_thread.h"
@@ -254,6 +253,9 @@ static GLuint s_eyeZoomTempTexture = 0;
 static int s_eyeZoomTempWidth = 0;
 static int s_eyeZoomTempHeight = 0;
 static GLuint s_eyeZoomBlitFBO = 0;
+
+static GLuint s_boatIconTex[4] = {0, 0, 0, 0};
+static bool   s_boatIconsLoaded = false;
 
 GLuint GetEyeZoomSnapshotTexture() { return s_eyeZoomSnapshotTexture; }
 int GetEyeZoomSnapshotWidth() { return s_eyeZoomSnapshotWidth; }
@@ -6011,33 +6013,75 @@ static ImU32 NBGradientColor(double probability)
 }
 
 
-// Order: [0]=gray(NONE/ERROR), [1]=blue(MEASURING), [2]=green(VALID), [3]=red(ERROR)
-static GLuint s_boatIconTex[4] = {0, 0, 0, 0};
-static bool   s_boatIconsLoaded = false;
-
 static void EnsureBoatIconsLoaded()
 {
     if (s_boatIconsLoaded) return;
+
+    // Make sure OpenGL context is current
+    if (!wglGetCurrentContext()) return;
+
     s_boatIconsLoaded = true;
 
-    struct { const uint8_t* data; int len; int idx; } srcs[] = {
-        { g_boatIcon_gray_png,    g_boatIcon_gray_png_len,    0 },
-        { g_boatIcon_blue_png,    g_boatIcon_blue_png_len,    1 },
-        { g_boatIcon_green_png,   g_boatIcon_green_png_len,   2 },
-        { g_boatIcon_red_png,     g_boatIcon_red_png_len,     3 },
+    // Get our DLL's own module handle - resources live in the DLL, not the EXE
+    HMODULE hModule = NULL;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       (LPCWSTR)&EnsureBoatIconsLoaded, &hModule);
+    if (!hModule) {
+        Log("EnsureBoatIconsLoaded: failed to get module handle");
+        return;
+    }
+
+    // Resource IDs for boat icons
+    const int resourceIds[4] = {
+        IDR_BOAT_GRAY,   // 0 - NONE/ERROR
+        IDR_BOAT_BLUE,   // 1 - MEASURING
+        IDR_BOAT_GREEN,  // 2 - VALID
+        IDR_BOAT_RED     // 3 - ERROR
     };
-    for (auto& s : srcs) {
+
+    for (int i = 0; i < 4; i++) {
+        HRSRC hResource = FindResourceW(hModule, MAKEINTRESOURCEW(resourceIds[i]), RT_RCDATA);
+        if (!hResource) {
+            Log("Failed to find boat icon resource for index " + std::to_string(i));
+            continue;
+        }
+
+        // Load the resource
+        HGLOBAL hLoaded = LoadResource(hModule, hResource);
+        if (!hLoaded) {
+            Log("Failed to load boat icon resource for index " + std::to_string(i));
+            continue;
+        }
+        
+        // Get pointer to resource data
+        void* pData = LockResource(hLoaded);
+        DWORD dataSize = SizeofResource(hModule, hResource);
+        
+        if (!pData || dataSize == 0) {
+            Log("Invalid boat icon resource data for index " + std::to_string(i));
+            continue;
+        }
+        
+        // Load PNG from memory
         int w, h, ch;
-        unsigned char* px = stbi_load_from_memory(s.data, s.len, &w, &h, &ch, 4);
-        if (!px) continue;
-        glGenTextures(1, &s_boatIconTex[s.idx]);
-        glBindTexture(GL_TEXTURE_2D, s_boatIconTex[s.idx]);
+        unsigned char* px = stbi_load_from_memory((const unsigned char*)pData, dataSize, &w, &h, &ch, 4);
+        
+        if (!px) {
+            Log("Failed to decode boat icon PNG for index " + std::to_string(i));
+            continue;
+        }
+        
+        // Create OpenGL texture
+        glGenTextures(1, &s_boatIconTex[i]);
+        glBindTexture(GL_TEXTURE_2D, s_boatIconTex[i]);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
         stbi_image_free(px);
+        Log("Loaded boat icon from resource ID: " + std::to_string(resourceIds[i]));
+        
     }
     glBindTexture(GL_TEXTURE_2D, 0);
 }

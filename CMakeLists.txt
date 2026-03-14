@@ -145,6 +145,14 @@ FetchContent_Declare(
     GIT_SHALLOW TRUE
 )
 
+
+FetchContent_Declare(
+    curl
+    URL https://curl.se/download/curl-8.10.1.tar.gz
+    URL_HASH SHA256=d15ebab765d793e2e96db090f0e172d127859d78ca6f6391d7eafecfd894bbc0
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+
 FetchContent_GetProperties(glew)
 if(NOT glew_POPULATED)
     FetchContent_Populate(glew)
@@ -175,6 +183,28 @@ FetchContent_GetProperties(nlohmann_json)
 if(NOT nlohmann_json_POPULATED)
     FetchContent_Populate(nlohmann_json)
 endif()
+
+FetchContent_GetProperties(curl)
+if(NOT curl_POPULATED)
+    set(BUILD_CURL_EXE        OFF CACHE BOOL "" FORCE)
+    set(BUILD_TESTING         OFF CACHE BOOL "" FORCE)
+    set(BUILD_SHARED_LIBS     OFF CACHE BOOL "" FORCE)
+    set(CURL_USE_OPENSSL      OFF CACHE BOOL "" FORCE)
+    set(CURL_USE_SCHANNEL     ON  CACHE BOOL "" FORCE)
+    set(HTTP_ONLY             ON  CACHE BOOL "" FORCE)
+    set(CURL_DISABLE_LDAP     ON  CACHE BOOL "" FORCE)
+    set(CURL_DISABLE_LDAPS    ON  CACHE BOOL "" FORCE)
+    set(CURL_STATICLIB        ON  CACHE BOOL "" FORCE)
+    set(CURL_USE_LIBPSL       OFF CACHE BOOL "" FORCE)
+    set(CURL_USE_LIBSSH2      OFF CACHE BOOL "" FORCE)
+    set(CURL_USE_LIBSSH       OFF CACHE BOOL "" FORCE)
+    set(CURL_USE_GSSAPI       OFF CACHE BOOL "" FORCE)
+    set(USE_LIBIDN2           OFF CACHE BOOL "" FORCE)
+    set(CURL_WINDOWS_SSPI     ON  CACHE BOOL "" FORCE)
+    FetchContent_Populate(curl)
+    add_subdirectory(${curl_SOURCE_DIR} ${curl_BINARY_DIR} EXCLUDE_FROM_ALL)
+endif()
+
 
 set(TOOLSCREEN_IMGUI_DIR "${imgui_SOURCE_DIR}")
 
@@ -255,7 +285,7 @@ add_library(${PROJECT_NAME} SHARED
 
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/features/Minecraft.ttf"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/Minecraft.ttf"
         "$<TARGET_FILE_DIR:${PROJECT_NAME}>/Minecraft.ttf"
     COMMENT "Copying Minecraft.ttf to output directory"
 )
@@ -271,12 +301,14 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${TOOLSCREEN_GENERATED_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${nlohmann_json_SOURCE_DIR}/single_include
+    ${curl_SOURCE_DIR}/include
 )
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE
     TOOLSCREEN_EXPORTS
     CMAKE_BUILD
     GLEW_STATIC
+    CURL_STATICLIB
     NOMINMAX
     UNICODE
     _UNICODE
@@ -300,7 +332,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     shlwapi
     user32
     version
-    winhttp
+    CURL::libcurl
 )
 
 if(MSVC)
