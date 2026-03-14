@@ -562,6 +562,7 @@ void ResizeHotkeySecondaryModes(size_t count);
 extern std::mutex g_hotkeySecondaryModesMutex;
 extern std::atomic<bool> g_cursorsNeedReload;
 extern std::atomic<bool> g_showGui;
+extern std::atomic<bool> g_wasCursorVisible;
 extern std::atomic<bool> g_imageOverlaysVisible;
 extern std::atomic<bool> g_windowOverlaysVisible;
 extern std::string g_currentlyEditingMirror;

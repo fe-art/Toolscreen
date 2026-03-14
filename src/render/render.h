@@ -205,6 +205,10 @@ extern GameViewportGeometry g_lastFrameGeometry;
 extern std::mutex g_geometryMutex;
 extern std::atomic<GLuint> g_cachedGameTextureId;
 
+extern std::string s_hoveredImageName;
+extern std::string s_draggedImageName;
+extern bool s_isDragging;
+
 enum class ResizeCorner;
 extern std::string s_hoveredWindowOverlayName;
 extern std::string s_draggedWindowOverlayName;

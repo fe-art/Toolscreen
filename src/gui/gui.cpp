@@ -3,8 +3,10 @@
 #include "config/config_toml.h"
 #include "common/expression_parser.h"
 #include "features/fake_cursor.h"
+#include "imgui_cache.h"
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_win32.h"
+#include "imgui_input_queue.h"
 #include "imgui_stdlib.h"
 #include "runtime/logic_thread.h"
 #include "render/mirror_thread.h"
@@ -58,13 +60,50 @@ static constexpr float spinnerHoldInterval = 0.01f;
 ImFont* g_keyboardLayoutPrimaryFont = nullptr;
 ImFont* g_keyboardLayoutSecondaryFont = nullptr;
 
-static std::atomic<bool> g_wasCursorVisible{ true };
-
 #define SliderFloat SliderFloatDoubleClickInput
 #define SliderInt SliderIntDoubleClickInput
 
 // This function MUST be defined before the JSON serialization functions that call it
 EyeZoomConfig GetDefaultEyeZoomConfig() { return GetDefaultEyeZoomConfigFromEmbedded(); }
+
+namespace {
+
+void ResetGuiTransientInteractionState() {
+    g_currentlyEditingMirror = "";
+    g_imageDragMode.store(false);
+    g_windowOverlayDragMode.store(false);
+
+    s_hoveredImageName = "";
+    s_draggedImageName = "";
+    s_isDragging = false;
+
+    s_hoveredWindowOverlayName = "";
+    s_draggedWindowOverlayName = "";
+    s_isWindowOverlayDragging = false;
+}
+
+void CloseSettingsGuiWindow() {
+    g_showGui = false;
+    InvalidateImGuiCache();
+
+    HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
+    ImGuiInputQueue_Clear();
+    ImGuiInputQueue_ResetMouseCapture(hwnd);
+
+    if (!g_wasCursorVisible.load(std::memory_order_acquire)) {
+        RECT clipRect{};
+        if (GetWindowClientRectInScreen(hwnd, clipRect)) {
+            ClipCursor(&clipRect);
+        } else {
+            ClipCursor(NULL);
+        }
+        SetCursor(NULL);
+    }
+
+    ResetGuiTransientInteractionState();
+}
+
+}
 
 void RenderConfigErrorGUI() {
     ImGuiIO& io = ImGui::GetIO();
@@ -479,35 +518,12 @@ void RenderSettingsGUI() {
     std::string windowTitle = "Toolscreen v" + GetToolscreenVersionString() + " by jojoe77777";
 
     bool windowOpen = true;
-    if (ImGui::Begin(windowTitle.c_str(), &windowOpen, ImGuiWindowFlags_NoCollapse)) {
-        if (!windowOpen) {
-            g_showGui = false;
-            if (!g_wasCursorVisible.load()) {
-                RECT clipRect{};
-                HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
-                if (GetWindowClientRectInScreen(hwnd, clipRect)) {
-                    ClipCursor(&clipRect);
-                } else {
-                    ClipCursor(NULL);
-                }
-                SetCursor(NULL);
-            }
-            g_currentlyEditingMirror = "";
-            g_imageDragMode.store(false);
-            g_windowOverlayDragMode.store(false);
-            extern std::string s_hoveredImageName;
-            extern std::string s_draggedImageName;
-            extern bool s_isDragging;
-            s_hoveredImageName = "";
-            s_draggedImageName = "";
-            s_isDragging = false;
-            extern std::string s_hoveredWindowOverlayName;
-            extern std::string s_draggedWindowOverlayName;
-            extern bool s_isWindowOverlayDragging;
-            s_hoveredWindowOverlayName = "";
-            s_draggedWindowOverlayName = "";
-            s_isWindowOverlayDragging = false;
-        }
+    const bool windowVisible = ImGui::Begin(windowTitle.c_str(), &windowOpen, ImGuiWindowFlags_NoCollapse);
+    if (!windowOpen) {
+        CloseSettingsGuiWindow();
+    }
+
+    if (windowVisible && windowOpen) {
 
         {
             static std::chrono::steady_clock::time_point s_lastScreenshotTime{};
@@ -735,10 +751,8 @@ void RenderSettingsGUI() {
             }
         }
 
-    } else {
-        g_currentlyEditingMirror = "";
-        g_imageDragMode.store(false, std::memory_order_relaxed);
-        g_windowOverlayDragMode.store(false, std::memory_order_relaxed);
+    } else if (windowOpen) {
+        ResetGuiTransientInteractionState();
     }
     ImGui::End();
 
