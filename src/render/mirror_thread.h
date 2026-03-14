@@ -29,6 +29,8 @@ extern std::atomic<bool> g_safeToCapture;
 // SubmitFrameCapture publishes the ready frame immediately and skips mirror-thread queue submission.
 extern std::atomic<bool> g_sameThreadMirrorPipelineActive;
 
+inline bool UseSynchronousMirrorPipeline() { return true; }
+
 // Updated by UpdateMirrorCaptureConfigs() (logic thread) and read by SwapBuffers hook to
 extern std::atomic<int> g_activeMirrorCaptureCount;
 

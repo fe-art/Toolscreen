@@ -1606,8 +1606,9 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                     const bool needCaptureForObsOrVc = g_graphicsHookDetected.load(std::memory_order_acquire) || IsVirtualCameraActive();
                     const bool needCapture = needCaptureForMirrors || needCaptureForEyeZoom || needCaptureForObsOrVc;
                     const bool sameThreadRenderPipeline = g_config.debug.sameThreadRenderPipeline;
+                    const bool synchronousMirrorPipeline = UseSynchronousMirrorPipeline();
                     const bool renderThreadNeeded = !sameThreadRenderPipeline;
-                    const bool mirrorThreadNeeded = needCapture && !sameThreadRenderPipeline;
+                    const bool mirrorThreadNeeded = needCapture && !sameThreadRenderPipeline && !synchronousMirrorPipeline;
 
                     if (!renderThreadNeeded && g_renderThreadRunning.load(std::memory_order_acquire)) {
                         StopRenderThread();
@@ -1644,10 +1645,12 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
             const bool needCaptureForEyeZoom = g_showEyeZoom.load(std::memory_order_relaxed) ||
                                                g_isTransitioningFromEyeZoom.load(std::memory_order_relaxed);
             const bool needCaptureForObsOrVc = g_graphicsHookDetected.load(std::memory_order_acquire) || IsVirtualCameraActive();
-            g_sameThreadMirrorPipelineActive.store(frameCfg.debug.sameThreadRenderPipeline, std::memory_order_release);
+            const bool synchronousMirrorPipeline = UseSynchronousMirrorPipeline();
+            g_sameThreadMirrorPipelineActive.store(synchronousMirrorPipeline, std::memory_order_release);
 
             const bool needCapture = needCaptureForMirrors || needCaptureForEyeZoom || needCaptureForObsOrVc;
-            const bool needAsyncCaptureCopy = needCapture && !frameCfg.debug.sameThreadRenderPipeline;
+            const bool needAsyncCaptureCopy = needCaptureForEyeZoom || needCaptureForObsOrVc ||
+                                              (needCaptureForMirrors && !synchronousMirrorPipeline);
             if (needAsyncCaptureCopy) {
                 static auto s_lastMirrorOnlyCaptureSubmit = std::chrono::steady_clock::time_point{};
                 static int s_lastMirrorOnlyW = 0;

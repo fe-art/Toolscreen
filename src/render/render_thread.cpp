@@ -3847,9 +3847,11 @@ static void RenderThreadFunc(void* gameGLContext) {
 
             if (!request.isRawWindowedMode && !activeMirrors.empty()) {
                 PROFILE_SCOPE_CAT("RT Mirror Render", "Render Thread");
-                // Swap ready buffers from capture thread (done on render thread to avoid main thread locks)
-                // This must happen before reading mirror textures
-                SwapMirrorBuffers();
+                    if (!UseSynchronousMirrorPipeline()) {
+                        // Swap ready buffers from capture thread (done on render thread to avoid main thread locks)
+                        // This must happen before reading mirror textures
+                        SwapMirrorBuffers();
+                    }
 
                 bool isEyeZoomMode = (request.modeId == "EyeZoom");
 
@@ -4356,7 +4358,7 @@ static void RenderThreadFunc(void* gameGLContext) {
 }
 
 void StartRenderThread(void* gameGLContext, bool allowSameThreadMode) {
-    if (g_sameThreadMirrorPipelineActive.load(std::memory_order_acquire) && !allowSameThreadMode) {
+    if (g_config.debug.sameThreadRenderPipeline && !allowSameThreadMode) {
         if (g_renderThreadRunning.load(std::memory_order_acquire) || g_renderThread.joinable()) {
             StopRenderThread();
         }

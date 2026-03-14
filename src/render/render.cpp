@@ -1930,8 +1930,7 @@ void CreateMirrorGPUResources(const MirrorConfig& conf) {
     inst.final_h_back = inst.final_h;
 
     bool finalFrontComplete = CreateMirrorFramebuffer(inst.finalFbo, inst.finalTexture, inst.final_w, inst.final_h, GL_NEAREST);
-    const bool sameThreadRenderPipeline = g_config.debug.sameThreadRenderPipeline;
-    const bool needsAsyncBackBuffers = !sameThreadRenderPipeline;
+    const bool needsAsyncBackBuffers = !UseSynchronousMirrorPipeline();
     const bool backComplete = !needsAsyncBackBuffers || EnsureMirrorAsyncGPUResources(inst);
 
     if (frontComplete && finalFrontComplete && backComplete) {
@@ -4423,8 +4422,9 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
     }
 
     const bool sameThreadRenderPipeline = g_config.debug.sameThreadRenderPipeline;
-    g_sameThreadMirrorPipelineActive.store(sameThreadRenderPipeline, std::memory_order_release);
-    if (!UpdateMirrorAsyncResourceMode(nullptr, sameThreadRenderPipeline)) {
+    const bool synchronousMirrorPipeline = UseSynchronousMirrorPipeline();
+    g_sameThreadMirrorPipelineActive.store(synchronousMirrorPipeline, std::memory_order_release);
+    if (!UpdateMirrorAsyncResourceMode(nullptr, synchronousMirrorPipeline)) {
         glBindFramebuffer(GL_FRAMEBUFFER, s.fb);
         if (oglViewport)
             oglViewport(0, 0, fullW, fullH);
@@ -4432,10 +4432,10 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
             glViewport(0, 0, fullW, fullH);
         return;
     }
+    if (g_mirrorCaptureRunning.load(std::memory_order_acquire)) {
+        StopMirrorCaptureThread();
+    }
     if (sameThreadRenderPipeline) {
-        if (g_mirrorCaptureRunning.load(std::memory_order_acquire)) {
-            StopMirrorCaptureThread();
-        }
         if (g_renderThreadRunning.load(std::memory_order_acquire)) {
             StopRenderThread();
         }
@@ -4451,14 +4451,6 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
         g_captureGameH.store(current_gameH);
 
         // Lazy auto-start capture thread when game texture is available
-        if (!sameThreadRenderPipeline && !useFramebufferFallback && !g_mirrorCaptureRunning.load()) {
-            HGLRC gameContext = wglGetCurrentContext();
-            if (gameContext) {
-                // Capture texture init is now done inside StartMirrorCaptureThread after wglShareLists
-                StartMirrorCaptureThread(gameContext);
-            }
-        }
-
         if (!useFramebufferFallback && g_graphicsHookDetected.load()) { StartObsHookThread(); }
 
         const bool renderThreadNeeded = !sameThreadRenderPipeline;
@@ -4579,6 +4571,7 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
                     if (it == g_mirrorInstances.end()) continue;
 
                     MirrorInstance& inst = it->second;
+                    const bool needsFallbackFinalTarget = conf.rawOutput || conf.border.type == MirrorBorderType::Static;
                     int padding = (conf.border.type == MirrorBorderType::Dynamic) ? conf.border.dynamicThickness : 0;
                     int requiredFboW = conf.captureWidth + 2 * padding;
                     int requiredFboH = conf.captureHeight + 2 * padding;
@@ -4587,6 +4580,7 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
                         inst.fbo_w = requiredFboW;
                         inst.fbo_h = requiredFboH;
                         inst.forceUpdateFrames = 3;
+                        inst.cachedRenderState.isValid = false;
 
                         BindTextureDirect(GL_TEXTURE_2D, inst.fboTexture);
                         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, inst.fbo_w, inst.fbo_h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
@@ -4594,6 +4588,27 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
                         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
                         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
                         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                    }
+
+                    if (needsFallbackFinalTarget) {
+                        float finalScaleX = conf.output.separateScale ? conf.output.scaleX : conf.output.scale;
+                        float finalScaleY = conf.output.separateScale ? conf.output.scaleY : conf.output.scale;
+                        int requiredFinalW = static_cast<int>(inst.fbo_w * finalScaleX);
+                        int requiredFinalH = static_cast<int>(inst.fbo_h * finalScaleY);
+                        if (requiredFinalW > 0 && requiredFinalH > 0 && (inst.final_w != requiredFinalW || inst.final_h != requiredFinalH)) {
+                            BindTextureDirect(GL_TEXTURE_2D, inst.finalTexture);
+                            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, requiredFinalW, requiredFinalH, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+                            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+                            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+                            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                            inst.final_w = requiredFinalW;
+                            inst.final_h = requiredFinalH;
+                            inst.final_w_back = requiredFinalW;
+                            inst.final_h_back = requiredFinalH;
+                            inst.cachedRenderState.isValid = false;
+                            inst.cachedRenderStateBack.isValid = false;
+                        }
                     }
 
                     glBindFramebuffer(GL_FRAMEBUFFER, inst.fbo);
@@ -4630,9 +4645,17 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
                                           GL_NEAREST);
                     }
 
+                    if (needsFallbackFinalTarget && inst.finalFbo != 0 && inst.finalTexture != 0 && inst.final_w > 0 && inst.final_h > 0) {
+                        glBindFramebuffer(GL_READ_FRAMEBUFFER, inst.fbo);
+                        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, inst.finalFbo);
+                        glBlitFramebuffer(0, 0, inst.fbo_w, inst.fbo_h, 0, 0, inst.final_w, inst.final_h, GL_COLOR_BUFFER_BIT,
+                                          GL_NEAREST);
+                    }
+
                     glBindFramebuffer(GL_FRAMEBUFFER, inst.fbo);
                     inst.lastUpdateTime = now;
                     inst.hasValidContent = true;
+                    inst.hasFrameContent = true;
                     inst.capturedAsRawOutput = true;
                     if (inst.forceUpdateFrames > 0) { inst.forceUpdateFrames--; }
                 }
@@ -5009,6 +5032,27 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
             (transitionState.active && transitionState.moveProgress < 1.0f) ? transitionState.moveProgress : 1.0f;
     };
 
+    const auto captureMirrorsSynchronously = [&]() {
+        if (!synchronousMirrorPipeline || !hasMirrors || useFramebufferFallback) { return false; }
+
+        std::vector<ThreadedMirrorConfig> activeMirrorConfigs;
+        {
+            std::lock_guard<std::mutex> lock(g_threadedMirrorConfigMutex);
+            if (g_threadedMirrorConfigs.empty()) { return false; }
+            activeMirrorConfigs = g_threadedMirrorConfigs;
+        }
+
+        GLuint sourceTexture = 0;
+        int sourceW = 0;
+        int sourceH = 0;
+        if (!SelectSameThreadGameTexture(gameTextureToUse, current_gameW, current_gameH, sourceTexture, sourceW, sourceH)) {
+            return false;
+        }
+
+        return RenderMirrorCapturesOnCurrentThread(activeMirrorConfigs, sourceTexture, sourceW, sourceH, fullW, fullH,
+                                                   currentGeo.finalX, currentGeo.finalY, currentGeo.finalW, currentGeo.finalH);
+    };
+
     if (sameThreadRenderPipeline) {
         const uint64_t mirrorCaptureFrameTag = BeginSameThreadMirrorCaptureFrame();
         if (wantAsyncOverlayThisFrame && configSnap) {
@@ -5026,6 +5070,11 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
         }
     } else if (canRenderOverlayThisFrame) {
         PROFILE_SCOPE_CAT("Async Overlay Submit/Blit", "Rendering");
+
+        if (captureMirrorsSynchronously()) {
+            PROFILE_SCOPE_CAT("Prepare Overlay GL State", "Rendering");
+            PrepareSameThreadOverlayState(s, fullW, fullH);
+        }
 
         {
             PROFILE_SCOPE_CAT("Submit Frame For Rendering", "Rendering");

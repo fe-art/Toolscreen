@@ -2035,21 +2035,46 @@ static bool MT_HarvestContentReadback(MT_MirrorFbos& fb, bool& outHasContent) {
     return true;
 }
 
-static void MT_QueueContentReadback(MT_MirrorFbos& fb, GLuint sourceFbo, int sourceW, int sourceH) {
+static bool MT_DetectContentSynchronously(MirrorInstance* inst, GLuint sourceFbo, int sourceW, int sourceH) {
+    if (!inst || sourceFbo == 0 || sourceW <= 0 || sourceH <= 0) { return false; }
+
+    const size_t requiredBytes = static_cast<size_t>(sourceW) * static_cast<size_t>(sourceH) * 4;
+    if (inst->pixelBuffer.size() < requiredBytes) {
+        inst->pixelBuffer.resize(requiredBytes);
+    }
+
+    GLint previousReadFramebuffer = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFramebuffer);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, sourceFbo);
+    glReadPixels(0, 0, sourceW, sourceH, GL_RGBA, GL_UNSIGNED_BYTE, inst->pixelBuffer.data());
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previousReadFramebuffer));
+
+    const unsigned char* pixels = inst->pixelBuffer.data();
+    for (size_t i = 3; i < requiredBytes; i += 4) {
+        if (pixels[i] > 0) { return true; }
+    }
+
+    return false;
+}
+
+static void MT_QueueContentReadback(MT_MirrorFbos& fb, GLuint sourceFbo, int sourceW, int sourceH,
+                                    bool preserveSinglePixels = false) {
     if (sourceFbo == 0 || sourceW <= 0 || sourceH <= 0) {
         MT_ReleaseContentDetectionResources(fb);
         return;
     }
 
     constexpr int kDetectMax = 64;
-    const int detW = (std::min)(sourceW, kDetectMax);
-    const int detH = (std::min)(sourceH, kDetectMax);
+    const bool useDownsample = !preserveSinglePixels;
+    const int detW = useDownsample ? (std::min)(sourceW, kDetectMax) : sourceW;
+    const int detH = useDownsample ? (std::min)(sourceH, kDetectMax) : sourceH;
     if (detW <= 0 || detH <= 0) {
         MT_ReleaseContentDetectionResources(fb);
         return;
     }
 
-    if ((fb.contentDownsampleFbo == 0) || (fb.contentDownsampleTex == 0) || (fb.contentDownW != detW) || (fb.contentDownH != detH)) {
+    if (useDownsample &&
+        ((fb.contentDownsampleFbo == 0) || (fb.contentDownsampleTex == 0) || (fb.contentDownW != detW) || (fb.contentDownH != detH))) {
         if (fb.contentDownsampleFbo == 0) { glGenFramebuffers(1, &fb.contentDownsampleFbo); }
         if (fb.contentDownsampleTex == 0) { glGenTextures(1, &fb.contentDownsampleTex); }
         BindTextureDirect(GL_TEXTURE_2D, fb.contentDownsampleTex);
@@ -2065,6 +2090,17 @@ static void MT_QueueContentReadback(MT_MirrorFbos& fb, GLuint sourceFbo, int sou
         fb.contentDownW = detW;
         fb.contentDownH = detH;
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    } else if (!useDownsample) {
+        if (fb.contentDownsampleFbo) {
+            glDeleteFramebuffers(1, &fb.contentDownsampleFbo);
+            fb.contentDownsampleFbo = 0;
+        }
+        if (fb.contentDownsampleTex) {
+            glDeleteTextures(1, &fb.contentDownsampleTex);
+            fb.contentDownsampleTex = 0;
+        }
+        fb.contentDownW = 0;
+        fb.contentDownH = 0;
     }
 
     if (fb.contentDetectionPBO == 0 || fb.contentPBOWidth != detW || fb.contentPBOHeight != detH) {
@@ -2079,11 +2115,16 @@ static void MT_QueueContentReadback(MT_MirrorFbos& fb, GLuint sourceFbo, int sou
     if (fb.contentReadbackFence && glIsSync(fb.contentReadbackFence)) { glDeleteSync(fb.contentReadbackFence); }
     fb.contentReadbackFence = nullptr;
 
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, sourceFbo);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fb.contentDownsampleFbo);
-    glBlitFramebuffer(0, 0, sourceW, sourceH, 0, 0, detW, detH, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    if (useDownsample) {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, sourceFbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fb.contentDownsampleFbo);
+        glBlitFramebuffer(0, 0, sourceW, sourceH, 0, 0, detW, detH, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, fb.contentDownsampleFbo);
+    } else {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, sourceFbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    }
 
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, fb.contentDownsampleFbo);
     glBindBuffer(GL_PIXEL_PACK_BUFFER, fb.contentDetectionPBO);
     glReadPixels(0, 0, detW, detH, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
@@ -2974,17 +3015,10 @@ bool RenderMirrorCapturesOnCurrentThread(const std::vector<ThreadedMirrorConfig>
         }
 
         const bool needsContentDetection = MT_MirrorNeedsContentDetection(conf, conf.rawOutput);
-        {
+        if (!needsContentDetection) {
             PROFILE_SCOPE_CAT("Mirror Content Detection", "Rendering");
-            if (needsContentDetection) {
-                bool hasContent = false;
-                if (MT_HarvestContentReadback(fb, hasContent)) {
-                    inst->hasFrameContent = hasContent;
-                }
-            } else {
-                MT_ReleaseContentDetectionResources(fb);
-                inst->hasFrameContent = true;
-            }
+            MT_ReleaseContentDetectionResources(fb);
+            inst->hasFrameContent = true;
         }
 
         {
@@ -3012,7 +3046,8 @@ bool RenderMirrorCapturesOnCurrentThread(const std::vector<ThreadedMirrorConfig>
         {
             PROFILE_SCOPE_CAT("Finalize Mirror Capture", "Rendering");
             if (needsContentDetection) {
-                MT_QueueContentReadback(fb, fb.backFbo, inst->fbo_w, inst->fbo_h);
+                MT_ReleaseContentDetectionResources(fb);
+                inst->hasFrameContent = MT_DetectContentSynchronously(inst, fb.backFbo, inst->fbo_w, inst->fbo_h);
             }
             ComputeMirrorRenderCache(inst, conf, gameW, gameH, screenW, screenH, finalX, finalY, finalW, finalH, false);
             inst->capturedAsRawOutput = conf.rawOutput;
