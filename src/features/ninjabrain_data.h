@@ -45,7 +45,7 @@ struct NinjabrainData {
     double lastCorrection             = 0.0;
     double lastAngleWithoutCorrection = 0.0;
     bool   hasCorrection              = false; 
-.
+    
     bool   hasNetherAngle  = false;
     double netherAngle     = 0.0; 
     double netherAngleDiff = 0.0; 

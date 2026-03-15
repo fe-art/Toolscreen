@@ -104,10 +104,6 @@ static void parseStrongholdEvent(const std::string& json)
             }
         }
 
-<<<<<<< HEAD
-        // Predictions + per-prediction angle adjustment
-=======
->>>>>>> ff0ea79 (ninjabrainClient: switch to libcurl and minor cleanup)
         auto& preds = j["predictions"];
         int count   = 0;
         g_ninjabrainData.validPrediction = false;
@@ -196,22 +192,6 @@ static size_t curlWriteCallback(char* ptr, size_t size, size_t nmemb, void* user
         } else {
             ctx->lineBuf += ch;
         }
-<<<<<<< HEAD
-        readSSEStream(sock, "/api/v1/stronghold/events", parseStrongholdEvent);
-        closesocket(sock);
-        {
-            std::lock_guard<std::mutex> lock(g_ninjabrainMutex);
-            std::string bs = g_ninjabrainData.boatState;
-            double ba = g_ninjabrainData.boatAngle;
-            bool hba = g_ninjabrainData.hasBoatAngle;
-            g_ninjabrainData = NinjabrainData{};
-            g_ninjabrainData.boatState = bs;
-            g_ninjabrainData.boatAngle = ba;
-            g_ninjabrainData.hasBoatAngle = hba;
-        }
-        std::this_thread::sleep_for(std::chrono::seconds(3));
-=======
->>>>>>> ff0ea79 (ninjabrainClient: switch to libcurl and minor cleanup)
     }
 
     
@@ -285,8 +265,13 @@ void ninjabrainClient()
 
     CURLM* multi = curl_multi_init();
 
-    SSEContext ctxStronghold{ parseStrongholdEvent, strongholdDisconnect, {}, {} };
-    SSEContext ctxBoat      { parseBoatEvent,        boatDisconnect,       {}, {} };
+    SSEContext ctxStronghold;
+    ctxStronghold.onEvent      = parseStrongholdEvent;
+    ctxStronghold.onDisconnect = strongholdDisconnect;
+
+    SSEContext ctxBoat;
+    ctxBoat.onEvent      = parseBoatEvent;
+    ctxBoat.onDisconnect = boatDisconnect;
 
     auto makeHandle = [&](const char* url, SSEContext& ctx) -> CURL* {
         CURL* curl = curl_easy_init();

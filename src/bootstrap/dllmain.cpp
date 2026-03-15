@@ -13,7 +13,6 @@
 #include "common/i18n.h"
 #include "hooks/hook_chain.h"
 #include "common/utils.h"
-#include "features/minecraft_font.h"
 #include "version.h"
 #include "features/virtual_camera.h"
 #include "features/window_overlay.h"
@@ -2065,12 +2064,23 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             {
                 std::wstring fontDest = g_toolscreenPath + L"\\Minecraft.ttf";
                 if (GetFileAttributesW(fontDest.c_str()) == INVALID_FILE_ATTRIBUTES) {
-                    HANDLE hFile = CreateFileW(fontDest.c_str(), GENERIC_WRITE, 0, NULL,
-                                               CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
-                    if (hFile != INVALID_HANDLE_VALUE) {
-                        DWORD written = 0;
-                        WriteFile(hFile, g_minecraftFont_ttf, (DWORD)g_minecraftFont_ttf_len, &written, NULL);
-                        CloseHandle(hFile);
+                    HMODULE hModule = nullptr;
+                    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                       reinterpret_cast<LPCWSTR>(&DllMain), &hModule);
+                    HRSRC hRes = hModule ? FindResourceW(hModule, MAKEINTRESOURCEW(IDR_MINECRAFT_FONT), RT_RCDATA) : nullptr;
+                    HGLOBAL hData = hRes ? LoadResource(hModule, hRes) : nullptr;
+                    if (hData) {
+                        DWORD size = SizeofResource(hModule, hRes);
+                        const void* data = LockResource(hData);
+                        if (data && size > 0) {
+                            HANDLE hFile = CreateFileW(fontDest.c_str(), GENERIC_WRITE, 0, NULL,
+                                                       CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+                            if (hFile != INVALID_HANDLE_VALUE) {
+                                DWORD written = 0;
+                                WriteFile(hFile, data, size, &written, NULL);
+                                CloseHandle(hFile);
+                            }
+                        }
                     }
                 }
             }
