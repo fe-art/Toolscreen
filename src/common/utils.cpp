@@ -2261,6 +2261,60 @@ bool GetRecentRequestedWindowClientResizes(int& outCurrentW, int& outCurrentH, i
     return outCurrentW > 0 && outCurrentH > 0;
 }
 
+static bool GetCenteredWindowedRestoreRect(HWND hwnd, RECT& outRect) {
+    RECT monitorRect{};
+    if (!GetMonitorRectForWindow(hwnd, monitorRect)) {
+        if (!GetWindowRect(hwnd, &monitorRect)) { return false; }
+    }
+
+    const int monitorW = monitorRect.right - monitorRect.left;
+    const int monitorH = monitorRect.bottom - monitorRect.top;
+    if (monitorW <= 0 || monitorH <= 0) { return false; }
+
+    const int windowedW = (std::max)(1, monitorW / 2);
+    const int windowedH = (std::max)(1, monitorH / 2);
+
+    outRect.left = monitorRect.left + (monitorW - windowedW) / 2;
+    outRect.top = monitorRect.top + (monitorH - windowedH) / 2;
+    outRect.right = outRect.left + windowedW;
+    outRect.bottom = outRect.top + windowedH;
+    return true;
+}
+
+static bool ApplyCenteredWindowedRestore(HWND hwnd, UINT extraFlags, const char* source, RECT* appliedRect = nullptr) {
+    if (!hwnd || !IsWindow(hwnd)) { return false; }
+
+    if (IsIconic(hwnd) || IsZoomed(hwnd)) {
+        ShowWindow(hwnd, SW_RESTORE);
+    }
+
+    RECT targetRect{};
+    if (!GetCenteredWindowedRestoreRect(hwnd, targetRect)) { return false; }
+
+    const int targetW = targetRect.right - targetRect.left;
+    const int targetH = targetRect.bottom - targetRect.top;
+    if (!SetWindowPos(hwnd, HWND_NOTOPMOST, targetRect.left, targetRect.top, targetW, targetH, SWP_NOOWNERZORDER | extraFlags)) {
+        std::string src = source ? source : "unknown";
+        Log("[WINDOW] SetWindowPos failed while centering windowed restore (" + src + "). Error=" + std::to_string(GetLastError()));
+        return false;
+    }
+
+    if (appliedRect) { *appliedRect = targetRect; }
+    return true;
+}
+
+bool CenterWindowedRestoreOnCurrentMonitor(HWND hwnd, const char* source) {
+    RECT targetRect{};
+    if (!ApplyCenteredWindowedRestore(hwnd, 0, source, &targetRect)) { return false; }
+
+    const int targetW = targetRect.right - targetRect.left;
+    const int targetH = targetRect.bottom - targetRect.top;
+    std::string src = source ? source : "unknown";
+    Log("[WINDOW] Centered windowed restore (" + src + ") -> " + std::to_string(targetW) + "x" + std::to_string(targetH) +
+        " at " + std::to_string(targetRect.left) + "," + std::to_string(targetRect.top));
+    return true;
+}
+
 bool RequestWindowClientResize(HWND hwnd, int width, int height, const char* source) {
     if (!hwnd || !IsWindow(hwnd) || width <= 0 || height <= 0) { return false; }
 
@@ -2356,11 +2410,6 @@ void ToggleBorderlessWindowedFullscreen(HWND hwnd) {
     const int targetW = (targetRect.right - targetRect.left);
     const int targetH = (targetRect.bottom - targetRect.top);
 
-    const int windowedW = (std::max)(1, targetW / 2);
-    const int windowedH = (std::max)(1, targetH / 2);
-    const int windowedX = targetRect.left + (targetW - windowedW) / 2;
-    const int windowedY = targetRect.top + (targetH - windowedH) / 2;
-
     RECT beforeRect{};
     if (!GetWindowRect(hwnd, &beforeRect)) { return; }
 
@@ -2451,10 +2500,9 @@ void ToggleBorderlessWindowedFullscreen(HWND hwnd) {
             ok = setWindowLongChecked(GWL_EXSTYLE, targetExStyle);
         }
 
+        RECT centeredRect{};
         if (ok) {
-            ok = SetWindowPos(hwnd, HWND_NOTOPMOST, windowedX, windowedY, windowedW, windowedH, SWP_NOOWNERZORDER | SWP_FRAMECHANGED) !=
-                 FALSE;
-            if (!ok) { Log("[WINDOW] SetWindowPos failed while disabling borderless. Error=" + std::to_string(GetLastError())); }
+            ok = ApplyCenteredWindowedRestore(hwnd, SWP_FRAMECHANGED, "window:borderless_off", &centeredRect);
         }
 
         if (!ok) {
@@ -2465,6 +2513,8 @@ void ToggleBorderlessWindowedFullscreen(HWND hwnd) {
         InvalidateTrackedGameTextureId(false);
         state.active = false;
         RequestCurrentModeClientResizeSync(hwnd, "window:borderless_off");
-        Log("[WINDOW] Toggled borderless OFF -> windowed centered (" + std::to_string(windowedW) + "x" + std::to_string(windowedH) + ")");
+        const int centeredW = centeredRect.right - centeredRect.left;
+        const int centeredH = centeredRect.bottom - centeredRect.top;
+        Log("[WINDOW] Toggled borderless OFF -> windowed centered (" + std::to_string(centeredW) + "x" + std::to_string(centeredH) + ")");
     }
 }

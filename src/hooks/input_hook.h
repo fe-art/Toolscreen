@@ -15,6 +15,7 @@ inline constexpr UINT WM_TOOLSCREEN_CHAR_NO_REBIND = WM_APP + 0x2A1;
 // Custom messages: treat payload as WM_KEYDOWN/WM_KEYUP without running HandleKeyRebinding.
 inline constexpr UINT WM_TOOLSCREEN_KEYDOWN_NO_REBIND = WM_APP + 0x2A2;
 inline constexpr UINT WM_TOOLSCREEN_KEYUP_NO_REBIND = WM_APP + 0x2A3;
+inline constexpr UINT WM_TOOLSCREEN_APPLY_FOCUS_REGAIN_SIZE = WM_APP + 0x2A4;
 
 InputHandlerResult HandleMouseMoveViewportOffset(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM& lParam);
 

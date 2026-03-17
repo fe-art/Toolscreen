@@ -65,6 +65,7 @@ static std::atomic<int> s_cachedSystemCursorVisible{ -1 };
 static std::atomic<ULONGLONG> s_cachedSystemCursorVisibilityTick{ 0 };
 static HHOOK s_lowLevelKeyboardHook = NULL;
 static std::mutex s_lowLevelKeyboardHookMutex;
+static std::atomic<bool> s_deferredFocusRegainWmSizePending{ false };
 
 struct LowLevelSuppressedKeyState {
     DWORD rawVk = 0;
@@ -279,8 +280,22 @@ static void ResendCurrentModeWmSize(HWND hWnd, const char* source) {
     RequestWindowClientResize(hWnd, mode->width, mode->height, source);
 }
 
+static bool IsFocusGainMessage(UINT uMsg) {
+    return uMsg == WM_ACTIVATE || uMsg == WM_ACTIVATEAPP || uMsg == WM_SETFOCUS;
+}
+
+static void QueueDeferredFocusRegainWmSize(HWND hWnd) {
+    if (!hWnd || !IsWindow(hWnd)) { return; }
+
+    if (!PostMessage(hWnd, WM_TOOLSCREEN_APPLY_FOCUS_REGAIN_SIZE, 0, 0)) {
+        s_deferredFocusRegainWmSizePending.store(false, std::memory_order_relaxed);
+        Log("[WINDOW] Failed to post deferred focus-regain WM_SIZE. Error=" + std::to_string(GetLastError()));
+    }
+}
+
 static void SyncWindowMetricsFromMessage(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     constexpr int kInactiveTransientClientMin = 32;
+    constexpr int kFullscreenTolPx = 1;
     bool shouldInvalidateScreenMetrics = false;
     bool shouldRequestRecalc = false;
     bool shouldInvalidateImGui = false;
@@ -352,6 +367,16 @@ static void SyncWindowMetricsFromMessage(HWND hWnd, UINT uMsg, WPARAM wParam, LP
             const bool windowActive = g_gameWindowActive.load(std::memory_order_relaxed);
             const bool isInactiveTinySize = !windowActive && (clientW < kInactiveTransientClientMin || clientH < kInactiveTransientClientMin);
             if (!isInactiveTinySize) {
+                RECT monitorRect{};
+                const bool haveMonitorRect = GetMonitorRectForWindow(hWnd, monitorRect);
+                const int monitorW = haveMonitorRect ? (monitorRect.right - monitorRect.left) : 0;
+                const int monitorH = haveMonitorRect ? (monitorRect.bottom - monitorRect.top) : 0;
+                const bool previousSizeFilledMonitor = haveMonitorRect && prevW >= (monitorW - kFullscreenTolPx) && prevH >= (monitorH - kFullscreenTolPx);
+                const bool currentSizeIsWindowed = haveMonitorRect && (clientW < (monitorW - kFullscreenTolPx) || clientH < (monitorH - kFullscreenTolPx));
+                if (previousSizeFilledMonitor && currentSizeIsWindowed) {
+                    if (CenterWindowedRestoreOnCurrentMonitor(hWnd, "input_hook:fullscreen_exit_restore")) { return; }
+                }
+
                 clientSizeChanged = (clientW != prevW) || (clientH != prevH);
                 UpdateCachedWindowMetricsFromSize(clientW, clientH);
             }
@@ -1067,15 +1092,48 @@ void RestoreKeyRepeatSettings();
 void ApplyKeyRepeatSettings();
 
 InputHandlerResult HandleActivate(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-    if (uMsg != WM_ACTIVATE) { return { false, 0 }; }
-    PROFILE_SCOPE("HandleActivate");
+    bool becameInactive = false;
+    bool becameActive = false;
+    const char* focusSource = nullptr;
 
-    if (wParam == WA_INACTIVE) {
+    switch (uMsg) {
+    case WM_ACTIVATE:
+        becameInactive = (LOWORD(wParam) == WA_INACTIVE);
+        becameActive = !becameInactive;
+        focusSource = becameActive ? "input_hook:focus_regain_activate" : "input_hook:focus_loss_activate";
+        break;
+
+    case WM_ACTIVATEAPP:
+        becameActive = (wParam != FALSE);
+        becameInactive = !becameActive;
+        focusSource = becameActive ? "input_hook:focus_regain_activateapp" : "input_hook:focus_loss_activateapp";
+        break;
+
+    case WM_SETFOCUS:
+        becameActive = true;
+        focusSource = "input_hook:focus_regain_setfocus";
+        break;
+
+    case WM_KILLFOCUS:
+        becameInactive = true;
+        focusSource = "input_hook:focus_loss_killfocus";
+        break;
+
+    default:
+        return { false, 0 };
+    }
+
+    PROFILE_SCOPE("HandleActivate");
+    (void)lParam;
+
+    if (becameInactive) {
         ImGuiInputQueue_EnqueueFocus(false);
 
         ReleaseActiveLowLevelRebindKeys(hWnd);
 
-        if (auto cs = GetConfigSnapshot(); cs && cs->debug.showHotkeyDebug) Log("[WINDOW] Window became inactive.");
+        if (auto cs = GetConfigSnapshot(); cs && cs->debug.showHotkeyDebug) {
+            Log(std::string("[WINDOW] Window became inactive via ") + focusSource + ".");
+        }
         extern std::atomic<bool> g_isGameFocused;
         g_isGameFocused.store(false);
         g_gameWindowActive.store(false);
@@ -1085,7 +1143,9 @@ InputHandlerResult HandleActivate(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
     } else {
         ImGuiInputQueue_EnqueueFocus(true);
 
-        if (auto cs = GetConfigSnapshot(); cs && cs->debug.showHotkeyDebug) Log("[WINDOW] Window became active.");
+        if (auto cs = GetConfigSnapshot(); cs && cs->debug.showHotkeyDebug) {
+            Log(std::string("[WINDOW] Window became active via ") + focusSource + ".");
+        }
         extern std::atomic<bool> g_isGameFocused;
         g_isGameFocused.store(true);
         g_gameWindowActive.store(true);
@@ -1102,7 +1162,7 @@ InputHandlerResult HandleActivate(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         RequestScreenMetricsRecalculation();
         InvalidateImGuiCache();
         g_guiNeedsRecenter = true;
-        ResendCurrentModeWmSize(hWnd, "input_hook:focus_regain");
+        s_deferredFocusRegainWmSizePending.store(true, std::memory_order_relaxed);
     }
     return { false, 0 };
 }
@@ -2758,6 +2818,12 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     result = HandleToolscreenQueryMessages(hWnd, uMsg, wParam, lParam);
     if (result.consumed) return result.result;
 
+    if (uMsg == WM_TOOLSCREEN_APPLY_FOCUS_REGAIN_SIZE) {
+        s_deferredFocusRegainWmSizePending.store(false, std::memory_order_relaxed);
+        ResendCurrentModeWmSize(hWnd, "input_hook:focus_regain_deferred");
+        return 0;
+    }
+
     result = HandleInjectedMenuMaskKey(hWnd, uMsg, wParam, lParam);
     if (result.consumed) return result.result;
 
@@ -2872,7 +2938,11 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     result = HandleCharRebinding(hWnd, uMsg, wParam, lParam);
     if (result.consumed) return result.result;
 
-    return CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam);
+    const LRESULT forwarded = CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam);
+    if (IsFocusGainMessage(uMsg) && s_deferredFocusRegainWmSizePending.exchange(false, std::memory_order_relaxed)) {
+        QueueDeferredFocusRegainWmSize(hWnd);
+    }
+    return forwarded;
 }
 
 
