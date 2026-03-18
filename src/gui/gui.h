@@ -142,11 +142,6 @@ enum class MirrorBorderShape {
     Circle
 };
 
-enum class HookChainingNextTarget {
-    LatestHook = 0,
-    OriginalFunction = 1,
-};
-
 struct MirrorBorderConfig {
     MirrorBorderType type = MirrorBorderType::Dynamic;
 
@@ -473,7 +468,6 @@ struct Config {
     MirrorGammaMode mirrorGammaMode = MirrorGammaMode::Auto;
     // Useful if a specific overlay/driver hook layer is unstable when chained.
     bool disableHookChaining = false;
-    HookChainingNextTarget hookChainingNextTarget = HookChainingNextTarget::OriginalFunction;
     bool allowCursorEscape = false;
     float mouseSensitivity = 1.0f;
     int windowsMouseSpeed = 0;                              // Windows mouse speed override (0 = disabled, 1-20 = override)

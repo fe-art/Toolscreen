@@ -1,6 +1,5 @@
 lang='en'
 disableHookChaining = false
-hookChainingNextTarget = 'Original'
 allowCursorEscape = true
 basicModeEnabled = true
 configVersion = 2

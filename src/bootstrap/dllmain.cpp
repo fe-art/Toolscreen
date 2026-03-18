@@ -720,6 +720,19 @@ static __forceinline bool IsDynamicMemoryCaller(void* caller_address) {
     return isDynamic;
 }
 
+static __forceinline bool IsDisallowedThirdPartySwapCaller(void* caller_address) {
+    if (!caller_address) {
+        return true;
+    }
+
+    PVOID baseOfImage = nullptr;
+    if (RtlPcToFileHeader(caller_address, &baseOfImage) == NULL || !baseOfImage) {
+        return true;
+    }
+
+    return !HookChain::IsAllowedThirdPartyHookAddress(baseOfImage) && !HookChain::IsAllowedThirdPartyHookAddress(caller_address);
+}
+
 void APIENTRY BindTextureDirect(GLenum target, GLuint texture) {
     GLBINDTEXTUREPROC next = oglBindTexture ? oglBindTexture : g_oglBindTextureDriver;
     if (next) {
@@ -828,10 +841,7 @@ static BOOL ClipCursorHook_Impl(CLIPCURSORPROC next, const RECT* lpRect) {
 BOOL WINAPI hkClipCursor(const RECT* lpRect) { return ClipCursorHook_Impl(oClipCursor, lpRect); }
 
 BOOL WINAPI hkClipCursor_ThirdParty(const RECT* lpRect) {
-    CLIPCURSORPROC next = oClipCursor;
-    if (g_config.hookChainingNextTarget == HookChainingNextTarget::LatestHook) {
-        next = g_oClipCursorThirdParty ? g_oClipCursorThirdParty : oClipCursor;
-    }
+    CLIPCURSORPROC next = g_oClipCursorThirdParty ? g_oClipCursorThirdParty : oClipCursor;
     return ClipCursorHook_Impl(next, lpRect);
 }
 
@@ -892,10 +902,7 @@ static HCURSOR SetCursorHook_Impl(SETCURSORPROC next, HCURSOR hCursor) {
 HCURSOR WINAPI hkSetCursor(HCURSOR hCursor) { return SetCursorHook_Impl(oSetCursor, hCursor); }
 
 HCURSOR WINAPI hkSetCursor_ThirdParty(HCURSOR hCursor) {
-    SETCURSORPROC next = oSetCursor;
-    if (g_config.hookChainingNextTarget == HookChainingNextTarget::LatestHook) {
-        next = g_oSetCursorThirdParty ? g_oSetCursorThirdParty : oSetCursor;
-    }
+    SETCURSORPROC next = g_oSetCursorThirdParty ? g_oSetCursorThirdParty : oSetCursor;
     return SetCursorHook_Impl(next, hCursor);
 }
 // Note: OBS capture is now handled by obs_thread.cpp via glBlitFramebuffer hook
@@ -1237,10 +1244,7 @@ void WINAPI hkglViewport_Driver(GLint x, GLint y, GLsizei width, GLsizei height)
 }
 
 void WINAPI hkglViewport_ThirdParty(GLint x, GLint y, GLsizei width, GLsizei height) {
-    GLVIEWPORTPROC next = oglViewport ? oglViewport : g_oglViewportDriver;
-    if (g_config.hookChainingNextTarget == HookChainingNextTarget::LatestHook) {
-        next = g_oglViewportThirdParty ? g_oglViewportThirdParty : (oglViewport ? oglViewport : g_oglViewportDriver);
-    }
+    GLVIEWPORTPROC next = g_oglViewportThirdParty ? g_oglViewportThirdParty : (oglViewport ? oglViewport : g_oglViewportDriver);
 
     if (!next) {
         return;
@@ -1334,10 +1338,7 @@ static BOOL SetCursorPosHook_Impl(SETCURSORPOSPROC next, int X, int Y) {
 BOOL WINAPI hkSetCursorPos(int X, int Y) { return SetCursorPosHook_Impl(oSetCursorPos, X, Y); }
 
 BOOL WINAPI hkSetCursorPos_ThirdParty(int X, int Y) {
-    SETCURSORPOSPROC next = oSetCursorPos;
-    if (g_config.hookChainingNextTarget == HookChainingNextTarget::LatestHook) {
-        next = g_oSetCursorPosThirdParty ? g_oSetCursorPosThirdParty : oSetCursorPos;
-    }
+    SETCURSORPOSPROC next = g_oSetCursorPosThirdParty ? g_oSetCursorPosThirdParty : oSetCursorPos;
     return SetCursorPosHook_Impl(next, X, Y);
 }
 
@@ -1370,10 +1371,7 @@ static void GlfwSetInputModeHook_Impl(GLFWSETINPUTMODE next, void* window, int m
 void hkglfwSetInputMode(void* window, int mode, int value) { GlfwSetInputModeHook_Impl(oglfwSetInputMode, window, mode, value); }
 
 void hkglfwSetInputMode_ThirdParty(void* window, int mode, int value) {
-    GLFWSETINPUTMODE next = oglfwSetInputMode;
-    if (g_config.hookChainingNextTarget == HookChainingNextTarget::LatestHook) {
-        next = g_oglfwSetInputModeThirdParty ? g_oglfwSetInputModeThirdParty : oglfwSetInputMode;
-    }
+    GLFWSETINPUTMODE next = g_oglfwSetInputModeThirdParty ? g_oglfwSetInputModeThirdParty : oglfwSetInputMode;
     GlfwSetInputModeHook_Impl(next, window, mode, value);
 }
 
@@ -1502,10 +1500,7 @@ UINT WINAPI hkGetRawInputData(HRAWINPUT hRawInput, UINT uiCommand, LPVOID pData,
 }
 
 UINT WINAPI hkGetRawInputData_ThirdParty(HRAWINPUT hRawInput, UINT uiCommand, LPVOID pData, PUINT pcbSize, UINT cbSizeHeader) {
-    GETRAWINPUTDATAPROC next = oGetRawInputData;
-    if (g_config.hookChainingNextTarget == HookChainingNextTarget::LatestHook) {
-        next = g_oGetRawInputDataThirdParty ? g_oGetRawInputDataThirdParty : oGetRawInputData;
-    }
+    GETRAWINPUTDATAPROC next = g_oGetRawInputDataThirdParty ? g_oGetRawInputDataThirdParty : oGetRawInputData;
     return GetRawInputDataHook_Impl(next, hRawInput, uiCommand, pData, pcbSize, cbSizeHeader);
 }
 
@@ -2188,10 +2183,15 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
 BOOL WINAPI hkwglSwapBuffers(HDC hDc) { return SwapBuffersHook_Impl(owglSwapBuffers, hDc); }
 
 BOOL WINAPI hkwglSwapBuffers_ThirdParty(HDC hDc) {
-    WGLSWAPBUFFERS next = owglSwapBuffers;
-    if (g_config.hookChainingNextTarget == HookChainingNextTarget::LatestHook) {
-        next = g_owglSwapBuffersThirdParty ? g_owglSwapBuffersThirdParty : owglSwapBuffers;
+    void* caller_address = _ReturnAddress();
+    if (IsDisallowedThirdPartySwapCaller(caller_address)) {
+        WGLSWAPBUFFERS next = (g_owglSwapBuffersThirdParty && g_owglSwapBuffersThirdParty != reinterpret_cast<WGLSWAPBUFFERS>(&hkwglSwapBuffers_ThirdParty))
+                                  ? g_owglSwapBuffersThirdParty
+                                  : owglSwapBuffers;
+        return next ? next(hDc) : FALSE;
     }
+
+    WGLSWAPBUFFERS next = g_owglSwapBuffersThirdParty ? g_owglSwapBuffersThirdParty : owglSwapBuffers;
     return SwapBuffersHook_Impl(next, hDc);
 }
 

@@ -624,9 +624,8 @@ void LoadConfig() {
 
             if (loadedConfigVersion == 1 && currentConfigVersion >= 2) {
                 g_config.disableHookChaining = false;
-                g_config.hookChainingNextTarget = HookChainingNextTarget::OriginalFunction;
                 g_configIsDirty = true;
-                Log("Applied v2 migration: disableHookChaining=false, hookChainingNextTarget=Original");
+                Log("Applied v2 migration: disableHookChaining=false");
             }
 
             g_config.configVersion = currentConfigVersion;

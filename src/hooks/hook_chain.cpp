@@ -92,6 +92,20 @@ static std::string PtrToHex(const void* p) {
     return ss.str();
 }
 
+static std::wstring ToLowerWide(std::wstring value) {
+    for (wchar_t& ch : value) ch = static_cast<wchar_t>(towlower(ch));
+    return value;
+}
+
+static bool ContainsAnySubstring(const std::wstring& haystack, std::initializer_list<const wchar_t*> needles) {
+    for (const wchar_t* needle : needles) {
+        if (needle && haystack.find(needle) != std::wstring::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static std::wstring GetFileVersionStringValue(const std::wstring& filePath, const wchar_t* key) {
     if (filePath.empty() || !key) return L"";
 
@@ -294,8 +308,7 @@ static void LogHookChainDetails(const char* apiName, void* startAddress, void* r
     if (!apiName) apiName = "(unknown api)";
     if (!reason) reason = "(unspecified)";
 
-    const char* mode =
-        (g_config.hookChainingNextTarget == HookChainingNextTarget::OriginalFunction) ? "OriginalFunction" : "LatestHook";
+    const char* mode = "LatestHook";
 
     LogCategory("hookchain",
                 std::string("[") + apiName + "] chain-detect reason=" + reason + " nextTarget=" + mode + " start=" +
@@ -603,6 +616,8 @@ static void RefreshThirdPartyWglSwapBuffersIatHookChain() {
         HMODULE m = mods[i];
         if (!m) continue;
 
+        if (m == opengl32) continue;
+
         void* thunkTarget = FindIatImportedFunctionTarget(m, "opengl32.dll", "wglSwapBuffers");
         if (!thunkTarget) continue;
 
@@ -630,6 +645,23 @@ static void RefreshThirdPartyWglSwapBuffersIatHookChain() {
 
 namespace HookChain {
 
+bool IsAllowedThirdPartyHookAddress(const void* addr) {
+    HookChainOwnerInfo ownerInfo{};
+    if (!GetOwnerInfoForAddress(addr, ownerInfo)) return false;
+
+    const std::wstring ownerNameLower = ToLowerWide(ownerInfo.name);
+    const std::wstring ownerCompanyLower = ToLowerWide(ownerInfo.company);
+    const std::wstring ownerProductLower = ToLowerWide(ownerInfo.product);
+    const std::wstring ownerDescriptionLower = ToLowerWide(ownerInfo.description);
+    const std::wstring ownerPathLower = ToLowerWide(ownerInfo.path);
+    const bool isObs = ContainsAnySubstring(ownerPathLower, { L"graphics-hook" });
+
+    const bool isDiscord = ContainsAnySubstring(ownerNameLower, { L"discord" }) ||
+                           ContainsAnySubstring(ownerPathLower, { L"discord" });
+
+    return isObs || isDiscord;
+}
+
 bool TryCreateAndEnableHook(void* target, void* detour, void** outOriginal, const char* what) {
     if (!target) return false;
 
@@ -641,6 +673,12 @@ bool TryCreateAndEnableHook(void* target, void* detour, void** outOriginal, cons
 
     st = MH_EnableHook(target);
     if (st != MH_OK && st != MH_ERROR_ENABLED) {
+        if ((int)st == 11) {
+            MH_RemoveHook(target);
+            Log(std::string("INFO: Skipping ") + (what ? what : "(hook)") +
+                " hook because the target is not safely patchable by MinHook (status " + std::to_string((int)st) + ")");
+            return false;
+        }
         Log(std::string("ERROR: Failed to enable ") + (what ? what : "(hook)") + " hook (status " + std::to_string((int)st) + ")");
         return false;
     }
