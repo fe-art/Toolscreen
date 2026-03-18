@@ -361,6 +361,7 @@
     "label.toggle_image_overlays": "Toggle Image Overlays:",
     "label.toggle_window_overlays": "Toggle Window Overlays:",
     "label.toolscreen": "Toolscreen",
+    "welcome_toast.fullscreen_press_to_configure": "Press {} to configure",
     "label.type": "Type:",
     "label.realtime": "Realtime",
     "label.unlimited": "Unlimited",

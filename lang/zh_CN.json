@@ -361,6 +361,7 @@
     "label.toggle_image_overlays": "切换图像覆盖层：",
     "label.toggle_window_overlays": "切换窗口投影：",
     "label.toolscreen": "Toolscreen",
+    "welcome_toast.fullscreen_press_to_configure": "按 {} 进行配置",
     "label.type": "类型：",
     "label.realtime": "实时",
     "label.unlimited": "无限制",

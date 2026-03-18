@@ -355,6 +355,130 @@ bool IsGuiHotkeyPressed(WPARAM wParam) { return CheckHotkeyMatch(g_config.guiHot
 std::atomic<bool> g_welcomeToastVisible{ false };
 std::atomic<bool> g_configurePromptDismissedThisSession{ false };
 
+static ImU32 ScaleToastAlpha(ImU32 color, float alpha) {
+    ImVec4 rgba = ImGui::ColorConvertU32ToFloat4(color);
+    rgba.w *= std::clamp(alpha, 0.0f, 1.0f);
+    return ImGui::ColorConvertFloat4ToU32(rgba);
+}
+
+static void RenderFullscreenWelcomeToastImGui(float toastOpacity) {
+    std::lock_guard<std::recursive_mutex> imguiLock(GetImGuiContextMutex());
+
+    HWND hwnd = g_minecraftHwnd.load();
+    if (!hwnd) { return; }
+
+    InitializeImGuiContext(hwnd);
+    if (ImGui::GetCurrentContext() == nullptr) { return; }
+
+    ImGui_ImplOpenGL3_NewFrame();
+    ImGui_ImplWin32_NewFrame();
+    SyncImGuiDisplayMetrics(hwnd);
+    ApplyDynamicGuiFontRefresh();
+    ImGui::NewFrame();
+
+    ImGuiIO& io = ImGui::GetIO();
+    if (io.DisplaySize.x <= 0.0f || io.DisplaySize.y <= 0.0f) {
+        ImGui::Render();
+        RenderImGuiWithStateProtection(true);
+        return;
+    }
+
+    const float toastScale = (io.DisplaySize.y / 1080.0f) * 0.45f;
+    const ImVec2 toastSize(700.0f * toastScale, 250.0f * toastScale);
+    const float unit = toastSize.y / 250.0f;
+
+    std::string titleText = tr("label.toolscreen");
+    std::string hotkeyText = GetKeyComboString(g_config.guiHotkey);
+    if (hotkeyText.empty()) {
+        hotkeyText = tr("hotkeys.none");
+    }
+    const std::string messageText = tr("welcome_toast.fullscreen_press_to_configure", hotkeyText);
+
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+    ImGui::SetNextWindowSize(toastSize);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    if (ImGui::Begin("##fullscreen_welcome_toast", nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
+                         ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoFocusOnAppearing |
+                         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground)) {
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        ImFont* font = ImGui::GetFont();
+        const ImVec2 origin = ImGui::GetWindowPos();
+        const ImVec2 size = ImGui::GetWindowSize();
+        const float rounding = 28.0f * unit;
+
+        auto calcTextSize = [&](const std::string& text, float fontSize) {
+            return font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, text.c_str());
+        };
+        auto addVec = [](const ImVec2& a, const ImVec2& b) {
+            return ImVec2(a.x + b.x, a.y + b.y);
+        };
+        auto subVec = [](const ImVec2& a, const ImVec2& b) {
+            return ImVec2(a.x - b.x, a.y - b.y);
+        };
+        auto fitTextSize = [&](const std::string& text, float desiredSize, float minSize, float maxWidth) {
+            float fontSize = desiredSize;
+            while (fontSize > minSize && calcTextSize(text, fontSize).x > maxWidth) {
+                fontSize -= unit;
+            }
+            return fontSize;
+        };
+        auto drawCenteredText = [&](const std::string& text, float centerY, float fontSize, ImU32 color) {
+            const ImVec2 textSize = calcTextSize(text, fontSize);
+            const ImVec2 textPos(origin.x + (size.x - textSize.x) * 0.5f, origin.y + centerY - textSize.y * 0.5f);
+            drawList->AddText(font, fontSize, addVec(textPos, ImVec2(2.0f * unit, 2.0f * unit)), ScaleToastAlpha(IM_COL32(20, 8, 31, 145), toastOpacity),
+                              text.c_str());
+            drawList->AddText(font, fontSize, textPos, color, text.c_str());
+        };
+        auto drawCenteredOutlinedText = [&](const std::string& text, float centerY, float fontSize, ImU32 fillColor, ImU32 outlineColor,
+                                            float outlineOffset) {
+            const ImVec2 textSize = calcTextSize(text, fontSize);
+            const ImVec2 textPos(origin.x + (size.x - textSize.x) * 0.5f, origin.y + centerY - textSize.y * 0.5f);
+            const ImVec2 offsets[] = {
+                ImVec2(-outlineOffset, 0.0f), ImVec2(outlineOffset, 0.0f), ImVec2(0.0f, -outlineOffset), ImVec2(0.0f, outlineOffset),
+                ImVec2(-outlineOffset, -outlineOffset), ImVec2(outlineOffset, -outlineOffset), ImVec2(-outlineOffset, outlineOffset),
+                ImVec2(outlineOffset, outlineOffset),
+            };
+
+            for (const ImVec2& offset : offsets) {
+                drawList->AddText(font, fontSize, addVec(textPos, offset), outlineColor, text.c_str());
+            }
+            drawList->AddText(font, fontSize, addVec(textPos, ImVec2(1.5f * unit, 1.5f * unit)), ScaleToastAlpha(IM_COL32(34, 15, 54, 120), toastOpacity),
+                              text.c_str());
+            drawList->AddText(font, fontSize, textPos, fillColor, text.c_str());
+        };
+
+        const ImVec2 panelMax = addVec(origin, size);
+        drawList->AddRectFilled(origin, panelMax, ScaleToastAlpha(IM_COL32(36, 10, 58, 244), toastOpacity), rounding,
+                                ImDrawFlags_RoundCornersBottomRight);
+        drawList->AddRectFilledMultiColor(origin, panelMax,
+                                          ScaleToastAlpha(IM_COL32(70, 45, 113, 208), toastOpacity),
+                                          ScaleToastAlpha(IM_COL32(40, 14, 64, 72), toastOpacity),
+                                          ScaleToastAlpha(IM_COL32(36, 10, 58, 0), toastOpacity),
+                                          ScaleToastAlpha(IM_COL32(65, 41, 107, 146), toastOpacity));
+        drawList->AddRectFilledMultiColor(origin, ImVec2(panelMax.x, origin.y + 118.0f * unit),
+                                          ScaleToastAlpha(IM_COL32(82, 58, 130, 88), toastOpacity),
+                                          ScaleToastAlpha(IM_COL32(63, 38, 102, 18), toastOpacity),
+                                          ScaleToastAlpha(IM_COL32(0, 0, 0, 0), toastOpacity),
+                                          ScaleToastAlpha(IM_COL32(0, 0, 0, 0), toastOpacity));
+
+        const float titleFontSize = fitTextSize(titleText, 66.0f * unit, 34.0f * unit, size.x - 80.0f * unit);
+        drawCenteredOutlinedText(titleText, 52.0f * unit, titleFontSize,
+                                 ScaleToastAlpha(IM_COL32(243, 224, 151, 255), toastOpacity),
+                                 ScaleToastAlpha(IM_COL32(74, 46, 35, 225), toastOpacity), 1.7f * unit);
+
+        const float messageFontSize = fitTextSize(messageText, 48.0f * unit, 22.0f * unit, size.x - 78.0f * unit);
+        drawCenteredText(messageText, 155.0f * unit, messageFontSize, ScaleToastAlpha(IM_COL32(247, 241, 224, 255), toastOpacity));
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(3);
+
+    ImGui::Render();
+    RenderImGuiWithStateProtection(true);
+}
+
 void RenderWelcomeToast(bool isFullscreen) {
     if (isFullscreen && g_configurePromptDismissedThisSession.load(std::memory_order_relaxed)) { return; }
 
@@ -394,6 +518,11 @@ void RenderWelcomeToast(bool isFullscreen) {
         }
     }
 
+    if (isFullscreen) {
+        RenderFullscreenWelcomeToastImGui(toastOpacity);
+        return;
+    }
+
     static GLuint s_program = 0;
     static GLuint s_vao = 0;
     static GLuint s_vbo = 0;
@@ -401,9 +530,7 @@ void RenderWelcomeToast(bool isFullscreen) {
     static GLint s_locOpacity = -1;
 
     static GLuint s_toast1Texture = 0;
-    static GLuint s_toast2Texture = 0;
     static int s_toast1Width = 0, s_toast1Height = 0;
-    static int s_toast2Width = 0, s_toast2Height = 0;
 
     static HGLRC s_lastCtx = NULL;
     HGLRC currentCtx = wglGetCurrentContext();
@@ -415,9 +542,7 @@ void RenderWelcomeToast(bool isFullscreen) {
         s_locTexture = -1;
         s_locOpacity = -1;
         s_toast1Texture = 0;
-        s_toast2Texture = 0;
         s_toast1Width = s_toast1Height = 0;
-        s_toast2Width = s_toast2Height = 0;
     }
 
     if (s_program == 0) {
@@ -511,11 +636,10 @@ void main() {
     };
 
     ensureToastTexture(IDR_TOAST1_PNG, s_toast1Texture, s_toast1Width, s_toast1Height);
-    ensureToastTexture(IDR_TOAST2_PNG, s_toast2Texture, s_toast2Width, s_toast2Height);
 
-    GLuint texture = isFullscreen ? s_toast2Texture : s_toast1Texture;
-    int imgW = isFullscreen ? s_toast2Width : s_toast1Width;
-    int imgH = isFullscreen ? s_toast2Height : s_toast1Height;
+    GLuint texture = s_toast1Texture;
+    int imgW = s_toast1Width;
+    int imgH = s_toast1Height;
     if (s_program == 0 || s_vao == 0 || s_vbo == 0 || texture == 0 || imgW <= 0 || imgH <= 0) { return; }
 
     GLint viewport[4];
