@@ -231,23 +231,12 @@ if (ImGui::BeginTabItem(trc("tabs.browser_overlays"))) {
                 ImGui::SetTooltip(trc("browser.tooltip.reload_interval"));
             }
 
-            if (ImGui::Checkbox(trc("browser.overlays_high_performance_mode"), &overlay.highPerformanceMode)) {
-                if (overlay.highPerformanceMode) {
-                    overlay.transparentBackground = false;
-                }
-                g_configIsDirty = true;
-            }
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip(trc("browser.tooltip.high_performance_mode"));
-            }
-
-            if (ImGui::Checkbox(trc("browser.overlays_reload_on_update"), &overlay.reloadOnUpdate)) g_configIsDirty = true;
-            ImGui::BeginDisabled(overlay.highPerformanceMode);
             if (ImGui::Checkbox(trc("browser.overlays_transparent_background"), &overlay.transparentBackground)) g_configIsDirty = true;
-            ImGui::EndDisabled();
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip(trc("browser.tooltip.transparent_background"));
             }
+
+            if (ImGui::Checkbox(trc("browser.overlays_reload_on_update"), &overlay.reloadOnUpdate)) g_configIsDirty = true;
             if (ImGui::Checkbox(trc("browser.overlays_mute_audio"), &overlay.muteAudio)) g_configIsDirty = true;
 
             ImGui::SeparatorText(trc("browser.overlays_background"));

@@ -92,7 +92,6 @@ constexpr int BROWSER_OVERLAY_WIDTH = 1280;
 constexpr int BROWSER_OVERLAY_HEIGHT = 720;
 constexpr int BROWSER_OVERLAY_FPS = 15;
 inline const std::string BROWSER_OVERLAY_CUSTOM_CSS = "";
-constexpr bool BROWSER_OVERLAY_HIGH_PERFORMANCE_MODE = false;
 constexpr bool BROWSER_OVERLAY_ENABLE_COLOR_KEY = false;
 constexpr bool BROWSER_OVERLAY_TRANSPARENT_BACKGROUND = false;
 constexpr bool BROWSER_OVERLAY_MUTE_AUDIO = true;

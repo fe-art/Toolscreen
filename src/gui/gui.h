@@ -258,7 +258,6 @@ struct BrowserOverlayConfig {
     float scale = 1.0f;
     std::string relativeTo = "topLeftScreen";
     int crop_top = 0, crop_bottom = 0, crop_left = 0, crop_right = 0;
-    bool highPerformanceMode = false;
     bool enableColorKey = false;
     std::vector<ColorKeyConfig> colorKeys;
     float opacity = 1.0f;

@@ -63,7 +63,6 @@ struct BrowserOverlayCacheEntry {
     int browserWidth = 1280;
     int browserHeight = 720;
     int fps = 15;
-    bool highPerformanceMode = false;
     bool transparentBackground = false;
     bool muteAudio = true;
     bool reloadOnUpdate = false;
@@ -954,7 +953,7 @@ void SyncBrowserOverlayEntry(const BrowserOverlayConfig& config) {
     bool cssChanged = false;
     bool sizeChanged = false;
     bool transparencyChanged = false;
-    const bool effectiveTransparentBackground = config.transparentBackground && !config.highPerformanceMode;
+    const bool transparentModeEnabled = config.transparentBackground;
 
     {
         std::lock_guard<std::mutex> lock(g_browserOverlayCacheMutex);
@@ -967,8 +966,7 @@ void SyncBrowserOverlayEntry(const BrowserOverlayConfig& config) {
             slot->browserWidth = (std::max)(1, config.browserWidth);
             slot->browserHeight = (std::max)(1, config.browserHeight);
             slot->fps = (std::max)(1, config.fps);
-            slot->highPerformanceMode = config.highPerformanceMode;
-            slot->transparentBackground = effectiveTransparentBackground;
+            slot->transparentBackground = transparentModeEnabled;
             slot->muteAudio = config.muteAudio;
             slot->reloadOnUpdate = config.reloadOnUpdate;
             slot->reloadInterval = (std::max)(0, config.reloadInterval);
@@ -976,15 +974,13 @@ void SyncBrowserOverlayEntry(const BrowserOverlayConfig& config) {
             urlChanged = slot->url != config.url;
             cssChanged = slot->customCss != config.customCss;
             sizeChanged = slot->browserWidth != config.browserWidth || slot->browserHeight != config.browserHeight;
-            transparencyChanged = slot->transparentBackground != effectiveTransparentBackground ||
-                                  slot->highPerformanceMode != config.highPerformanceMode;
+            transparencyChanged = slot->transparentBackground != transparentModeEnabled;
             slot->url = config.url;
             slot->customCss = config.customCss;
             slot->browserWidth = (std::max)(1, config.browserWidth);
             slot->browserHeight = (std::max)(1, config.browserHeight);
             slot->fps = (std::max)(1, config.fps);
-            slot->highPerformanceMode = config.highPerformanceMode;
-            slot->transparentBackground = effectiveTransparentBackground;
+            slot->transparentBackground = transparentModeEnabled;
             slot->muteAudio = config.muteAudio;
             slot->reloadOnUpdate = config.reloadOnUpdate;
             slot->reloadInterval = (std::max)(0, config.reloadInterval);
@@ -1109,8 +1105,8 @@ void TryCaptureBrowserOverlay(const std::string& overlayId) {
         entry.captureInFlight = true;
         entry.lastCaptureTime = now;
         entryPtr = it->second;
-        shouldUseWindowCapture = (!entry.transparentBackground && entry.hostWindow != nullptr) || entry.highPerformanceMode;
-        forceWindowCaptureOnly = entry.highPerformanceMode;
+        shouldUseWindowCapture = !entry.transparentBackground && entry.hostWindow != nullptr;
+        forceWindowCaptureOnly = !entry.transparentBackground;
     }
 
     if (!entryPtr || !entryPtr->webview) {

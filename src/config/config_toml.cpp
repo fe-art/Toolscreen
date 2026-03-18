@@ -798,7 +798,6 @@ void BrowserOverlayConfigToToml(const BrowserOverlayConfig& cfg, toml::table& ou
     out.insert("crop_bottom", cfg.crop_bottom);
     out.insert("crop_left", cfg.crop_left);
     out.insert("crop_right", cfg.crop_right);
-    out.insert("highPerformanceMode", cfg.highPerformanceMode);
     out.insert("enableColorKey", cfg.enableColorKey);
 
     toml::array colorKeysArr;
@@ -842,7 +841,6 @@ void BrowserOverlayConfigFromToml(const toml::table& tbl, BrowserOverlayConfig& 
     cfg.crop_bottom = GetOr(tbl, "crop_bottom", ConfigDefaults::IMAGE_CROP_BOTTOM);
     cfg.crop_left = GetOr(tbl, "crop_left", ConfigDefaults::IMAGE_CROP_LEFT);
     cfg.crop_right = GetOr(tbl, "crop_right", ConfigDefaults::IMAGE_CROP_RIGHT);
-    cfg.highPerformanceMode = GetOr(tbl, "highPerformanceMode", ConfigDefaults::BROWSER_OVERLAY_HIGH_PERFORMANCE_MODE);
     cfg.enableColorKey = GetOr(tbl, "enableColorKey", ConfigDefaults::BROWSER_OVERLAY_ENABLE_COLOR_KEY);
 
     cfg.colorKeys.clear();
@@ -2064,7 +2062,6 @@ bool SaveConfigToTomlFile(const Config& config, const std::wstring& path) {
                                                         "crop_bottom",
                                                         "crop_left",
                                                         "crop_right",
-                                                        "highPerformanceMode",
                                                         "enableColorKey",
                                                         "colorKeys",
                                                         "opacity",
