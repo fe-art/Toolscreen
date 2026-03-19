@@ -522,6 +522,7 @@ struct Config {
     AppearanceConfig appearance;
     int keyRepeatStartDelay = ConfigDefaults::CONFIG_KEY_REPEAT_START_DELAY;
     int keyRepeatDelay = ConfigDefaults::CONFIG_KEY_REPEAT_DELAY;
+    bool keyRepeatResumePreviousHeldKey = ConfigDefaults::CONFIG_KEY_REPEAT_RESUME_PREVIOUS_HELD_KEY;
     bool basicModeEnabled = false;
     bool restoreWindowedModeOnFullscreenExit = ConfigDefaults::CONFIG_RESTORE_WINDOWED_MODE_ON_FULLSCREEN_EXIT;
     bool disableFullscreenPrompt = false;

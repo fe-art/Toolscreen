@@ -1925,6 +1925,7 @@ void ConfigToToml(const Config& config, toml::table& out) {
     out.insert("obsFramerate", config.obsFramerate);
     out.insert("keyRepeatStartDelay", config.keyRepeatStartDelay);
     out.insert("keyRepeatDelay", config.keyRepeatDelay);
+    out.insert("keyRepeatResumePreviousHeldKey", config.keyRepeatResumePreviousHeldKey);
     out.insert("basicModeEnabled", config.basicModeEnabled);
     out.insert("restoreWindowedModeOnFullscreenExit", config.restoreWindowedModeOnFullscreenExit);
     out.insert("disableFullscreenPrompt", config.disableFullscreenPrompt);
@@ -2034,6 +2035,7 @@ void ConfigToToml(const Config& config, toml::table& out) {
 
 void ConfigFromToml(const toml::table& tbl, Config& config) {
     config.configVersion = GetOr(tbl, "configVersion", ConfigDefaults::DEFAULT_CONFIG_VERSION);
+    const bool legacyPreV3Config = config.configVersion < 3;
     config.disableHookChaining = GetOr(tbl, "disableHookChaining", ConfigDefaults::CONFIG_DISABLE_HOOK_CHAINING);
     config.defaultMode = GetStringOr(tbl, "defaultMode", ConfigDefaults::CONFIG_DEFAULT_MODE);
     config.fontPath = GetStringOr(tbl, "fontPath", ConfigDefaults::CONFIG_FONT_PATH);
@@ -2049,13 +2051,26 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
     config.hideAnimationsInGame = GetOr(tbl, "hideAnimationsInGame", ConfigDefaults::CONFIG_HIDE_ANIMATIONS_IN_GAME);
     config.limitCaptureFramerate = GetOr(tbl, "limitCaptureFramerate", ConfigDefaults::CONFIG_LIMIT_CAPTURE_FRAMERATE);
     config.obsFramerate = ClampObsFramerateConfigValue(GetOr(tbl, "obsFramerate", ConfigDefaults::CONFIG_OBS_FRAMERATE));
-    config.keyRepeatStartDelay = ClampKeyRepeatConfigValue(GetOr(tbl, "keyRepeatStartDelay", ConfigDefaults::CONFIG_KEY_REPEAT_START_DELAY));
-    config.keyRepeatDelay = ClampKeyRepeatConfigValue(GetOr(tbl, "keyRepeatDelay", ConfigDefaults::CONFIG_KEY_REPEAT_DELAY));
+    config.keyRepeatStartDelay = GetOr(tbl, "keyRepeatStartDelay", ConfigDefaults::CONFIG_KEY_REPEAT_START_DELAY);
+    config.keyRepeatDelay = GetOr(tbl, "keyRepeatDelay", ConfigDefaults::CONFIG_KEY_REPEAT_DELAY);
+    if (legacyPreV3Config) {
+        if (config.keyRepeatStartDelay == 0) {
+            config.keyRepeatStartDelay = ConfigDefaults::CONFIG_KEY_REPEAT_START_DELAY;
+        } else if (config.keyRepeatStartDelay > 0 && config.keyRepeatStartDelay < 50) {
+            config.keyRepeatStartDelay = 50;
+        }
+
+        if (config.keyRepeatDelay == 0) {
+            config.keyRepeatDelay = ConfigDefaults::CONFIG_KEY_REPEAT_DELAY;
+        }
+    }
     if (config.configVersion < ConfigDefaults::DEFAULT_CONFIG_VERSION) {
         if (config.keyRepeatStartDelay == 0) { config.keyRepeatStartDelay = ConfigDefaults::CONFIG_KEY_REPEAT_START_DELAY; }
         if (config.keyRepeatDelay == 0) { config.keyRepeatDelay = ConfigDefaults::CONFIG_KEY_REPEAT_DELAY; }
         config.configVersion = ConfigDefaults::DEFAULT_CONFIG_VERSION;
     }
+    config.keyRepeatResumePreviousHeldKey =
+        GetOr(tbl, "keyRepeatResumePreviousHeldKey", ConfigDefaults::CONFIG_KEY_REPEAT_RESUME_PREVIOUS_HELD_KEY);
     config.basicModeEnabled = GetOr(tbl, "basicModeEnabled", ConfigDefaults::CONFIG_BASIC_MODE_ENABLED);
     config.restoreWindowedModeOnFullscreenExit =
         GetOr(tbl, "restoreWindowedModeOnFullscreenExit", ConfigDefaults::CONFIG_RESTORE_WINDOWED_MODE_ON_FULLSCREEN_EXIT);
@@ -2228,6 +2243,7 @@ bool SaveConfigToTomlFile(const Config& config, const std::wstring& path) {
                              "obsFramerate",
                                                  "keyRepeatStartDelay",
                                                  "keyRepeatDelay",
+                                                 "keyRepeatResumePreviousHeldKey",
                                                  "basicModeEnabled",
                                                  "restoreWindowedModeOnFullscreenExit",
                                                  "disableFullscreenPrompt",

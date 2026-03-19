@@ -17,6 +17,7 @@ disableFullscreenPrompt = false
 disableConfigurePrompt = false
 keyRepeatDelay = -1
 keyRepeatStartDelay = -1
+keyRepeatResumePreviousHeldKey = false
 mouseSensitivity = 1.0
 windowOverlay = []
 windowsMouseSpeed = 0
