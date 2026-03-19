@@ -13,6 +13,7 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <windows.h>
 
@@ -350,6 +351,21 @@ void WriteCurrentModeToFile(const std::string& modeId);
 bool SwitchToMode(const std::string& newModeId, const std::string& source = "", bool forceCut = false);
 bool IsHardcodedMode(const std::string& modeId);
 bool EqualsIgnoreCase(const std::string& a, const std::string& b);
+std::string ModeSourceTypeToString(ModeSourceType type);
+ModeSourceType StringToModeSourceType(const std::string& value);
+std::vector<ModeSourceRef> BuildModeSourcesFromLegacyLists(const std::vector<std::string>& mirrorIds,
+                                                           const std::vector<std::string>& mirrorGroupIds,
+                                                           const std::vector<std::string>& imageIds,
+                                                           const std::vector<std::string>& windowOverlayIds,
+                                                           const std::vector<std::string>& browserOverlayIds);
+bool ModeHasSource(const ModeConfig& mode, ModeSourceType type, const std::string& id);
+bool AddModeSource(ModeConfig& mode, ModeSourceType type, const std::string& id);
+bool RemoveModeSource(ModeConfig& mode, ModeSourceType type, const std::string& id);
+size_t RemoveAllModeSources(ModeConfig& mode, ModeSourceType type, const std::string& id);
+bool RenameModeSource(ModeConfig& mode, ModeSourceType type, const std::string& oldId, const std::string& newId);
+bool MoveModeSource(ModeConfig& mode, size_t fromIndex, size_t toIndex);
+void CollectModeMirrorIds(const Config& config, const ModeConfig& mode, std::unordered_set<std::string>& outMirrorIds);
+void CollectModeOrderedMirrorIds(const Config& config, const ModeConfig& mode, std::vector<std::string>& outMirrorIds);
 const ModeConfig* GetMode(const std::string& id);
 const ModeConfig* GetMode_Internal(const std::string& id);
 ModeConfig* GetModeMutable(const std::string& id);

@@ -491,7 +491,7 @@ void LoadConfig() {
             fullscreenMode.stretch.y = 0;
             fullscreenMode.stretch.width = screenWidth;
             fullscreenMode.stretch.height = screenHeight;
-            fullscreenMode.mirrorIds.push_back("Mapless");
+            AddModeSource(fullscreenMode, ModeSourceType::Mirror, "Mapless");
             g_config.modes.insert(g_config.modes.begin(), fullscreenMode);
             Log("Created missing Fullscreen mode");
         }
@@ -577,7 +577,7 @@ void LoadConfig() {
             thinMode.manualHeight = thinMode.height;
             thinMode.background.selectedMode = "color";
             thinMode.background.color = { 45 / 255.0f, 0 / 255.0f, 80 / 255.0f };
-            thinMode.mirrorIds.push_back("Mapless");
+            AddModeSource(thinMode, ModeSourceType::Mirror, "Mapless");
             g_config.modes.push_back(thinMode);
             Log("Created missing Thin mode");
         }
@@ -591,7 +591,7 @@ void LoadConfig() {
             wideMode.manualHeight = wideMode.height;
             wideMode.background.selectedMode = "color";
             wideMode.background.color = { 0.0f, 0.0f, 0.0f };
-            wideMode.mirrorIds.push_back("Mapless");
+            AddModeSource(wideMode, ModeSourceType::Mirror, "Mapless");
             g_config.modes.push_back(wideMode);
             Log("Created missing Wide mode");
         }

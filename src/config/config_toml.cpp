@@ -877,6 +877,17 @@ void BrowserOverlayConfigFromToml(const toml::table& tbl, BrowserOverlayConfig& 
     if (auto t = GetTable(tbl, "border")) { BorderConfigFromToml(*t, cfg.border); }
 }
 
+static void ModeSourceRefToToml(const ModeSourceRef& cfg, toml::table& out) {
+    out.is_inline(true);
+    out.insert("type", ModeSourceTypeToString(cfg.type));
+    out.insert("id", cfg.id);
+}
+
+static void ModeSourceRefFromToml(const toml::table& tbl, ModeSourceRef& cfg) {
+    cfg.type = StringToModeSourceType(GetStringOr(tbl, "type", "mirror"));
+    cfg.id = GetStringOr(tbl, "id", "");
+}
+
 void ModeConfigToToml(const ModeConfig& cfg, toml::table& out) {
     out.insert("id", cfg.id);
 
@@ -909,25 +920,14 @@ void ModeConfigToToml(const ModeConfig& cfg, toml::table& out) {
     BackgroundConfigToToml(cfg.background, bgTbl);
     out.insert("background", bgTbl);
 
-    toml::array mirrorIds;
-    for (const auto& id : cfg.mirrorIds) { mirrorIds.push_back(id); }
-    out.insert("mirrorIds", mirrorIds);
-
-    toml::array mirrorGroupIds;
-    for (const auto& id : cfg.mirrorGroupIds) { mirrorGroupIds.push_back(id); }
-    out.insert("mirrorGroupIds", mirrorGroupIds);
-
-    toml::array imageIds;
-    for (const auto& id : cfg.imageIds) { imageIds.push_back(id); }
-    out.insert("imageIds", imageIds);
-
-    toml::array windowOverlayIds;
-    for (const auto& id : cfg.windowOverlayIds) { windowOverlayIds.push_back(id); }
-    out.insert("windowOverlayIds", windowOverlayIds);
-
-    toml::array browserOverlayIds;
-    for (const auto& id : cfg.browserOverlayIds) { browserOverlayIds.push_back(id); }
-    out.insert("browserOverlayIds", browserOverlayIds);
+    toml::array sourcesArr;
+    for (const auto& source : cfg.sources) {
+        if (source.id.empty()) continue;
+        toml::table sourceTbl;
+        ModeSourceRefToToml(source, sourceTbl);
+        sourcesArr.push_back(sourceTbl);
+    }
+    out.insert("sources", sourcesArr);
 
     toml::table stretchTbl;
     StretchConfigToToml(cfg.stretch, stretchTbl);
@@ -1029,39 +1029,55 @@ void ModeConfigFromToml(const toml::table& tbl, ModeConfig& cfg) {
 
     if (auto t = GetTable(tbl, "background")) { BackgroundConfigFromToml(*t, cfg.background); }
 
-    cfg.mirrorIds.clear();
+    cfg.sources.clear();
+    if (auto arr = GetArray(tbl, "sources")) {
+        for (const auto& elem : *arr) {
+            if (auto t = elem.as_table()) {
+                ModeSourceRef source;
+                ModeSourceRefFromToml(*t, source);
+                if (!source.id.empty()) { cfg.sources.push_back(std::move(source)); }
+            }
+        }
+    }
+
+    std::vector<std::string> legacyMirrorIds;
     if (auto arr = GetArray(tbl, "mirrorIds")) {
         for (const auto& elem : *arr) {
-            if (auto val = elem.value<std::string>()) { cfg.mirrorIds.push_back(*val); }
+            if (auto val = elem.value<std::string>()) { legacyMirrorIds.push_back(*val); }
         }
     }
 
-    cfg.mirrorGroupIds.clear();
+    std::vector<std::string> legacyMirrorGroupIds;
     if (auto arr = GetArray(tbl, "mirrorGroupIds")) {
         for (const auto& elem : *arr) {
-            if (auto val = elem.value<std::string>()) { cfg.mirrorGroupIds.push_back(*val); }
+            if (auto val = elem.value<std::string>()) { legacyMirrorGroupIds.push_back(*val); }
         }
     }
 
-    cfg.imageIds.clear();
+    std::vector<std::string> legacyImageIds;
     if (auto arr = GetArray(tbl, "imageIds")) {
         for (const auto& elem : *arr) {
-            if (auto val = elem.value<std::string>()) { cfg.imageIds.push_back(*val); }
+            if (auto val = elem.value<std::string>()) { legacyImageIds.push_back(*val); }
         }
     }
 
-    cfg.windowOverlayIds.clear();
+    std::vector<std::string> legacyWindowOverlayIds;
     if (auto arr = GetArray(tbl, "windowOverlayIds")) {
         for (const auto& elem : *arr) {
-            if (auto val = elem.value<std::string>()) { cfg.windowOverlayIds.push_back(*val); }
+            if (auto val = elem.value<std::string>()) { legacyWindowOverlayIds.push_back(*val); }
         }
     }
 
-    cfg.browserOverlayIds.clear();
+    std::vector<std::string> legacyBrowserOverlayIds;
     if (auto arr = GetArray(tbl, "browserOverlayIds")) {
         for (const auto& elem : *arr) {
-            if (auto val = elem.value<std::string>()) { cfg.browserOverlayIds.push_back(*val); }
+            if (auto val = elem.value<std::string>()) { legacyBrowserOverlayIds.push_back(*val); }
         }
+    }
+
+    if (cfg.sources.empty()) {
+        cfg.sources = BuildModeSourcesFromLegacyLists(legacyMirrorIds, legacyMirrorGroupIds, legacyImageIds,
+                                                     legacyWindowOverlayIds, legacyBrowserOverlayIds);
     }
 
     if (auto t = GetTable(tbl, "stretch")) { StretchConfigFromToml(*t, cfg.stretch); }
@@ -1799,8 +1815,9 @@ void ConfigToToml(const Config& config, toml::table& out) {
 }
 
 void ConfigFromToml(const toml::table& tbl, Config& config) {
-    config.configVersion = GetOr(tbl, "configVersion", ConfigDefaults::DEFAULT_CONFIG_VERSION);
-    const bool legacyPreV3Config = config.configVersion < 3;
+    const int originalConfigVersion = GetOr(tbl, "configVersion", ConfigDefaults::DEFAULT_CONFIG_VERSION);
+    config.configVersion = originalConfigVersion;
+    const bool legacyPreV3Config = originalConfigVersion < 3;
     config.disableHookChaining = GetOr(tbl, "disableHookChaining", ConfigDefaults::CONFIG_DISABLE_HOOK_CHAINING);
     config.defaultMode = GetStringOr(tbl, "defaultMode", ConfigDefaults::CONFIG_DEFAULT_MODE);
     config.fontPath = GetStringOr(tbl, "fontPath", ConfigDefaults::CONFIG_FONT_PATH);
@@ -1974,6 +1991,8 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
             }
         }
     }
+
+    config.configVersion = ConfigDefaults::DEFAULT_CONFIG_VERSION;
 }
 
 bool SaveConfigToTomlFile(const Config& config, const std::wstring& path) {
@@ -2030,11 +2049,7 @@ bool SaveConfigToTomlFile(const Config& config, const std::wstring& path) {
                                               "relativeWidth",
                                               "relativeHeight",
                                               "background",
-                                              "mirrorIds",
-                                              "mirrorGroupIds",
-                                              "imageIds",
-                                              "windowOverlayIds",
-                                              "browserOverlayIds",
+                                              "sources",
                                               "stretch",
                                               "gameTransition",
                                               "overlayTransition",

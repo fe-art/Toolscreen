@@ -64,9 +64,7 @@ if (ImGui::BeginTabItem(trc("tabs.mirrors"))) {
                     g_configIsDirty = true;
                     if (oldMirrorName != mirror.name) {
                         for (auto& mode : g_config.modes) {
-                            for (auto& mirrorId : mode.mirrorIds) {
-                                if (mirrorId == oldMirrorName) { mirrorId = mirror.name; }
-                            }
+                            RenameModeSource(mode, ModeSourceType::Mirror, oldMirrorName, mirror.name);
                         }
                         for (auto& group : g_config.mirrorGroups) {
                             for (auto& item : group.mirrors) {
@@ -650,11 +648,7 @@ if (ImGui::BeginTabItem(trc("tabs.mirrors"))) {
         std::string deletedMirrorName = g_config.mirrors[mirror_to_remove].name;
         g_config.mirrors.erase(g_config.mirrors.begin() + mirror_to_remove);
         for (auto& mode : g_config.modes) {
-            auto it = std::find(mode.mirrorIds.begin(), mode.mirrorIds.end(), deletedMirrorName);
-            while (it != mode.mirrorIds.end()) {
-                mode.mirrorIds.erase(it);
-                it = std::find(mode.mirrorIds.begin(), mode.mirrorIds.end(), deletedMirrorName);
-            }
+            RemoveAllModeSources(mode, ModeSourceType::Mirror, deletedMirrorName);
         }
         for (auto& group : g_config.mirrorGroups) {
             group.mirrors.erase(
@@ -698,16 +692,17 @@ if (ImGui::BeginTabItem(trc("tabs.mirrors"))) {
             for (const auto& g : g_config.mirrorGroups) { groupNames.push_back(g.name); }
 
             for (auto& mode : g_config.modes) {
-                mode.mirrorIds.erase(std::remove_if(mode.mirrorIds.begin(), mode.mirrorIds.end(),
-                                                    [&mirrorNames](const std::string& id) {
-                                                        return std::find(mirrorNames.begin(), mirrorNames.end(), id) == mirrorNames.end();
-                                                    }),
-                                   mode.mirrorIds.end());
-                mode.mirrorGroupIds.erase(std::remove_if(mode.mirrorGroupIds.begin(), mode.mirrorGroupIds.end(),
-                                                         [&groupNames](const std::string& id) {
-                                                             return std::find(groupNames.begin(), groupNames.end(), id) == groupNames.end();
-                                                         }),
-                                        mode.mirrorGroupIds.end());
+                mode.sources.erase(std::remove_if(mode.sources.begin(), mode.sources.end(),
+                                                  [&mirrorNames, &groupNames](const ModeSourceRef& source) {
+                                                      if (source.type == ModeSourceType::Mirror) {
+                                                          return std::find(mirrorNames.begin(), mirrorNames.end(), source.id) == mirrorNames.end();
+                                                      }
+                                                      if (source.type == ModeSourceType::MirrorGroup) {
+                                                          return std::find(groupNames.begin(), groupNames.end(), source.id) == groupNames.end();
+                                                      }
+                                                      return false;
+                                                  }),
+                                   mode.sources.end());
             }
 
             for (auto& group : g_config.mirrorGroups) {
@@ -788,9 +783,7 @@ if (ImGui::BeginTabItem(trc("tabs.mirrors"))) {
                     g_configIsDirty = true;
                     if (oldGroupName != group.name) {
                         for (auto& mode : g_config.modes) {
-                            for (auto& groupId : mode.mirrorGroupIds) {
-                                if (groupId == oldGroupName) { groupId = group.name; }
-                            }
+                            RenameModeSource(mode, ModeSourceType::MirrorGroup, oldGroupName, group.name);
                         }
                         if (selectedGroupName == oldGroupName) { selectedGroupName = group.name; }
                     }
@@ -1035,11 +1028,7 @@ if (ImGui::BeginTabItem(trc("tabs.mirrors"))) {
         std::string deletedGroupName = g_config.mirrorGroups[group_to_remove].name;
         g_config.mirrorGroups.erase(g_config.mirrorGroups.begin() + group_to_remove);
         for (auto& mode : g_config.modes) {
-            auto it = std::find(mode.mirrorGroupIds.begin(), mode.mirrorGroupIds.end(), deletedGroupName);
-            while (it != mode.mirrorGroupIds.end()) {
-                mode.mirrorGroupIds.erase(it);
-                it = std::find(mode.mirrorGroupIds.begin(), mode.mirrorGroupIds.end(), deletedGroupName);
-            }
+            RemoveAllModeSources(mode, ModeSourceType::MirrorGroup, deletedGroupName);
         }
         g_configIsDirty = true;
     }

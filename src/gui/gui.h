@@ -296,6 +296,19 @@ enum class EasingType {
     EaseInOut
 };
 
+enum class ModeSourceType {
+    Mirror,
+    MirrorGroup,
+    Image,
+    WindowOverlay,
+    BrowserOverlay
+};
+
+struct ModeSourceRef {
+    ModeSourceType type = ModeSourceType::Mirror;
+    std::string id;
+};
+
 struct ModeConfig {
     std::string id;
     int width = 0, height = 0;
@@ -305,11 +318,7 @@ struct ModeConfig {
     float relativeHeight = 0.5f;
 
     BackgroundConfig background;
-    std::vector<std::string> mirrorIds;
-    std::vector<std::string> mirrorGroupIds;
-    std::vector<std::string> imageIds;
-    std::vector<std::string> windowOverlayIds;
-    std::vector<std::string> browserOverlayIds;
+    std::vector<ModeSourceRef> sources;
     StretchConfig stretch;
 
     GameTransitionType gameTransition = GameTransitionType::Bounce;
@@ -472,7 +481,7 @@ struct KeyRebindsConfig {
     std::vector<KeyRebind> rebinds;
 };
 struct Config {
-    int configVersion = 3;
+    int configVersion = 4;
     std::vector<MirrorConfig> mirrors;
     std::vector<MirrorGroupConfig> mirrorGroups;
     std::vector<ImageConfig> images;

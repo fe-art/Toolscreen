@@ -72,9 +72,7 @@ if (ImGui::BeginTabItem(trc("tabs.images"))) {
                     g_configIsDirty = true;
                     if (oldImageName != img.name) {
                         for (auto& mode : g_config.modes) {
-                            for (auto& imageId : mode.imageIds) {
-                                if (imageId == oldImageName) { imageId = img.name; }
-                            }
+                            RenameModeSource(mode, ModeSourceType::Image, oldImageName, img.name);
                         }
                     }
                 } else {
@@ -307,11 +305,7 @@ if (ImGui::BeginTabItem(trc("tabs.images"))) {
         std::string deletedImageName = g_config.images[image_to_remove].name;
         g_config.images.erase(g_config.images.begin() + image_to_remove);
         for (auto& mode : g_config.modes) {
-            auto it = std::find(mode.imageIds.begin(), mode.imageIds.end(), deletedImageName);
-            while (it != mode.imageIds.end()) {
-                mode.imageIds.erase(it);
-                it = std::find(mode.imageIds.begin(), mode.imageIds.end(), deletedImageName);
-            }
+            RemoveAllModeSources(mode, ModeSourceType::Image, deletedImageName);
         }
         g_configIsDirty = true;
     }
@@ -328,9 +322,7 @@ if (ImGui::BeginTabItem(trc("tabs.images"))) {
         if (!g_currentModeId.empty()) {
             for (auto& mode : g_config.modes) {
                 if (mode.id == g_currentModeId) {
-                    if (std::find(mode.imageIds.begin(), mode.imageIds.end(), newImg.name) == mode.imageIds.end()) {
-                        mode.imageIds.push_back(newImg.name);
-                    }
+                    AddModeSource(mode, ModeSourceType::Image, newImg.name);
                     break;
                 }
             }

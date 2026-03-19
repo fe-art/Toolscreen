@@ -784,8 +784,9 @@ std::string GetWindowOverlayAtPoint(int x, int y, int screenWidth, int screenHei
         const ModeConfig* mode = overlaySnap ? GetModeFromSnapshot(*overlaySnap, currentModeId) : nullptr;
         if (!mode) return "";
 
-        for (auto it = mode->windowOverlayIds.rbegin(); it != mode->windowOverlayIds.rend(); ++it) {
-            const std::string& overlayId = *it;
+        for (auto it = mode->sources.rbegin(); it != mode->sources.rend(); ++it) {
+            if (it->type != ModeSourceType::WindowOverlay) { continue; }
+            const std::string& overlayId = it->id;
             const WindowOverlayConfig* config = FindWindowOverlayConfigIn(overlayId, *overlaySnap);
             if (config && config->enableInteraction) { activeOverlays.emplace_back(overlayId, *config); }
         }

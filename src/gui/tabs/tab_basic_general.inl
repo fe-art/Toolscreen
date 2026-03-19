@@ -467,25 +467,17 @@ if (ImGui::BeginTabItem(trc("tabs.general"))) {
 
         auto ModeHasNinjabrain = [&](const std::string& modeId) -> bool {
             ModeConfig* mode = GetModeConfig(modeId);
-            if (!mode) return false;
-            for (const auto& imgId : mode->imageIds) {
-                if (EqualsIgnoreCase(imgId, "Ninjabrain Bot")) return true;
-            }
-            return false;
+            return mode && ModeHasSource(*mode, ModeSourceType::Image, "Ninjabrain Bot");
         };
 
         auto AddNinjabrainToMode = [&](const std::string& modeId) {
             ModeConfig* mode = GetModeConfig(modeId);
-            if (mode && !ModeHasNinjabrain(modeId)) { mode->imageIds.push_back("Ninjabrain Bot"); }
+            if (mode && AddModeSource(*mode, ModeSourceType::Image, "Ninjabrain Bot")) { g_configIsDirty = true; }
         };
 
         auto RemoveNinjabrainFromMode = [&](const std::string& modeId) {
             ModeConfig* mode = GetModeConfig(modeId);
-            if (mode) {
-                mode->imageIds.erase(std::remove_if(mode->imageIds.begin(), mode->imageIds.end(),
-                                                    [](const std::string& id) { return EqualsIgnoreCase(id, "Ninjabrain Bot"); }),
-                                     mode->imageIds.end());
-            }
+            if (mode && RemoveAllModeSources(*mode, ModeSourceType::Image, "Ninjabrain Bot") > 0) { g_configIsDirty = true; }
         };
 
         bool ninjabrainEnabled = ModeHasNinjabrain("Fullscreen") || ModeHasNinjabrain("EyeZoom") || ModeHasNinjabrain("Preemptive") ||
@@ -521,56 +513,64 @@ if (ImGui::BeginTabItem(trc("tabs.general"))) {
         if (ImGui::TreeNode(label)) {
             int item_idx_to_remove = -1;
             bool remove_is_group = false;
+            std::vector<std::string> mirrorIds;
+            std::vector<std::string> mirrorGroupIds;
+            mirrorIds.reserve(modeConfig->sources.size());
+            mirrorGroupIds.reserve(modeConfig->sources.size());
 
-            for (size_t k = 0; k < modeConfig->mirrorIds.size(); ++k) {
+            for (const auto& source : modeConfig->sources) {
+                if (source.type == ModeSourceType::Mirror) {
+                    mirrorIds.push_back(source.id);
+                } else if (source.type == ModeSourceType::MirrorGroup) {
+                    mirrorGroupIds.push_back(source.id);
+                }
+            }
+
+            for (size_t k = 0; k < mirrorIds.size(); ++k) {
                 ImGui::PushID(static_cast<int>(k));
                 if (ImGui::Button("X", ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()))) {
                     item_idx_to_remove = static_cast<int>(k);
                     remove_is_group = false;
                 }
                 ImGui::SameLine();
-                ImGui::TextUnformatted(modeConfig->mirrorIds[k].c_str());
+                ImGui::TextUnformatted(mirrorIds[k].c_str());
                 ImGui::PopID();
             }
 
-            for (size_t k = 0; k < modeConfig->mirrorGroupIds.size(); ++k) {
+            for (size_t k = 0; k < mirrorGroupIds.size(); ++k) {
                 ImGui::PushID(static_cast<int>(k) + 10000);
                 if (ImGui::Button("X", ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()))) {
                     item_idx_to_remove = static_cast<int>(k);
                     remove_is_group = true;
                 }
                 ImGui::SameLine();
-                ImGui::Text("%s %s", trc("general.group"), modeConfig->mirrorGroupIds[k].c_str());
+                ImGui::Text("%s %s", trc("general.group"), mirrorGroupIds[k].c_str());
                 ImGui::PopID();
             }
 
             if (item_idx_to_remove != -1) {
                 if (remove_is_group) {
-                    modeConfig->mirrorGroupIds.erase(modeConfig->mirrorGroupIds.begin() + item_idx_to_remove);
-                } else {
-                    modeConfig->mirrorIds.erase(modeConfig->mirrorIds.begin() + item_idx_to_remove);
+                    if (RemoveModeSource(*modeConfig, ModeSourceType::MirrorGroup, mirrorGroupIds[item_idx_to_remove])) {
+                        g_configIsDirty = true;
+                    }
+                } else if (RemoveModeSource(*modeConfig, ModeSourceType::Mirror, mirrorIds[item_idx_to_remove])) {
+                    g_configIsDirty = true;
                 }
-                g_configIsDirty = true;
             }
 
             if (ImGui::BeginCombo("##AddMirrorOrGroup", trc("general.add_mirror_or_group"))) {
                 for (const auto& mirrorConf : g_config.mirrors) {
-                    if (std::find(modeConfig->mirrorIds.begin(), modeConfig->mirrorIds.end(), mirrorConf.name) ==
-                        modeConfig->mirrorIds.end()) {
-                        if (ImGui::Selectable(mirrorConf.name.c_str())) {
-                            modeConfig->mirrorIds.push_back(mirrorConf.name);
-                            g_configIsDirty = true;
-                        }
+                    if (!ModeHasSource(*modeConfig, ModeSourceType::Mirror, mirrorConf.name) &&
+                        ImGui::Selectable(mirrorConf.name.c_str())) {
+                        if (AddModeSource(*modeConfig, ModeSourceType::Mirror, mirrorConf.name)) { g_configIsDirty = true; }
                     }
                 }
                 if (!g_config.mirrors.empty() && !g_config.mirrorGroups.empty()) { ImGui::Separator(); }
                 for (const auto& groupConf : g_config.mirrorGroups) {
-                    if (std::find(modeConfig->mirrorGroupIds.begin(), modeConfig->mirrorGroupIds.end(), groupConf.name) ==
-                        modeConfig->mirrorGroupIds.end()) {
+                    if (!ModeHasSource(*modeConfig, ModeSourceType::MirrorGroup, groupConf.name)) {
                         std::string displayName = std::string(trc("general.group")) + " " + groupConf.name;
                         if (ImGui::Selectable(displayName.c_str())) {
-                            modeConfig->mirrorGroupIds.push_back(groupConf.name);
-                            g_configIsDirty = true;
+                            if (AddModeSource(*modeConfig, ModeSourceType::MirrorGroup, groupConf.name)) { g_configIsDirty = true; }
                         }
                     }
                 }
