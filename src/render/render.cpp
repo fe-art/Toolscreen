@@ -885,7 +885,7 @@ void RenderGameBorder(int x, int y, int w, int h, int borderWidth, int radius, c
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-    glUniform4f(g_solidColorShaderLocs.color, color.r, color.g, color.b, 1.0f);
+    glUniform4f(g_solidColorShaderLocs.color, color.r, color.g, color.b, color.a);
 
     int y_gl = fullH - y - h;
 
@@ -4322,9 +4322,16 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
     if (!request.isRawWindowedMode && request.showEyeZoom) {
         PROFILE_SCOPE_CAT("EyeZoom Overlay", "Rendering");
         ClearEyeZoomTextLabels();
+        const BorderConfig* eyeZoomCloneBorder = nullptr;
+        for (const auto& mode : cfg.modes) {
+            if (EqualsIgnoreCase(mode.id, "EyeZoom")) {
+                eyeZoomCloneBorder = &mode.border;
+                break;
+            }
+        }
         handleEyeZoomMode(s, cfg.eyezoom, request.fullW, request.fullH, request.eyeZoomFadeOpacity,
                           request.eyeZoomAnimatedViewportX, request.isTransitioningFromEyeZoom, request.gameTextureId,
-                          request.gameW, request.gameH);
+                          request.gameW, request.gameH, eyeZoomCloneBorder);
         {
             PROFILE_SCOPE_CAT("Prepare Overlay GL State", "Rendering");
             PrepareSameThreadOverlayState(s, request.fullW, request.fullH);
@@ -5189,7 +5196,7 @@ bool RenderSameThreadObsFrame(const ModeConfig* modeToRender, const GLState& s, 
 
 void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fullW, int fullH, float opacity,
                        int animatedViewportX, bool useSnapshot, GLuint preferredGameTexture, int preferredGameW,
-                       int preferredGameH) {
+                       int preferredGameH, const BorderConfig* cloneBorder) {
     PROFILE_SCOPE_CAT("EyeZoom Mode Rendering", "Rendering");
 
     if (opacity <= 0.0f || fullW <= 0 || fullH <= 0) { return; }
@@ -5727,6 +5734,13 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
         glScissor(prevScissorBox[0], prevScissorBox[1], prevScissorBox[2], prevScissorBox[3]);
     } else {
         glDisable(GL_SCISSOR_TEST);
+    }
+
+    if (cloneBorder && cloneBorder->enabled && cloneBorder->width > 0) {
+        Color borderColor = cloneBorder->color;
+        borderColor.a *= overlayOpacityScale;
+        RenderGameBorder(zoomX, zoomY, zoomOutputWidth, zoomOutputHeight, cloneBorder->width, cloneBorder->radius,
+                         borderColor, fullW, fullH);
     }
 
     glDisable(GL_BLEND);

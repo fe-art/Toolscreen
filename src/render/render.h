@@ -270,7 +270,7 @@ void RenderModeWithOpacity(const ModeConfig* modeToRender, const GLState& s, int
 void RenderDebugBordersForMirror(const MirrorConfig* conf, Color captureColor, Color outputColor, GLint originalVAO);
 void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fullW, int fullH, float opacity = 1.0f,
                        int animatedViewportX = -1, bool useSnapshot = false, GLuint preferredGameTexture = 0,
-                       int preferredGameW = 0, int preferredGameH = 0);
+                       int preferredGameW = 0, int preferredGameH = 0, const BorderConfig* cloneBorder = nullptr);
 void InitializeOverlayTextFont(const std::string& fontPath, float baseFontSize, float scaleFactor);
 void SetOverlayTextFontSize(int sizePixels);
 
