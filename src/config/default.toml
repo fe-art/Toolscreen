@@ -19,6 +19,7 @@ keyRepeatDelay = -1
 keyRepeatStartDelay = -1
 keyRepeatResumePreviousHeldKey = false
 mouseSensitivity = 1.0
+mouseMovementPollingRate = 1000
 windowOverlay = []
 windowsMouseSpeed = 0
 

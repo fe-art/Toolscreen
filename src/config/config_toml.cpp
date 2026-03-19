@@ -1904,8 +1904,15 @@ static int ClampObsFramerateConfigValue(int value) {
     return value;
 }
 
-static int ClampKeyRepeatConfigValue(int value) {
-    return std::clamp(value, -1, 300);
+static int ClampMouseMovementPollingRateConfigValue(int value) {
+    value = std::clamp(value, 0, ConfigDefaults::CONFIG_MOUSE_MOVEMENT_POLLING_RATE_MAX);
+    if (value == 0) {
+        return 0;
+    }
+
+    const int interval = ConfigDefaults::CONFIG_MOUSE_MOVEMENT_POLLING_RATE_INTERVAL;
+    value = static_cast<int>(std::lround(static_cast<double>(value) / static_cast<double>(interval))) * interval;
+    return std::clamp(value, interval, ConfigDefaults::CONFIG_MOUSE_MOVEMENT_POLLING_RATE_MAX);
 }
 
 void ConfigToToml(const Config& config, toml::table& out) {
@@ -1919,6 +1926,7 @@ void ConfigToToml(const Config& config, toml::table& out) {
     out.insert("mirrorMatchColorspace", MirrorGammaModeToString(config.mirrorGammaMode));
     out.insert("allowCursorEscape", config.allowCursorEscape);
     out.insert("mouseSensitivity", config.mouseSensitivity);
+    out.insert("mouseMovementPollingRate", config.mouseMovementPollingRate);
     out.insert("windowsMouseSpeed", config.windowsMouseSpeed);
     out.insert("hideAnimationsInGame", config.hideAnimationsInGame);
     out.insert("limitCaptureFramerate", config.limitCaptureFramerate);
@@ -2047,6 +2055,8 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
         GetStringOr(tbl, "mirrorMatchColorspace", ConfigDefaults::CONFIG_MIRROR_MATCH_COLORSPACE));
     config.allowCursorEscape = GetOr(tbl, "allowCursorEscape", ConfigDefaults::CONFIG_ALLOW_CURSOR_ESCAPE);
     config.mouseSensitivity = GetOr(tbl, "mouseSensitivity", ConfigDefaults::CONFIG_MOUSE_SENSITIVITY);
+    config.mouseMovementPollingRate =
+        ClampMouseMovementPollingRateConfigValue(GetOr(tbl, "mouseMovementPollingRate", ConfigDefaults::CONFIG_MOUSE_MOVEMENT_POLLING_RATE));
     config.windowsMouseSpeed = GetOr(tbl, "windowsMouseSpeed", ConfigDefaults::CONFIG_WINDOWS_MOUSE_SPEED);
     config.hideAnimationsInGame = GetOr(tbl, "hideAnimationsInGame", ConfigDefaults::CONFIG_HIDE_ANIMATIONS_IN_GAME);
     config.limitCaptureFramerate = GetOr(tbl, "limitCaptureFramerate", ConfigDefaults::CONFIG_LIMIT_CAPTURE_FRAMERATE);
@@ -2237,6 +2247,7 @@ bool SaveConfigToTomlFile(const Config& config, const std::wstring& path) {
                              "mirrorMatchColorspace",
                                                  "allowCursorEscape",
                                                  "mouseSensitivity",
+                                                 "mouseMovementPollingRate",
                                                  "windowsMouseSpeed",
                                                  "hideAnimationsInGame",
                                                  "limitCaptureFramerate",

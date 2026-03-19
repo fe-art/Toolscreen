@@ -1357,6 +1357,55 @@ void hkglfwSetInputMode_ThirdParty(void* window, int mode, int value) {
     GlfwSetInputModeHook_Impl(next, window, mode, value);
 }
 
+static std::pair<float, float> ResolveMouseSensitivityForRawInput() {
+    auto cfgSnap = GetConfigSnapshot();
+    if (g_tempSensitivityActiveAtomic.load(std::memory_order_acquire)) {
+        return {
+            g_tempSensitivityXAtomic.load(std::memory_order_relaxed),
+            g_tempSensitivityYAtomic.load(std::memory_order_relaxed)
+        };
+    }
+
+    thread_local bool cachedTransitionActive = false;
+    thread_local std::string cachedModeId;
+    thread_local float cachedSensitivityX = 1.0f;
+    thread_local float cachedSensitivityY = 1.0f;
+
+    const ViewportTransitionSnapshot& transitionSnap =
+        g_viewportTransitionSnapshots[g_viewportTransitionSnapshotIndex.load(std::memory_order_acquire)];
+    const bool transitionActive = transitionSnap.active;
+    const std::string& modeId = transitionActive
+        ? transitionSnap.toModeId
+        : g_modeIdBuffers[g_currentModeIdIndex.load(std::memory_order_acquire)];
+
+    if (modeId == cachedModeId && transitionActive == cachedTransitionActive) {
+        return { cachedSensitivityX, cachedSensitivityY };
+    }
+
+    float sensitivityX = 1.0f;
+    float sensitivityY = 1.0f;
+    auto inputCfgSnap = cfgSnap;
+    const ModeConfig* mode = inputCfgSnap ? GetModeFromSnapshot(*inputCfgSnap, modeId) : nullptr;
+    if (mode && mode->sensitivityOverrideEnabled) {
+        if (mode->separateXYSensitivity) {
+            sensitivityX = mode->modeSensitivityX;
+            sensitivityY = mode->modeSensitivityY;
+        } else {
+            sensitivityX = mode->modeSensitivity;
+            sensitivityY = mode->modeSensitivity;
+        }
+    } else if (inputCfgSnap) {
+        sensitivityX = inputCfgSnap->mouseSensitivity;
+        sensitivityY = inputCfgSnap->mouseSensitivity;
+    }
+
+    cachedTransitionActive = transitionActive;
+    cachedModeId = modeId;
+    cachedSensitivityX = sensitivityX;
+    cachedSensitivityY = sensitivityY;
+    return { sensitivityX, sensitivityY };
+}
+
 static UINT GetRawInputDataHook_Impl(GETRAWINPUTDATAPROC next, HRAWINPUT hRawInput, UINT uiCommand, LPVOID pData, PUINT pcbSize,
                                     UINT cbSizeHeader) {
     if (!next) return static_cast<UINT>(-1);
@@ -1367,50 +1416,39 @@ static UINT GetRawInputDataHook_Impl(GETRAWINPUTDATAPROC next, HRAWINPUT hRawInp
 
     if (result == static_cast<UINT>(-1) || pData == nullptr || uiCommand != RID_INPUT) { return result; }
 
-    if (g_showGui.load() || g_isShuttingDown.load()) { return result; }
+    if (g_showGui.load() || g_isShuttingDown.load()) {
+        ResetMouseMovementThrottleState();
+        return result;
+    }
 
     RAWINPUT* raw = reinterpret_cast<RAWINPUT*>(pData);
 
     if (raw->header.dwType == RIM_TYPEMOUSE) {
-        float sensitivityX = 1.0f;
-        float sensitivityY = 1.0f;
-        bool sensitivityDetermined = false;
+        LONG injectedPendingX = 0;
+        LONG injectedPendingY = 0;
+        if ((raw->data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE) == 0 &&
+            ConsumePendingRawMouseMovementThrottleInjection(hRawInput, injectedPendingX, injectedPendingY)) {
+            const long long combinedX = static_cast<long long>(raw->data.mouse.lLastX) + static_cast<long long>(injectedPendingX);
+            const long long combinedY = static_cast<long long>(raw->data.mouse.lLastY) + static_cast<long long>(injectedPendingY);
 
-        {
-            std::lock_guard<std::mutex> lock(g_tempSensitivityMutex);
-            if (g_tempSensitivityOverride.active) {
-                sensitivityX = g_tempSensitivityOverride.sensitivityX;
-                sensitivityY = g_tempSensitivityOverride.sensitivityY;
-                sensitivityDetermined = true;
-            }
-        }
-
-        if (!sensitivityDetermined) {
-            const ViewportTransitionSnapshot& transitionSnap =
-                g_viewportTransitionSnapshots[g_viewportTransitionSnapshotIndex.load(std::memory_order_acquire)];
-
-            std::string modeId;
-            if (transitionSnap.active) {
-                modeId = transitionSnap.toModeId;
+            if (combinedX > static_cast<long long>(LONG_MAX)) {
+                raw->data.mouse.lLastX = LONG_MAX;
+            } else if (combinedX < static_cast<long long>(LONG_MIN)) {
+                raw->data.mouse.lLastX = LONG_MIN;
             } else {
-                modeId = g_modeIdBuffers[g_currentModeIdIndex.load(std::memory_order_acquire)];
+                raw->data.mouse.lLastX = static_cast<LONG>(combinedX);
             }
 
-            auto inputCfgSnap = GetConfigSnapshot();
-            const ModeConfig* mode = inputCfgSnap ? GetModeFromSnapshot(*inputCfgSnap, modeId) : nullptr;
-            if (mode && mode->sensitivityOverrideEnabled) {
-                if (mode->separateXYSensitivity) {
-                    sensitivityX = mode->modeSensitivityX;
-                    sensitivityY = mode->modeSensitivityY;
-                } else {
-                    sensitivityX = mode->modeSensitivity;
-                    sensitivityY = mode->modeSensitivity;
-                }
-            } else if (inputCfgSnap) {
-                sensitivityX = inputCfgSnap->mouseSensitivity;
-                sensitivityY = inputCfgSnap->mouseSensitivity;
+            if (combinedY > static_cast<long long>(LONG_MAX)) {
+                raw->data.mouse.lLastY = LONG_MAX;
+            } else if (combinedY < static_cast<long long>(LONG_MIN)) {
+                raw->data.mouse.lLastY = LONG_MIN;
+            } else {
+                raw->data.mouse.lLastY = static_cast<LONG>(combinedY);
             }
         }
+
+        const auto [sensitivityX, sensitivityY] = ResolveMouseSensitivityForRawInput();
 
         if (!(raw->data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE)) {
             static float xAccum = 0.0f;
