@@ -9,6 +9,8 @@ bool TryCreateAndEnableHook(void* target, void* detour, void** outOriginal, cons
 
 bool IsAllowedThirdPartyHookAddress(const void* addr);
 
+bool HasAllowedThirdPartyHookOnStack(unsigned skipFrames = 0);
+
 void RefreshAllThirdPartyHookChains();
 
 std::string DescribeAddressWithOwner(const void* addr);

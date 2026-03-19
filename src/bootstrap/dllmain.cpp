@@ -723,6 +723,11 @@ static __forceinline bool IsDynamicMemoryCaller(void* caller_address) {
 }
 
 static __forceinline bool IsDisallowedThirdPartySwapCaller(void* caller_address) {
+    void* installedHookTarget = g_wglSwapBuffersThirdPartyHookTarget.load(std::memory_order_acquire);
+    if (installedHookTarget) {
+        return false;
+    }
+
     if (!caller_address) {
         return true;
     }
@@ -2186,6 +2191,14 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
 BOOL WINAPI hkwglSwapBuffers(HDC hDc) { return SwapBuffersHook_Impl(owglSwapBuffers, hDc); }
 
 BOOL WINAPI hkwglSwapBuffers_ThirdParty(HDC hDc) {
+    void* installedHookTarget = g_wglSwapBuffersThirdPartyHookTarget.load(std::memory_order_acquire);
+    if (installedHookTarget == reinterpret_cast<void*>(&hkwglSwapBuffers)) {
+        WGLSWAPBUFFERS next = (g_owglSwapBuffersThirdParty && g_owglSwapBuffersThirdParty != reinterpret_cast<WGLSWAPBUFFERS>(&hkwglSwapBuffers_ThirdParty))
+                                  ? g_owglSwapBuffersThirdParty
+                                  : owglSwapBuffers;
+        return next ? next(hDc) : FALSE;
+    }
+
     void* caller_address = _ReturnAddress();
     if (IsDisallowedThirdPartySwapCaller(caller_address)) {
         WGLSWAPBUFFERS next = (g_owglSwapBuffersThirdParty && g_owglSwapBuffersThirdParty != reinterpret_cast<WGLSWAPBUFFERS>(&hkwglSwapBuffers_ThirdParty))
