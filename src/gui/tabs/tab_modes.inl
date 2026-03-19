@@ -24,79 +24,308 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
 
     SliderCtrlClickTip();
 
-    auto getModeSourceLabel = [&](const ModeSourceRef& source) {
-        const char* typeLabel = "Unknown";
-        switch (source.type) {
+    auto getModeSourceTypeLabel = [&](ModeSourceType type) -> const char* {
+        switch (type) {
         case ModeSourceType::Mirror:
-            typeLabel = trc("modes.mirrors");
-            break;
+            return trc("modes.mirrors");
         case ModeSourceType::MirrorGroup:
-            typeLabel = trc("modes.mirror_groups");
-            break;
+            return trc("modes.mirror_groups");
         case ModeSourceType::Image:
-            typeLabel = trc("modes.images");
-            break;
+            return trc("modes.images");
         case ModeSourceType::WindowOverlay:
-            typeLabel = trc("modes.window_overlays");
-            break;
+            return trc("modes.window_overlays");
         case ModeSourceType::BrowserOverlay:
-            typeLabel = trc("modes.browser_overlays");
-            break;
+            return trc("modes.browser_overlays");
         }
 
-        return std::string(typeLabel) + ": " + source.id;
+        return "Unknown";
+    };
+
+    auto getModeSourceTypeTint = [&](ModeSourceType type) {
+        switch (type) {
+        case ModeSourceType::Mirror:
+            return ImVec4(0.38f, 0.68f, 1.00f, 1.00f);
+        case ModeSourceType::MirrorGroup:
+            return ImVec4(0.30f, 0.82f, 0.69f, 1.00f);
+        case ModeSourceType::Image:
+            return ImVec4(0.98f, 0.70f, 0.24f, 1.00f);
+        case ModeSourceType::WindowOverlay:
+            return ImVec4(0.82f, 0.49f, 0.97f, 1.00f);
+        case ModeSourceType::BrowserOverlay:
+            return ImVec4(0.95f, 0.42f, 0.52f, 1.00f);
+        }
+
+        return ImVec4(0.65f, 0.65f, 0.65f, 1.00f);
+    };
+
+    auto drawModeSourceTypeIcon = [&](ImDrawList* drawList, const ImVec2& min, const ImVec2& max, ModeSourceType type) {
+        const ImVec4 tint = getModeSourceTypeTint(type);
+        const ImU32 bgColor = ImGui::ColorConvertFloat4ToU32(ImVec4(tint.x, tint.y, tint.z, 0.20f));
+        const ImU32 borderColor = ImGui::ColorConvertFloat4ToU32(ImVec4(tint.x, tint.y, tint.z, 0.90f));
+        const ImU32 detailColor = ImGui::GetColorU32(ImGuiCol_Text);
+        const float width = max.x - min.x;
+        const float height = max.y - min.y;
+        const float left = min.x + width * 0.22f;
+        const float right = max.x - width * 0.22f;
+        const float top = min.y + height * 0.22f;
+        const float bottom = max.y - height * 0.22f;
+        const float centerX = (min.x + max.x) * 0.5f;
+        const float centerY = (min.y + max.y) * 0.5f;
+        const float rounding = 5.0f;
+
+        drawList->AddRectFilled(min, max, bgColor, rounding);
+        drawList->AddRect(min, max, borderColor, rounding, 0, 1.2f);
+
+        switch (type) {
+        case ModeSourceType::Mirror:
+            drawList->AddRect(ImVec2(left, top), ImVec2(right, bottom), detailColor, 3.0f, 0, 1.2f);
+            drawList->AddLine(ImVec2(centerX, top + 1.5f), ImVec2(centerX, bottom - 1.5f), detailColor, 1.2f);
+            drawList->AddLine(ImVec2(left + 1.5f, bottom - 2.5f), ImVec2(right - 1.5f, top + 2.5f), detailColor, 1.0f);
+            break;
+        case ModeSourceType::MirrorGroup:
+            drawList->AddRect(ImVec2(left + 2.0f, top + 1.0f), ImVec2(right, bottom - 1.0f), detailColor, 2.5f, 0, 1.0f);
+            drawList->AddRect(ImVec2(left - 1.0f, top + 3.0f), ImVec2(right - 3.0f, bottom + 1.0f), detailColor, 2.5f, 0, 1.0f);
+            drawList->AddLine(ImVec2(centerX + 1.0f, top + 2.5f), ImVec2(centerX + 1.0f, bottom - 1.5f), detailColor, 1.0f);
+            break;
+        case ModeSourceType::Image:
+            drawList->AddRect(ImVec2(left, top), ImVec2(right, bottom), detailColor, 2.5f, 0, 1.0f);
+            drawList->AddCircleFilled(ImVec2(right - width * 0.14f, top + height * 0.16f), width * 0.07f, detailColor);
+            drawList->AddTriangleFilled(ImVec2(left + width * 0.06f, bottom - height * 0.10f), ImVec2(centerX - width * 0.03f, top + height * 0.28f),
+                                        ImVec2(centerX + width * 0.10f, bottom - height * 0.10f), detailColor);
+            drawList->AddTriangleFilled(ImVec2(centerX - width * 0.03f, bottom - height * 0.10f), ImVec2(right - width * 0.16f, top + height * 0.40f),
+                                        ImVec2(right - width * 0.04f, bottom - height * 0.10f), detailColor);
+            break;
+        case ModeSourceType::WindowOverlay:
+            drawList->AddRect(ImVec2(left, top), ImVec2(right, bottom), detailColor, 2.5f, 0, 1.0f);
+            drawList->AddLine(ImVec2(left, top + height * 0.18f), ImVec2(right, top + height * 0.18f), detailColor, 1.0f);
+            drawList->AddLine(ImVec2(left + width * 0.20f, top + height * 0.28f), ImVec2(left + width * 0.20f, bottom - height * 0.10f), detailColor,
+                              1.0f);
+            drawList->AddLine(ImVec2(left + width * 0.30f, centerY), ImVec2(right - width * 0.10f, centerY), detailColor, 1.0f);
+            break;
+        case ModeSourceType::BrowserOverlay:
+            drawList->AddRect(ImVec2(left, top), ImVec2(right, bottom), detailColor, 2.5f, 0, 1.0f);
+            drawList->AddLine(ImVec2(left, top + height * 0.18f), ImVec2(right, top + height * 0.18f), detailColor, 1.0f);
+            drawList->AddCircleFilled(ImVec2(left + width * 0.12f, top + height * 0.10f), width * 0.04f, detailColor);
+            drawList->AddCircleFilled(ImVec2(left + width * 0.22f, top + height * 0.10f), width * 0.04f, detailColor);
+            drawList->AddCircleFilled(ImVec2(left + width * 0.32f, top + height * 0.10f), width * 0.04f, detailColor);
+            drawList->AddLine(ImVec2(left + width * 0.12f, centerY), ImVec2(right - width * 0.12f, centerY), detailColor, 1.0f);
+            drawList->AddLine(ImVec2(left + width * 0.12f, centerY + height * 0.16f), ImVec2(right - width * 0.28f, centerY + height * 0.16f), detailColor,
+                              1.0f);
+            break;
+        }
+    };
+
+    auto drawModeSourceTypeIconAt = [&](const ImVec2& min, float iconSize, ModeSourceType type) {
+        drawModeSourceTypeIcon(ImGui::GetWindowDrawList(), min, ImVec2(min.x + iconSize, min.y + iconSize), type);
+    };
+
+    auto renderModeSourceTypeIcon = [&](const ModeSourceRef& source, const char* id) {
+        const float iconSize = ImGui::GetFrameHeight();
+        const ImVec2 iconMin = ImGui::GetCursorScreenPos();
+        const ImVec2 iconMax(iconMin.x + iconSize, iconMin.y + iconSize);
+
+        ImGui::InvisibleButton(id, ImVec2(iconSize, iconSize));
+        drawModeSourceTypeIcon(ImGui::GetWindowDrawList(), iconMin, iconMax, source.type);
+
+        if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", getModeSourceTypeLabel(source.type)); }
+    };
+
+    auto renderModeSourceDragHandle = [&](const char* id, float width, float height) {
+        const ImVec2 handleMin = ImGui::GetCursorScreenPos();
+        const ImVec2 handleSize(width, height);
+        ImGui::InvisibleButton(id, handleSize);
+
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        const ImU32 dotColor = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+        const float radius = 1.4f;
+        const float columnGap = width * 0.42f;
+        const float firstX = handleMin.x + width * 0.28f;
+        const float secondX = firstX + columnGap;
+        const float topY = handleMin.y + height * 0.26f;
+        const float rowGap = height * 0.24f;
+        for (int row = 0; row < 3; ++row) {
+            const float y = topY + rowGap * row;
+            drawList->AddCircleFilled(ImVec2(firstX, y), radius, dotColor);
+            drawList->AddCircleFilled(ImVec2(secondX, y), radius, dotColor);
+        }
     };
 
     auto renderModeSourceAssignments = [&](ModeConfig& mode, const std::string& idSuffix) {
-        if (ImGui::TreeNode((std::string("Sources") + "##" + idSuffix).c_str())) {
+        if (ImGui::TreeNode((std::string(trc("modes.sources")) + "##" + idSuffix).c_str())) {
+            const ImGuiStyle& style = ImGui::GetStyle();
+            const float rowHeight = ImGui::GetFrameHeight() + style.FramePadding.y * 1.5f;
+            const float dragHandleWidth = (std::max)(10.0f, ImGui::GetFrameHeight() * 0.58f);
+            const float listPaddingY = style.WindowPadding.y;
+            const float listHeight = (std::min)(rowHeight * (mode.sources.empty() ? 1.8f : static_cast<float>(mode.sources.size()) + 0.35f),
+                                                rowHeight * 6.25f);
             int removeIndex = -1;
-            int moveUpIndex = -1;
-            int moveDownIndex = -1;
+            int moveFromIndex = -1;
+            size_t moveInsertIndex = 0;
+            bool hasPreviewInsertLine = false;
+            float previewInsertLineY = 0.0f;
+            ImVec4 previewInsertTint = ImVec4(0.45f, 0.72f, 1.00f, 1.00f);
 
-            for (size_t k = 0; k < mode.sources.size(); ++k) {
-                const ModeSourceRef& source = mode.sources[k];
-                const std::string sourceLabel = getModeSourceLabel(source);
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.07f, 0.09f, 0.13f, 0.70f));
+            const std::string listChildId = "##sources_list_" + idSuffix;
+            if (ImGui::BeginChild(listChildId.c_str(), ImVec2(0.0f, listHeight), true)) {
+                if (mode.sources.empty()) {
+                    ImGui::Dummy(ImVec2(0.0f, rowHeight * 0.20f));
+                    ImGui::TextDisabled(trc("modes.sources_drag_hint"));
+                }
 
-                ImGui::PushID(("mode_source_" + idSuffix + "_" + std::to_string(k)).c_str());
-                ImGui::BeginDisabled(k == 0);
-                if (ImGui::ArrowButton("##up", ImGuiDir_Up)) { moveUpIndex = static_cast<int>(k); }
-                ImGui::EndDisabled();
-                ImGui::SameLine();
-                ImGui::BeginDisabled(k + 1 >= mode.sources.size());
-                if (ImGui::ArrowButton("##down", ImGuiDir_Down)) { moveDownIndex = static_cast<int>(k); }
-                ImGui::EndDisabled();
-                ImGui::SameLine();
-                if (ImGui::Button("X##remove")) { removeIndex = static_cast<int>(k); }
-                ImGui::SameLine();
-                ImGui::TextUnformatted(sourceLabel.c_str());
-                ImGui::PopID();
-            }
+                for (size_t k = 0; k < mode.sources.size(); ++k) {
+                    const ModeSourceRef& source = mode.sources[k];
 
-            if (moveUpIndex > 0 && MoveModeSource(mode, static_cast<size_t>(moveUpIndex), static_cast<size_t>(moveUpIndex - 1))) {
-                g_configIsDirty = true;
+                    ImGui::PushID(("mode_source_" + idSuffix + "_" + std::to_string(k)).c_str());
+
+                    ImGui::Selectable("##source_row", false, 0, ImVec2(ImGui::GetContentRegionAvail().x, rowHeight));
+
+                    const ImVec2 rowMin = ImGui::GetItemRectMin();
+                    const ImVec2 rowMax = ImGui::GetItemRectMax();
+                    const bool rowHovered = ImGui::IsItemHovered();
+                    const bool rowActive = ImGui::IsItemActive();
+                    const ImVec4 typeTint = getModeSourceTypeTint(source.type);
+                    const ImVec4 rowFill = rowActive ? ImVec4(typeTint.x, typeTint.y, typeTint.z, 0.26f)
+                                                     : rowHovered ? ImVec4(typeTint.x, typeTint.y, typeTint.z, 0.18f)
+                                                                  : ImVec4(0.11f, 0.13f, 0.18f, 0.92f);
+                    const ImVec4 rowBorder = rowHovered ? ImVec4(typeTint.x, typeTint.y, typeTint.z, 0.70f)
+                                                        : ImVec4(typeTint.x, typeTint.y, typeTint.z, 0.38f);
+                    ImDrawList* drawList = ImGui::GetWindowDrawList();
+                    drawList->AddRectFilled(rowMin, rowMax, ImGui::ColorConvertFloat4ToU32(rowFill), 6.0f);
+                    drawList->AddRect(rowMin, rowMax, ImGui::ColorConvertFloat4ToU32(rowBorder), 6.0f, 0, 1.0f);
+                    drawList->AddRectFilled(ImVec2(rowMin.x + 1.0f, rowMin.y + 2.0f), ImVec2(rowMin.x + 5.0f, rowMax.y - 2.0f),
+                                            ImGui::ColorConvertFloat4ToU32(ImVec4(typeTint.x, typeTint.y, typeTint.z, 0.95f)), 3.0f);
+
+                    if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+                        const int draggedIndex = static_cast<int>(k);
+                        ImGui::SetDragDropPayload("MODE_SOURCE_ROW", &draggedIndex, sizeof(draggedIndex));
+
+                        const float previewY = ImGui::GetCursorScreenPos().y;
+                        renderModeSourceTypeIcon(source, "##drag_preview_icon");
+                        ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
+                        ImGui::SetCursorScreenPos(
+                            ImVec2(ImGui::GetCursorScreenPos().x, previewY + (ImGui::GetFrameHeight() - ImGui::GetTextLineHeight()) * 0.5f));
+                        ImGui::TextUnformatted(source.id.c_str());
+                        ImGui::EndDragDropSource();
+                    }
+
+                    if (ImGui::BeginDragDropTarget()) {
+                        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(
+                                "MODE_SOURCE_ROW", ImGuiDragDropFlags_AcceptBeforeDelivery | ImGuiDragDropFlags_AcceptNoDrawDefaultRect)) {
+                            if (payload->DataSize == sizeof(int)) {
+                                const bool insertAfter = ImGui::GetMousePos().y > (rowMin.y + rowMax.y) * 0.5f;
+                                const int payloadIndex = *static_cast<const int*>(payload->Data);
+                                hasPreviewInsertLine = true;
+                                previewInsertLineY = insertAfter ? rowMax.y : rowMin.y;
+                                previewInsertTint = getModeSourceTypeTint(source.type);
+
+                                if (payload->Delivery) {
+                                    moveFromIndex = payloadIndex;
+                                    moveInsertIndex = k + (insertAfter ? 1u : 0u);
+                                }
+                            }
+                        }
+                        ImGui::EndDragDropTarget();
+                    }
+
+                    const float contentY = rowMin.y + (rowHeight - ImGui::GetFrameHeight()) * 0.5f;
+                    const float removeButtonWidth = ImGui::GetFrameHeight();
+                    const float removeButtonX = rowMax.x - style.FramePadding.x - removeButtonWidth;
+                    float cursorX = rowMin.x + style.FramePadding.x + 8.0f;
+
+                    ImGui::SetCursorScreenPos(ImVec2(cursorX, contentY));
+                    renderModeSourceDragHandle("##drag_handle", dragHandleWidth, ImGui::GetFrameHeight());
+                    cursorX += dragHandleWidth + style.ItemInnerSpacing.x;
+
+                    ImGui::SetCursorScreenPos(ImVec2(cursorX, contentY));
+                    renderModeSourceTypeIcon(source, "##type_icon");
+                    cursorX += ImGui::GetFrameHeight() + style.ItemInnerSpacing.x;
+
+                    ImGui::SetCursorScreenPos(ImVec2(removeButtonX, contentY));
+                    if (ImGui::Button("X##remove", ImVec2(removeButtonWidth, 0.0f))) { removeIndex = static_cast<int>(k); }
+
+                    const float textMinX = cursorX;
+                    const float textMaxX = removeButtonX - style.ItemInnerSpacing.x;
+                    if (textMaxX > textMinX) {
+                        const ImVec2 textPos(textMinX, rowMin.y + (rowHeight - ImGui::GetTextLineHeight()) * 0.5f);
+                        drawList->PushClipRect(ImVec2(textMinX, rowMin.y), ImVec2(textMaxX, rowMax.y), true);
+                        drawList->AddText(textPos, ImGui::GetColorU32(ImGuiCol_Text), source.id.c_str());
+                        drawList->PopClipRect();
+                    }
+
+                    ImGui::PopID();
+                }
+
+                if (hasPreviewInsertLine) {
+                    const ImVec2 lineStart(ImGui::GetWindowPos().x + style.WindowPadding.x, previewInsertLineY);
+                    const ImVec2 lineEnd(ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x - style.WindowPadding.x, previewInsertLineY);
+                    const ImU32 lineColor = ImGui::ColorConvertFloat4ToU32(ImVec4(previewInsertTint.x, previewInsertTint.y, previewInsertTint.z, 1.00f));
+                    ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(lineStart.x, previewInsertLineY - 4.0f),
+                                                              ImVec2(lineStart.x + 10.0f, previewInsertLineY + 4.0f), lineColor, 3.0f);
+                    ImGui::GetWindowDrawList()->AddLine(ImVec2(lineStart.x + 14.0f, lineStart.y), lineEnd, lineColor, 2.0f);
+                    ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(lineStart.x + 14.0f, lineStart.y), 3.0f, lineColor);
+                }
             }
-            if (moveDownIndex >= 0 && static_cast<size_t>(moveDownIndex + 1) < mode.sources.size() &&
-                MoveModeSource(mode, static_cast<size_t>(moveDownIndex), static_cast<size_t>(moveDownIndex + 1))) {
-                g_configIsDirty = true;
-            }
+            ImGui::EndChild();
+            ImGui::PopStyleColor();
+
+            ImGui::Dummy(ImVec2(0.0f, listPaddingY * 0.35f));
+
             if (removeIndex >= 0) {
                 mode.sources.erase(mode.sources.begin() + removeIndex);
                 g_configIsDirty = true;
+            } else if (moveFromIndex >= 0 && static_cast<size_t>(moveFromIndex) < mode.sources.size()) {
+                size_t normalizedInsertIndex = moveInsertIndex;
+                if (normalizedInsertIndex > mode.sources.size()) { normalizedInsertIndex = mode.sources.size(); }
+
+                size_t fromIndex = static_cast<size_t>(moveFromIndex);
+                if (fromIndex < normalizedInsertIndex) { --normalizedInsertIndex; }
+
+                if (fromIndex != normalizedInsertIndex) {
+                    ModeSourceRef movedSource = mode.sources[fromIndex];
+                    mode.sources.erase(mode.sources.begin() + static_cast<std::ptrdiff_t>(fromIndex));
+                    mode.sources.insert(mode.sources.begin() + static_cast<std::ptrdiff_t>(normalizedInsertIndex), std::move(movedSource));
+                    g_configIsDirty = true;
+                }
             }
 
-            if (ImGui::BeginCombo((std::string("Add Source") + "##" + idSuffix).c_str(), "[Add Source]")) {
+            if (ImGui::BeginCombo((std::string(trc("modes.add_source")) + "##" + idSuffix).c_str(), trc("modes.add_source"))) {
                 auto renderSourceOption = [&](ModeSourceType type, const std::string& id) {
-                    const std::string label = getModeSourceLabel({ type, id });
-                    if (ModeHasSource(mode, type, id)) {
-                        ImGui::BeginDisabled();
-                        ImGui::Selectable(label.c_str(), false);
-                        ImGui::EndDisabled();
+                    ImGui::PushID((std::to_string(static_cast<int>(type)) + "_" + id).c_str());
+                    const bool alreadyAdded = ModeHasSource(mode, type, id);
+                    const float optionHeight = ImGui::GetFrameHeight() + style.FramePadding.y;
+                    if (alreadyAdded) { ImGui::BeginDisabled(); }
+                    const bool selected = ImGui::Selectable("##source_option", false, 0, ImVec2(0.0f, optionHeight));
+                    if (alreadyAdded) { ImGui::EndDisabled(); }
+                    const ImVec2 optionMin = ImGui::GetItemRectMin();
+                    const ImVec2 optionMax = ImGui::GetItemRectMax();
+                    const bool optionHovered = ImGui::IsItemHovered();
+                    const ImVec4 tint = getModeSourceTypeTint(type);
+                    ImDrawList* drawList = ImGui::GetWindowDrawList();
+                    if (optionHovered) {
+                        drawList->AddRectFilled(optionMin, optionMax,
+                                                ImGui::ColorConvertFloat4ToU32(ImVec4(tint.x, tint.y, tint.z, 0.16f)), 5.0f);
+                    }
+
+                    const float iconSize = ImGui::GetFrameHeight() - 1.0f;
+                    const ImVec2 iconMin(optionMin.x + style.FramePadding.x, optionMin.y + (optionHeight - iconSize) * 0.5f);
+                    drawModeSourceTypeIconAt(iconMin, iconSize, type);
+
+                    const ImVec2 textPos(iconMin.x + iconSize + style.ItemInnerSpacing.x,
+                                         optionMin.y + (optionHeight - ImGui::GetTextLineHeight()) * 0.5f);
+                    const ImU32 textColor = alreadyAdded ? ImGui::GetColorU32(ImGuiCol_TextDisabled) : ImGui::GetColorU32(ImGuiCol_Text);
+                    drawList->AddText(textPos, textColor, id.c_str());
+
+                    if (alreadyAdded) {
+                        ImGui::PopID();
                         return;
                     }
 
-                    if (ImGui::Selectable(label.c_str())) {
+                    if (selected) {
                         if (AddModeSource(mode, type, id)) { g_configIsDirty = true; }
                     }
+
+                    ImGui::PopID();
                 };
 
                 if (!g_config.mirrors.empty()) {
