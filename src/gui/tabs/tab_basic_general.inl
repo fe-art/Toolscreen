@@ -432,7 +432,8 @@ if (ImGui::BeginTabItem(trc("tabs.general"))) {
                 ninjabrainBot.x = 0;
                 ninjabrainBot.y = 0;
                 ninjabrainBot.scale = 1.2f;
-                ninjabrainBot.relativeTo = "topLeft";
+                ninjabrainBot.relativeSizing = true;
+                ninjabrainBot.relativeTo = "topLeftScreen";
                 ninjabrainBot.opacity = 1.0f;
                 ninjabrainBot.colorKey = { 55 / 255.0f, 60 / 255.0f, 66 / 255.0f };
                 ninjabrainBot.enableColorKey = true;

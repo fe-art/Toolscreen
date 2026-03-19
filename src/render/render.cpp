@@ -887,22 +887,35 @@ static void ScaleViewportRelativeImageSize(int baseW, int baseH, bool relativeSt
     outH = (std::max)(1, static_cast<int>(baseH * uniformScale));
 }
 
+static void ResolveConfiguredImageDimensions(const ImageConfig& img, int sourceWidth, int sourceHeight, int& outW, int& outH) {
+    int croppedWidth = sourceWidth - img.crop_left - img.crop_right;
+    int croppedHeight = sourceHeight - img.crop_top - img.crop_bottom;
+    croppedWidth = (std::max)(1, croppedWidth);
+    croppedHeight = (std::max)(1, croppedHeight);
+
+    if (!img.relativeSizing && img.width > 0 && img.height > 0) {
+        outW = (std::max)(1, img.width);
+        outH = (std::max)(1, img.height);
+        return;
+    }
+
+    outW = (std::max)(1, static_cast<int>(croppedWidth * img.scale));
+    outH = (std::max)(1, static_cast<int>(croppedHeight * img.scale));
+}
+
 void CalculateImageDimensions(const ImageConfig& img, int& outW, int& outH) {
+    if (!img.relativeSizing && img.width > 0 && img.height > 0) {
+        outW = (std::max)(1, img.width);
+        outH = (std::max)(1, img.height);
+        return;
+    }
+
     // NOTE: This is used in UI/drag hit-testing; avoid blocking if another thread is updating textures.
     std::unique_lock<std::mutex> lock(g_userImagesMutex, std::try_to_lock);
     if (lock.owns_lock()) {
         auto it = g_userImages.find(img.name);
         if (it != g_userImages.end() && it->second.textureId != 0) {
-            int texWidth = it->second.width;
-            int texHeight = it->second.height;
-            int croppedWidth = texWidth - img.crop_left - img.crop_right;
-            int croppedHeight = texHeight - img.crop_top - img.crop_bottom;
-            if (croppedWidth < 1) croppedWidth = 1;
-            if (croppedHeight < 1) croppedHeight = 1;
-            outW = static_cast<int>(croppedWidth * img.scale);
-            outH = static_cast<int>(croppedHeight * img.scale);
-            if (outW < 1) outW = 1;
-            if (outH < 1) outH = 1;
+            ResolveConfiguredImageDimensions(img, it->second.width, it->second.height, outW, outH);
             return;
         }
     }
@@ -3110,12 +3123,7 @@ static void RenderImagesDirect(const std::vector<ImageConfig>& activeImages, int
 
         int displayW = 0;
         int displayH = 0;
-        int croppedWidth = texWidth - conf.crop_left - conf.crop_right;
-        int croppedHeight = texHeight - conf.crop_top - conf.crop_bottom;
-        if (croppedWidth < 1) croppedWidth = 1;
-        if (croppedHeight < 1) croppedHeight = 1;
-        displayW = (std::max)(1, static_cast<int>(croppedWidth * conf.scale));
-        displayH = (std::max)(1, static_cast<int>(croppedHeight * conf.scale));
+        ResolveConfiguredImageDimensions(conf, texWidth, texHeight, displayW, displayH);
 
         bool isViewportRelative = conf.relativeTo.length() > 8 && conf.relativeTo.substr(conf.relativeTo.length() - 8) == "Viewport";
         int finalScreenX = 0;
@@ -5561,14 +5569,9 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
                         }
 
                         // Calculate actual dimensions from scale (avoid calling CalculateImageDimensions to prevent nested locking)
-                        int croppedW = texWidth - conf.crop_left - conf.crop_right;
-                        int croppedH = texHeight - conf.crop_top - conf.crop_bottom;
-                        if (croppedW < 1) croppedW = 1;
-                        if (croppedH < 1) croppedH = 1;
-                        int displayW = static_cast<int>(croppedW * conf.scale);
-                        int displayH = static_cast<int>(croppedH * conf.scale);
-                        if (displayW < 1) displayW = 1;
-                        if (displayH < 1) displayH = 1;
+                        int displayW = 0;
+                        int displayH = 0;
+                        ResolveConfiguredImageDimensions(conf, texWidth, texHeight, displayW, displayH);
 
                         const bool isViewportRelative =
                             conf.relativeTo.length() > 8 && conf.relativeTo.substr(conf.relativeTo.length() - 8) == "Viewport";

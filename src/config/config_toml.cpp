@@ -633,6 +633,9 @@ void ImageConfigToToml(const ImageConfig& cfg, toml::table& out) {
     out.insert("x", cfg.x);
     out.insert("y", cfg.y);
     out.insert("scale", cfg.scale);
+    out.insert("relativeSizing", cfg.relativeSizing);
+    out.insert("width", cfg.width);
+    out.insert("height", cfg.height);
     out.insert("relativeTo", cfg.relativeTo);
     out.insert("crop_top", cfg.crop_top);
     out.insert("crop_bottom", cfg.crop_bottom);
@@ -668,6 +671,9 @@ void ImageConfigFromToml(const toml::table& tbl, ImageConfig& cfg) {
     cfg.x = GetOr(tbl, "x", ConfigDefaults::IMAGE_X);
     cfg.y = GetOr(tbl, "y", ConfigDefaults::IMAGE_Y);
     cfg.scale = GetOr(tbl, "scale", ConfigDefaults::IMAGE_SCALE);
+    cfg.relativeSizing = GetOr(tbl, "relativeSizing", ConfigDefaults::IMAGE_RELATIVE_SIZING);
+    cfg.width = GetOr(tbl, "width", ConfigDefaults::IMAGE_WIDTH);
+    cfg.height = GetOr(tbl, "height", ConfigDefaults::IMAGE_HEIGHT);
     cfg.relativeTo = GetStringOr(tbl, "relativeTo", ConfigDefaults::IMAGE_RELATIVE_TO);
     cfg.crop_top = GetOr(tbl, "crop_top", ConfigDefaults::IMAGE_CROP_TOP);
     cfg.crop_bottom = GetOr(tbl, "crop_bottom", ConfigDefaults::IMAGE_CROP_BOTTOM);

@@ -211,6 +211,9 @@ struct ImageConfig {
     std::string path;
     int x = 0, y = 0;
     float scale = 1.0f;
+    bool relativeSizing = true;
+    int width = 0;
+    int height = 0;
     std::string relativeTo = "topLeftScreen";
     int crop_top = 0, crop_bottom = 0, crop_left = 0, crop_right = 0;
     bool enableColorKey = false;
