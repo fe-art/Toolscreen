@@ -1789,6 +1789,8 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                         }
                         ImGui::Text(trc("images.border_width"));
                         if (Spinner("##BorderWidthThin", &mode.border.width, 1, 1, 50)) { g_configIsDirty = true; }
+                            ImGui::Text(trc("images.border_radius"));
+                            if (Spinner("##BorderRadiusThin", &mode.border.radius, 1, 0, 100)) { g_configIsDirty = true; }
                     }
                     ImGui::TreePop();
                 }
@@ -2206,6 +2208,8 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                         }
                         ImGui::Text(trc("images.border_width"));
                         if (Spinner("##BorderWidthWide", &mode.border.width, 1, 1, 50)) { g_configIsDirty = true; }
+                            ImGui::Text(trc("images.border_radius"));
+                            if (Spinner("##BorderRadiusWide", &mode.border.radius, 1, 0, 100)) { g_configIsDirty = true; }
                     }
                     ImGui::TreePop();
                 }
