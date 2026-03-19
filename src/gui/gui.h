@@ -499,6 +499,7 @@ struct Config {
     bool disableHookChaining = false;
     bool allowCursorEscape = false;
     float mouseSensitivity = 1.0f;
+    int mouseMovementPollingRate = ConfigDefaults::CONFIG_MOUSE_MOVEMENT_POLLING_RATE;
     int windowsMouseSpeed = 0;                              // Windows mouse speed override (0 = disabled, 1-20 = override)
     bool hideAnimationsInGame = false;
     bool limitCaptureFramerate = ConfigDefaults::CONFIG_LIMIT_CAPTURE_FRAMERATE;

@@ -1362,6 +1362,7 @@ void hkglfwSetInputMode_ThirdParty(void* window, int mode, int value) {
 }
 
 static std::pair<float, float> ResolveMouseSensitivityForRawInput() {
+    auto cfgSnap = GetConfigSnapshot();
     if (g_tempSensitivityActiveAtomic.load(std::memory_order_acquire)) {
         return {
             g_tempSensitivityXAtomic.load(std::memory_order_relaxed),
@@ -1387,7 +1388,7 @@ static std::pair<float, float> ResolveMouseSensitivityForRawInput() {
 
     float sensitivityX = 1.0f;
     float sensitivityY = 1.0f;
-    auto inputCfgSnap = GetConfigSnapshot();
+    auto inputCfgSnap = cfgSnap;
     const ModeConfig* mode = inputCfgSnap ? GetModeFromSnapshot(*inputCfgSnap, modeId) : nullptr;
     if (mode && mode->sensitivityOverrideEnabled) {
         if (mode->separateXYSensitivity) {
@@ -1419,11 +1420,38 @@ static UINT GetRawInputDataHook_Impl(GETRAWINPUTDATAPROC next, HRAWINPUT hRawInp
 
     if (result == static_cast<UINT>(-1) || pData == nullptr || uiCommand != RID_INPUT) { return result; }
 
-    if (g_showGui.load() || g_isShuttingDown.load()) { return result; }
+    if (g_showGui.load() || g_isShuttingDown.load()) {
+        ResetMouseMovementThrottleState();
+        return result;
+    }
 
     RAWINPUT* raw = reinterpret_cast<RAWINPUT*>(pData);
 
     if (raw->header.dwType == RIM_TYPEMOUSE) {
+        LONG injectedPendingX = 0;
+        LONG injectedPendingY = 0;
+        if ((raw->data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE) == 0 &&
+            ConsumePendingRawMouseMovementThrottleInjection(hRawInput, injectedPendingX, injectedPendingY)) {
+            const long long combinedX = static_cast<long long>(raw->data.mouse.lLastX) + static_cast<long long>(injectedPendingX);
+            const long long combinedY = static_cast<long long>(raw->data.mouse.lLastY) + static_cast<long long>(injectedPendingY);
+
+            if (combinedX > static_cast<long long>(LONG_MAX)) {
+                raw->data.mouse.lLastX = LONG_MAX;
+            } else if (combinedX < static_cast<long long>(LONG_MIN)) {
+                raw->data.mouse.lLastX = LONG_MIN;
+            } else {
+                raw->data.mouse.lLastX = static_cast<LONG>(combinedX);
+            }
+
+            if (combinedY > static_cast<long long>(LONG_MAX)) {
+                raw->data.mouse.lLastY = LONG_MAX;
+            } else if (combinedY < static_cast<long long>(LONG_MIN)) {
+                raw->data.mouse.lLastY = LONG_MIN;
+            } else {
+                raw->data.mouse.lLastY = static_cast<LONG>(combinedY);
+            }
+        }
+
         const auto [sensitivityX, sensitivityY] = ResolveMouseSensitivityForRawInput();
 
         if (!(raw->data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE)) {

@@ -16,6 +16,25 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
             ImGui::SameLine();
             HelpMarker(trc("tooltip.mouse_sensitivity"));
 
+            ImGui::Text(trc("label.mouse_movement_polling_rate"));
+            ImGui::SetNextItemWidth(600);
+            int mouseMovementPollingRate = g_config.mouseMovementPollingRate;
+            if (ImGui::SliderInt("##mouseMovementPollingRate", &mouseMovementPollingRate, 0,
+                                 ConfigDefaults::CONFIG_MOUSE_MOVEMENT_POLLING_RATE_MAX,
+                                 mouseMovementPollingRate == 0 ? trc("label.disabled") : "%d events/s")) {
+                const int interval = ConfigDefaults::CONFIG_MOUSE_MOVEMENT_POLLING_RATE_INTERVAL;
+                if (mouseMovementPollingRate > 0) {
+                    mouseMovementPollingRate =
+                        static_cast<int>(std::lround(static_cast<double>(mouseMovementPollingRate) / static_cast<double>(interval))) * interval;
+                    mouseMovementPollingRate = std::clamp(mouseMovementPollingRate, interval, ConfigDefaults::CONFIG_MOUSE_MOVEMENT_POLLING_RATE_MAX);
+                }
+                g_config.mouseMovementPollingRate = mouseMovementPollingRate;
+                g_configIsDirty = true;
+                ResetMouseMovementThrottleState();
+            }
+            ImGui::SameLine();
+            HelpMarker(trc("tooltip.mouse_movement_polling_rate"));
+
             ImGui::Text(trc("label.windows_mouse_speed"));
             ImGui::SetNextItemWidth(600);
             int windowsSpeedValue = g_config.windowsMouseSpeed;

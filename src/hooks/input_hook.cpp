@@ -24,6 +24,8 @@
 #include <unordered_set>
 #include <windowsx.h>
 
+typedef UINT(WINAPI* GETRAWINPUTDATAPROC)(HRAWINPUT hRawInput, UINT uiCommand, LPVOID pData, PUINT pcbSize, UINT cbSizeHeader);
+
 extern std::atomic<bool> g_showGui;
 extern std::atomic<bool> g_guiNeedsRecenter;
 extern std::atomic<bool> g_wasCursorVisible;
@@ -58,6 +60,7 @@ extern std::atomic<float> g_tempSensitivityYAtomic;
 extern std::set<std::string> g_triggerOnReleasePending;
 extern std::set<std::string> g_triggerOnReleaseInvalidated;
 extern std::mutex g_triggerOnReleaseMutex;
+extern GETRAWINPUTDATAPROC oGetRawInputData;
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 static bool s_forcedShowCursor = false;
@@ -69,6 +72,19 @@ static HHOOK s_lowLevelKeyboardHook = NULL;
 static std::mutex s_lowLevelKeyboardHookMutex;
 static std::atomic<bool> s_deferredFocusRegainWmSizePending{ false };
 static constexpr UINT_PTR kToolscreenKeyRepeatTimerId = 0x54535250;
+
+struct MouseMovementThrottleState {
+    std::mutex mutex;
+    std::chrono::steady_clock::time_point lastWindowMoveForwardTime{};
+    std::chrono::steady_clock::time_point lastRawInputForwardTime{};
+    long long pendingRawDeltaX = 0;
+    long long pendingRawDeltaY = 0;
+    HRAWINPUT pendingRawInjectionHandle = NULL;
+    LONG pendingRawInjectionX = 0;
+    LONG pendingRawInjectionY = 0;
+};
+
+static MouseMovementThrottleState s_mouseMovementThrottleState;
 
 struct LowLevelSuppressedKeyState {
     DWORD rawVk = 0;
@@ -94,6 +110,125 @@ static bool IsModifierVk(DWORD vk);
 static LPARAM BuildKeyboardMessageLParam(UINT scanCodeWithFlags, bool isKeyDown, bool isSystemKey, UINT repeatCount,
                                          bool previousKeyState, bool transitionState);
 static std::chrono::steady_clock::time_point ResolveNextRepeatTimeFromPress(const std::chrono::steady_clock::time_point& initialPressTime);
+
+static LONG ClampAccumulatedRawMouseDelta(long long value) {
+    if (value > static_cast<long long>(LONG_MAX)) return LONG_MAX;
+    if (value < static_cast<long long>(LONG_MIN)) return LONG_MIN;
+    return static_cast<LONG>(value);
+}
+
+static int ResolveConfiguredMouseMovementPollingRate() {
+    return std::clamp(g_config.mouseMovementPollingRate, 0, ConfigDefaults::CONFIG_MOUSE_MOVEMENT_POLLING_RATE_MAX);
+}
+
+void ResetMouseMovementThrottleState() {
+    std::lock_guard<std::mutex> lock(s_mouseMovementThrottleState.mutex);
+    s_mouseMovementThrottleState.lastWindowMoveForwardTime = std::chrono::steady_clock::time_point{};
+    s_mouseMovementThrottleState.lastRawInputForwardTime = std::chrono::steady_clock::time_point{};
+    s_mouseMovementThrottleState.pendingRawDeltaX = 0;
+    s_mouseMovementThrottleState.pendingRawDeltaY = 0;
+    s_mouseMovementThrottleState.pendingRawInjectionHandle = NULL;
+    s_mouseMovementThrottleState.pendingRawInjectionX = 0;
+    s_mouseMovementThrottleState.pendingRawInjectionY = 0;
+}
+
+bool ConsumePendingRawMouseMovementThrottleInjection(HRAWINPUT rawInputHandle, LONG& pendingX, LONG& pendingY) {
+    pendingX = 0;
+    pendingY = 0;
+
+    std::lock_guard<std::mutex> lock(s_mouseMovementThrottleState.mutex);
+    if (s_mouseMovementThrottleState.pendingRawInjectionHandle != rawInputHandle) {
+        return false;
+    }
+
+    pendingX = s_mouseMovementThrottleState.pendingRawInjectionX;
+    pendingY = s_mouseMovementThrottleState.pendingRawInjectionY;
+    s_mouseMovementThrottleState.pendingRawInjectionHandle = NULL;
+    s_mouseMovementThrottleState.pendingRawInjectionX = 0;
+    s_mouseMovementThrottleState.pendingRawInjectionY = 0;
+    return pendingX != 0 || pendingY != 0;
+}
+
+static bool TryReadRawMouseInput(HRAWINPUT rawInputHandle, RAWINPUT& outRawInput) {
+    if (!rawInputHandle || !oGetRawInputData) return false;
+
+    UINT rawSize = sizeof(outRawInput);
+    const UINT readResult = oGetRawInputData(rawInputHandle, RID_INPUT, &outRawInput, &rawSize, sizeof(RAWINPUTHEADER));
+    if (readResult == static_cast<UINT>(-1) || rawSize < sizeof(RAWINPUTHEADER)) {
+        return false;
+    }
+
+    return outRawInput.header.dwType == RIM_TYPEMOUSE;
+}
+
+static void PreparePendingRawMouseMovementThrottleInjection(HRAWINPUT rawInputHandle) {
+    if (!rawInputHandle) return;
+
+    const LONG pendingX = ClampAccumulatedRawMouseDelta(s_mouseMovementThrottleState.pendingRawDeltaX);
+    const LONG pendingY = ClampAccumulatedRawMouseDelta(s_mouseMovementThrottleState.pendingRawDeltaY);
+    if (pendingX == 0 && pendingY == 0) return;
+
+    s_mouseMovementThrottleState.pendingRawInjectionHandle = rawInputHandle;
+    s_mouseMovementThrottleState.pendingRawInjectionX = pendingX;
+    s_mouseMovementThrottleState.pendingRawInjectionY = pendingY;
+    s_mouseMovementThrottleState.pendingRawDeltaX = 0;
+    s_mouseMovementThrottleState.pendingRawDeltaY = 0;
+}
+
+static InputHandlerResult HandleMouseMovementRateLimit(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    if (uMsg != WM_MOUSEMOVE && uMsg != WM_INPUT) {
+        return { false, 0 };
+    }
+
+    const int rateLimit = ResolveConfiguredMouseMovementPollingRate();
+    if (rateLimit <= 0 || g_showGui.load(std::memory_order_acquire) || g_isShuttingDown.load(std::memory_order_acquire)) {
+        ResetMouseMovementThrottleState();
+        return { false, 0 };
+    }
+
+    using Clock = std::chrono::steady_clock;
+    const auto minInterval = std::chrono::duration<double>(1.0 / static_cast<double>(rateLimit));
+    const Clock::time_point now = Clock::now();
+
+    if (uMsg == WM_MOUSEMOVE) {
+        std::lock_guard<std::mutex> lock(s_mouseMovementThrottleState.mutex);
+        const bool hasRecentForward =
+            s_mouseMovementThrottleState.lastWindowMoveForwardTime.time_since_epoch() != Clock::duration::zero();
+        if (hasRecentForward && (now - s_mouseMovementThrottleState.lastWindowMoveForwardTime) < minInterval) {
+            return { true, 0 };
+        }
+
+        s_mouseMovementThrottleState.lastWindowMoveForwardTime = now;
+        return { false, 0 };
+    }
+
+    RAWINPUT rawInput{};
+    if (!TryReadRawMouseInput(reinterpret_cast<HRAWINPUT>(lParam), rawInput)) {
+        return { false, 0 };
+    }
+
+    const RAWMOUSE& rawMouse = rawInput.data.mouse;
+    const bool isRelativeMove = (rawMouse.usFlags & MOUSE_MOVE_ABSOLUTE) == 0;
+    const bool hasMovement = rawMouse.lLastX != 0 || rawMouse.lLastY != 0;
+    const bool hasButtonOrWheelState = rawMouse.usButtonFlags != 0;
+    const bool isPureMoveEvent = isRelativeMove && hasMovement && !hasButtonOrWheelState;
+
+    std::lock_guard<std::mutex> lock(s_mouseMovementThrottleState.mutex);
+    const bool hasRecentForward = s_mouseMovementThrottleState.lastRawInputForwardTime.time_since_epoch() != Clock::duration::zero();
+
+    if (isPureMoveEvent && hasRecentForward && (now - s_mouseMovementThrottleState.lastRawInputForwardTime) < minInterval) {
+        s_mouseMovementThrottleState.pendingRawDeltaX += static_cast<long long>(rawMouse.lLastX);
+        s_mouseMovementThrottleState.pendingRawDeltaY += static_cast<long long>(rawMouse.lLastY);
+        return { true, DefWindowProc(hWnd, uMsg, wParam, lParam) };
+    }
+
+    PreparePendingRawMouseMovementThrottleInjection(reinterpret_cast<HRAWINPUT>(lParam));
+    if (hasMovement || s_mouseMovementThrottleState.pendingRawInjectionHandle != NULL) {
+        s_mouseMovementThrottleState.lastRawInputForwardTime = now;
+    }
+
+    return { false, 0 };
+}
 
 static std::unordered_map<DWORD, LowLevelSuppressedKeyState> s_lowLevelSuppressedKeys;
 static std::mutex s_lowLevelSuppressedKeysMutex;
@@ -3376,6 +3511,9 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     }
 
     result = HandleMouseCoordinateTranslationPhase(hWnd, uMsg, wParam, lParam);
+    if (result.consumed) return result.result;
+
+    result = HandleMouseMovementRateLimit(hWnd, uMsg, wParam, lParam);
     if (result.consumed) return result.result;
 
     result = HandleCustomKeyNoRebind(hWnd, uMsg, wParam, lParam);
