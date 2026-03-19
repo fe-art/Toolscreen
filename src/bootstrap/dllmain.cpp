@@ -1976,11 +1976,21 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                  modeToRenderCopy.stretch.y == 0);
             const bool borderVisible = modeToRenderCopy.border.enabled && modeToRenderCopy.border.width > 0;
 
-            const bool anyModeOverlaysConfigured =
-                (!modeToRenderCopy.mirrorIds.empty() || !modeToRenderCopy.mirrorGroupIds.empty() ||
-                 (g_imageOverlaysVisible.load(std::memory_order_acquire) && !modeToRenderCopy.imageIds.empty()) ||
-                 (g_windowOverlaysVisible.load(std::memory_order_acquire) && !modeToRenderCopy.windowOverlayIds.empty()) ||
-                 (g_browserOverlaysVisible.load(std::memory_order_acquire) && !modeToRenderCopy.browserOverlayIds.empty()));
+            const bool anyModeOverlaysConfigured = std::any_of(modeToRenderCopy.sources.begin(), modeToRenderCopy.sources.end(),
+                                                               [&](const ModeSourceRef& source) {
+                                                                   switch (source.type) {
+                                                                   case ModeSourceType::Mirror:
+                                                                   case ModeSourceType::MirrorGroup:
+                                                                       return true;
+                                                                   case ModeSourceType::Image:
+                                                                       return g_imageOverlaysVisible.load(std::memory_order_acquire);
+                                                                   case ModeSourceType::WindowOverlay:
+                                                                       return g_windowOverlaysVisible.load(std::memory_order_acquire);
+                                                                   case ModeSourceType::BrowserOverlay:
+                                                                       return g_browserOverlaysVisible.load(std::memory_order_acquire);
+                                                                   }
+                                                                   return false;
+                                                               });
 
             const bool anyImGuiOrDebugOverlay = shouldRenderGui || showPerformanceOverlay || showProfiler || showEyeZoomOnScreen ||
                                                 frameCfg.debug.showTextureGrid;

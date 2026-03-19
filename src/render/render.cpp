@@ -184,14 +184,71 @@ static void EnsureConfigCachesValid() {
     }
 }
 
-void CollectActiveElementsForMode(const Config& config, const std::string& modeId, bool onlyOnMyScreenPass,
-                                  std::vector<MirrorConfig>& outMirrors, std::vector<ImageConfig>& outImages,
-                                  std::vector<WindowOverlayConfig>& outWindowOverlays,
-                                  std::vector<BrowserOverlayConfig>& outBrowserOverlays) {
+enum class ActiveModeSourceType {
+    Mirror,
+    Image,
+    WindowOverlay,
+    BrowserOverlay
+};
+
+struct ActiveModeSourceEntry {
+    ActiveModeSourceType type = ActiveModeSourceType::Mirror;
+    MirrorConfig mirror;
+    const ImageConfig* image = nullptr;
+    const WindowOverlayConfig* windowOverlay = nullptr;
+    const BrowserOverlayConfig* browserOverlay = nullptr;
+};
+
+static MirrorConfig BuildGroupedMirrorConfig(const MirrorConfig& mirror, const MirrorGroupConfig& group, const MirrorGroupItem& item) {
+    MirrorConfig groupedMirror = mirror;
+
+    int groupX = group.output.x;
+    int groupY = group.output.y;
+    if (group.output.useRelativePosition) {
+        int screenW = GetCachedWindowWidth();
+        int screenH = GetCachedWindowHeight();
+        groupX = static_cast<int>(group.output.relativeX * screenW);
+        groupY = static_cast<int>(group.output.relativeY * screenH);
+    }
+
+    groupedMirror.output.x = groupX + item.offsetX;
+    groupedMirror.output.y = groupY + item.offsetY;
+    groupedMirror.output.relativeTo = group.output.relativeTo;
+    groupedMirror.output.useRelativePosition = group.output.useRelativePosition;
+    groupedMirror.output.relativeX = group.output.relativeX;
+    groupedMirror.output.relativeY = group.output.relativeY;
+    if (item.widthPercent != 1.0f || item.heightPercent != 1.0f) {
+        groupedMirror.output.separateScale = true;
+        float baseScaleX = mirror.output.separateScale ? mirror.output.scaleX : mirror.output.scale;
+        float baseScaleY = mirror.output.separateScale ? mirror.output.scaleY : mirror.output.scale;
+        groupedMirror.output.scaleX = baseScaleX * item.widthPercent;
+        groupedMirror.output.scaleY = baseScaleY * item.heightPercent;
+    }
+
+    return groupedMirror;
+}
+
+static bool ModeHasSourceType(const ModeConfig& mode, ModeSourceType type) {
+    return std::any_of(mode.sources.begin(), mode.sources.end(), [&](const ModeSourceRef& source) {
+        return source.type == type;
+    });
+}
+
+static bool ModeHasAnyMirrorSources(const ModeConfig& mode) {
+    return ModeHasSourceType(mode, ModeSourceType::Mirror) || ModeHasSourceType(mode, ModeSourceType::MirrorGroup);
+}
+
+static void ResolveActiveElementsForMode(const Config& config, const std::string& modeId, bool onlyOnMyScreenPass,
+                                         uint64_t configVersion, std::vector<MirrorConfig>& outMirrors,
+                                         std::vector<ImageConfig>& outImages,
+                                         std::vector<const WindowOverlayConfig*>& outWindowOverlays,
+                                         std::vector<const BrowserOverlayConfig*>& outBrowserOverlays,
+                                         std::vector<ActiveModeSourceEntry>* outOrderedSources) {
     outMirrors.clear();
     outImages.clear();
     outWindowOverlays.clear();
     outBrowserOverlays.clear();
+    if (outOrderedSources) { outOrderedSources->clear(); }
 
     std::unordered_map<std::string, const ModeConfig*> modeById;
     std::unordered_map<std::string, const ModeConfig*> modeByIdLowered;
@@ -234,86 +291,119 @@ void CollectActiveElementsForMode(const Config& config, const std::string& modeI
     }
     if (!mode) return;
 
-    outMirrors.reserve(mode->mirrorIds.size() + mode->mirrorGroupIds.size());
-    outImages.reserve(mode->imageIds.size());
-    outWindowOverlays.reserve(mode->windowOverlayIds.size());
-    outBrowserOverlays.reserve(mode->browserOverlayIds.size());
+    const bool imagesVisible = g_imageOverlaysVisible.load(std::memory_order_acquire);
+    const bool windowOverlaysVisible = g_windowOverlaysVisible.load(std::memory_order_acquire);
+    const bool browserOverlaysVisible = g_browserOverlaysVisible.load(std::memory_order_acquire);
 
-    for (const auto& mirrorName : mode->mirrorIds) {
-        auto it = mirrorByName.find(mirrorName);
-        if (it == mirrorByName.end() || !it->second) continue;
-        const MirrorConfig& mirror = *it->second;
-        if (!onlyOnMyScreenPass || mirror.onlyOnMyScreen) { outMirrors.push_back(mirror); }
-    }
+    const size_t sourceEstimate = mode->sources.size();
+    outMirrors.reserve(sourceEstimate);
+    outImages.reserve(sourceEstimate);
+    outWindowOverlays.reserve(sourceEstimate);
+    outBrowserOverlays.reserve(sourceEstimate);
+    if (outOrderedSources) { outOrderedSources->reserve(sourceEstimate * 2); }
 
-    for (const auto& groupName : mode->mirrorGroupIds) {
-        auto git = groupByName.find(groupName);
-        if (git == groupByName.end() || !git->second) continue;
+    auto appendMirror = [&](const MirrorConfig& mirror) {
+        if (onlyOnMyScreenPass && !mirror.onlyOnMyScreen) { return; }
+        outMirrors.push_back(mirror);
+        if (outOrderedSources) {
+            ActiveModeSourceEntry source;
+            source.type = ActiveModeSourceType::Mirror;
+            source.mirror = mirror;
+            outOrderedSources->push_back(std::move(source));
+        }
+    };
+
+    auto appendMirrorByName = [&](const std::string& mirrorName) {
+        auto it = s_mirrorByName.find(mirrorName);
+        if (it == s_mirrorByName.end() || !it->second) return;
+        appendMirror(*it->second);
+    };
+
+    auto appendMirrorGroup = [&](const std::string& groupName) {
+        auto git = s_groupByName.find(groupName);
+        if (git == s_groupByName.end() || !git->second) return;
         const auto& group = *git->second;
 
         for (const auto& item : group.mirrors) {
             if (!item.enabled) continue;
+            auto mit = s_mirrorByName.find(item.mirrorId);
+            if (mit == s_mirrorByName.end() || !mit->second) continue;
+            appendMirror(BuildGroupedMirrorConfig(*mit->second, group, item));
+        }
+    };
 
-            auto mit = mirrorByName.find(item.mirrorId);
-            if (mit == mirrorByName.end() || !mit->second) continue;
+    auto appendImage = [&](const std::string& imageName) {
+        if (!imagesVisible) return;
+        auto it = s_imageByName.find(imageName);
+        if (it == s_imageByName.end() || !it->second) return;
+        const ImageConfig* image = it->second;
+        if (onlyOnMyScreenPass && !image->onlyOnMyScreen) { return; }
+        outImages.push_back(*image);
+        if (outOrderedSources) {
+            ActiveModeSourceEntry source;
+            source.type = ActiveModeSourceType::Image;
+            source.image = image;
+            outOrderedSources->push_back(std::move(source));
+        }
+    };
 
-            const auto& mirror = *mit->second;
-            if (onlyOnMyScreenPass && !mirror.onlyOnMyScreen) continue;
+    auto appendWindowOverlay = [&](const std::string& overlayId) {
+        if (!windowOverlaysVisible) return;
+        auto it = s_windowOverlayByName.find(overlayId);
+        if (it == s_windowOverlayByName.end() || !it->second) return;
+        const WindowOverlayConfig* overlay = it->second;
+        if (onlyOnMyScreenPass && !overlay->onlyOnMyScreen) { return; }
+        outWindowOverlays.push_back(overlay);
+        if (outOrderedSources) {
+            ActiveModeSourceEntry source;
+            source.type = ActiveModeSourceType::WindowOverlay;
+            source.windowOverlay = overlay;
+            outOrderedSources->push_back(std::move(source));
+        }
+    };
 
-            MirrorConfig groupedMirror = mirror;
-            int groupX = group.output.x;
-            int groupY = group.output.y;
-            if (group.output.useRelativePosition) {
-                int screenW = GetCachedWindowWidth();
-                int screenH = GetCachedWindowHeight();
-                groupX = static_cast<int>(group.output.relativeX * screenW);
-                groupY = static_cast<int>(group.output.relativeY * screenH);
-            }
+    auto appendBrowserOverlay = [&](const std::string& overlayId) {
+        if (!browserOverlaysVisible) return;
+        auto it = s_browserOverlayByName.find(overlayId);
+        if (it == s_browserOverlayByName.end() || !it->second) return;
+        const BrowserOverlayConfig* overlay = it->second;
+        if (onlyOnMyScreenPass && !overlay->onlyOnMyScreen) { return; }
+        outBrowserOverlays.push_back(overlay);
+        if (outOrderedSources) {
+            ActiveModeSourceEntry source;
+            source.type = ActiveModeSourceType::BrowserOverlay;
+            source.browserOverlay = overlay;
+            outOrderedSources->push_back(std::move(source));
+        }
+    };
 
-            groupedMirror.output.x = groupX + item.offsetX;
-            groupedMirror.output.y = groupY + item.offsetY;
-            groupedMirror.output.relativeTo = group.output.relativeTo;
-            groupedMirror.output.useRelativePosition = group.output.useRelativePosition;
-            groupedMirror.output.relativeX = group.output.relativeX;
-            groupedMirror.output.relativeY = group.output.relativeY;
-            if (item.widthPercent != 1.0f || item.heightPercent != 1.0f) {
-                groupedMirror.output.separateScale = true;
-                float baseScaleX = mirror.output.separateScale ? mirror.output.scaleX : mirror.output.scale;
-                float baseScaleY = mirror.output.separateScale ? mirror.output.scaleY : mirror.output.scale;
-                groupedMirror.output.scaleX = baseScaleX * item.widthPercent;
-                groupedMirror.output.scaleY = baseScaleY * item.heightPercent;
-            }
-
-            outMirrors.push_back(groupedMirror);
+    for (const auto& source : mode->sources) {
+        switch (source.type) {
+        case ModeSourceType::Mirror:
+            appendMirrorByName(source.id);
+            break;
+        case ModeSourceType::MirrorGroup:
+            appendMirrorGroup(source.id);
+            break;
+        case ModeSourceType::Image:
+            appendImage(source.id);
+            break;
+        case ModeSourceType::WindowOverlay:
+            appendWindowOverlay(source.id);
+            break;
+        case ModeSourceType::BrowserOverlay:
+            appendBrowserOverlay(source.id);
+            break;
         }
     }
+}
 
-    if (g_imageOverlaysVisible.load(std::memory_order_acquire)) {
-        for (const auto& imageName : mode->imageIds) {
-            auto it = imageByName.find(imageName);
-            if (it == imageByName.end() || !it->second) continue;
-            const ImageConfig& image = *it->second;
-            if (!onlyOnMyScreenPass || image.onlyOnMyScreen) { outImages.push_back(image); }
-        }
-    }
-
-    if (g_windowOverlaysVisible.load(std::memory_order_acquire)) {
-        for (const auto& overlayId : mode->windowOverlayIds) {
-            auto it = windowOverlayByName.find(overlayId);
-            if (it == windowOverlayByName.end() || !it->second) continue;
-            const WindowOverlayConfig& overlay = *it->second;
-            if (!onlyOnMyScreenPass || overlay.onlyOnMyScreen) { outWindowOverlays.push_back(overlay); }
-        }
-    }
-
-    if (g_browserOverlaysVisible.load(std::memory_order_acquire)) {
-        for (const auto& overlayId : mode->browserOverlayIds) {
-            auto it = browserOverlayByName.find(overlayId);
-            if (it == browserOverlayByName.end() || !it->second) continue;
-            const BrowserOverlayConfig& overlay = *it->second;
-            if (!onlyOnMyScreenPass || overlay.onlyOnMyScreen) { outBrowserOverlays.push_back(overlay); }
-        }
-    }
+void CollectActiveElementsForMode(const Config& config, const std::string& modeId, bool onlyOnMyScreenPass, uint64_t configVersion,
+                                  std::vector<MirrorConfig>& outMirrors, std::vector<ImageConfig>& outImages,
+                                  std::vector<const WindowOverlayConfig*>& outWindowOverlays,
+                                  std::vector<const BrowserOverlayConfig*>& outBrowserOverlays) {
+    ResolveActiveElementsForMode(config, modeId, onlyOnMyScreenPass, configVersion, outMirrors, outImages, outWindowOverlays,
+                                 outBrowserOverlays, nullptr);
 }
 
 extern std::atomic<bool> g_graphicsHookDetected;
@@ -4197,9 +4287,10 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
     static bool s_cachedActiveBrowserOverlaysVisible = false;
     static std::vector<MirrorConfig> s_cachedActiveMirrors;
     static std::vector<ImageConfig> s_cachedActiveImages;
-    static std::vector<WindowOverlayConfig> s_cachedActiveWindowOverlays;
-    static std::vector<BrowserOverlayConfig> s_cachedActiveBrowserOverlays;
-    static const Config* s_cachedEyeZoomSlideOutConfig = nullptr;
+    static std::vector<const WindowOverlayConfig*> s_cachedActiveWindowOverlays;
+    static std::vector<const BrowserOverlayConfig*> s_cachedActiveBrowserOverlays;
+    static std::vector<ActiveModeSourceEntry> s_cachedActiveOrderedSources;
+    static uint64_t s_cachedEyeZoomSlideOutConfigVersion = 0;
     static std::string s_cachedEyeZoomSlideOutTargetModeId;
     static std::vector<MirrorConfig> s_cachedEyeZoomSlideOutMirrors;
     static const Config* s_cachedTransitionSlideOutConfig = nullptr;
@@ -4211,8 +4302,9 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
     static std::vector<ThreadedMirrorConfig> s_cachedSameThreadCaptureConfigs;
     static const std::vector<MirrorConfig> s_emptyMirrors;
     static const std::vector<ImageConfig> s_emptyImages;
-    static const std::vector<WindowOverlayConfig> s_emptyWindowOverlays;
-    static const std::vector<BrowserOverlayConfig> s_emptyBrowserOverlays;
+    static const std::vector<const WindowOverlayConfig*> s_emptyWindowOverlays;
+    static const std::vector<const BrowserOverlayConfig*> s_emptyBrowserOverlays;
+    static const std::vector<ActiveModeSourceEntry> s_emptyActiveSources;
 
     GameViewportGeometry geo{};
     geo.gameW = request.gameW;
@@ -4243,8 +4335,9 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
             s_cachedActiveImagesVisible = imagesVisible;
             s_cachedActiveWindowOverlaysVisible = windowOverlaysVisible;
             s_cachedActiveBrowserOverlaysVisible = browserOverlaysVisible;
-            CollectActiveElementsForMode(cfg, request.modeId, false, s_cachedActiveMirrors, s_cachedActiveImages,
-                                         s_cachedActiveWindowOverlays, s_cachedActiveBrowserOverlays);
+            ResolveActiveElementsForMode(cfg, request.modeId, false, cfgVersion, s_cachedActiveMirrors, s_cachedActiveImages,
+                                         s_cachedActiveWindowOverlays, s_cachedActiveBrowserOverlays,
+                                         &s_cachedActiveOrderedSources);
         }
     }
     const std::vector<MirrorConfig>& activeMirrors = needModeElements ? s_cachedActiveMirrors : s_emptyMirrors;
@@ -4253,6 +4346,7 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
         needModeElements ? s_cachedActiveWindowOverlays : s_emptyWindowOverlays;
     const std::vector<BrowserOverlayConfig>& activeBrowserOverlays =
         needModeElements ? s_cachedActiveBrowserOverlays : s_emptyBrowserOverlays;
+    const std::vector<ActiveModeSourceEntry>& activeOrderedSources = needModeElements ? s_cachedActiveOrderedSources : s_emptyActiveSources;
 
     if (!request.isRawWindowedMode && request.isTransitioningFromEyeZoom && cfg.eyezoom.slideMirrorsIn && !request.skipAnimation) {
         if (s_cachedEyeZoomSlideOutConfig != &cfg || s_cachedEyeZoomSlideOutTargetModeId != request.modeId) {
@@ -4340,6 +4434,78 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
         ClearEyeZoomTextLabels();
     }
 
+    const bool isEyeZoomMode = (request.modeId == "EyeZoom");
+    const auto renderActiveSourceRange = [&](size_t beginIndex, size_t endIndex) {
+        if (beginIndex >= endIndex || endIndex > activeOrderedSources.size()) { return; }
+
+        std::vector<MirrorConfig> singleMirror;
+        std::vector<ImageConfig> singleImage;
+        std::vector<const WindowOverlayConfig*> singleWindowOverlay;
+        std::vector<const BrowserOverlayConfig*> singleBrowserOverlay;
+        singleMirror.reserve(1);
+        singleImage.reserve(1);
+        singleWindowOverlay.reserve(1);
+        singleBrowserOverlay.reserve(1);
+
+        for (size_t sourceIndex = beginIndex; sourceIndex < endIndex; ++sourceIndex) {
+            const ActiveModeSourceEntry& source = activeOrderedSources[sourceIndex];
+
+            switch (source.type) {
+            case ActiveModeSourceType::Mirror:
+                if (request.isRawWindowedMode) { break; }
+                singleMirror.clear();
+                singleMirror.push_back(source.mirror);
+                RenderMirrorsDirect(singleMirror, geo, request.fullW, request.fullH, request.overlayOpacity,
+                                    request.excludeOnlyOnMyScreen, request.relativeStretching, request.transitionProgress,
+                                    request.mirrorSlideProgress, request.fromX, request.fromY, request.fromW, request.fromH,
+                                    request.toX, request.toY, request.toW, request.toH, isEyeZoomMode,
+                                    request.isTransitioningFromEyeZoom, request.eyeZoomAnimatedViewportX, request.skipAnimation,
+                                    request.fromModeId, request.fromSlideMirrorsIn, request.toSlideMirrorsIn, false, cfg);
+                break;
+
+            case ActiveModeSourceType::Image:
+                if (request.isRawWindowedMode || !source.image) { break; }
+                singleImage.clear();
+                singleImage.push_back(*source.image);
+                RenderImagesDirect(singleImage, request.fullW, request.fullH, request.toX, request.toY, request.toW,
+                                   request.toH, request.gameW, request.gameH, request.relativeStretching,
+                                   request.transitionProgress, request.fromX, request.fromY, request.fromW, request.fromH,
+                                   request.overlayOpacity, request.excludeOnlyOnMyScreen);
+                break;
+
+            case ActiveModeSourceType::WindowOverlay:
+                if (!source.windowOverlay) { break; }
+                singleWindowOverlay.clear();
+                singleWindowOverlay.push_back(source.windowOverlay);
+                RenderWindowOverlaysDirect(singleWindowOverlay, request.fullW, request.fullH, request.toX, request.toY,
+                                           request.toW, request.toH, request.gameW, request.gameH,
+                                           request.relativeStretching, request.transitionProgress, request.fromX,
+                                           request.fromY, request.fromW, request.fromH, request.overlayOpacity,
+                                           request.excludeOnlyOnMyScreen);
+                break;
+
+            case ActiveModeSourceType::BrowserOverlay:
+                if (!source.browserOverlay) { break; }
+                singleBrowserOverlay.clear();
+                singleBrowserOverlay.push_back(source.browserOverlay);
+                RenderBrowserOverlaysDirect(singleBrowserOverlay, request.fullW, request.fullH, request.toX, request.toY,
+                                            request.toW, request.toH, request.gameW, request.gameH,
+                                            request.relativeStretching, request.transitionProgress, request.fromX,
+                                            request.fromY, request.fromW, request.fromH, request.overlayOpacity,
+                                            request.excludeOnlyOnMyScreen);
+                break;
+            }
+        }
+    };
+
+    size_t firstNonMirrorSource = activeOrderedSources.size();
+    for (size_t i = 0; i < activeOrderedSources.size(); ++i) {
+        if (activeOrderedSources[i].type != ActiveModeSourceType::Mirror) {
+            firstNonMirrorSource = i;
+            break;
+        }
+    }
+
     if (!request.isRawWindowedMode) {
         GLuint sourceTexture = 0;
         int sourceW = 0;
@@ -4379,15 +4545,9 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
             }
         }
 
-        if (!activeMirrors.empty()) {
-            PROFILE_SCOPE_CAT("Render Active Mirrors", "Rendering");
-            const bool isEyeZoomMode = (request.modeId == "EyeZoom");
-            RenderMirrorsDirect(activeMirrors, geo, request.fullW, request.fullH, request.overlayOpacity,
-                                request.excludeOnlyOnMyScreen, request.relativeStretching, request.transitionProgress,
-                                request.mirrorSlideProgress, request.fromX, request.fromY, request.fromW, request.fromH, request.toX,
-                                request.toY, request.toW, request.toH, isEyeZoomMode, request.isTransitioningFromEyeZoom,
-                                request.eyeZoomAnimatedViewportX, request.skipAnimation, request.fromModeId, request.fromSlideMirrorsIn,
-                                request.toSlideMirrorsIn, false, cfg);
+        if (firstNonMirrorSource > 0) {
+            PROFILE_SCOPE_CAT("Render Ordered Mirror Sources", "Rendering");
+            renderActiveSourceRange(0, firstNonMirrorSource);
         }
 
         if (!eyeZoomSlideOutMirrors->empty()) {
@@ -4410,27 +4570,9 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
         }
     }
 
-    if (!request.isRawWindowedMode && !activeImages.empty()) {
-        PROFILE_SCOPE_CAT("Render Active Images", "Rendering");
-        RenderImagesDirect(activeImages, request.fullW, request.fullH, request.toX, request.toY, request.toW, request.toH,
-                           request.gameW, request.gameH, request.relativeStretching, request.transitionProgress, request.fromX,
-                           request.fromY, request.fromW, request.fromH, request.overlayOpacity, request.excludeOnlyOnMyScreen);
-    }
-
-    if (!activeWindowOverlays.empty()) {
-        PROFILE_SCOPE_CAT("Render Window Overlays", "Rendering");
-        RenderWindowOverlaysDirect(activeWindowOverlays, request.fullW, request.fullH, request.toX, request.toY, request.toW,
-                                   request.toH, request.gameW, request.gameH, request.relativeStretching, request.transitionProgress,
-                                   request.fromX, request.fromY, request.fromW, request.fromH, request.overlayOpacity,
-                                   request.excludeOnlyOnMyScreen);
-    }
-
-    if (!activeBrowserOverlays.empty()) {
-        PROFILE_SCOPE_CAT("Render Browser Overlays", "Rendering");
-        RenderBrowserOverlaysDirect(activeBrowserOverlays, request.fullW, request.fullH, request.toX, request.toY, request.toW,
-                                    request.toH, request.gameW, request.gameH, request.relativeStretching,
-                                    request.transitionProgress, request.fromX, request.fromY, request.fromW, request.fromH,
-                                    request.overlayOpacity, request.excludeOnlyOnMyScreen);
+    if (firstNonMirrorSource < activeOrderedSources.size()) {
+        PROFILE_SCOPE_CAT("Render Ordered Non-Mirror Sources", "Rendering");
+        renderActiveSourceRange(firstNonMirrorSource, activeOrderedSources.size());
     }
 
     RenderSameThreadImGui(request);
@@ -5165,12 +5307,13 @@ bool RenderSameThreadObsFrame(const ModeConfig* modeToRender, const GLState& s, 
             request.textureGridModeHeight = 0;
             request.showWelcomeToast = false;
             request.welcomeToastIsFullscreen = false;
-            request.modeHasMirrors = !modeToRender->mirrorIds.empty() || !modeToRender->mirrorGroupIds.empty();
-            request.modeHasImages = g_imageOverlaysVisible.load(std::memory_order_acquire) && !modeToRender->imageIds.empty();
+            request.modeHasMirrors = ModeHasAnyMirrorSources(*modeToRender);
+            request.modeHasImages = g_imageOverlaysVisible.load(std::memory_order_acquire) &&
+                                    ModeHasSourceType(*modeToRender, ModeSourceType::Image);
             request.modeHasWindowOverlays = g_windowOverlaysVisible.load(std::memory_order_acquire) &&
-                                            !modeToRender->windowOverlayIds.empty();
+                                            ModeHasSourceType(*modeToRender, ModeSourceType::WindowOverlay);
             request.modeHasBrowserOverlays = g_browserOverlaysVisible.load(std::memory_order_acquire) &&
-                                             !modeToRender->browserOverlayIds.empty();
+                                             ModeHasSourceType(*modeToRender, ModeSourceType::BrowserOverlay);
             request.isRawWindowedMode = false;
             request.fromModeId = transitionState.fromModeId;
             request.fromSlideMirrorsIn = fromMode && fromMode->slideMirrorsIn;
@@ -5804,7 +5947,7 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
     }
 
     // Active elements are collected earlier; here we only check whether mirror resources are needed.
-    bool hasMirrors = !modeToRender->mirrorIds.empty() || !modeToRender->mirrorGroupIds.empty();
+    bool hasMirrors = ModeHasAnyMirrorSources(*modeToRender);
 
     {
         PROFILE_SCOPE_CAT("Framebuffer/Viewport Setup", "Rendering");
@@ -6156,59 +6299,13 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
 
             // Collect active mirrors for fallback rendering (use snapshot for thread safety)
             std::vector<MirrorConfig> fallbackMirrors;
-            const auto& fbMirrors = configSnap ? configSnap->mirrors : g_config.mirrors;
-            const auto& fbGroups = configSnap ? configSnap->mirrorGroups : g_config.mirrorGroups;
-            fallbackMirrors.reserve(modeToRender->mirrorIds.size() + modeToRender->mirrorGroupIds.size());
-
-            std::unordered_map<std::string, size_t> mirrorIndex;
-            mirrorIndex.reserve(fbMirrors.size());
-            for (size_t i = 0; i < fbMirrors.size(); ++i) { mirrorIndex[fbMirrors[i].name] = i; }
-            std::unordered_map<std::string, size_t> groupIndex;
-            groupIndex.reserve(fbGroups.size());
-            for (size_t i = 0; i < fbGroups.size(); ++i) { groupIndex[fbGroups[i].name] = i; }
-
-            for (const auto& name : modeToRender->mirrorIds) {
-                auto it = mirrorIndex.find(name);
-                if (it != mirrorIndex.end()) {
-                    fallbackMirrors.push_back(fbMirrors[it->second]);
-                }
-            }
-            for (const auto& groupName : modeToRender->mirrorGroupIds) {
-                auto git = groupIndex.find(groupName);
-                if (git != groupIndex.end()) {
-                    const auto& group = fbGroups[git->second];
-                    for (const auto& item : group.mirrors) {
-                        if (!item.enabled) continue;
-                        auto mit = mirrorIndex.find(item.mirrorId);
-                        if (mit != mirrorIndex.end()) {
-                            const auto& mirror = fbMirrors[mit->second];
-                            MirrorConfig groupedMirror = mirror;
-                            int groupX = group.output.x;
-                            int groupY = group.output.y;
-                            if (group.output.useRelativePosition) {
-                                int screenW = GetCachedWindowWidth();
-                                int screenH = GetCachedWindowHeight();
-                                groupX = static_cast<int>(group.output.relativeX * screenW);
-                                groupY = static_cast<int>(group.output.relativeY * screenH);
-                            }
-                            groupedMirror.output.x = groupX + item.offsetX;
-                            groupedMirror.output.y = groupY + item.offsetY;
-                            groupedMirror.output.relativeTo = group.output.relativeTo;
-                            groupedMirror.output.useRelativePosition = group.output.useRelativePosition;
-                            groupedMirror.output.relativeX = group.output.relativeX;
-                            groupedMirror.output.relativeY = group.output.relativeY;
-                            if (item.widthPercent != 1.0f || item.heightPercent != 1.0f) {
-                                groupedMirror.output.separateScale = true;
-                                float baseScaleX = mirror.output.separateScale ? mirror.output.scaleX : mirror.output.scale;
-                                float baseScaleY = mirror.output.separateScale ? mirror.output.scaleY : mirror.output.scale;
-                                groupedMirror.output.scaleX = baseScaleX * item.widthPercent;
-                                groupedMirror.output.scaleY = baseScaleY * item.heightPercent;
-                            }
-                            fallbackMirrors.push_back(groupedMirror);
-                        }
-                    }
-                }
-            }
+            std::vector<ImageConfig> unusedImages;
+            std::vector<const WindowOverlayConfig*> unusedOverlays;
+            std::vector<const BrowserOverlayConfig*> unusedBrowserOverlays;
+            const Config& fallbackConfig = configSnap ? *configSnap : g_config;
+            const uint64_t fallbackConfigVersion = configSnap ? g_configSnapshotVersion.load(std::memory_order_acquire) : 0;
+            CollectActiveElementsForMode(fallbackConfig, modeToRender->id, false, fallbackConfigVersion, fallbackMirrors,
+                                         unusedImages, unusedOverlays, unusedBrowserOverlays);
 
             std::vector<size_t> mirrorsNeedingUpdate;
             mirrorsNeedingUpdate.reserve(fallbackMirrors.size());
@@ -6389,7 +6486,9 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
                             imageByName.emplace(img.name, &img);
                         }
                     }
-                    for (const auto& imageName : modeToRender->imageIds) {
+                    for (const auto& source : modeToRender->sources) {
+                        if (source.type != ModeSourceType::Image) { continue; }
+                        const std::string& imageName = source.id;
                         const ImageConfig* confPtr = nullptr;
                         if (!imageByName.empty()) {
                             auto it = imageByName.find(imageName);
@@ -6527,7 +6626,9 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
                                     overlayByName.emplace(ov.name, &ov);
                                 }
                             }
-                            for (const auto& overlayId : modeToRender->windowOverlayIds) {
+                            for (const auto& source : modeToRender->sources) {
+                                if (source.type != ModeSourceType::WindowOverlay) { continue; }
+                                const std::string& overlayId = source.id;
                                 const WindowOverlayConfig* config = nullptr;
                                 if (!overlayByName.empty()) {
                                     auto it = overlayByName.find(overlayId);
@@ -6723,7 +6824,14 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
 
     float overlayOpacity = 1.0f;
 
-    const bool wantOverlayElements = true;
+    // If there's nothing to draw, avoid compositing a fullscreen overlay texture.
+    const bool wantOverlayElements = hasMirrors ||
+                                    (g_imageOverlaysVisible.load(std::memory_order_acquire) &&
+                                     ModeHasSourceType(*modeToRender, ModeSourceType::Image)) ||
+                                    (g_windowOverlaysVisible.load(std::memory_order_acquire) &&
+                                     ModeHasSourceType(*modeToRender, ModeSourceType::WindowOverlay)) ||
+                                    (g_browserOverlaysVisible.load(std::memory_order_acquire) &&
+                                     ModeHasSourceType(*modeToRender, ModeSourceType::BrowserOverlay));
     const bool wantAnyImGui = g_shouldRenderGui.load(std::memory_order_relaxed) || g_showPerformanceOverlay.load(std::memory_order_relaxed) ||
                               g_showProfiler.load(std::memory_order_relaxed) || g_showEyeZoom.load(std::memory_order_relaxed) ||
                               g_showTextureGrid.load(std::memory_order_relaxed);
@@ -6820,11 +6928,12 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
         target.welcomeToastIsFullscreen = isFullscreenMode;
         target.showWelcomeToast = wantWelcomeToast;
         target.modeHasMirrors = hasMirrors;
-        target.modeHasImages = g_imageOverlaysVisible.load(std::memory_order_acquire) && !modeToRender->imageIds.empty();
+        target.modeHasImages = g_imageOverlaysVisible.load(std::memory_order_acquire) &&
+                       ModeHasSourceType(*modeToRender, ModeSourceType::Image);
         target.modeHasWindowOverlays = g_windowOverlaysVisible.load(std::memory_order_acquire) &&
-                                       !modeToRender->windowOverlayIds.empty();
+                           ModeHasSourceType(*modeToRender, ModeSourceType::WindowOverlay);
         target.modeHasBrowserOverlays = g_browserOverlaysVisible.load(std::memory_order_acquire) &&
-                        !modeToRender->browserOverlayIds.empty();
+                        ModeHasSourceType(*modeToRender, ModeSourceType::BrowserOverlay);
 
         target.fromModeId = transitionState.fromModeId;
         if (!transitionState.fromModeId.empty()) {

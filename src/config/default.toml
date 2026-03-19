@@ -308,9 +308,7 @@ output = { relativeTo = 'centerViewport', relativeX = 0.0, relativeY = 0.0, scal
 border = { color = [ 255, 255, 255 ], enabled = false, radius = 0, width = 4 }
 height = 'screenHeight'
 id = 'Fullscreen'
-imageIds = [ 'Ninjabrain Bot' ]
-mirrorGroupIds = []
-mirrorIds = [ 'Mapless' ]
+sources = [ { type = 'Mirror', id = 'Mapless' }, { type = 'Image', id = 'Ninjabrain Bot' } ]
 modeSensitivity = 1.0
 modeSensitivityX = 1.0
 modeSensitivityY = 1.0
@@ -318,8 +316,6 @@ sensitivityOverrideEnabled = false
 separateXYSensitivity = false
 stretch = { enabled = true, height = 1440, width = 2560, x = 0, y = 0 }
 width = 'screenWidth'
-browserOverlayIds = []
-windowOverlayIds = []
 
     [mode.transition]
     gameTransition = 'Bounce'
@@ -350,9 +346,7 @@ windowOverlayIds = []
 border = { color = [ 255, 255, 255 ], enabled = false, radius = 0, width = 4 }
 height = 16384
 id = 'EyeZoom'
-imageIds = [ 'Ninjabrain Bot' ]
-mirrorGroupIds = [ 'Preemptive Pie' ]
-mirrorIds = [ 'E Counter' ]
+sources = [ { type = 'Mirror', id = 'E Counter' }, { type = 'MirrorGroup', id = 'Preemptive Pie' }, { type = 'Image', id = 'Ninjabrain Bot' } ]
 modeSensitivity = 1.0
 modeSensitivityX = 1.0
 modeSensitivityY = 1.0
@@ -360,8 +354,6 @@ sensitivityOverrideEnabled = false
 separateXYSensitivity = false
 stretch = { enabled = false, height = 0, width = 0, x = 0, y = 0 }
 width = 384
-browserOverlayIds = []
-windowOverlayIds = []
 
     [mode.transition]
     gameTransition = 'Bounce'
@@ -392,9 +384,7 @@ windowOverlayIds = []
 border = { color = [ 255, 255, 255 ], enabled = false, radius = 0, width = 4 }
 height = 16384
 id = 'Preemptive'
-imageIds = [ ]
-mirrorGroupIds = [ 'Preemptive Pie' ]
-mirrorIds = [ 'E Counter' ]
+sources = [ { type = 'Mirror', id = 'E Counter' }, { type = 'MirrorGroup', id = 'Preemptive Pie' } ]
 modeSensitivity = 1.0
 modeSensitivityX = 1.0
 modeSensitivityY = 1.0
@@ -402,8 +392,6 @@ sensitivityOverrideEnabled = false
 separateXYSensitivity = false
 stretch = { enabled = false, height = 0, width = 0, x = 0, y = 0 }
 width = 384
-browserOverlayIds = []
-windowOverlayIds = []
 
     [mode.transition]
     gameTransition = 'Bounce'
@@ -434,9 +422,7 @@ windowOverlayIds = []
 border = { color = [ 122, 21, 162 ], enabled = true, radius = 0, width = 1 }
 height = 'roundEven(screenHeight * 0.95)'
 id = 'Thin'
-imageIds = []
-mirrorGroupIds = [ 'Preemptive Pie' ]
-mirrorIds = [ 'Mapless', 'E Counter' ]
+sources = [ { type = 'Mirror', id = 'Mapless' }, { type = 'Mirror', id = 'E Counter' }, { type = 'MirrorGroup', id = 'Preemptive Pie' } ]
 modeSensitivity = 1.0
 modeSensitivityX = 1.0
 modeSensitivityY = 1.0
@@ -444,8 +430,6 @@ sensitivityOverrideEnabled = false
 separateXYSensitivity = false
 stretch = { enabled = false, height = 0, width = 0, x = 0, y = 0 }
 width = 'max(330, roundEven(screenWidth / 8))'
-browserOverlayIds = []
-windowOverlayIds = []
 
     [mode.transition]
     gameTransition = 'Bounce'
@@ -476,9 +460,7 @@ windowOverlayIds = []
 border = { color = [ 122, 21, 162 ], enabled = true, radius = 0, width = 1 }
 height = 0.25
 id = 'Wide'
-imageIds = []
-mirrorGroupIds = []
-mirrorIds = []
+sources = []
 modeSensitivity = 1.0
 modeSensitivityX = 1.0
 modeSensitivityY = 1.0
@@ -486,8 +468,6 @@ sensitivityOverrideEnabled = false
 separateXYSensitivity = false
 stretch = { enabled = false, height = 0, width = 0, x = 0, y = 0 }
 width = "roundEven(screenWidth * 0.98)"
-browserOverlayIds = []
-windowOverlayIds = []
 
     [mode.transition]
     gameTransition = 'Bounce'

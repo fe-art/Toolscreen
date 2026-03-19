@@ -24,34 +24,109 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
 
     SliderCtrlClickTip();
 
-    auto renderModeBrowserOverlayAssignments = [&](ModeConfig& mode, const std::string& idSuffix) {
-        if (ImGui::TreeNode((tr("modes.browser_overlays") + "##" + idSuffix).c_str())) {
-            int browserOverlayIdxToRemove = -1;
-            for (size_t k = 0; k < mode.browserOverlayIds.size(); ++k) {
-                ImGui::PushID(("browser_overlay_" + idSuffix + "_" + std::to_string(k)).c_str());
-                std::string deleteLabel = "X##del_browser_overlay_from_mode_" + idSuffix + "_" + std::to_string(k);
-                if (ImGui::Button(deleteLabel.c_str())) { browserOverlayIdxToRemove = static_cast<int>(k); }
+    auto getModeSourceLabel = [&](const ModeSourceRef& source) {
+        const char* typeLabel = "Unknown";
+        switch (source.type) {
+        case ModeSourceType::Mirror:
+            typeLabel = trc("modes.mirrors");
+            break;
+        case ModeSourceType::MirrorGroup:
+            typeLabel = trc("modes.mirror_groups");
+            break;
+        case ModeSourceType::Image:
+            typeLabel = trc("modes.images");
+            break;
+        case ModeSourceType::WindowOverlay:
+            typeLabel = trc("modes.window_overlays");
+            break;
+        case ModeSourceType::BrowserOverlay:
+            typeLabel = trc("modes.browser_overlays");
+            break;
+        }
+
+        return std::string(typeLabel) + ": " + source.id;
+    };
+
+    auto renderModeSourceAssignments = [&](ModeConfig& mode, const std::string& idSuffix) {
+        if (ImGui::TreeNode((std::string("Sources") + "##" + idSuffix).c_str())) {
+            int removeIndex = -1;
+            int moveUpIndex = -1;
+            int moveDownIndex = -1;
+
+            for (size_t k = 0; k < mode.sources.size(); ++k) {
+                const ModeSourceRef& source = mode.sources[k];
+                const std::string sourceLabel = getModeSourceLabel(source);
+
+                ImGui::PushID(("mode_source_" + idSuffix + "_" + std::to_string(k)).c_str());
+                ImGui::BeginDisabled(k == 0);
+                if (ImGui::ArrowButton("##up", ImGuiDir_Up)) { moveUpIndex = static_cast<int>(k); }
+                ImGui::EndDisabled();
                 ImGui::SameLine();
-                ImGui::TextUnformatted(mode.browserOverlayIds[k].c_str());
+                ImGui::BeginDisabled(k + 1 >= mode.sources.size());
+                if (ImGui::ArrowButton("##down", ImGuiDir_Down)) { moveDownIndex = static_cast<int>(k); }
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                if (ImGui::Button("X##remove")) { removeIndex = static_cast<int>(k); }
+                ImGui::SameLine();
+                ImGui::TextUnformatted(sourceLabel.c_str());
                 ImGui::PopID();
             }
-            if (browserOverlayIdxToRemove != -1) {
-                mode.browserOverlayIds.erase(mode.browserOverlayIds.begin() + browserOverlayIdxToRemove);
+
+            if (moveUpIndex > 0 && MoveModeSource(mode, static_cast<size_t>(moveUpIndex), static_cast<size_t>(moveUpIndex - 1))) {
                 g_configIsDirty = true;
             }
-            if (ImGui::BeginCombo((tr("modes.add_browser_overlay") + "##add_browser_overlay_to_mode_" + idSuffix).c_str(),
-                                  trc("modes.select_browser_overlay"))) {
-                for (const auto& overlayConf : g_config.browserOverlays) {
-                    if (std::find(mode.browserOverlayIds.begin(), mode.browserOverlayIds.end(), overlayConf.name) ==
-                        mode.browserOverlayIds.end()) {
-                        if (ImGui::Selectable(overlayConf.name.c_str())) {
-                            mode.browserOverlayIds.push_back(overlayConf.name);
-                            g_configIsDirty = true;
-                        }
+            if (moveDownIndex >= 0 && static_cast<size_t>(moveDownIndex + 1) < mode.sources.size() &&
+                MoveModeSource(mode, static_cast<size_t>(moveDownIndex), static_cast<size_t>(moveDownIndex + 1))) {
+                g_configIsDirty = true;
+            }
+            if (removeIndex >= 0) {
+                mode.sources.erase(mode.sources.begin() + removeIndex);
+                g_configIsDirty = true;
+            }
+
+            if (ImGui::BeginCombo((std::string("Add Source") + "##" + idSuffix).c_str(), "[Add Source]")) {
+                auto renderSourceOption = [&](ModeSourceType type, const std::string& id) {
+                    const std::string label = getModeSourceLabel({ type, id });
+                    if (ModeHasSource(mode, type, id)) {
+                        ImGui::BeginDisabled();
+                        ImGui::Selectable(label.c_str(), false);
+                        ImGui::EndDisabled();
+                        return;
+                    }
+
+                    if (ImGui::Selectable(label.c_str())) {
+                        if (AddModeSource(mode, type, id)) { g_configIsDirty = true; }
+                    }
+                };
+
+                if (!g_config.mirrors.empty()) {
+                    ImGui::SeparatorText(trc("modes.mirrors"));
+                    for (const auto& mirrorConf : g_config.mirrors) { renderSourceOption(ModeSourceType::Mirror, mirrorConf.name); }
+                }
+                if (!g_config.mirrorGroups.empty()) {
+                    ImGui::SeparatorText(trc("modes.mirror_groups"));
+                    for (const auto& groupConf : g_config.mirrorGroups) { renderSourceOption(ModeSourceType::MirrorGroup, groupConf.name); }
+                }
+                if (!g_config.images.empty()) {
+                    ImGui::SeparatorText(trc("modes.images"));
+                    for (const auto& imgConf : g_config.images) { renderSourceOption(ModeSourceType::Image, imgConf.name); }
+                }
+                if (!g_config.windowOverlays.empty()) {
+                    ImGui::SeparatorText(trc("modes.window_overlays"));
+                    for (const auto& overlayConf : g_config.windowOverlays) {
+                        renderSourceOption(ModeSourceType::WindowOverlay, overlayConf.name);
                     }
                 }
+                if (!g_config.browserOverlays.empty()) {
+                    ImGui::SeparatorText(trc("modes.browser_overlays"));
+                    for (const auto& overlayConf : g_config.browserOverlays) {
+                        renderSourceOption(ModeSourceType::BrowserOverlay, overlayConf.name);
+                    }
+                }
+
                 ImGui::EndCombo();
             }
+
             ImGui::TreePop();
         }
     };
@@ -208,121 +283,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                 }
                 ImGui::Separator();
 
-                if (ImGui::TreeNode(trc("modes.mirrors"))) {
-                    int mirror_idx_to_remove = -1;
-                    for (size_t k = 0; k < mode.mirrorIds.size(); ++k) {
-                        ImGui::PushID(static_cast<int>(k));
-                        std::string del_mirror_label = "X##del_mirror_from_mode_" + std::to_string(k);
-                        if (ImGui::Button(del_mirror_label.c_str())) { mirror_idx_to_remove = (int)k; }
-                        ImGui::SameLine();
-                        ImGui::TextUnformatted(mode.mirrorIds[k].c_str());
-                        ImGui::PopID();
-                    }
-                    if (mirror_idx_to_remove != -1) {
-                        mode.mirrorIds.erase(mode.mirrorIds.begin() + mirror_idx_to_remove);
-                        g_configIsDirty = true;
-                    }
-                    if (ImGui::BeginCombo((tr("modes.add_mirror") + "##add_mirror_to_mode").c_str(), trc("modes.select_mirror"))) {
-                        for (const auto& mirrorConf : g_config.mirrors) {
-                            if (std::find(mode.mirrorIds.begin(), mode.mirrorIds.end(), mirrorConf.name) == mode.mirrorIds.end()) {
-                                if (ImGui::Selectable(mirrorConf.name.c_str())) {
-                                    mode.mirrorIds.push_back(mirrorConf.name);
-                                    g_configIsDirty = true;
-                                }
-                            }
-                        }
-                        ImGui::EndCombo();
-                    }
-                    ImGui::TreePop();
-                }
-
-                if (ImGui::TreeNode(trc("modes.mirror_groups"))) {
-                    int group_idx_to_remove = -1;
-                    for (size_t k = 0; k < mode.mirrorGroupIds.size(); ++k) {
-                        ImGui::PushID(static_cast<int>(k));
-                        std::string del_group_label = "X##del_mirror_group_from_mode_" + std::to_string(k);
-                        if (ImGui::Button(del_group_label.c_str())) { group_idx_to_remove = (int)k; }
-                        ImGui::SameLine();
-                        ImGui::TextUnformatted(mode.mirrorGroupIds[k].c_str());
-                        ImGui::PopID();
-                    }
-                    if (group_idx_to_remove != -1) {
-                        mode.mirrorGroupIds.erase(mode.mirrorGroupIds.begin() + group_idx_to_remove);
-                        g_configIsDirty = true;
-                    }
-                    if (ImGui::BeginCombo((tr("modes.add_mirror_group") + "##add_mirror_group_to_mode").c_str(), trc("modes.select_mirror_group"))) {
-                        for (const auto& groupConf : g_config.mirrorGroups) {
-                            if (std::find(mode.mirrorGroupIds.begin(), mode.mirrorGroupIds.end(), groupConf.name) ==
-                                mode.mirrorGroupIds.end()) {
-                                if (ImGui::Selectable(groupConf.name.c_str())) {
-                                    mode.mirrorGroupIds.push_back(groupConf.name);
-                                    g_configIsDirty = true;
-                                }
-                            }
-                        }
-                        ImGui::EndCombo();
-                    }
-                    ImGui::TreePop();
-                }
-
-                if (ImGui::TreeNode(trc("modes.images"))) {
-                    int image_idx_to_remove = -1;
-                    for (size_t k = 0; k < mode.imageIds.size(); ++k) {
-                        ImGui::PushID(static_cast<int>(k));
-                        std::string del_img_label = "X##del_img_from_mode_" + std::to_string(k);
-                        if (ImGui::Button(del_img_label.c_str())) { image_idx_to_remove = (int)k; }
-                        ImGui::SameLine();
-                        ImGui::TextUnformatted(mode.imageIds[k].c_str());
-                        ImGui::PopID();
-                    }
-                    if (image_idx_to_remove != -1) {
-                        mode.imageIds.erase(mode.imageIds.begin() + image_idx_to_remove);
-                        g_configIsDirty = true;
-                    }
-                    if (ImGui::BeginCombo((tr("modes.add_image") + "##add_image_to_mode").c_str(), trc("modes.select_image"))) {
-                        for (const auto& imgConf : g_config.images) {
-                            if (std::find(mode.imageIds.begin(), mode.imageIds.end(), imgConf.name) == mode.imageIds.end()) {
-                                if (ImGui::Selectable(imgConf.name.c_str())) {
-                                    mode.imageIds.push_back(imgConf.name);
-                                    g_configIsDirty = true;
-                                }
-                            }
-                        }
-                        ImGui::EndCombo();
-                    }
-                    ImGui::TreePop();
-                }
-
-                if (ImGui::TreeNode(trc("modes.window_overlays"))) {
-                    int windowOverlay_idx_to_remove = -1;
-                    for (size_t k = 0; k < mode.windowOverlayIds.size(); ++k) {
-                        ImGui::PushID(static_cast<int>(k));
-                        std::string del_overlay_label = "X##del_overlay_from_mode_" + std::to_string(k);
-                        if (ImGui::Button(del_overlay_label.c_str())) { windowOverlay_idx_to_remove = (int)k; }
-                        ImGui::SameLine();
-                        ImGui::TextUnformatted(mode.windowOverlayIds[k].c_str());
-                        ImGui::PopID();
-                    }
-                    if (windowOverlay_idx_to_remove != -1) {
-                        mode.windowOverlayIds.erase(mode.windowOverlayIds.begin() + windowOverlay_idx_to_remove);
-                        g_configIsDirty = true;
-                    }
-                    if (ImGui::BeginCombo((tr("modes.add_window_overlay") + "##add_overlay_to_mode").c_str(), trc("modes.select_overlay"))) {
-                        for (const auto& overlayConf : g_config.windowOverlays) {
-                            if (std::find(mode.windowOverlayIds.begin(), mode.windowOverlayIds.end(), overlayConf.name) ==
-                                mode.windowOverlayIds.end()) {
-                                if (ImGui::Selectable(overlayConf.name.c_str())) {
-                                    mode.windowOverlayIds.push_back(overlayConf.name);
-                                    g_configIsDirty = true;
-                                }
-                            }
-                        }
-                        ImGui::EndCombo();
-                    }
-                    ImGui::TreePop();
-                }
-
-                renderModeBrowserOverlayAssignments(mode, mode.id);
+                renderModeSourceAssignments(mode, mode.id);
 
 
                 if (ImGui::TreeNode((tr("modes.sensitivity_override") + "##Fullscreen").c_str())) {
@@ -994,119 +955,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                     ImGui::TreePop();
                 }
 
-                if (ImGui::TreeNode(trc("modes.eyezoom.mirrors"))) {
-                    int mirror_idx_to_remove = -1;
-                    for (size_t k = 0; k < mode.mirrorIds.size(); ++k) {
-                        ImGui::PushID(static_cast<int>(k));
-                        std::string del_mirror_label = "X##del_mirror_from_mode_" + std::to_string(k);
-                        if (ImGui::Button(del_mirror_label.c_str())) { mirror_idx_to_remove = (int)k; }
-                        ImGui::SameLine();
-                        ImGui::TextUnformatted(mode.mirrorIds[k].c_str());
-                        ImGui::PopID();
-                    }
-                    if (mirror_idx_to_remove != -1) {
-                        mode.mirrorIds.erase(mode.mirrorIds.begin() + mirror_idx_to_remove);
-                        g_configIsDirty = true;
-                    }
-                    if (ImGui::BeginCombo((tr("modes.add_mirror") + "##add_mirror_to_eyezoom").c_str(), trc("modes.select_mirror"))) {
-                        for (const auto& mirrorConf : g_config.mirrors) {
-                            if (std::find(mode.mirrorIds.begin(), mode.mirrorIds.end(), mirrorConf.name) == mode.mirrorIds.end()) {
-                                if (ImGui::Selectable(mirrorConf.name.c_str())) {
-                                    mode.mirrorIds.push_back(mirrorConf.name);
-                                    g_configIsDirty = true;
-                                }
-                            }
-                        }
-                        ImGui::EndCombo();
-                    }
-                    ImGui::TreePop();
-                }
-
-                if (ImGui::TreeNode((tr("modes.mirror_groups") + "##EyeZoom").c_str())) {
-                    int group_idx_to_remove = -1;
-                    for (size_t k = 0; k < mode.mirrorGroupIds.size(); ++k) {
-                        ImGui::PushID(static_cast<int>(k));
-                        std::string del_group_label = "X##del_mirror_group_from_eyezoom_" + std::to_string(k);
-                        if (ImGui::Button(del_group_label.c_str())) { group_idx_to_remove = (int)k; }
-                        ImGui::SameLine();
-                        ImGui::TextUnformatted(mode.mirrorGroupIds[k].c_str());
-                        ImGui::PopID();
-                    }
-                    if (group_idx_to_remove != -1) {
-                        mode.mirrorGroupIds.erase(mode.mirrorGroupIds.begin() + group_idx_to_remove);
-                        g_configIsDirty = true;
-                    }
-                    if (ImGui::BeginCombo((tr("modes.add_mirror_group") + "##add_mirror_group_to_eyezoom").c_str(), trc("modes.select_mirror_group"))) {
-                        for (const auto& groupConf : g_config.mirrorGroups) {
-                            if (std::find(mode.mirrorGroupIds.begin(), mode.mirrorGroupIds.end(), groupConf.name) ==
-                                mode.mirrorGroupIds.end()) {
-                                if (ImGui::Selectable(groupConf.name.c_str())) {
-                                    mode.mirrorGroupIds.push_back(groupConf.name);
-                                    g_configIsDirty = true;
-                                }
-                            }
-                        }
-                        ImGui::EndCombo();
-                    }
-                    ImGui::TreePop();
-                }
-
-                if (ImGui::TreeNode(trc("modes.eyezoom.images"))) {
-                    int image_idx_to_remove = -1;
-                    for (size_t k = 0; k < mode.imageIds.size(); ++k) {
-                        ImGui::PushID(static_cast<int>(k));
-                        std::string del_img_label = "X##del_img_from_mode_" + std::to_string(k);
-                        if (ImGui::Button(del_img_label.c_str())) { image_idx_to_remove = (int)k; }
-                        ImGui::SameLine();
-                        ImGui::TextUnformatted(mode.imageIds[k].c_str());
-                        ImGui::PopID();
-                    }
-                    if (image_idx_to_remove != -1) {
-                        mode.imageIds.erase(mode.imageIds.begin() + image_idx_to_remove);
-                        g_configIsDirty = true;
-                    }
-                    if (ImGui::BeginCombo((tr("modes.add_image") + "##add_image_to_eyezoom").c_str(), trc("modes.select_image"))) {
-                        for (const auto& imgConf : g_config.images) {
-                            if (std::find(mode.imageIds.begin(), mode.imageIds.end(), imgConf.name) == mode.imageIds.end()) {
-                                if (ImGui::Selectable(imgConf.name.c_str())) {
-                                    mode.imageIds.push_back(imgConf.name);
-                                    g_configIsDirty = true;
-                                }
-                            }
-                        }
-                        ImGui::EndCombo();
-                    }
-                    ImGui::TreePop();
-                }
-
-                if (ImGui::TreeNode(trc("modes.eyezoom.window_overlays"))) {
-                    int overlay_idx_to_remove = -1;
-                    for (size_t k = 0; k < mode.windowOverlayIds.size(); ++k) {
-                        ImGui::PushID(static_cast<int>(k));
-                        std::string del_overlay_label = "X##del_overlay_from_mode_" + std::to_string(k);
-                        if (ImGui::Button(del_overlay_label.c_str())) { overlay_idx_to_remove = (int)k; }
-                        ImGui::SameLine();
-                        ImGui::TextUnformatted(mode.windowOverlayIds[k].c_str());
-                        ImGui::PopID();
-                    }
-                    if (overlay_idx_to_remove != -1) {
-                        mode.windowOverlayIds.erase(mode.windowOverlayIds.begin() + overlay_idx_to_remove);
-                        g_configIsDirty = true;
-                    }
-                    if (ImGui::BeginCombo((tr("modes.add_overlay") + "##add_overlay_to_mode").c_str(), trc("modes.select_overlay"))) {
-                        for (const auto& overlayConf : g_config.windowOverlays) {
-                            if (std::find(mode.windowOverlayIds.begin(), mode.windowOverlayIds.end(), overlayConf.name) ==
-                                mode.windowOverlayIds.end()) {
-                                if (ImGui::Selectable(overlayConf.name.c_str())) {
-                                    mode.windowOverlayIds.push_back(overlayConf.name);
-                                    g_configIsDirty = true;
-                                }
-                            }
-                        }
-                        ImGui::EndCombo();
-                    }
-                    ImGui::TreePop();
-                }
+                renderModeSourceAssignments(mode, mode.id);
 
                 renderModeBrowserOverlayAssignments(mode, mode.id);
 
@@ -1400,120 +1249,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                     ImGui::TreePop();
                 }
 
-                if (ImGui::TreeNode((tr("modes.mirrors") + "##Preemptive").c_str())) {
-                    int mirror_idx_to_remove = -1;
-                    for (size_t k = 0; k < mode.mirrorIds.size(); ++k) {
-                        ImGui::PushID(static_cast<int>(k));
-                        std::string del_mirror_label = "X##del_mirror_from_preemptive_" + std::to_string(k);
-                        if (ImGui::Button(del_mirror_label.c_str())) { mirror_idx_to_remove = (int)k; }
-                        ImGui::SameLine();
-                        ImGui::TextUnformatted(mode.mirrorIds[k].c_str());
-                        ImGui::PopID();
-                    }
-                    if (mirror_idx_to_remove != -1) {
-                        mode.mirrorIds.erase(mode.mirrorIds.begin() + mirror_idx_to_remove);
-                        g_configIsDirty = true;
-                    }
-                    if (ImGui::BeginCombo((tr("modes.add_mirror") + "##add_mirror_to_preemptive").c_str(), trc("modes.select_mirror"))) {
-                        for (const auto& mirrorConf : g_config.mirrors) {
-                            if (std::find(mode.mirrorIds.begin(), mode.mirrorIds.end(), mirrorConf.name) == mode.mirrorIds.end()) {
-                                if (ImGui::Selectable(mirrorConf.name.c_str())) {
-                                    mode.mirrorIds.push_back(mirrorConf.name);
-                                    g_configIsDirty = true;
-                                }
-                            }
-                        }
-                        ImGui::EndCombo();
-                    }
-                    ImGui::TreePop();
-                }
-
-                if (ImGui::TreeNode((tr("modes.mirror_groups") + "##Preemptive").c_str())) {
-                    int group_idx_to_remove = -1;
-                    for (size_t k = 0; k < mode.mirrorGroupIds.size(); ++k) {
-                        ImGui::PushID(static_cast<int>(k));
-                        std::string del_group_label = "X##del_mirror_group_from_preemptive_" + std::to_string(k);
-                        if (ImGui::Button(del_group_label.c_str())) { group_idx_to_remove = (int)k; }
-                        ImGui::SameLine();
-                        ImGui::TextUnformatted(mode.mirrorGroupIds[k].c_str());
-                        ImGui::PopID();
-                    }
-                    if (group_idx_to_remove != -1) {
-                        mode.mirrorGroupIds.erase(mode.mirrorGroupIds.begin() + group_idx_to_remove);
-                        g_configIsDirty = true;
-                    }
-                    if (ImGui::BeginCombo((tr("modes.add_mirror_group") + "##add_mirror_group_to_preemptive").c_str(), trc("modes.select_mirror_group"))) {
-                        for (const auto& groupConf : g_config.mirrorGroups) {
-                            if (std::find(mode.mirrorGroupIds.begin(), mode.mirrorGroupIds.end(), groupConf.name) ==
-                                mode.mirrorGroupIds.end()) {
-                                if (ImGui::Selectable(groupConf.name.c_str())) {
-                                    mode.mirrorGroupIds.push_back(groupConf.name);
-                                    g_configIsDirty = true;
-                                }
-                            }
-                        }
-                        ImGui::EndCombo();
-                    }
-                    ImGui::TreePop();
-                }
-
-                if (ImGui::TreeNode((tr("modes.images") + "##Preemptive").c_str())) {
-                    int image_idx_to_remove = -1;
-                    for (size_t k = 0; k < mode.imageIds.size(); ++k) {
-                        ImGui::PushID(static_cast<int>(k));
-                        std::string del_img_label = "X##del_img_from_preemptive_" + std::to_string(k);
-                        if (ImGui::Button(del_img_label.c_str())) { image_idx_to_remove = (int)k; }
-                        ImGui::SameLine();
-                        ImGui::TextUnformatted(mode.imageIds[k].c_str());
-                        ImGui::PopID();
-                    }
-                    if (image_idx_to_remove != -1) {
-                        mode.imageIds.erase(mode.imageIds.begin() + image_idx_to_remove);
-                        g_configIsDirty = true;
-                    }
-                    if (ImGui::BeginCombo((tr("modes.add_image") + "##add_image_to_preemptive").c_str(), trc("modes.select_image"))) {
-                        for (const auto& imgConf : g_config.images) {
-                            if (std::find(mode.imageIds.begin(), mode.imageIds.end(), imgConf.name) == mode.imageIds.end()) {
-                                if (ImGui::Selectable(imgConf.name.c_str())) {
-                                    mode.imageIds.push_back(imgConf.name);
-                                    g_configIsDirty = true;
-                                }
-                            }
-                        }
-                        ImGui::EndCombo();
-                    }
-                    ImGui::TreePop();
-                }
-
-                if (ImGui::TreeNode((tr("modes.window_overlays") + "##Preemptive").c_str())) {
-                    int overlay_idx_to_remove = -1;
-                    for (size_t k = 0; k < mode.windowOverlayIds.size(); ++k) {
-                        ImGui::PushID(static_cast<int>(k));
-                        std::string del_overlay_label = "X##del_overlay_from_preemptive_" + std::to_string(k);
-                        if (ImGui::Button(del_overlay_label.c_str())) { overlay_idx_to_remove = (int)k; }
-                        ImGui::SameLine();
-                        ImGui::TextUnformatted(mode.windowOverlayIds[k].c_str());
-                        ImGui::PopID();
-                    }
-                    if (overlay_idx_to_remove != -1) {
-                        mode.windowOverlayIds.erase(mode.windowOverlayIds.begin() + overlay_idx_to_remove);
-                        g_configIsDirty = true;
-                    }
-                    if (ImGui::BeginCombo((tr("modes.add_overlay") + "##add_overlay_to_preemptive").c_str(), trc("modes.select_overlay"))) {
-                        for (const auto& overlayConf : g_config.windowOverlays) {
-                            if (std::find(mode.windowOverlayIds.begin(), mode.windowOverlayIds.end(), overlayConf.name) ==
-                                mode.windowOverlayIds.end()) {
-                                if (ImGui::Selectable(overlayConf.name.c_str())) {
-                                    mode.windowOverlayIds.push_back(overlayConf.name);
-                                    g_configIsDirty = true;
-                                }
-                            }
-                        }
-                        ImGui::EndCombo();
-                    }
-                    ImGui::TreePop();
-                }
-
+                renderModeSourceAssignments(mode, mode.id);
                 ImGui::Separator();
                 if (ImGui::TreeNode((tr("modes.transition_settings") + "##Preemptive").c_str())) {
                     RenderTransitionSettingsHorizontal(mode, "Preemptive");
@@ -1523,8 +1259,6 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                     }
                     ImGui::TreePop();
                 }
-
-                renderModeBrowserOverlayAssignments(mode, mode.id);
 
                 if (ImGui::TreeNode((tr("modes.sensitivity_override") + "##Preemptive").c_str())) {
                     if (ImGui::Checkbox((tr("modes.override_sensitivity") + "##Preemptive").c_str(), &mode.sensitivityOverrideEnabled)) { g_configIsDirty = true; }
@@ -1847,119 +1581,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                     ImGui::TreePop();
                 }
 
-                if (ImGui::TreeNode(trc("modes.mirrors"))) {
-                    int mirror_idx_to_remove = -1;
-                    for (size_t k = 0; k < mode.mirrorIds.size(); ++k) {
-                        ImGui::PushID(static_cast<int>(k));
-                        if (ImGui::Button("X##del_mirror")) { mirror_idx_to_remove = (int)k; }
-                        ImGui::SameLine();
-                        ImGui::TextUnformatted(mode.mirrorIds[k].c_str());
-                        ImGui::PopID();
-                    }
-                    if (mirror_idx_to_remove != -1) {
-                        mode.mirrorIds.erase(mode.mirrorIds.begin() + mirror_idx_to_remove);
-                        g_configIsDirty = true;
-                    }
-                    if (ImGui::BeginCombo("Add Mirror##Thin", "[Select Mirror]")) {
-                        for (const auto& mirrorConf : g_config.mirrors) {
-                            if (std::find(mode.mirrorIds.begin(), mode.mirrorIds.end(), mirrorConf.name) == mode.mirrorIds.end()) {
-                                if (ImGui::Selectable(mirrorConf.name.c_str())) {
-                                    mode.mirrorIds.push_back(mirrorConf.name);
-                                    g_configIsDirty = true;
-                                }
-                            }
-                        }
-                        ImGui::EndCombo();
-                    }
-                    ImGui::TreePop();
-                }
-
-                if (ImGui::TreeNode(trc("modes.mirror_groups"))) {
-                    int group_idx_to_remove = -1;
-                    for (size_t k = 0; k < mode.mirrorGroupIds.size(); ++k) {
-                        ImGui::PushID(static_cast<int>(k));
-                        std::string del_group_label = "X##del_mirror_group_from_thin_" + std::to_string(k);
-                        if (ImGui::Button(del_group_label.c_str())) { group_idx_to_remove = (int)k; }
-                        ImGui::SameLine();
-                        ImGui::TextUnformatted(mode.mirrorGroupIds[k].c_str());
-                        ImGui::PopID();
-                    }
-                    if (group_idx_to_remove != -1) {
-                        mode.mirrorGroupIds.erase(mode.mirrorGroupIds.begin() + group_idx_to_remove);
-                        g_configIsDirty = true;
-                    }
-                    if (ImGui::BeginCombo((tr("modes.add_mirror_group") + "##add_mirror_group_to_thin").c_str(), trc("modes.select_mirror_group"))) {
-                        for (const auto& groupConf : g_config.mirrorGroups) {
-                            if (std::find(mode.mirrorGroupIds.begin(), mode.mirrorGroupIds.end(), groupConf.name) ==
-                                mode.mirrorGroupIds.end()) {
-                                if (ImGui::Selectable(groupConf.name.c_str())) {
-                                    mode.mirrorGroupIds.push_back(groupConf.name);
-                                    g_configIsDirty = true;
-                                }
-                            }
-                        }
-                        ImGui::EndCombo();
-                    }
-                    ImGui::TreePop();
-                }
-
-                if (ImGui::TreeNode(trc("modes.images"))) {
-                    int image_idx_to_remove = -1;
-                    for (size_t k = 0; k < mode.imageIds.size(); ++k) {
-                        ImGui::PushID(static_cast<int>(k));
-                        if (ImGui::Button("X##del_img")) { image_idx_to_remove = (int)k; }
-                        ImGui::SameLine();
-                        ImGui::TextUnformatted(mode.imageIds[k].c_str());
-                        ImGui::PopID();
-                    }
-                    if (image_idx_to_remove != -1) {
-                        mode.imageIds.erase(mode.imageIds.begin() + image_idx_to_remove);
-                        g_configIsDirty = true;
-                    }
-                    if (ImGui::BeginCombo((tr("modes.add_image") + "##Thin").c_str(), trc("modes.select_image"))) {
-                        for (const auto& imgConf : g_config.images) {
-                            if (std::find(mode.imageIds.begin(), mode.imageIds.end(), imgConf.name) == mode.imageIds.end()) {
-                                if (ImGui::Selectable(imgConf.name.c_str())) {
-                                    mode.imageIds.push_back(imgConf.name);
-                                    g_configIsDirty = true;
-                                }
-                            }
-                        }
-                        ImGui::EndCombo();
-                    }
-                    ImGui::TreePop();
-                }
-
-                if (ImGui::TreeNode(trc("modes.window_overlays"))) {
-                    int windowOverlay_idx_to_remove = -1;
-                    for (size_t k = 0; k < mode.windowOverlayIds.size(); ++k) {
-                        ImGui::PushID(static_cast<int>(k));
-                        if (ImGui::Button("X##del_window_overlay")) { windowOverlay_idx_to_remove = (int)k; }
-                        ImGui::SameLine();
-                        ImGui::TextUnformatted(mode.windowOverlayIds[k].c_str());
-                        ImGui::PopID();
-                    }
-                    if (windowOverlay_idx_to_remove != -1) {
-                        mode.windowOverlayIds.erase(mode.windowOverlayIds.begin() + windowOverlay_idx_to_remove);
-                        g_configIsDirty = true;
-                    }
-                    if (ImGui::BeginCombo((tr("modes.add_overlay") + "##add_window_overlay_to_thin").c_str(), trc("modes.select_overlay"))) {
-                        for (const auto& overlayConf : g_config.windowOverlays) {
-                            if (std::find(mode.windowOverlayIds.begin(), mode.windowOverlayIds.end(), overlayConf.name) ==
-                                mode.windowOverlayIds.end()) {
-                                if (ImGui::Selectable(overlayConf.name.c_str())) {
-                                    mode.windowOverlayIds.push_back(overlayConf.name);
-                                    g_configIsDirty = true;
-                                }
-                            }
-                        }
-                        ImGui::EndCombo();
-                    }
-                    ImGui::TreePop();
-                }
-
-                renderModeBrowserOverlayAssignments(mode, mode.id);
-
+                renderModeSourceAssignments(mode, mode.id);
                 if (ImGui::TreeNode(trc("modes.sensitivity_override"))) {
                     if (ImGui::Checkbox(trc("modes.override_sensitivity"), &mode.sensitivityOverrideEnabled)) { g_configIsDirty = true; }
                     HelpMarker(trc("modes.tooltip.override_sensitivity"));
@@ -2268,119 +1890,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                     ImGui::TreePop();
                 }
 
-                if (ImGui::TreeNode(trc("modes.mirrors"))) {
-                    int mirror_idx_to_remove = -1;
-                    for (size_t k = 0; k < mode.mirrorIds.size(); ++k) {
-                        ImGui::PushID(static_cast<int>(k));
-                        if (ImGui::Button("X##del_mirror")) { mirror_idx_to_remove = (int)k; }
-                        ImGui::SameLine();
-                        ImGui::TextUnformatted(mode.mirrorIds[k].c_str());
-                        ImGui::PopID();
-                    }
-                    if (mirror_idx_to_remove != -1) {
-                        mode.mirrorIds.erase(mode.mirrorIds.begin() + mirror_idx_to_remove);
-                        g_configIsDirty = true;
-                    }
-                    if (ImGui::BeginCombo((tr("modes.add_mirror") + "##Wide").c_str(), trc("modes.select_mirror"))) {
-                        for (const auto& mirrorConf : g_config.mirrors) {
-                            if (std::find(mode.mirrorIds.begin(), mode.mirrorIds.end(), mirrorConf.name) == mode.mirrorIds.end()) {
-                                if (ImGui::Selectable(mirrorConf.name.c_str())) {
-                                    mode.mirrorIds.push_back(mirrorConf.name);
-                                    g_configIsDirty = true;
-                                }
-                            }
-                        }
-                        ImGui::EndCombo();
-                    }
-                    ImGui::TreePop();
-                }
-
-                if (ImGui::TreeNode(trc("modes.mirror_groups"))) {
-                    int group_idx_to_remove = -1;
-                    for (size_t k = 0; k < mode.mirrorGroupIds.size(); ++k) {
-                        ImGui::PushID(static_cast<int>(k));
-                        std::string del_group_label = "X##del_mirror_group_from_wide_" + std::to_string(k);
-                        if (ImGui::Button(del_group_label.c_str())) { group_idx_to_remove = (int)k; }
-                        ImGui::SameLine();
-                        ImGui::TextUnformatted(mode.mirrorGroupIds[k].c_str());
-                        ImGui::PopID();
-                    }
-                    if (group_idx_to_remove != -1) {
-                        mode.mirrorGroupIds.erase(mode.mirrorGroupIds.begin() + group_idx_to_remove);
-                        g_configIsDirty = true;
-                    }
-                    if (ImGui::BeginCombo((tr("modes.add_mirror_group") + "##add_mirror_group_to_wide").c_str(), trc("modes.select_mirror_group"))) {
-                        for (const auto& groupConf : g_config.mirrorGroups) {
-                            if (std::find(mode.mirrorGroupIds.begin(), mode.mirrorGroupIds.end(), groupConf.name) ==
-                                mode.mirrorGroupIds.end()) {
-                                if (ImGui::Selectable(groupConf.name.c_str())) {
-                                    mode.mirrorGroupIds.push_back(groupConf.name);
-                                    g_configIsDirty = true;
-                                }
-                            }
-                        }
-                        ImGui::EndCombo();
-                    }
-                    ImGui::TreePop();
-                }
-
-                if (ImGui::TreeNode(trc("modes.images"))) {
-                    int image_idx_to_remove = -1;
-                    for (size_t k = 0; k < mode.imageIds.size(); ++k) {
-                        ImGui::PushID(static_cast<int>(k));
-                        if (ImGui::Button("X##del_img")) { image_idx_to_remove = (int)k; }
-                        ImGui::SameLine();
-                        ImGui::TextUnformatted(mode.imageIds[k].c_str());
-                        ImGui::PopID();
-                    }
-                    if (image_idx_to_remove != -1) {
-                        mode.imageIds.erase(mode.imageIds.begin() + image_idx_to_remove);
-                        g_configIsDirty = true;
-                    }
-                    if (ImGui::BeginCombo((tr("modes.add_image") + "##Wide").c_str(), trc("modes.select_image"))) {
-                        for (const auto& imgConf : g_config.images) {
-                            if (std::find(mode.imageIds.begin(), mode.imageIds.end(), imgConf.name) == mode.imageIds.end()) {
-                                if (ImGui::Selectable(imgConf.name.c_str())) {
-                                    mode.imageIds.push_back(imgConf.name);
-                                    g_configIsDirty = true;
-                                }
-                            }
-                        }
-                        ImGui::EndCombo();
-                    }
-                    ImGui::TreePop();
-                }
-
-                if (ImGui::TreeNode(trc("modes.window_overlays"))) {
-                    int windowOverlay_idx_to_remove = -1;
-                    for (size_t k = 0; k < mode.windowOverlayIds.size(); ++k) {
-                        ImGui::PushID(static_cast<int>(k));
-                        if (ImGui::Button("X##del_window_overlay")) { windowOverlay_idx_to_remove = (int)k; }
-                        ImGui::SameLine();
-                        ImGui::TextUnformatted(mode.windowOverlayIds[k].c_str());
-                        ImGui::PopID();
-                    }
-                    if (windowOverlay_idx_to_remove != -1) {
-                        mode.windowOverlayIds.erase(mode.windowOverlayIds.begin() + windowOverlay_idx_to_remove);
-                        g_configIsDirty = true;
-                    }
-                    if (ImGui::BeginCombo((tr("modes.add_overlay") + "##add_window_overlay_to_wide").c_str(), trc("modes.select_overlay"))) {
-                        for (const auto& overlayConf : g_config.windowOverlays) {
-                            if (std::find(mode.windowOverlayIds.begin(), mode.windowOverlayIds.end(), overlayConf.name) ==
-                                mode.windowOverlayIds.end()) {
-                                if (ImGui::Selectable(overlayConf.name.c_str())) {
-                                    mode.windowOverlayIds.push_back(overlayConf.name);
-                                    g_configIsDirty = true;
-                                }
-                            }
-                        }
-                        ImGui::EndCombo();
-                    }
-                    ImGui::TreePop();
-                }
-
-                renderModeBrowserOverlayAssignments(mode, mode.id);
-
+                renderModeSourceAssignments(mode, mode.id);
                 if (ImGui::TreeNode(trc("modes.sensitivity_override"))) {
                     if (ImGui::Checkbox(trc("modes.override_sensitivity"), &mode.sensitivityOverrideEnabled)) { g_configIsDirty = true; }
                     HelpMarker(trc("modes.tooltip.override_sensitivity"));
@@ -2793,121 +2303,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                     ImGui::TreePop();
                 }
 
-                if (ImGui::TreeNode(trc("modes.mirrors"))) {
-                    int mirror_idx_to_remove = -1;
-                    for (size_t k = 0; k < mode.mirrorIds.size(); ++k) {
-                        ImGui::PushID(static_cast<int>(k));
-                        std::string del_mirror_label = "X##del_mirror_from_mode_" + std::to_string(k);
-                        if (ImGui::Button(del_mirror_label.c_str())) { mirror_idx_to_remove = (int)k; }
-                        ImGui::SameLine();
-                        ImGui::TextUnformatted(mode.mirrorIds[k].c_str());
-                        ImGui::PopID();
-                    }
-                    if (mirror_idx_to_remove != -1) {
-                        mode.mirrorIds.erase(mode.mirrorIds.begin() + mirror_idx_to_remove);
-                        g_configIsDirty = true;
-                    }
-                    if (ImGui::BeginCombo((tr("modes.add_mirror") + "##add_mirror_to_mode").c_str(), trc("modes.select_mirror"))) {
-                        for (const auto& mirrorConf : g_config.mirrors) {
-                            if (std::find(mode.mirrorIds.begin(), mode.mirrorIds.end(), mirrorConf.name) == mode.mirrorIds.end()) {
-                                if (ImGui::Selectable(mirrorConf.name.c_str())) {
-                                    mode.mirrorIds.push_back(mirrorConf.name);
-                                    g_configIsDirty = true;
-                                }
-                            }
-                        }
-                        ImGui::EndCombo();
-                    }
-                    ImGui::TreePop();
-                }
-
-                if (ImGui::TreeNode(trc("modes.mirror_groups"))) {
-                    int group_idx_to_remove = -1;
-                    for (size_t k = 0; k < mode.mirrorGroupIds.size(); ++k) {
-                        ImGui::PushID(static_cast<int>(k));
-                        std::string del_group_label = "X##del_mirror_group_from_custom_" + std::to_string(k);
-                        if (ImGui::Button(del_group_label.c_str())) { group_idx_to_remove = (int)k; }
-                        ImGui::SameLine();
-                        ImGui::TextUnformatted(mode.mirrorGroupIds[k].c_str());
-                        ImGui::PopID();
-                    }
-                    if (group_idx_to_remove != -1) {
-                        mode.mirrorGroupIds.erase(mode.mirrorGroupIds.begin() + group_idx_to_remove);
-                        g_configIsDirty = true;
-                    }
-                    if (ImGui::BeginCombo((tr("modes.add_mirror_group") + "##add_mirror_group_to_custom").c_str(), trc("modes.select_mirror_group"))) {
-                        for (const auto& groupConf : g_config.mirrorGroups) {
-                            if (std::find(mode.mirrorGroupIds.begin(), mode.mirrorGroupIds.end(), groupConf.name) ==
-                                mode.mirrorGroupIds.end()) {
-                                if (ImGui::Selectable(groupConf.name.c_str())) {
-                                    mode.mirrorGroupIds.push_back(groupConf.name);
-                                    g_configIsDirty = true;
-                                }
-                            }
-                        }
-                        ImGui::EndCombo();
-                    }
-                    ImGui::TreePop();
-                }
-
-                if (ImGui::TreeNode(trc("modes.images"))) {
-                    int image_idx_to_remove = -1;
-                    for (size_t k = 0; k < mode.imageIds.size(); ++k) {
-                        ImGui::PushID(static_cast<int>(k));
-                        std::string del_img_label = "X##del_img_from_mode_" + std::to_string(k);
-                        if (ImGui::Button(del_img_label.c_str())) { image_idx_to_remove = (int)k; }
-                        ImGui::SameLine();
-                        ImGui::TextUnformatted(mode.imageIds[k].c_str());
-                        ImGui::PopID();
-                    }
-                    if (image_idx_to_remove != -1) {
-                        mode.imageIds.erase(mode.imageIds.begin() + image_idx_to_remove);
-                        g_configIsDirty = true;
-                    }
-                    if (ImGui::BeginCombo((tr("modes.add_image") + "##add_image_to_mode").c_str(), trc("modes.select_image"))) {
-                        for (const auto& imgConf : g_config.images) {
-                            if (std::find(mode.imageIds.begin(), mode.imageIds.end(), imgConf.name) == mode.imageIds.end()) {
-                                if (ImGui::Selectable(imgConf.name.c_str())) {
-                                    mode.imageIds.push_back(imgConf.name);
-                                    g_configIsDirty = true;
-                                }
-                            }
-                        }
-                        ImGui::EndCombo();
-                    }
-                    ImGui::TreePop();
-                }
-
-                if (ImGui::TreeNode(trc("modes.window_overlays"))) {
-                    int windowOverlay_idx_to_remove = -1;
-                    for (size_t k = 0; k < mode.windowOverlayIds.size(); ++k) {
-                        ImGui::PushID(static_cast<int>(k));
-                        std::string del_overlay_label = "X##del_overlay_from_mode_" + std::to_string(k);
-                        if (ImGui::Button(del_overlay_label.c_str())) { windowOverlay_idx_to_remove = (int)k; }
-                        ImGui::SameLine();
-                        ImGui::TextUnformatted(mode.windowOverlayIds[k].c_str());
-                        ImGui::PopID();
-                    }
-                    if (windowOverlay_idx_to_remove != -1) {
-                        mode.windowOverlayIds.erase(mode.windowOverlayIds.begin() + windowOverlay_idx_to_remove);
-                        g_configIsDirty = true;
-                    }
-                    if (ImGui::BeginCombo((tr("modes.add_overlay") + "##add_overlay_to_mode").c_str(), trc("modes.select_overlay"))) {
-                        for (const auto& overlayConf : g_config.windowOverlays) {
-                            if (std::find(mode.windowOverlayIds.begin(), mode.windowOverlayIds.end(), overlayConf.name) ==
-                                mode.windowOverlayIds.end()) {
-                                if (ImGui::Selectable(overlayConf.name.c_str())) {
-                                    mode.windowOverlayIds.push_back(overlayConf.name);
-                                    g_configIsDirty = true;
-                                }
-                            }
-                        }
-                        ImGui::EndCombo();
-                    }
-                    ImGui::TreePop();
-                }
-
-                renderModeBrowserOverlayAssignments(mode, mode.id);
+                renderModeSourceAssignments(mode, mode.id);
 
                 if (ImGui::TreeNode("Stretch Properties")) {
                     ImGui::TextDisabled("Fullscreen stretch is always enabled and fills the game window.");

@@ -201,14 +201,15 @@ void UpdateActiveMirrorConfigs() {
     const ModeConfig* mode = GetModeFromSnapshot(cfg, currentModeId);
     if (!mode) { return; }
 
-    std::vector<std::string> currentMirrorIds = mode->mirrorIds;
-    std::unordered_set<std::string> currentMirrorIdSet(currentMirrorIds.begin(), currentMirrorIds.end());
-    currentMirrorIdSet.reserve(mode->mirrorIds.size() + (mode->mirrorGroupIds.size() * 4));
+    std::vector<std::string> currentMirrorIds;
+    CollectModeOrderedMirrorIds(cfg, *mode, currentMirrorIds);
     std::unordered_map<std::string, MirrorGroupPlacement> mirrorPlacements;
-    mirrorPlacements.reserve(currentMirrorIdSet.size() + (mode->mirrorGroupIds.size() * 4));
+    mirrorPlacements.reserve(currentMirrorIds.size() + 4);
 
-    for (const auto& groupName : mode->mirrorGroupIds) {
-        auto groupIt = s_groupByName.find(groupName);
+    for (const auto& source : mode->sources) {
+        if (source.type != ModeSourceType::MirrorGroup) continue;
+
+        auto groupIt = s_groupByName.find(source.id);
         if (groupIt == s_groupByName.end() || !groupIt->second) {
             continue;
         }
@@ -216,11 +217,6 @@ void UpdateActiveMirrorConfigs() {
         const MirrorGroupConfig& group = *groupIt->second;
         for (const auto& item : group.mirrors) {
             if (!item.enabled) continue;
-
-            if (currentMirrorIdSet.insert(item.mirrorId).second) {
-                currentMirrorIds.push_back(item.mirrorId);
-            }
-
             mirrorPlacements.try_emplace(item.mirrorId, MirrorGroupPlacement{ &group, &item });
         }
     }

@@ -1049,30 +1049,10 @@ bool SwitchToMode(const std::string& newModeId, const std::string& source, bool 
             preserveEyeZoomSourceMirrorsForSlideOut || preserveModeSourceMirrorsForSlideOut;
 
         if (!preserveSourceOnlyMirrorsForSlideOut && modeSnap && fromMode && toMode && !EqualsIgnoreCase(fromMode->id, toMode->id)) {
-            auto collectModeMirrorIds = [](const Config& cfg, const ModeConfig* mode, std::unordered_set<std::string>& outMirrorIds) {
-                if (!mode) return;
-
-                outMirrorIds.reserve(outMirrorIds.size() + mode->mirrorIds.size() + mode->mirrorGroupIds.size());
-                for (const auto& mirrorId : mode->mirrorIds) {
-                    if (!mirrorId.empty()) { outMirrorIds.insert(mirrorId); }
-                }
-
-                for (const auto& groupName : mode->mirrorGroupIds) {
-                    for (const auto& group : cfg.mirrorGroups) {
-                        if (group.name != groupName) continue;
-                        for (const auto& item : group.mirrors) {
-                            if (!item.enabled || item.mirrorId.empty()) continue;
-                            outMirrorIds.insert(item.mirrorId);
-                        }
-                        break;
-                    }
-                }
-            };
-
             std::unordered_set<std::string> fromMirrorIds;
             std::unordered_set<std::string> toMirrorIds;
-            collectModeMirrorIds(*modeSnap, fromMode, fromMirrorIds);
-            collectModeMirrorIds(*modeSnap, toMode, toMirrorIds);
+            if (fromMode) { CollectModeMirrorIds(*modeSnap, *fromMode, fromMirrorIds); }
+            if (toMode) { CollectModeMirrorIds(*modeSnap, *toMode, toMirrorIds); }
 
             mirrorsToInvalidate.reserve(fromMirrorIds.size());
             for (const auto& mirrorId : fromMirrorIds) {
@@ -1282,6 +1262,154 @@ bool EqualsIgnoreCase(const std::string& a, const std::string& b) {
     if (a.size() != b.size()) { return false; }
 
     return std::equal(a.begin(), a.end(), b.begin(), [](char a, char b) { return std::tolower(a) == std::tolower(b); });
+}
+
+std::string ModeSourceTypeToString(ModeSourceType type) {
+    switch (type) {
+    case ModeSourceType::Mirror:
+        return "mirror";
+    case ModeSourceType::MirrorGroup:
+        return "mirrorGroup";
+    case ModeSourceType::Image:
+        return "image";
+    case ModeSourceType::WindowOverlay:
+        return "windowOverlay";
+    case ModeSourceType::BrowserOverlay:
+        return "browserOverlay";
+    default:
+        return "mirror";
+    }
+}
+
+ModeSourceType StringToModeSourceType(const std::string& value) {
+    if (EqualsIgnoreCase(value, "mirror")) return ModeSourceType::Mirror;
+    if (EqualsIgnoreCase(value, "mirrorGroup") || EqualsIgnoreCase(value, "group")) return ModeSourceType::MirrorGroup;
+    if (EqualsIgnoreCase(value, "image")) return ModeSourceType::Image;
+    if (EqualsIgnoreCase(value, "windowOverlay") || EqualsIgnoreCase(value, "window")) return ModeSourceType::WindowOverlay;
+    if (EqualsIgnoreCase(value, "browserOverlay") || EqualsIgnoreCase(value, "browser")) return ModeSourceType::BrowserOverlay;
+    return ModeSourceType::Mirror;
+}
+
+static void AppendModeSources(std::vector<ModeSourceRef>& outSources, ModeSourceType type, const std::vector<std::string>& ids) {
+    outSources.reserve(outSources.size() + ids.size());
+    for (const auto& id : ids) {
+        if (id.empty()) continue;
+        outSources.push_back({ type, id });
+    }
+}
+
+std::vector<ModeSourceRef> BuildModeSourcesFromLegacyLists(const std::vector<std::string>& mirrorIds,
+                                                           const std::vector<std::string>& mirrorGroupIds,
+                                                           const std::vector<std::string>& imageIds,
+                                                           const std::vector<std::string>& windowOverlayIds,
+                                                           const std::vector<std::string>& browserOverlayIds) {
+    std::vector<ModeSourceRef> rebuiltSources;
+    rebuiltSources.reserve(mirrorIds.size() + mirrorGroupIds.size() + imageIds.size() + windowOverlayIds.size() +
+                           browserOverlayIds.size());
+    AppendModeSources(rebuiltSources, ModeSourceType::Mirror, mirrorIds);
+    AppendModeSources(rebuiltSources, ModeSourceType::MirrorGroup, mirrorGroupIds);
+    AppendModeSources(rebuiltSources, ModeSourceType::Image, imageIds);
+    AppendModeSources(rebuiltSources, ModeSourceType::WindowOverlay, windowOverlayIds);
+    AppendModeSources(rebuiltSources, ModeSourceType::BrowserOverlay, browserOverlayIds);
+    return rebuiltSources;
+}
+
+bool ModeHasSource(const ModeConfig& mode, ModeSourceType type, const std::string& id) {
+    return std::any_of(mode.sources.begin(), mode.sources.end(), [&](const ModeSourceRef& source) {
+        return source.type == type && source.id == id;
+    });
+}
+
+bool AddModeSource(ModeConfig& mode, ModeSourceType type, const std::string& id) {
+    if (id.empty() || ModeHasSource(mode, type, id)) { return false; }
+    mode.sources.push_back({ type, id });
+    return true;
+}
+
+bool RemoveModeSource(ModeConfig& mode, ModeSourceType type, const std::string& id) {
+    auto it = std::find_if(mode.sources.begin(), mode.sources.end(), [&](const ModeSourceRef& source) {
+        return source.type == type && source.id == id;
+    });
+    if (it == mode.sources.end()) { return false; }
+    mode.sources.erase(it);
+    return true;
+}
+
+size_t RemoveAllModeSources(ModeConfig& mode, ModeSourceType type, const std::string& id) {
+    const size_t originalSize = mode.sources.size();
+    mode.sources.erase(std::remove_if(mode.sources.begin(), mode.sources.end(), [&](const ModeSourceRef& source) {
+                           return source.type == type && source.id == id;
+                       }),
+                       mode.sources.end());
+    return originalSize - mode.sources.size();
+}
+
+bool RenameModeSource(ModeConfig& mode, ModeSourceType type, const std::string& oldId, const std::string& newId) {
+    bool changed = false;
+    for (auto& source : mode.sources) {
+        if (source.type == type && source.id == oldId) {
+            source.id = newId;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+bool MoveModeSource(ModeConfig& mode, size_t fromIndex, size_t toIndex) {
+    if (fromIndex >= mode.sources.size() || toIndex >= mode.sources.size() || fromIndex == toIndex) { return false; }
+
+    ModeSourceRef movedSource = mode.sources[fromIndex];
+    mode.sources.erase(mode.sources.begin() + static_cast<std::ptrdiff_t>(fromIndex));
+    mode.sources.insert(mode.sources.begin() + static_cast<std::ptrdiff_t>(toIndex), std::move(movedSource));
+    return true;
+}
+
+void CollectModeMirrorIds(const Config& config, const ModeConfig& mode, std::unordered_set<std::string>& outMirrorIds) {
+    for (const auto& source : mode.sources) {
+        if (source.id.empty()) continue;
+
+        if (source.type == ModeSourceType::Mirror) {
+            outMirrorIds.insert(source.id);
+            continue;
+        }
+
+        if (source.type != ModeSourceType::MirrorGroup) { continue; }
+
+        for (const auto& group : config.mirrorGroups) {
+            if (group.name != source.id) continue;
+            for (const auto& item : group.mirrors) {
+                if (!item.enabled || item.mirrorId.empty()) continue;
+                outMirrorIds.insert(item.mirrorId);
+            }
+            break;
+        }
+    }
+}
+
+void CollectModeOrderedMirrorIds(const Config& config, const ModeConfig& mode, std::vector<std::string>& outMirrorIds) {
+    std::unordered_set<std::string> seenMirrorIds;
+    const size_t estimatedSourceCount = mode.sources.size();
+    seenMirrorIds.reserve(estimatedSourceCount * 2 + 4);
+
+    for (const auto& source : mode.sources) {
+        if (source.id.empty()) continue;
+
+        if (source.type == ModeSourceType::Mirror) {
+            if (seenMirrorIds.insert(source.id).second) { outMirrorIds.push_back(source.id); }
+            continue;
+        }
+
+        if (source.type != ModeSourceType::MirrorGroup) { continue; }
+
+        for (const auto& group : config.mirrorGroups) {
+            if (group.name != source.id) continue;
+            for (const auto& item : group.mirrors) {
+                if (!item.enabled || item.mirrorId.empty()) continue;
+                if (seenMirrorIds.insert(item.mirrorId).second) { outMirrorIds.push_back(item.mirrorId); }
+            }
+            break;
+        }
+    }
 }
 
 // Internal version - requires g_configMutex to already be held

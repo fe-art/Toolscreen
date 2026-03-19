@@ -52,9 +52,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.window_overlays"))) {
                     g_configIsDirty = true;
                     if (oldOverlayName != overlay.name) {
                         for (auto& mode : g_config.modes) {
-                            for (auto& overlayId : mode.windowOverlayIds) {
-                                if (overlayId == oldOverlayName) { overlayId = overlay.name; }
-                            }
+                            RenameModeSource(mode, ModeSourceType::WindowOverlay, oldOverlayName, overlay.name);
                         }
                     }
                 } else {
@@ -353,11 +351,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.window_overlays"))) {
         RemoveWindowOverlayFromCache(deletedOverlayName);
         g_config.windowOverlays.erase(g_config.windowOverlays.begin() + windowOverlay_to_remove);
         for (auto& mode : g_config.modes) {
-            auto it = std::find(mode.windowOverlayIds.begin(), mode.windowOverlayIds.end(), deletedOverlayName);
-            while (it != mode.windowOverlayIds.end()) {
-                mode.windowOverlayIds.erase(it);
-                it = std::find(mode.windowOverlayIds.begin(), mode.windowOverlayIds.end(), deletedOverlayName);
-            }
+            RemoveAllModeSources(mode, ModeSourceType::WindowOverlay, deletedOverlayName);
         }
         g_configIsDirty = true;
     }
@@ -372,10 +366,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.window_overlays"))) {
         if (!g_currentModeId.empty()) {
             for (auto& mode : g_config.modes) {
                 if (mode.id == g_currentModeId) {
-                    if (std::find(mode.windowOverlayIds.begin(), mode.windowOverlayIds.end(), newOverlay.name) ==
-                        mode.windowOverlayIds.end()) {
-                        mode.windowOverlayIds.push_back(newOverlay.name);
-                    }
+                    AddModeSource(mode, ModeSourceType::WindowOverlay, newOverlay.name);
                     break;
                 }
             }

@@ -56,9 +56,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.browser_overlays"))) {
                     if (oldOverlayName != overlay.name) {
                         RemoveBrowserOverlayFromCache(oldOverlayName);
                         for (auto& mode : g_config.modes) {
-                            for (auto& overlayId : mode.browserOverlayIds) {
-                                if (overlayId == oldOverlayName) { overlayId = overlay.name; }
-                            }
+                            RenameModeSource(mode, ModeSourceType::BrowserOverlay, oldOverlayName, overlay.name);
                         }
                     }
                 } else {
@@ -332,11 +330,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.browser_overlays"))) {
         RemoveBrowserOverlayFromCache(deletedOverlayName);
         g_config.browserOverlays.erase(g_config.browserOverlays.begin() + browserOverlayToRemove);
         for (auto& mode : g_config.modes) {
-            auto it = std::find(mode.browserOverlayIds.begin(), mode.browserOverlayIds.end(), deletedOverlayName);
-            while (it != mode.browserOverlayIds.end()) {
-                mode.browserOverlayIds.erase(it);
-                it = std::find(mode.browserOverlayIds.begin(), mode.browserOverlayIds.end(), deletedOverlayName);
-            }
+            RemoveAllModeSources(mode, ModeSourceType::BrowserOverlay, deletedOverlayName);
         }
         g_configIsDirty = true;
     }
@@ -352,10 +346,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.browser_overlays"))) {
         if (!g_currentModeId.empty()) {
             for (auto& mode : g_config.modes) {
                 if (mode.id == g_currentModeId) {
-                    if (std::find(mode.browserOverlayIds.begin(), mode.browserOverlayIds.end(), newOverlay.name) ==
-                        mode.browserOverlayIds.end()) {
-                        mode.browserOverlayIds.push_back(newOverlay.name);
-                    }
+                    AddModeSource(mode, ModeSourceType::BrowserOverlay, newOverlay.name);
                     break;
                 }
             }
@@ -375,7 +366,12 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.browser_overlays"))) {
         if (ImGui::Button(trc("button.confirm_reset"), ImVec2(120, 0))) {
             for (const auto& overlay : g_config.browserOverlays) { RemoveBrowserOverlayFromCache(overlay.name); }
             g_config.browserOverlays = GetDefaultBrowserOverlays();
-            for (auto& mode : g_config.modes) { mode.browserOverlayIds.clear(); }
+            for (auto& mode : g_config.modes) {
+                mode.sources.erase(std::remove_if(mode.sources.begin(), mode.sources.end(), [](const ModeSourceRef& source) {
+                                      return source.type == ModeSourceType::BrowserOverlay;
+                                  }),
+                                  mode.sources.end());
+            }
             g_configIsDirty = true;
             ImGui::CloseCurrentPopup();
         }
