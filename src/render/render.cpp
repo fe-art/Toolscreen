@@ -5767,10 +5767,7 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
 
     float overlayOpacity = 1.0f;
 
-    // If there's nothing to draw, avoid compositing a fullscreen overlay texture.
-    const bool wantOverlayElements = hasMirrors ||
-                                    (g_imageOverlaysVisible.load(std::memory_order_acquire) && !modeToRender->imageIds.empty()) ||
-                                    (g_windowOverlaysVisible.load(std::memory_order_acquire) && !modeToRender->windowOverlayIds.empty());
+    const bool wantOverlayElements = true;
     const bool wantAnyImGui = g_shouldRenderGui.load(std::memory_order_relaxed) || g_showPerformanceOverlay.load(std::memory_order_relaxed) ||
                               g_showProfiler.load(std::memory_order_relaxed) || g_showEyeZoom.load(std::memory_order_relaxed) ||
                               g_showTextureGrid.load(std::memory_order_relaxed);
