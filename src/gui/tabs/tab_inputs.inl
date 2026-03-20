@@ -484,7 +484,6 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                 static float s_keyboardLayoutScale = 1.45f;
                 static bool s_layoutEscapeRequiresRelease = false;
                 static bool s_layoutContextSplitMode = false;
-                static bool s_layoutShiftUppercaseDefault = true;
                 static bool s_layoutContextPopupWasOpenLastFrame = false;
                 static bool s_keyboardLayoutWasOpenLastFrame = false;
                 static ImVec2 s_lastKeyboardLayoutWindowSize = ImVec2(-1.0f, -1.0f);
@@ -1992,9 +1991,6 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                                         g_configIsDirty = true;
                                     } else if (s_layoutBindTarget == LayoutBindTarget::TypesVkShift) {
                                         r.shiftLayerEnabled = true;
-                                        if (r.shiftLayerOutputVK == 0 && r.shiftLayerOutputUnicode == 0) {
-                                            r.shiftLayerOutputShifted = s_layoutShiftUppercaseDefault;
-                                        }
                                         r.shiftLayerOutputVK = capturedVk;
                                         r.shiftLayerOutputUnicode = 0;
 
@@ -2059,13 +2055,9 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                                 if (s_layoutUnicodeEditIndex >= 0 && s_layoutUnicodeEditIndex < (int)g_config.keyRebinds.rebinds.size()) {
                                     auto& r = g_config.keyRebinds.rebinds[s_layoutUnicodeEditIndex];
                                     if (s_layoutUnicodeEditTarget == LayoutUnicodeEditTarget::TypesShift) {
-                                        const bool hadShiftOutput = (r.shiftLayerOutputVK != 0) || (r.shiftLayerOutputUnicode != 0);
                                         r.shiftLayerEnabled = true;
                                         if (r.shiftLayerOutputVK == 0) {
                                             r.shiftLayerOutputVK = resolveTypesVkFor(&r, r.fromKey, false);
-                                        }
-                                        if (!hadShiftOutput) {
-                                            r.shiftLayerOutputShifted = s_layoutShiftUppercaseDefault;
                                         }
                                         if (s_layoutUnicodeEditText.empty()) {
                                             r.shiftLayerOutputUnicode = 0;
@@ -2269,9 +2261,6 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                                         if (idx >= 0) {
                                             auto& r = g_config.keyRebinds.rebinds[idx];
                                             r.shiftLayerEnabled = true;
-                                            if (r.shiftLayerOutputVK == 0 && r.shiftLayerOutputUnicode == 0) {
-                                                r.shiftLayerOutputShifted = s_layoutShiftUppercaseDefault;
-                                            }
                                             s_layoutBindTarget = LayoutBindTarget::TypesVkShift;
                                             s_layoutBindIndex = idx;
                                             s_layoutBindLastSeq = GetLatestBindingInputSequence();
@@ -2307,7 +2296,6 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
                                                 r.shiftLayerOutputVK = resolveTypesVkFor(&r, r.fromKey, false);
                                             }
                                             r.shiftLayerOutputShifted = shiftLayerOutputShifted;
-                                            s_layoutShiftUppercaseDefault = shiftLayerOutputShifted;
                                             clearShiftLayerOverrideIfDefault(r, r.fromKey);
                                             g_configIsDirty = true;
 
