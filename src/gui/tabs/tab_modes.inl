@@ -648,8 +648,13 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
 
                 ImGui::Separator();
                 ImGui::Text(trc("modes.eyezoom.zoom_area_output"));
+                const float eyeZoomAreaLabelWidth =
+                    (std::max)(150.0f,
+                               (std::max)(ImGui::CalcTextSize(trc("modes.eyezoom.zoom_area_width")).x,
+                                          ImGui::CalcTextSize(trc("modes.eyezoom.zoom_area_height")).x) +
+                                   ImGui::GetStyle().ItemSpacing.x + 24.0f);
                 ImGui::Columns(2, "eyezoom_area_cols", false);
-                ImGui::SetColumnWidth(0, 150);
+                ImGui::SetColumnWidth(0, eyeZoomAreaLabelWidth);
                 ImGui::Text(trc("modes.eyezoom.zoom_area_width"));
                 ImGui::NextColumn();
                 constexpr int kEyeZoomMaxCustomDimension = 16384;
@@ -1907,10 +1912,10 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                     ImGui::TreePop();
                 }
 
+                renderModeBrowserOverlayAssignments(mode, mode.id);
+
                 if (ImGui::TreeNode(trc("modes.sensitivity_override"))) {
                     if (ImGui::Checkbox(trc("modes.override_sensitivity"), &mode.sensitivityOverrideEnabled)) { g_configIsDirty = true; }
-
-                renderModeBrowserOverlayAssignments(mode, mode.id);
                     HelpMarker(trc("modes.tooltip.override_sensitivity"));
 
                     if (mode.sensitivityOverrideEnabled) {
@@ -2324,10 +2329,10 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                     ImGui::TreePop();
                 }
 
+                renderModeBrowserOverlayAssignments(mode, mode.id);
+
                 if (ImGui::TreeNode(trc("modes.sensitivity_override"))) {
                     if (ImGui::Checkbox(trc("modes.override_sensitivity"), &mode.sensitivityOverrideEnabled)) { g_configIsDirty = true; }
-
-                renderModeBrowserOverlayAssignments(mode, mode.id);
                     HelpMarker(trc("modes.tooltip.override_sensitivity"));
 
                     if (mode.sensitivityOverrideEnabled) {
