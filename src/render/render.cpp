@@ -18,10 +18,116 @@
 #include <chrono>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <set>
 #include <shared_mutex>
 #include <unordered_map>
 #include <unordered_set>
+
+namespace {
+constexpr size_t kMaxDecodedImageUploadBytes = 512ull * 1024ull * 1024ull;
+constexpr size_t kMaxVirtualCameraSyncBytes = 128ull * 1024ull * 1024ull;
+
+bool TryMultiplySize(size_t left, size_t right, size_t& out) {
+    if (left == 0 || right == 0) {
+        out = 0;
+        return true;
+    }
+    if (left > (std::numeric_limits<size_t>::max)() / right) { return false; }
+    out = left * right;
+    return true;
+}
+
+bool TryComputeImageByteCount(int width, int height, int channels, size_t& outBytes) {
+    if (width <= 0 || height <= 0 || channels <= 0) { return false; }
+
+    size_t pixelCount = 0;
+    if (!TryMultiplySize(static_cast<size_t>(width), static_cast<size_t>(height), pixelCount)) { return false; }
+    return TryMultiplySize(pixelCount, static_cast<size_t>(channels), outBytes);
+}
+
+std::string FormatByteCount(size_t bytes) {
+    const size_t mib = 1024ull * 1024ull;
+    return std::to_string(bytes) + " bytes (" + std::to_string(bytes / mib) + " MiB)";
+}
+
+bool TryDescribeDecodedImageStorage(const DecodedImageData& imgData, size_t& outBytes, std::string& outReason) {
+    if (imgData.width <= 0 || imgData.height <= 0) {
+        outReason = "invalid dimensions " + std::to_string(imgData.width) + "x" + std::to_string(imgData.height);
+        return false;
+    }
+
+    if (imgData.isAnimated) {
+        if (imgData.frameCount <= 1) {
+            outReason = "animated image has invalid frameCount=" + std::to_string(imgData.frameCount);
+            return false;
+        }
+        if (imgData.frameHeight <= 0) {
+            outReason = "animated image has invalid frameHeight=" + std::to_string(imgData.frameHeight);
+            return false;
+        }
+
+        size_t expectedHeight = 0;
+        if (!TryMultiplySize(static_cast<size_t>(imgData.frameHeight), static_cast<size_t>(imgData.frameCount), expectedHeight)) {
+            outReason = "animated image height overflowed for frameHeight=" + std::to_string(imgData.frameHeight) +
+                        ", frameCount=" + std::to_string(imgData.frameCount);
+            return false;
+        }
+        if (expectedHeight != static_cast<size_t>(imgData.height)) {
+            outReason = "animated image height mismatch: got " + std::to_string(imgData.height) + ", expected " +
+                        std::to_string(expectedHeight);
+            return false;
+        }
+    }
+
+    if (!TryComputeImageByteCount(imgData.width, imgData.height, 4, outBytes)) {
+        outReason = "byte-count overflowed for " + std::to_string(imgData.width) + "x" + std::to_string(imgData.height) + "x4";
+        return false;
+    }
+
+    return true;
+}
+
+bool TryComputeVirtualCameraSyncBytes(int width, int height, size_t& yBytes, size_t& uvBytes, size_t& totalBytes, std::string& outReason) {
+    if (width <= 0 || height <= 0) {
+        outReason = "invalid dimensions " + std::to_string(width) + "x" + std::to_string(height);
+        return false;
+    }
+    if ((width & 1) != 0 || (height & 1) != 0) {
+        outReason = "dimensions must be even for NV12: " + std::to_string(width) + "x" + std::to_string(height);
+        return false;
+    }
+
+    if (!TryComputeImageByteCount(width, height, 1, yBytes)) {
+        outReason = "luma byte-count overflowed for " + std::to_string(width) + "x" + std::to_string(height);
+        return false;
+    }
+    uvBytes = yBytes / 2u;
+    if (!TryMultiplySize(static_cast<size_t>(width / 2), static_cast<size_t>(height / 2), totalBytes)) {
+        outReason = "chroma plane size overflowed for " + std::to_string(width) + "x" + std::to_string(height);
+        return false;
+    }
+    totalBytes = yBytes + uvBytes;
+    return true;
+}
+
+void LogVirtualCameraSyncGuardOnce(const std::string& reason, int width, int height, size_t totalBytes) {
+    static int s_lastWidth = 0;
+    static int s_lastHeight = 0;
+    static size_t s_lastBytes = 0;
+    static std::string s_lastReason;
+
+    if (s_lastWidth == width && s_lastHeight == height && s_lastBytes == totalBytes && s_lastReason == reason) { return; }
+
+    s_lastWidth = width;
+    s_lastHeight = height;
+    s_lastBytes = totalBytes;
+    s_lastReason = reason;
+
+    Log("Virtual Camera: rejecting synchronous readback at " + std::to_string(width) + "x" + std::to_string(height) +
+        " (" + FormatByteCount(totalBytes) + "): " + reason);
+}
+} // namespace
 
 static std::unordered_map<std::string, size_t> s_mirrorLookupCache;
 static std::unordered_map<std::string, size_t> s_imageLookupCache;
@@ -598,6 +704,20 @@ static bool SubmitSameThreadVirtualCameraFrameSync(GLuint srcTexture, int width,
     if (g_sameThreadVirtualCameraReadFBO == 0) { glGenFramebuffers(1, &g_sameThreadVirtualCameraReadFBO); }
     if (g_sameThreadVirtualCameraReadFBO == 0) { return false; }
 
+    size_t yBytes = 0;
+    size_t uvBytes = 0;
+    size_t totalBytes = 0;
+    std::string syncReason;
+    if (!TryComputeVirtualCameraSyncBytes(width, height, yBytes, uvBytes, totalBytes, syncReason)) {
+        LogVirtualCameraSyncGuardOnce(syncReason, width, height, totalBytes);
+        return false;
+    }
+    if (totalBytes > kMaxVirtualCameraSyncBytes) {
+        LogVirtualCameraSyncGuardOnce("requested buffer size exceeds guard limit of " + FormatByteCount(kMaxVirtualCameraSyncBytes),
+                                      width, height, totalBytes);
+        return false;
+    }
+
     SameThreadVirtualCameraReadbackSlot syncSlot{};
     syncSlot.yTexture = g_sameThreadVirtualCameraLumaTexture;
     syncSlot.uvTexture = g_sameThreadVirtualCameraChromaTexture;
@@ -607,8 +727,6 @@ static bool SubmitSameThreadVirtualCameraFrameSync(GLuint srcTexture, int width,
 
     static std::vector<uint8_t> yPlane;
     static std::vector<uint8_t> uvPlane;
-    const size_t yBytes = static_cast<size_t>(width) * static_cast<size_t>(height);
-    const size_t uvBytes = yBytes / 2u;
     yPlane.resize(yBytes);
     uvPlane.resize(uvBytes);
 
@@ -1969,6 +2087,23 @@ void UploadDecodedImageToGPU(const DecodedImageData& imgData) {
     PROFILE_SCOPE_CAT("GPU Image Upload", "GPU Operations");
     PixelStoreStateGuard pixelStoreGuard;
 
+    size_t decodedBytes = 0;
+    std::string decodedReason;
+    if (!TryDescribeDecodedImageStorage(imgData, decodedBytes, decodedReason)) {
+        LogCategory("image_monitor", "Skipping GPU upload for image '" + imgData.id + "' due to invalid decoded image data: " + decodedReason + ".");
+        return;
+    }
+    if (decodedBytes > kMaxDecodedImageUploadBytes) {
+        LogCategory("image_monitor",
+                    "Skipping GPU upload for image '" + imgData.id + "' because decoded storage " + FormatByteCount(decodedBytes) +
+                        " exceeds guard limit of " + FormatByteCount(kMaxDecodedImageUploadBytes) + ".");
+        return;
+    }
+
+    LogCategory("image_monitor", "Uploading decoded image '" + imgData.id + "' to GPU: " + std::to_string(imgData.width) + "x" +
+                                   std::to_string(imgData.height) + ", frameCount=" + std::to_string(imgData.frameCount) +
+                                   ", bytes=" + FormatByteCount(decodedBytes) + ".");
+
     if (imgData.type == DecodedImageData::Type::Background) {
         std::lock_guard<std::mutex> bgLock(g_backgroundTexturesMutex);
 
@@ -2157,6 +2292,7 @@ void ProcessPendingDecodedImages() {
     }
 
     PROFILE_SCOPE_CAT("Process Decoded Images", "GPU Operations");
+    LogCategory("image_monitor", "Processing " + std::to_string(pendingImages.size()) + " decoded images on render thread.");
     for (auto& decodedImg : pendingImages) {
         if (!decodedImg.data) {
             continue;
