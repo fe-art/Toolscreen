@@ -638,7 +638,6 @@ void RenderSettingsGUI() {
                     if (ImGui::BeginPopup("##LanguagePopup")) {
                         nlohmann::json langs = GetLangs();
                         for (const auto& [langCode, langName] : langs.items()) {
-                            Log(langName.get<std::string>());
                             bool isSelected = (g_config.lang == langCode);
                             if (ImGui::Selectable(langName.get<std::string>().c_str(), isSelected)) {
                                 if (g_config.lang != langCode) {
