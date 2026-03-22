@@ -112,6 +112,7 @@ MirrorGammaMode GetGlobalMirrorGammaMode();
 void InitCaptureTexture(int width, int height);
 void EnsureCaptureTextureInitialized(int width, int height);
 void CleanupCaptureTexture();
+void CleanupMirrorCaptureGpuResources();
 
 // Copy the current game texture into the shared mirror capture textures.
 void SubmitFrameCapture(GLuint gameTexture, int width, int height);

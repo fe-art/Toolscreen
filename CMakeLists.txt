@@ -643,6 +643,11 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     config-load-image-color-key-default-sensitivity
     config-load-window-overlay-color-key-default-sensitivity
     config-load-browser-overlay-color-key-default-sensitivity
+    mode-mirror-render-screen-anchors
+    mode-mirror-render-viewport-anchors
+    mode-mirror-render-screen-anchor-size-matrix
+    mode-mirror-render-viewport-anchor-size-matrix
+    mode-mirror-group-render
     mode-window-overlay-render
     mode-browser-overlay-render
     config-error-gui

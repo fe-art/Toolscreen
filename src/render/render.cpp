@@ -1983,6 +1983,8 @@ void CleanupGPUResources() {
         return;
     }
 
+    CleanupMirrorCaptureGpuResources();
+
     // Lock all GPU resource mutexes during cleanup
     std::unique_lock<std::shared_mutex> mirrorLock(g_mirrorInstancesMutex); // Write lock - cleanup
     std::lock_guard<std::mutex> bgLock(g_backgroundTexturesMutex);
@@ -4386,7 +4388,7 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
 
 bool RenderModeOverlaysForIntegrationTest(const Config& config, const ModeConfig& modeToRender, const GLState& s, int fullW,
                                           int fullH, int gameX, int gameY, int gameW, int gameH,
-                                          bool excludeOnlyOnMyScreen) {
+                                          bool excludeOnlyOnMyScreen, GLuint gameTextureId) {
     SameThreadOverlayState request;
     request.fullW = fullW;
     request.fullH = fullH;
@@ -4396,6 +4398,7 @@ bool RenderModeOverlaysForIntegrationTest(const Config& config, const ModeConfig
     request.finalY = gameY;
     request.finalW = gameW;
     request.finalH = gameH;
+    request.gameTextureId = gameTextureId;
     request.modeId = modeToRender.id;
     request.overlayOpacity = 1.0f;
     request.excludeOnlyOnMyScreen = excludeOnlyOnMyScreen;
@@ -4410,13 +4413,13 @@ bool RenderModeOverlaysForIntegrationTest(const Config& config, const ModeConfig
     request.toY = gameY;
     request.toW = gameW;
     request.toH = gameH;
-    request.modeHasMirrors = false;
+    request.modeHasMirrors = gameTextureId != 0 && ModeHasAnyMirrorSources(modeToRender);
     request.modeHasImages = false;
     request.modeHasWindowOverlays = g_windowOverlaysVisible.load(std::memory_order_acquire) &&
                                     ModeHasSourceType(modeToRender, ModeSourceType::WindowOverlay);
     request.modeHasBrowserOverlays = g_browserOverlaysVisible.load(std::memory_order_acquire) &&
                                      ModeHasSourceType(modeToRender, ModeSourceType::BrowserOverlay);
-    request.isRawWindowedMode = true;
+    request.isRawWindowedMode = !request.modeHasMirrors;
     request.toSlideMirrorsIn = modeToRender.slideMirrorsIn;
     request.mirrorSlideProgress = 1.0f;
     return RenderSameThreadOverlayPass(request, config, s);

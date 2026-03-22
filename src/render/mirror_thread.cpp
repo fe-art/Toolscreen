@@ -2220,6 +2220,31 @@ static std::unordered_map<std::string, MT_SourceRectGpuCacheEntry> g_sameThreadS
 static GLuint g_sameThreadCaptureVAO = 0;
 static GLuint g_sameThreadCaptureVBO = 0;
 
+void CleanupMirrorCaptureGpuResources() {
+    for (auto& [name, fb] : g_sameThreadMirrorFbos) {
+        (void)name;
+        MT_DeleteMirrorFbos(fb);
+    }
+    g_sameThreadMirrorFbos.clear();
+
+    for (auto& [name, cacheEntry] : g_sameThreadSourceRectGpuCaches) {
+        (void)name;
+        MT_DeleteSourceRectGpuCacheEntry(cacheEntry);
+    }
+    g_sameThreadSourceRectGpuCaches.clear();
+
+    if (g_sameThreadCaptureVAO != 0) {
+        glDeleteVertexArrays(1, &g_sameThreadCaptureVAO);
+        g_sameThreadCaptureVAO = 0;
+    }
+    if (g_sameThreadCaptureVBO != 0) {
+        glDeleteBuffers(1, &g_sameThreadCaptureVBO);
+        g_sameThreadCaptureVBO = 0;
+    }
+
+    MT_CleanupShaders();
+}
+
 static void EnsureSameThreadMirrorCaptureResources() {
     if (g_sameThreadCaptureVAO != 0 && g_sameThreadCaptureVBO != 0) { return; }
 
