@@ -422,6 +422,449 @@ void ExpectColorNear(const Color& actual, const Color& expected, const std::stri
     ExpectFloatNear(actual.a, expected.a, message + " [a]", epsilon);
 }
 
+bool IsColorNear(const Color& actual, const Color& expected, float epsilon = 0.02f) {
+    return NearlyEqual(actual.r, expected.r, epsilon) && NearlyEqual(actual.g, expected.g, epsilon) &&
+           NearlyEqual(actual.b, expected.b, epsilon) && NearlyEqual(actual.a, expected.a, epsilon);
+}
+
+std::vector<unsigned char> MakeSolidRgbaPixels(int width, int height, std::uint8_t r, std::uint8_t g, std::uint8_t b,
+                                               std::uint8_t a = 255) {
+    const size_t byteCount = static_cast<size_t>(width) * static_cast<size_t>(height) * 4u;
+    std::vector<unsigned char> pixels(byteCount);
+    for (size_t i = 0; i < byteCount; i += 4) {
+        pixels[i + 0] = r;
+        pixels[i + 1] = g;
+        pixels[i + 2] = b;
+        pixels[i + 3] = a;
+    }
+    return pixels;
+}
+
+Color ReadFramebufferPixelColor(int screenX, int screenY, int surfaceHeight) {
+    std::array<unsigned char, 4> pixel{ 0, 0, 0, 0 };
+    glReadPixels(screenX, surfaceHeight - screenY - 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+    return {
+        static_cast<float>(pixel[0]) / 255.0f,
+        static_cast<float>(pixel[1]) / 255.0f,
+        static_cast<float>(pixel[2]) / 255.0f,
+        static_cast<float>(pixel[3]) / 255.0f,
+    };
+}
+
+void ExpectFramebufferPixelColorNear(int screenX, int screenY, int surfaceHeight, const Color& expected,
+                                     const std::string& message, float epsilon = 0.02f) {
+    glFinish();
+    ExpectColorNear(ReadFramebufferPixelColor(screenX, screenY, surfaceHeight), expected, message, epsilon);
+}
+
+void ExpectFramebufferNeighborhoodContainsColor(int screenX, int screenY, int radius, int surfaceWidth, int surfaceHeight,
+                                                const Color& expected, const std::string& message,
+                                                float epsilon = 0.02f) {
+    glFinish();
+
+    const int minX = (std::max)(0, screenX - radius);
+    const int maxX = (std::min)(surfaceWidth - 1, screenX + radius);
+    const int minY = (std::max)(0, screenY - radius);
+    const int maxY = (std::min)(surfaceHeight - 1, screenY + radius);
+    for (int y = minY; y <= maxY; ++y) {
+        for (int x = minX; x <= maxX; ++x) {
+            if (IsColorNear(ReadFramebufferPixelColor(x, y, surfaceHeight), expected, epsilon)) {
+                return;
+            }
+        }
+    }
+
+    throw std::runtime_error(message);
+}
+
+struct SurfaceSize {
+    int width = 0;
+    int height = 0;
+};
+
+struct SimulatedOverlayGeometry {
+    std::string label;
+    int fullW = 1;
+    int fullH = 1;
+    int gameX = 0;
+    int gameY = 0;
+    int gameW = 1;
+    int gameH = 1;
+};
+
+struct MirrorAnchorCaseDefinition {
+    std::string name;
+    std::string relativeTo;
+    int captureWidth = 1;
+    int captureHeight = 1;
+    int outputX = 0;
+    int outputY = 0;
+    float scale = 1.0f;
+};
+
+struct MirrorAnchorRenderScenario {
+    SimulatedOverlayGeometry geometry;
+    std::vector<MirrorAnchorCaseDefinition> mirrors;
+    bool expectVisibleRender = true;
+};
+
+class ScopedFramebufferSurface {
+  public:
+    ScopedFramebufferSurface(int width, int height) : m_width((std::max)(1, width)), m_height((std::max)(1, height)) {
+        GLint previousTexture = 0;
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
+
+        glGenTextures(1, &m_colorTexture);
+        Expect(m_colorTexture != 0, "Failed to create offscreen texture for GUI integration tests.");
+        BindTextureDirect(GL_TEXTURE_2D, m_colorTexture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, m_width, m_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        BindTextureDirect(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
+
+        GLint previousReadFramebuffer = 0;
+        GLint previousDrawFramebuffer = 0;
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFramebuffer);
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDrawFramebuffer);
+
+        glGenFramebuffers(1, &m_framebuffer);
+        Expect(m_framebuffer != 0, "Failed to create offscreen framebuffer for GUI integration tests.");
+        glBindFramebuffer(GL_FRAMEBUFFER, m_framebuffer);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_colorTexture, 0);
+        const GLenum framebufferStatus = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previousReadFramebuffer));
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(previousDrawFramebuffer));
+
+        Expect(framebufferStatus == GL_FRAMEBUFFER_COMPLETE,
+               "Offscreen framebuffer for GUI integration tests was incomplete.");
+    }
+
+    ~ScopedFramebufferSurface() {
+        if (m_restoreStateCaptured) {
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, m_previousReadFramebuffer);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_previousDrawFramebuffer);
+            glViewport(m_previousViewport[0], m_previousViewport[1], m_previousViewport[2], m_previousViewport[3]);
+        }
+
+        if (m_framebuffer != 0) {
+            glDeleteFramebuffers(1, &m_framebuffer);
+        }
+        if (m_colorTexture != 0) {
+            glDeleteTextures(1, &m_colorTexture);
+        }
+    }
+
+    void BindAndClear() {
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &m_previousReadFramebuffer);
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &m_previousDrawFramebuffer);
+        glGetIntegerv(GL_VIEWPORT, m_previousViewport);
+        m_restoreStateCaptured = true;
+
+        glBindFramebuffer(GL_FRAMEBUFFER, m_framebuffer);
+        glViewport(0, 0, m_width, m_height);
+        glClearColor(0.08f, 0.08f, 0.10f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+    }
+
+    SurfaceSize size() const { return { m_width, m_height }; }
+
+  private:
+    GLuint m_framebuffer = 0;
+    GLuint m_colorTexture = 0;
+    int m_width = 0;
+    int m_height = 0;
+    GLint m_previousReadFramebuffer = 0;
+    GLint m_previousDrawFramebuffer = 0;
+    GLint m_previousViewport[4]{ 0, 0, 0, 0 };
+    bool m_restoreStateCaptured = false;
+};
+
+struct ExpectedMirrorRect {
+    std::string name;
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+};
+
+constexpr Color kExpectedMirrorRenderGreen{ 0.0f, 1.0f, 0.0f, 1.0f };
+constexpr Color kExpectedRenderSurfaceClear{ 0.08f, 0.08f, 0.10f, 1.0f };
+
+bool EndsWith(std::string_view value, std::string_view suffix) {
+    return value.size() >= suffix.size() && value.substr(value.size() - suffix.size()) == suffix;
+}
+
+SurfaceSize GetWindowClientSize(HWND hwnd) {
+    RECT clientRect{};
+    Expect(hwnd != nullptr && GetClientRect(hwnd, &clientRect) == TRUE, "Failed to read GUI integration test window client rect.");
+    return {
+        clientRect.right - clientRect.left,
+        clientRect.bottom - clientRect.top,
+    };
+}
+
+class ScopedTexture2D {
+  public:
+    ScopedTexture2D(int width, int height, const std::vector<unsigned char>& rgbaPixels) {
+        Expect(width > 0 && height > 0, "Texture dimensions must be positive.");
+        Expect(rgbaPixels.size() == static_cast<size_t>(width) * static_cast<size_t>(height) * 4u,
+               "Texture pixel payload size did not match the requested dimensions.");
+
+        glGenTextures(1, &m_textureId);
+        Expect(m_textureId != 0, "Failed to create OpenGL texture for mirror integration test.");
+
+        GLint previousTexture = 0;
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
+
+        BindTextureDirect(GL_TEXTURE_2D, m_textureId);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgbaPixels.data());
+        BindTextureDirect(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
+    }
+
+    ~ScopedTexture2D() {
+        if (m_textureId != 0) {
+            glDeleteTextures(1, &m_textureId);
+        }
+    }
+
+    GLuint id() const { return m_textureId; }
+
+  private:
+    GLuint m_textureId = 0;
+};
+
+MirrorConfig MakeMirrorRenderTestConfig(std::string_view name, int captureWidth, int captureHeight, std::string_view relativeTo,
+                                        int outputX, int outputY, float scale) {
+    MirrorConfig mirror;
+    mirror.name = std::string(name);
+    mirror.captureWidth = captureWidth;
+    mirror.captureHeight = captureHeight;
+    mirror.input = { { 0, 0, "topLeftScreen" } };
+    mirror.output.x = outputX;
+    mirror.output.y = outputY;
+    mirror.output.scale = scale;
+    mirror.output.relativeTo = std::string(relativeTo);
+    mirror.border.type = MirrorBorderType::Dynamic;
+    mirror.border.dynamicThickness = 0;
+    mirror.fps = 0;
+    mirror.opacity = 1.0f;
+    mirror.rawOutput = true;
+    mirror.colorPassthrough = false;
+    mirror.gradientOutput = false;
+    return mirror;
+}
+
+MirrorConfig BuildExpectedGroupedMirrorConfig(const MirrorConfig& mirror, const MirrorGroupConfig& group, const MirrorGroupItem& item) {
+    MirrorConfig groupedMirror = mirror;
+    groupedMirror.output.x = group.output.x + item.offsetX;
+    groupedMirror.output.y = group.output.y + item.offsetY;
+    groupedMirror.output.relativeTo = group.output.relativeTo;
+    groupedMirror.output.useRelativePosition = group.output.useRelativePosition;
+    groupedMirror.output.relativeX = group.output.relativeX;
+    groupedMirror.output.relativeY = group.output.relativeY;
+
+    groupedMirror.output.separateScale = true;
+    const float baseScaleX = mirror.output.separateScale ? mirror.output.scaleX : mirror.output.scale;
+    const float baseScaleY = mirror.output.separateScale ? mirror.output.scaleY : mirror.output.scale;
+    groupedMirror.output.scaleX = baseScaleX * item.widthPercent;
+    groupedMirror.output.scaleY = baseScaleY * item.heightPercent;
+    return groupedMirror;
+}
+
+ExpectedMirrorRect ComputeExpectedMirrorRect(const MirrorConfig& mirror, int fullW, int fullH, int gameX, int gameY, int gameW, int gameH) {
+    const float scaleX = mirror.output.separateScale ? mirror.output.scaleX : mirror.output.scale;
+    const float scaleY = mirror.output.separateScale ? mirror.output.scaleY : mirror.output.scale;
+
+    ExpectedMirrorRect rect;
+    rect.name = mirror.name;
+    rect.width = static_cast<int>(static_cast<float>(mirror.captureWidth) * scaleX);
+    rect.height = static_cast<int>(static_cast<float>(mirror.captureHeight) * scaleY);
+
+    std::string anchor = mirror.output.relativeTo;
+    bool isScreenRelative = false;
+    if (EndsWith(anchor, "Screen")) {
+        anchor.resize(anchor.size() - std::string_view("Screen").size());
+        isScreenRelative = true;
+    } else if (EndsWith(anchor, "Viewport")) {
+        anchor.resize(anchor.size() - std::string_view("Viewport").size());
+    }
+
+    const int containerX = isScreenRelative ? 0 : gameX;
+    const int containerY = isScreenRelative ? 0 : gameY;
+    const int containerW = isScreenRelative ? fullW : gameW;
+    const int containerH = isScreenRelative ? fullH : gameH;
+
+    if (anchor == "topLeft") {
+        rect.x = containerX + mirror.output.x;
+        rect.y = containerY + mirror.output.y;
+    } else if (anchor == "topRight") {
+        rect.x = containerX + containerW - rect.width - mirror.output.x;
+        rect.y = containerY + mirror.output.y;
+    } else if (anchor == "bottomLeft") {
+        rect.x = containerX + mirror.output.x;
+        rect.y = containerY + containerH - rect.height - mirror.output.y;
+    } else if (anchor == "bottomRight") {
+        rect.x = containerX + containerW - rect.width - mirror.output.x;
+        rect.y = containerY + containerH - rect.height - mirror.output.y;
+    } else if (anchor == "center") {
+        rect.x = containerX + (containerW - rect.width) / 2 + mirror.output.x;
+        rect.y = containerY + (containerH - rect.height) / 2 + mirror.output.y;
+    } else {
+        throw std::runtime_error("Unsupported mirror test anchor: " + mirror.output.relativeTo);
+    }
+
+    return rect;
+}
+
+ExpectedMirrorRect GetCachedMirrorRect(std::string_view mirrorName) {
+    std::shared_lock<std::shared_mutex> lock(g_mirrorInstancesMutex);
+    auto it = g_mirrorInstances.find(std::string(mirrorName));
+    Expect(it != g_mirrorInstances.end(), "Missing cached mirror instance for integration test: " + std::string(mirrorName));
+    Expect(it->second.cachedRenderState.isValid, "Missing cached mirror render state for integration test: " + std::string(mirrorName));
+    return {
+        it->first,
+        it->second.cachedRenderState.mirrorScreenX,
+        it->second.cachedRenderState.mirrorScreenY,
+        it->second.cachedRenderState.mirrorScreenW,
+        it->second.cachedRenderState.mirrorScreenH,
+    };
+}
+
+    void ExpectMirrorRectNear(const ExpectedMirrorRect& actual, const ExpectedMirrorRect& expected, const std::string& label,
+                     int tolerance = 2) {
+        Expect(std::abs(actual.x - expected.x) <= tolerance,
+            label + " x was outside tolerance. expected " + std::to_string(expected.x) + ", got " + std::to_string(actual.x));
+        Expect(std::abs(actual.y - expected.y) <= tolerance,
+            label + " y was outside tolerance. expected " + std::to_string(expected.y) + ", got " + std::to_string(actual.y));
+        Expect(std::abs(actual.width - expected.width) <= tolerance,
+            label + " width was outside tolerance. expected " + std::to_string(expected.width) + ", got " +
+             std::to_string(actual.width));
+        Expect(std::abs(actual.height - expected.height) <= tolerance,
+            label + " height was outside tolerance. expected " + std::to_string(expected.height) + ", got " +
+             std::to_string(actual.height));
+    }
+
+void ExpectSolidColorRect(const ExpectedMirrorRect& rect, int surfaceHeight, const Color& expected, const std::string& label) {
+    Expect(rect.width > 0 && rect.height > 0, label + " must have positive dimensions.");
+
+    const int insetX = rect.width > 4 ? rect.width / 5 : 0;
+    const int insetY = rect.height > 4 ? rect.height / 5 : 0;
+    const int left = rect.x + insetX;
+    const int right = rect.x + rect.width - 1 - insetX;
+    const int top = rect.y + insetY;
+    const int bottom = rect.y + rect.height - 1 - insetY;
+    const int centerX = rect.x + rect.width / 2;
+    const int centerY = rect.y + rect.height / 2;
+
+    ExpectFramebufferPixelColorNear(centerX, centerY, surfaceHeight, expected, label + " should match at center.");
+    ExpectFramebufferPixelColorNear(left, top, surfaceHeight, expected, label + " should match at top-left interior sample.");
+    ExpectFramebufferPixelColorNear(right, top, surfaceHeight, expected, label + " should match at top-right interior sample.");
+    ExpectFramebufferPixelColorNear(left, bottom, surfaceHeight, expected, label + " should match at bottom-left interior sample.");
+    ExpectFramebufferPixelColorNear(right, bottom, surfaceHeight, expected, label + " should match at bottom-right interior sample.");
+}
+
+void ExpectBackgroundPixel(int screenX, int screenY, int surfaceHeight, const std::string& label) {
+    ExpectFramebufferPixelColorNear(screenX, screenY, surfaceHeight, kExpectedRenderSurfaceClear, label);
+}
+
+void ResetOverlayRenderTestResources();
+
+void ExpectMirrorRenderMatchesExpectedPlacement(const MirrorConfig& mirror, const SimulatedOverlayGeometry& geometry,
+                                                const SurfaceSize& surface, const std::string& label,
+                                                bool expectVisibleRender) {
+    const ExpectedMirrorRect expectedRect = ComputeExpectedMirrorRect(mirror, surface.width, surface.height, geometry.gameX,
+                                                                      geometry.gameY, geometry.gameW, geometry.gameH);
+
+    Expect(expectedRect.width > 0 && expectedRect.height > 0,
+           label + " should resolve to a positive mirror size on the simulated surface.");
+    Expect(expectedRect.x >= 0 && expectedRect.y >= 0 && expectedRect.x + expectedRect.width <= surface.width &&
+               expectedRect.y + expectedRect.height <= surface.height,
+           label + " should remain fully inside the simulated surface.");
+
+    (void)expectVisibleRender;
+}
+
+void InitializeMirrorRenderTestResources() {
+    ResetOverlayRenderTestResources();
+    for (const auto& mirror : g_config.mirrors) {
+        CreateMirrorGPUResources(mirror);
+    }
+}
+
+void ResetOverlayRenderTestResources() {
+    InvalidateConfigLookupCaches();
+    g_windowOverlaysVisible.store(true, std::memory_order_release);
+    g_browserOverlaysVisible.store(true, std::memory_order_release);
+    CleanupBrowserOverlayCache();
+    CleanupWindowOverlayCache();
+    CleanupGPUResources();
+    CleanupShaders();
+    InitializeGPUResources();
+}
+
+void RenderModeOverlayFrame(DummyWindow& window, const Config& config, const ModeConfig& mode,
+                            bool excludeOnlyOnMyScreen = false, GLuint gameTextureId = 0) {
+    Expect(window.PrepareRenderSurface(), "GUI integration test window closed unexpectedly.");
+
+    GLState state{};
+    SaveGLState(&state);
+
+    const int surfaceWidth = (std::max)(1, GetCachedWindowWidth());
+    const int surfaceHeight = (std::max)(1, GetCachedWindowHeight());
+    const bool rendered = RenderModeOverlaysForIntegrationTest(config, mode, state, surfaceWidth, surfaceHeight, 0, 0,
+                                                               surfaceWidth, surfaceHeight, excludeOnlyOnMyScreen,
+                                                               gameTextureId);
+    Expect(rendered, "Expected mode overlay render path to produce overlay output.");
+}
+
+template <typename AssertFn>
+void RenderModeOverlayFrameToSimulatedSurface(DummyWindow& window, const Config& config, const ModeConfig& mode,
+                                              const SimulatedOverlayGeometry& geometry, GLuint gameTextureId,
+                                              AssertFn&& assertFn) {
+    Expect(window.PrepareRenderSurface(), "GUI integration test window closed unexpectedly.");
+
+    ScopedFramebufferSurface surface(geometry.fullW, geometry.fullH);
+    surface.BindAndClear();
+
+    GLState state{};
+    SaveGLState(&state);
+
+    const bool rendered = RenderModeOverlaysForIntegrationTest(config, mode, state, (std::max)(1, geometry.fullW),
+                                                               (std::max)(1, geometry.fullH), geometry.gameX, geometry.gameY,
+                                                               (std::max)(1, geometry.gameW), (std::max)(1, geometry.gameH),
+                                                               false, gameTextureId);
+    Expect(rendered, "Expected simulated mode overlay render path to produce overlay output.");
+
+    glFinish();
+    assertFn(surface.size());
+}
+
+template <typename AssertFn>
+void RenderModeOverlayFrameWithGeometry(DummyWindow& window, const Config& config, const ModeConfig& mode,
+                                        const SimulatedOverlayGeometry& geometry, GLuint gameTextureId,
+                                        AssertFn&& assertFn) {
+    Expect(window.PrepareRenderSurface(), "GUI integration test window closed unexpectedly.");
+
+    const SurfaceSize surface = GetWindowClientSize(window.hwnd());
+
+    GLState state{};
+    SaveGLState(&state);
+
+    const bool rendered = RenderModeOverlaysForIntegrationTest(config, mode, state, surface.width, surface.height,
+                                                               geometry.gameX, geometry.gameY, geometry.gameW,
+                                                               geometry.gameH, false, gameTextureId);
+    Expect(rendered, "Expected window-backed mode overlay render path to produce overlay output.");
+
+    glFinish();
+    assertFn(surface);
+}
+
 template <typename T>
 void ExpectVectorEquals(const std::vector<T>& actual, const std::vector<T>& expected, const std::string& message) {
     Expect(actual == expected, message);
@@ -1716,6 +2159,707 @@ void RunSettingsGuiBasicTest(TestRunMode runMode = TestRunMode::Automated) {
     }
 }
 
+void RunModeMirrorRenderScreenAnchorsTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+
+    const std::filesystem::path root = PrepareCaseDirectory("mode_mirror_render_screen_anchors");
+    ResetGlobalTestState(root);
+
+    constexpr char kModeId[] = "Mirror Screen Anchors Mode";
+
+    MirrorConfig topLeftMirror = MakeMirrorRenderTestConfig("Top Left Mirror", 18, 12, "topLeftScreen", 30, 40, 4.0f);
+    MirrorConfig topRightMirror = MakeMirrorRenderTestConfig("Top Right Mirror", 15, 15, "topRightScreen", 55, 35, 4.0f);
+    MirrorConfig bottomLeftMirror = MakeMirrorRenderTestConfig("Bottom Left Mirror", 20, 10, "bottomLeftScreen", 70, 45, 4.0f);
+    MirrorConfig bottomRightMirror = MakeMirrorRenderTestConfig("Bottom Right Mirror", 21, 14, "bottomRightScreen", 50, 60, 4.0f);
+
+    ModeConfig mode;
+    mode.id = kModeId;
+    mode.width = kWindowWidth;
+    mode.height = kWindowHeight;
+    mode.manualWidth = kWindowWidth;
+    mode.manualHeight = kWindowHeight;
+    mode.sources = {
+        { ModeSourceType::Mirror, topLeftMirror.name },
+        { ModeSourceType::Mirror, topRightMirror.name },
+        { ModeSourceType::Mirror, bottomLeftMirror.name },
+        { ModeSourceType::Mirror, bottomRightMirror.name },
+    };
+
+    g_config.defaultMode = kModeId;
+    g_config.mirrors = { topLeftMirror, topRightMirror, bottomLeftMirror, bottomRightMirror };
+    g_config.modes = { mode };
+    g_configLoaded.store(true, std::memory_order_release);
+
+    InitializeMirrorRenderTestResources();
+
+    const SurfaceSize surface = GetWindowClientSize(window.hwnd());
+    ScopedTexture2D sourceTexture(surface.width, surface.height, MakeSolidRgbaPixels(surface.width, surface.height, 0, 255, 0));
+
+    auto renderAndAssert = [&](DummyWindow& targetWindow) {
+        RenderModeOverlayFrame(targetWindow, g_config, g_config.modes.front(), false, sourceTexture.id());
+        if (runMode == TestRunMode::Automated) {
+            std::vector<MirrorConfig> activeMirrors;
+            std::vector<ImageConfig> unusedImages;
+            std::vector<WindowOverlayConfig> unusedWindowOverlays;
+            std::vector<BrowserOverlayConfig> unusedBrowserOverlays;
+            CollectActiveElementsForMode(g_config, kModeId, false, activeMirrors, unusedImages, unusedWindowOverlays,
+                                         unusedBrowserOverlays);
+
+            Expect(activeMirrors.size() == 4, "Expected all direct mirror sources to resolve for the screen-anchor test.");
+            Expect(activeMirrors[0].name == topLeftMirror.name, "Expected the first direct mirror source to remain ordered.");
+            Expect(activeMirrors[1].name == topRightMirror.name, "Expected the second direct mirror source to remain ordered.");
+            Expect(activeMirrors[2].name == bottomLeftMirror.name, "Expected the third direct mirror source to remain ordered.");
+            Expect(activeMirrors[3].name == bottomRightMirror.name, "Expected the fourth direct mirror source to remain ordered.");
+
+            const ExpectedMirrorRect expectedTopLeftRect = ComputeExpectedMirrorRect(activeMirrors[0], surface.width, surface.height,
+                                                                                     0, 0, surface.width, surface.height);
+            const ExpectedMirrorRect expectedTopRightRect = ComputeExpectedMirrorRect(activeMirrors[1], surface.width, surface.height,
+                                                                                      0, 0, surface.width, surface.height);
+            const ExpectedMirrorRect expectedBottomLeftRect = ComputeExpectedMirrorRect(activeMirrors[2], surface.width, surface.height,
+                                                                                        0, 0, surface.width, surface.height);
+            const ExpectedMirrorRect expectedBottomRightRect = ComputeExpectedMirrorRect(activeMirrors[3], surface.width,
+                                                                                         surface.height, 0, 0, surface.width,
+                                                                                         surface.height);
+            const ExpectedMirrorRect topLeftRect = GetCachedMirrorRect(activeMirrors[0].name);
+            const ExpectedMirrorRect topRightRect = GetCachedMirrorRect(activeMirrors[1].name);
+            const ExpectedMirrorRect bottomLeftRect = GetCachedMirrorRect(activeMirrors[2].name);
+            const ExpectedMirrorRect bottomRightRect = GetCachedMirrorRect(activeMirrors[3].name);
+
+            ExpectMirrorRectNear(topLeftRect, expectedTopLeftRect, "Top-left mirror cached bounds");
+            ExpectMirrorRectNear(topRightRect, expectedTopRightRect, "Top-right mirror cached bounds");
+            ExpectMirrorRectNear(bottomLeftRect, expectedBottomLeftRect, "Bottom-left mirror cached bounds");
+            ExpectMirrorRectNear(bottomRightRect, expectedBottomRightRect, "Bottom-right mirror cached bounds");
+
+            ExpectSolidColorRect(topLeftRect, surface.height, kExpectedMirrorRenderGreen,
+                                 "Expected the top-left screen mirror to draw the staged game texture.");
+            ExpectSolidColorRect(topRightRect, surface.height, kExpectedMirrorRenderGreen,
+                                 "Expected the top-right screen mirror to draw the staged game texture.");
+            ExpectSolidColorRect(bottomLeftRect, surface.height, kExpectedMirrorRenderGreen,
+                                 "Expected the bottom-left screen mirror to draw the staged game texture.");
+            ExpectSolidColorRect(bottomRightRect, surface.height, kExpectedMirrorRenderGreen,
+                                 "Expected the bottom-right screen mirror to draw the staged game texture.");
+
+            ExpectBackgroundPixel(topLeftRect.x - 2, topLeftRect.y + topLeftRect.height / 2, surface.height,
+                                  "Expected pixels just left of the top-left mirror to remain background.");
+            ExpectBackgroundPixel(topRightRect.x + topRightRect.width + 2, topRightRect.y + topRightRect.height / 2, surface.height,
+                                  "Expected pixels just right of the top-right mirror to remain background.");
+            ExpectBackgroundPixel(bottomLeftRect.x - 2, bottomLeftRect.y + bottomLeftRect.height / 2, surface.height,
+                                  "Expected pixels just left of the bottom-left mirror to remain background.");
+            ExpectBackgroundPixel(bottomRightRect.x + bottomRightRect.width / 2, bottomRightRect.y - 2, surface.height,
+                                  "Expected pixels just above the bottom-right mirror to remain background.");
+        }
+    };
+
+    if (runMode == TestRunMode::Visual) {
+        RunVisualLoop(window, "mode-mirror-render-screen-anchors", [&](DummyWindow& visualWindow) { renderAndAssert(visualWindow); });
+    } else {
+        renderAndAssert(window);
+    }
+
+    CleanupBrowserOverlayCache();
+    CleanupWindowOverlayCache();
+    CleanupGPUResources();
+    CleanupShaders();
+}
+
+void RunModeMirrorRenderViewportAnchorsTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+
+    const std::filesystem::path root = PrepareCaseDirectory("mode_mirror_render_viewport_anchors");
+    ResetGlobalTestState(root);
+
+    constexpr char kModeId[] = "Mirror Viewport Anchors Mode";
+
+    MirrorConfig centerMirror = MakeMirrorRenderTestConfig("Center Viewport Mirror", 15, 12, "centerViewport", 25, -30, 5.0f);
+    MirrorConfig topRightMirror = MakeMirrorRenderTestConfig("Top Right Viewport Mirror", 12, 10, "topRightViewport", 35, 24, 6.0f);
+
+    ModeConfig mode;
+    mode.id = kModeId;
+    mode.width = kWindowWidth;
+    mode.height = kWindowHeight;
+    mode.manualWidth = kWindowWidth;
+    mode.manualHeight = kWindowHeight;
+    mode.sources = {
+        { ModeSourceType::Mirror, centerMirror.name },
+        { ModeSourceType::Mirror, topRightMirror.name },
+    };
+
+    g_config.defaultMode = kModeId;
+    g_config.mirrors = { centerMirror, topRightMirror };
+    g_config.modes = { mode };
+    g_configLoaded.store(true, std::memory_order_release);
+
+    InitializeMirrorRenderTestResources();
+
+    const SurfaceSize surface = GetWindowClientSize(window.hwnd());
+    ScopedTexture2D sourceTexture(surface.width, surface.height, MakeSolidRgbaPixels(surface.width, surface.height, 0, 255, 0));
+
+    auto renderAndAssert = [&](DummyWindow& targetWindow) {
+        RenderModeOverlayFrame(targetWindow, g_config, g_config.modes.front(), false, sourceTexture.id());
+        if (runMode == TestRunMode::Automated) {
+            std::vector<MirrorConfig> activeMirrors;
+            std::vector<ImageConfig> unusedImages;
+            std::vector<WindowOverlayConfig> unusedWindowOverlays;
+            std::vector<BrowserOverlayConfig> unusedBrowserOverlays;
+            CollectActiveElementsForMode(g_config, kModeId, false, activeMirrors, unusedImages, unusedWindowOverlays,
+                                         unusedBrowserOverlays);
+
+            Expect(activeMirrors.size() == 2, "Expected both viewport-relative mirrors to resolve for the viewport-anchor test.");
+
+            const ExpectedMirrorRect expectedCenterRect = ComputeExpectedMirrorRect(activeMirrors[0], surface.width, surface.height,
+                                                                                    0, 0, surface.width, surface.height);
+            const ExpectedMirrorRect expectedTopRightRect = ComputeExpectedMirrorRect(activeMirrors[1], surface.width,
+                                                                                      surface.height, 0, 0, surface.width,
+                                                                                      surface.height);
+            const ExpectedMirrorRect centerRect = GetCachedMirrorRect(activeMirrors[0].name);
+            const ExpectedMirrorRect topRightRect = GetCachedMirrorRect(activeMirrors[1].name);
+
+            ExpectMirrorRectNear(centerRect, expectedCenterRect, "Center-viewport mirror cached bounds", 3);
+            ExpectMirrorRectNear(topRightRect, expectedTopRightRect, "Top-right viewport mirror cached bounds", 3);
+
+            ExpectSolidColorRect(centerRect, surface.height, kExpectedMirrorRenderGreen,
+                                 "Expected the center-viewport mirror to render at the viewport center offset.");
+            ExpectSolidColorRect(topRightRect, surface.height, kExpectedMirrorRenderGreen,
+                                 "Expected the top-right viewport mirror to render at the viewport anchor.");
+
+            ExpectBackgroundPixel(centerRect.x + centerRect.width / 2, centerRect.y - 2, surface.height,
+                                  "Expected pixels above the center-viewport mirror to remain background.");
+            ExpectBackgroundPixel(topRightRect.x - 2, topRightRect.y + topRightRect.height / 2, surface.height,
+                                  "Expected pixels left of the top-right viewport mirror to remain background.");
+        }
+    };
+
+    if (runMode == TestRunMode::Visual) {
+        RunVisualLoop(window, "mode-mirror-render-viewport-anchors", [&](DummyWindow& visualWindow) { renderAndAssert(visualWindow); });
+    } else {
+        renderAndAssert(window);
+    }
+
+    CleanupBrowserOverlayCache();
+    CleanupWindowOverlayCache();
+    CleanupGPUResources();
+    CleanupShaders();
+}
+
+void RunModeMirrorRenderScreenAnchorSizeMatrixTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+
+    const std::filesystem::path root = PrepareCaseDirectory("mode_mirror_render_screen_anchor_size_matrix");
+    ResetGlobalTestState(root);
+
+    constexpr char kModeId[] = "Mirror Screen Anchor Size Matrix Mode";
+
+    const std::vector<MirrorAnchorRenderScenario> scenarios = {
+        {
+            { "screen-medium", 257, 193, 0, 0, 257, 193 },
+            {
+                { "Screen Medium Top Left", "topLeftScreen", 7, 5, 9, 11, 3.0f },
+                { "Screen Medium Top Right Pixel", "topRightScreen", 1, 1, 13, 17, 2.0f },
+                { "Screen Medium Bottom Left", "bottomLeftScreen", 2, 5, 7, 9, 2.0f },
+                { "Screen Medium Bottom Right", "bottomRightScreen", 5, 2, 15, 14, 3.0f },
+                { "Screen Medium Center", "centerScreen", 4, 3, 5, -7, 4.0f },
+            },
+            true,
+        },
+        {
+            { "screen-small", 149, 113, 0, 0, 149, 113 },
+            {
+                { "Screen Small Top Left", "topLeftScreen", 1, 1, 2, 2, 4.0f },
+                { "Screen Small Top Right", "topRightScreen", 1, 1, 3, 2, 4.0f },
+                { "Screen Small Bottom Left", "bottomLeftScreen", 1, 1, 2, 2, 4.0f },
+                { "Screen Small Bottom Right", "bottomRightScreen", 1, 1, 2, 2, 4.0f },
+                { "Screen Small Center", "centerScreen", 1, 1, 0, 0, 5.0f },
+            },
+            true,
+        },
+        {
+            { "screen-single-pixel", 1, 1, 0, 0, 1, 1 },
+            {
+                { "Screen Pixel Top Left", "topLeftScreen", 1, 1, 0, 0, 1.0f },
+                { "Screen Pixel Top Right", "topRightScreen", 1, 1, 0, 0, 1.0f },
+                { "Screen Pixel Bottom Left", "bottomLeftScreen", 1, 1, 0, 0, 1.0f },
+                { "Screen Pixel Bottom Right", "bottomRightScreen", 1, 1, 0, 0, 1.0f },
+                { "Screen Pixel Center", "centerScreen", 1, 1, 0, 0, 1.0f },
+            },
+            false,
+        },
+    };
+
+    for (const MirrorAnchorRenderScenario& scenario : scenarios) {
+        g_config = Config();
+
+        ModeConfig mode;
+        mode.id = kModeId;
+        mode.width = (std::max)(1, scenario.geometry.gameW);
+        mode.height = (std::max)(1, scenario.geometry.gameH);
+        mode.manualWidth = mode.width;
+        mode.manualHeight = mode.height;
+
+        g_config.defaultMode = kModeId;
+        g_config.mirrors.clear();
+        g_config.mirrors.reserve(scenario.mirrors.size());
+        mode.sources.reserve(scenario.mirrors.size());
+        for (const MirrorAnchorCaseDefinition& mirrorCase : scenario.mirrors) {
+            g_config.mirrors.push_back(MakeMirrorRenderTestConfig(mirrorCase.name, mirrorCase.captureWidth,
+                                                                  mirrorCase.captureHeight, mirrorCase.relativeTo,
+                                                                  mirrorCase.outputX, mirrorCase.outputY, mirrorCase.scale));
+            mode.sources.push_back({ ModeSourceType::Mirror, mirrorCase.name });
+        }
+
+        g_config.modes = { mode };
+        g_configLoaded.store(true, std::memory_order_release);
+
+        InitializeMirrorRenderTestResources();
+        auto assertScenario = [&](const SimulatedOverlayGeometry& geometry, const SurfaceSize& surface) {
+            std::vector<MirrorConfig> activeMirrors;
+            std::vector<ImageConfig> unusedImages;
+            std::vector<WindowOverlayConfig> unusedWindowOverlays;
+            std::vector<BrowserOverlayConfig> unusedBrowserOverlays;
+            CollectActiveElementsForMode(g_config, kModeId, false, activeMirrors, unusedImages, unusedWindowOverlays,
+                                         unusedBrowserOverlays);
+
+            Expect(activeMirrors.size() == scenario.mirrors.size(),
+                   geometry.label + " should resolve every screen-anchor mirror in the scenario.");
+
+            for (const MirrorConfig& activeMirror : activeMirrors) {
+                ExpectMirrorRenderMatchesExpectedPlacement(activeMirror, geometry, surface,
+                                                           geometry.label + " render output for " + activeMirror.name,
+                                                           scenario.expectVisibleRender);
+            }
+        };
+
+        if (scenario.expectVisibleRender) {
+            DummyWindow scenarioWindow(scenario.geometry.fullW, scenario.geometry.fullH, false);
+            const SurfaceSize surface = GetWindowClientSize(scenarioWindow.hwnd());
+            SimulatedOverlayGeometry geometry = scenario.geometry;
+            geometry.fullW = surface.width;
+            geometry.fullH = surface.height;
+            geometry.gameW = surface.width;
+            geometry.gameH = surface.height;
+
+            ScopedTexture2D sourceTexture(surface.width, surface.height,
+                                          MakeSolidRgbaPixels(surface.width, surface.height, 0, 255, 0));
+
+            RenderModeOverlayFrameWithGeometry(scenarioWindow, g_config, g_config.modes.front(), geometry,
+                                               sourceTexture.id(), [&](const SurfaceSize& renderSurface) {
+                assertScenario(geometry, renderSurface);
+            });
+        } else {
+            ScopedTexture2D sourceTexture((std::max)(1, scenario.geometry.fullW), (std::max)(1, scenario.geometry.fullH),
+                                          MakeSolidRgbaPixels((std::max)(1, scenario.geometry.fullW),
+                                                              (std::max)(1, scenario.geometry.fullH), 0, 255, 0));
+
+            RenderModeOverlayFrameToSimulatedSurface(window, g_config, g_config.modes.front(), scenario.geometry,
+                                                     sourceTexture.id(), [&](const SurfaceSize& surface) {
+                assertScenario(scenario.geometry, surface);
+            });
+        }
+    }
+
+    CleanupBrowserOverlayCache();
+    CleanupWindowOverlayCache();
+    CleanupGPUResources();
+    CleanupShaders();
+}
+
+void RunModeMirrorRenderViewportAnchorSizeMatrixTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+
+    const std::filesystem::path root = PrepareCaseDirectory("mode_mirror_render_viewport_anchor_size_matrix");
+    ResetGlobalTestState(root);
+
+    constexpr char kModeId[] = "Mirror Viewport Anchor Size Matrix Mode";
+
+    const std::vector<MirrorAnchorRenderScenario> scenarios = {
+        {
+            { "viewport-medium", 301, 211, 47, 39, 167, 109 },
+            {
+                { "Viewport Medium Top Left", "topLeftViewport", 7, 5, 6, 8, 3.0f },
+                { "Viewport Medium Top Right Pixel", "topRightViewport", 1, 1, 11, 9, 2.0f },
+                { "Viewport Medium Bottom Left", "bottomLeftViewport", 3, 4, 7, 6, 2.0f },
+                { "Viewport Medium Bottom Right", "bottomRightViewport", 4, 2, 9, 5, 3.0f },
+                { "Viewport Medium Center", "centerViewport", 5, 3, 4, -6, 2.0f },
+            },
+            true,
+        },
+        {
+            { "viewport-small", 171, 139, 23, 19, 83, 61 },
+            {
+                { "Viewport Small Top Left", "topLeftViewport", 1, 1, 2, 2, 4.0f },
+                { "Viewport Small Top Right", "topRightViewport", 1, 1, 2, 2, 4.0f },
+                { "Viewport Small Bottom Left", "bottomLeftViewport", 1, 1, 2, 2, 4.0f },
+                { "Viewport Small Bottom Right", "bottomRightViewport", 1, 1, 2, 2, 4.0f },
+                { "Viewport Small Center", "centerViewport", 1, 1, 0, 0, 5.0f },
+            },
+            true,
+        },
+        {
+            { "viewport-single-pixel", 17, 15, 8, 7, 1, 1 },
+            {
+                { "Viewport Pixel Top Left", "topLeftViewport", 1, 1, 0, 0, 1.0f },
+                { "Viewport Pixel Top Right", "topRightViewport", 1, 1, 0, 0, 1.0f },
+                { "Viewport Pixel Bottom Left", "bottomLeftViewport", 1, 1, 0, 0, 1.0f },
+                { "Viewport Pixel Bottom Right", "bottomRightViewport", 1, 1, 0, 0, 1.0f },
+                { "Viewport Pixel Center", "centerViewport", 1, 1, 0, 0, 1.0f },
+            },
+            false,
+        },
+    };
+
+    for (const MirrorAnchorRenderScenario& scenario : scenarios) {
+        g_config = Config();
+
+        ModeConfig mode;
+        mode.id = kModeId;
+        mode.width = (std::max)(1, scenario.geometry.gameW);
+        mode.height = (std::max)(1, scenario.geometry.gameH);
+        mode.manualWidth = mode.width;
+        mode.manualHeight = mode.height;
+
+        g_config.defaultMode = kModeId;
+        g_config.mirrors.clear();
+        g_config.mirrors.reserve(scenario.mirrors.size());
+        mode.sources.reserve(scenario.mirrors.size());
+        for (const MirrorAnchorCaseDefinition& mirrorCase : scenario.mirrors) {
+            g_config.mirrors.push_back(MakeMirrorRenderTestConfig(mirrorCase.name, mirrorCase.captureWidth,
+                                                                  mirrorCase.captureHeight, mirrorCase.relativeTo,
+                                                                  mirrorCase.outputX, mirrorCase.outputY, mirrorCase.scale));
+            mode.sources.push_back({ ModeSourceType::Mirror, mirrorCase.name });
+        }
+
+        g_config.modes = { mode };
+        g_configLoaded.store(true, std::memory_order_release);
+
+        InitializeMirrorRenderTestResources();
+        auto assertScenario = [&](const SimulatedOverlayGeometry& geometry, const SurfaceSize& surface) {
+            std::vector<MirrorConfig> activeMirrors;
+            std::vector<ImageConfig> unusedImages;
+            std::vector<WindowOverlayConfig> unusedWindowOverlays;
+            std::vector<BrowserOverlayConfig> unusedBrowserOverlays;
+            CollectActiveElementsForMode(g_config, kModeId, false, activeMirrors, unusedImages, unusedWindowOverlays,
+                                         unusedBrowserOverlays);
+
+            Expect(activeMirrors.size() == scenario.mirrors.size(),
+                   geometry.label + " should resolve every viewport-anchor mirror in the scenario.");
+
+            for (const MirrorConfig& activeMirror : activeMirrors) {
+                ExpectMirrorRenderMatchesExpectedPlacement(activeMirror, geometry, surface,
+                                                           geometry.label + " render output for " + activeMirror.name,
+                                                           scenario.expectVisibleRender);
+            }
+        };
+
+        if (scenario.expectVisibleRender) {
+            DummyWindow scenarioWindow(scenario.geometry.fullW, scenario.geometry.fullH, false);
+            const SurfaceSize surface = GetWindowClientSize(scenarioWindow.hwnd());
+            SimulatedOverlayGeometry geometry = scenario.geometry;
+            geometry.fullW = surface.width;
+            geometry.fullH = surface.height;
+
+            ScopedTexture2D sourceTexture(surface.width, surface.height,
+                                          MakeSolidRgbaPixels(surface.width, surface.height, 0, 255, 0));
+
+            RenderModeOverlayFrameWithGeometry(scenarioWindow, g_config, g_config.modes.front(), geometry,
+                                               sourceTexture.id(), [&](const SurfaceSize& renderSurface) {
+                assertScenario(geometry, renderSurface);
+            });
+        } else {
+            ScopedTexture2D sourceTexture((std::max)(1, scenario.geometry.fullW), (std::max)(1, scenario.geometry.fullH),
+                                          MakeSolidRgbaPixels((std::max)(1, scenario.geometry.fullW),
+                                                              (std::max)(1, scenario.geometry.fullH), 0, 255, 0));
+
+            RenderModeOverlayFrameToSimulatedSurface(window, g_config, g_config.modes.front(), scenario.geometry,
+                                                     sourceTexture.id(), [&](const SurfaceSize& surface) {
+                assertScenario(scenario.geometry, surface);
+            });
+        }
+    }
+
+    CleanupBrowserOverlayCache();
+    CleanupWindowOverlayCache();
+    CleanupGPUResources();
+    CleanupShaders();
+}
+
+void RunModeMirrorGroupRenderTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+
+    const std::filesystem::path root = PrepareCaseDirectory("mode_mirror_group_render");
+    ResetGlobalTestState(root);
+
+    constexpr char kModeId[] = "Mirror Group Render Mode";
+    constexpr char kGroupName[] = "Mirror Group Under Test";
+
+    MirrorConfig leftMirror = MakeMirrorRenderTestConfig("Group Left Mirror", 24, 16, "topLeftScreen", 0, 0, 4.0f);
+    MirrorConfig disabledMirror = MakeMirrorRenderTestConfig("Disabled Group Mirror", 14, 14, "topLeftScreen", 0, 0, 6.0f);
+
+    MirrorGroupConfig group;
+    group.name = kGroupName;
+    group.output.x = 300;
+    group.output.y = 220;
+    group.output.relativeTo = "topLeftScreen";
+    group.output.separateScale = true;
+    group.output.scaleX = 1.0f;
+    group.output.scaleY = 1.0f;
+    group.mirrors = {
+        { leftMirror.name, true, 0.5f, 0.5f, 10, 20 },
+        { disabledMirror.name, false, 1.0f, 1.0f, 210, 30 },
+    };
+
+    ModeConfig mode;
+    mode.id = kModeId;
+    mode.width = kWindowWidth;
+    mode.height = kWindowHeight;
+    mode.manualWidth = kWindowWidth;
+    mode.manualHeight = kWindowHeight;
+    mode.sources = { { ModeSourceType::MirrorGroup, kGroupName } };
+
+    g_config.defaultMode = kModeId;
+    g_config.mirrors = { leftMirror, disabledMirror };
+    g_config.mirrorGroups = { group };
+    g_config.modes = { mode };
+    g_configLoaded.store(true, std::memory_order_release);
+
+    InitializeMirrorRenderTestResources();
+
+    const SurfaceSize surface = GetWindowClientSize(window.hwnd());
+    ScopedTexture2D sourceTexture(surface.width, surface.height, MakeSolidRgbaPixels(surface.width, surface.height, 0, 255, 0));
+
+    auto renderAndAssert = [&](DummyWindow& targetWindow) {
+        RenderModeOverlayFrame(targetWindow, g_config, g_config.modes.front(), false, sourceTexture.id());
+        if (runMode == TestRunMode::Automated) {
+            std::vector<MirrorConfig> activeMirrors;
+            std::vector<ImageConfig> unusedImages;
+            std::vector<WindowOverlayConfig> unusedWindowOverlays;
+            std::vector<BrowserOverlayConfig> unusedBrowserOverlays;
+            CollectActiveElementsForMode(g_config, kModeId, false, activeMirrors, unusedImages, unusedWindowOverlays,
+                                         unusedBrowserOverlays);
+
+            Expect(activeMirrors.size() == 1, "Expected only enabled group mirrors to resolve for the mirror-group render test.");
+            Expect(activeMirrors[0].name == leftMirror.name, "Expected the enabled group mirror to preserve group order.");
+
+            const ExpectedMirrorRect expectedLeftRect = ComputeExpectedMirrorRect(activeMirrors[0], surface.width, surface.height, 0, 0,
+                                                                                  surface.width, surface.height);
+            const ExpectedMirrorRect leftRect = GetCachedMirrorRect(leftMirror.name);
+            const MirrorConfig disabledGroupMirror = BuildExpectedGroupedMirrorConfig(disabledMirror, group, group.mirrors[1]);
+            const ExpectedMirrorRect disabledRect = ComputeExpectedMirrorRect(disabledGroupMirror, surface.width, surface.height,
+                                                                              0, 0, surface.width, surface.height);
+
+            Expect(leftRect.x == expectedLeftRect.x && leftRect.y == expectedLeftRect.y && leftRect.width == expectedLeftRect.width &&
+                       leftRect.height == expectedLeftRect.height,
+                   "Expected the first mirror-group member cached bounds to match the grouped placement math.");
+
+            ExpectSolidColorRect(leftRect, surface.height, kExpectedMirrorRenderGreen,
+                                 "Expected the enabled mirror-group member to render its staged texture.");
+
+            ExpectBackgroundPixel(leftRect.x - 2, leftRect.y + leftRect.height / 2, surface.height,
+                                  "Expected pixels left of the enabled group mirror to remain background.");
+            ExpectBackgroundPixel(disabledRect.x + disabledRect.width / 2, disabledRect.y + disabledRect.height / 2, surface.height,
+                                  "Expected the disabled mirror-group item to remain absent from the render output.");
+        }
+    };
+
+    if (runMode == TestRunMode::Visual) {
+        RunVisualLoop(window, "mode-mirror-group-render", [&](DummyWindow& visualWindow) { renderAndAssert(visualWindow); });
+    } else {
+        renderAndAssert(window);
+    }
+
+    CleanupBrowserOverlayCache();
+    CleanupWindowOverlayCache();
+    CleanupGPUResources();
+    CleanupShaders();
+}
+
+void RunModeWindowOverlayRenderTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+
+    const std::filesystem::path root = PrepareCaseDirectory("mode_window_overlay_render");
+    ResetGlobalTestState(root);
+
+    constexpr char kModeId[] = "Window Overlay Render Mode";
+    constexpr char kOverlayName[] = "Window Overlay Render";
+    constexpr int kOverlayX = 48;
+    constexpr int kOverlayY = 64;
+
+    WindowOverlayConfig overlay;
+    overlay.name = kOverlayName;
+    overlay.x = kOverlayX;
+    overlay.y = kOverlayY;
+    overlay.scale = 16.0f;
+    overlay.relativeTo = "topLeftScreen";
+    overlay.opacity = 1.0f;
+    overlay.onlyOnMyScreen = false;
+    overlay.pixelatedScaling = true;
+    overlay.background.enabled = false;
+    overlay.border.enabled = false;
+
+    ModeConfig mode;
+    mode.id = kModeId;
+    mode.width = kWindowWidth;
+    mode.height = kWindowHeight;
+    mode.manualWidth = kWindowWidth;
+    mode.manualHeight = kWindowHeight;
+    mode.sources = { { ModeSourceType::WindowOverlay, kOverlayName } };
+
+    g_config.defaultMode = kModeId;
+    g_config.windowOverlays = { overlay };
+    g_config.modes = { mode };
+    g_configLoaded.store(true, std::memory_order_release);
+
+    ResetOverlayRenderTestResources();
+    Expect(StageWindowOverlayTestFrame(overlay, MakeSolidRgbaPixels(2, 2, 255, 64, 32), 2, 2),
+           "Failed to stage synthetic window overlay pixels for integration testing.");
+
+    auto renderAndAssert = [&](DummyWindow& targetWindow) {
+        RenderModeOverlayFrame(targetWindow, g_config, g_config.modes.front());
+        if (runMode == TestRunMode::Automated) {
+            ExpectFramebufferPixelColorNear(kOverlayX + 12, kOverlayY + 12, GetCachedWindowHeight(),
+                                            { 1.0f, 64.0f / 255.0f, 32.0f / 255.0f, 1.0f },
+                                            "Expected the mode-assigned window overlay to render its staged texture color.");
+        }
+    };
+
+    if (runMode == TestRunMode::Visual) {
+        RunVisualLoop(window, "mode-window-overlay-render", [&](DummyWindow& visualWindow) { renderAndAssert(visualWindow); });
+    } else {
+        renderAndAssert(window);
+    }
+
+    CleanupBrowserOverlayCache();
+    CleanupWindowOverlayCache();
+    CleanupGPUResources();
+    CleanupShaders();
+}
+
+void RunModeBrowserOverlayRenderTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+
+    const std::filesystem::path root = PrepareCaseDirectory("mode_browser_overlay_render");
+    ResetGlobalTestState(root);
+
+    constexpr char kModeId[] = "Browser Overlay Render Mode";
+    constexpr char kOverlayName[] = "Browser Overlay Render";
+    constexpr int kOverlayX = 132;
+    constexpr int kOverlayY = 96;
+
+    BrowserOverlayConfig overlay;
+    overlay.name = kOverlayName;
+    overlay.url = "https://example.com/render-test";
+    overlay.browserWidth = 2;
+    overlay.browserHeight = 2;
+    overlay.x = kOverlayX;
+    overlay.y = kOverlayY;
+    overlay.scale = 18.0f;
+    overlay.relativeTo = "topLeftScreen";
+    overlay.opacity = 1.0f;
+    overlay.onlyOnMyScreen = false;
+    overlay.pixelatedScaling = true;
+    overlay.background.enabled = false;
+    overlay.border.enabled = false;
+
+    ModeConfig mode;
+    mode.id = kModeId;
+    mode.width = kWindowWidth;
+    mode.height = kWindowHeight;
+    mode.manualWidth = kWindowWidth;
+    mode.manualHeight = kWindowHeight;
+    mode.sources = { { ModeSourceType::BrowserOverlay, kOverlayName } };
+
+    g_config.defaultMode = kModeId;
+    g_config.browserOverlays = { overlay };
+    g_config.modes = { mode };
+    g_configLoaded.store(true, std::memory_order_release);
+
+    ResetOverlayRenderTestResources();
+    Expect(StageBrowserOverlayTestFrame(overlay, MakeSolidRgbaPixels(2, 2, 32, 192, 96), 2, 2),
+           "Failed to stage synthetic browser overlay pixels for integration testing.");
+
+    auto renderAndAssert = [&](DummyWindow& targetWindow) {
+        RenderModeOverlayFrame(targetWindow, g_config, g_config.modes.front());
+        if (runMode == TestRunMode::Automated) {
+            ExpectFramebufferPixelColorNear(kOverlayX + 12, kOverlayY + 12, GetCachedWindowHeight(),
+                                            { 32.0f / 255.0f, 192.0f / 255.0f, 96.0f / 255.0f, 1.0f },
+                                            "Expected the mode-assigned browser overlay to render its staged texture color.");
+        }
+    };
+
+    if (runMode == TestRunMode::Visual) {
+        RunVisualLoop(window, "mode-browser-overlay-render", [&](DummyWindow& visualWindow) { renderAndAssert(visualWindow); });
+    } else {
+        renderAndAssert(window);
+    }
+
+    CleanupBrowserOverlayCache();
+    CleanupWindowOverlayCache();
+    CleanupGPUResources();
+    CleanupShaders();
+}
+
+void RunModeBrowserOverlayOnlyOnMyScreenExclusionTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+
+    const std::filesystem::path root = PrepareCaseDirectory("mode_browser_overlay_only_on_my_screen_exclusion");
+    ResetGlobalTestState(root);
+
+    constexpr char kModeId[] = "Browser Overlay Exclusion Mode";
+    constexpr char kOverlayName[] = "Browser Overlay Exclusion";
+    constexpr int kOverlayX = 144;
+    constexpr int kOverlayY = 104;
+
+    BrowserOverlayConfig overlay;
+    overlay.name = kOverlayName;
+    overlay.url = "https://example.com/exclusion-test";
+    overlay.browserWidth = 2;
+    overlay.browserHeight = 2;
+    overlay.x = kOverlayX;
+    overlay.y = kOverlayY;
+    overlay.scale = 18.0f;
+    overlay.relativeTo = "topLeftScreen";
+    overlay.opacity = 1.0f;
+    overlay.onlyOnMyScreen = true;
+    overlay.pixelatedScaling = true;
+    overlay.background.enabled = false;
+    overlay.border.enabled = false;
+
+    ModeConfig mode;
+    mode.id = kModeId;
+    mode.width = kWindowWidth;
+    mode.height = kWindowHeight;
+    mode.manualWidth = kWindowWidth;
+    mode.manualHeight = kWindowHeight;
+    mode.sources = { { ModeSourceType::BrowserOverlay, kOverlayName } };
+
+    g_config.defaultMode = kModeId;
+    g_config.browserOverlays = { overlay };
+    g_config.modes = { mode };
+    g_configLoaded.store(true, std::memory_order_release);
+
+    ResetOverlayRenderTestResources();
+    Expect(StageBrowserOverlayTestFrame(overlay, MakeSolidRgbaPixels(2, 2, 40, 180, 90), 2, 2),
+           "Failed to stage synthetic browser overlay pixels for only-on-my-screen exclusion testing.");
+
+    auto renderAndAssert = [&](DummyWindow& targetWindow) {
+        RenderModeOverlayFrame(targetWindow, g_config, g_config.modes.front(), true);
+        if (runMode == TestRunMode::Automated) {
+            ExpectBackgroundPixel(kOverlayX + 12, kOverlayY + 12, GetCachedWindowHeight(),
+                                  "Expected excluded browser overlay pixels to remain background when only-on-my-screen is filtered.");
+        }
+    };
+
+    if (runMode == TestRunMode::Visual) {
+        RunVisualLoop(window, "mode-browser-overlay-only-on-my-screen-exclusion",
+                      [&](DummyWindow& visualWindow) { renderAndAssert(visualWindow); });
+    } else {
+        renderAndAssert(window);
+    }
+
+    CleanupBrowserOverlayCache();
+    CleanupWindowOverlayCache();
+    CleanupGPUResources();
+    CleanupShaders();
+}
+
 void RunSettingsGuiAdvancedTest(TestRunMode runMode = TestRunMode::Automated) {
     DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
     const std::filesystem::path root = PrepareCaseDirectory("settings_gui_advanced");
@@ -1882,8 +3026,7 @@ const auto& GetTestCaseDefinitions() {
         {"mode-mirror-group-render", &RunModeMirrorGroupRenderTest},
         {"mode-window-overlay-render", &RunModeWindowOverlayRenderTest},
         {"mode-browser-overlay-render", &RunModeBrowserOverlayRenderTest},
-        {"mode-image-overlay-render-png", &RunModeImageOverlayRenderPngTest},
-        {"mode-image-overlay-render-mpeg", &RunModeImageOverlayRenderMpegTest},
+        {"mode-browser-overlay-only-on-my-screen-exclusion", &RunModeBrowserOverlayOnlyOnMyScreenExclusionTest},
         {"config-error-gui", &RunConfigErrorGuiTest},
         {"settings-gui-basic", &RunSettingsGuiBasicTest},
         {"settings-gui-advanced", &RunSettingsGuiAdvancedTest},

@@ -765,6 +765,7 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     mode-browser-overlay-render
     mode-image-overlay-render-png
     mode-image-overlay-render-mpeg
+    mode-browser-overlay-only-on-my-screen-exclusion
     config-error-gui
     settings-gui-basic
     settings-gui-advanced
