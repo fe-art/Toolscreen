@@ -692,6 +692,39 @@ void RemoveWindowOverlayFromCache(const std::string& overlayId) {
     }
 }
 
+bool StageWindowOverlayTestFrame(const WindowOverlayConfig& config, const std::vector<unsigned char>& rgbaPixels, int width, int height) {
+    if (width <= 0 || height <= 0) {
+        return false;
+    }
+
+    const size_t expectedByteCount = static_cast<size_t>(width) * static_cast<size_t>(height) * 4u;
+    if (rgbaPixels.size() != expectedByteCount) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> cacheLock(g_windowOverlayCacheMutex);
+    auto& entrySlot = g_windowOverlayCache[config.name];
+    if (!entrySlot) {
+        entrySlot = std::make_unique<WindowOverlayCacheEntry>();
+    }
+
+    WindowOverlayCacheEntry& entry = *entrySlot;
+    entry.windowTitle = config.windowTitle;
+    entry.windowClass = config.windowClass;
+    entry.executableName = config.executableName;
+    entry.windowMatchPriority = config.windowMatchPriority;
+
+    std::lock_guard<std::mutex> swapLock(entry.swapMutex);
+    entry.readyBuffer = std::make_unique<WindowOverlayRenderData>();
+    entry.readyBuffer->pixelData = new unsigned char[expectedByteCount];
+    std::copy(rgbaPixels.begin(), rgbaPixels.end(), entry.readyBuffer->pixelData);
+    entry.readyBuffer->width = width;
+    entry.readyBuffer->height = height;
+    entry.lastUploadedRenderData = nullptr;
+    entry.hasNewFrame.store(true, std::memory_order_release);
+    return true;
+}
+
 void CleanupWindowOverlayCacheEntry(const std::string& overlayId) {
     // Don't actually erase the entry - this would cause crashes when capture thread is using it
 

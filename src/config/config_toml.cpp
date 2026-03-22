@@ -1707,23 +1707,53 @@ static bool TryParseUnicodeCodepointString(const std::string& in, uint32_t& outC
     };
 
     std::string hex = s;
-    if (startsWithI("U+")) hex = s.substr(2);
-    else if (startsWithI("\\\\U")) hex = s.substr(2);
-    else if (startsWithI("\\\\u")) hex = s.substr(2);
-    else if (startsWithI("0X")) hex = s.substr(2);
+    bool explicitCodepointNotation = false;
+    if (startsWithI("U+")) {
+        hex = s.substr(2);
+        explicitCodepointNotation = true;
+    } else if (startsWithI("\\U")) {
+        hex = s.substr(2);
+        explicitCodepointNotation = true;
+    } else if (startsWithI("\\u")) {
+        hex = s.substr(2);
+        explicitCodepointNotation = true;
+    } else if (startsWithI("0X")) {
+        hex = s.substr(2);
+        explicitCodepointNotation = true;
+    }
 
     // Strip optional surrounding braces like "{00F8}".
-    if (!hex.empty() && hex.front() == '{' && hex.back() == '}') hex = hex.substr(1, hex.size() - 2);
+    if (!hex.empty() && hex.front() == '{' && hex.back() == '}') {
+        hex = hex.substr(1, hex.size() - 2);
+        explicitCodepointNotation = true;
+    }
+
+    if (explicitCodepointNotation) {
+        try {
+            size_t idx = 0;
+            unsigned long v = std::stoul(hex, &idx, 16);
+            if (idx == 0 || idx != hex.size()) return false;
+            if (v == 0 || v > 0x10FFFFul) return false;
+            if (v >= 0xD800ul && v <= 0xDFFFul) return false;
+            outCp = (uint32_t)v;
+            return true;
+        } catch (...) {
+            return false;
+        }
+    }
 
     {
         std::wstring w = Utf8ToWide(s);
         if (!w.empty()) {
             uint32_t cp = 0;
-            if (w.size() >= 2 && w[0] >= 0xD800 && w[0] <= 0xDBFF && w[1] >= 0xDC00 && w[1] <= 0xDFFF) {
+            if (w.size() == 1) {
+                cp = (uint32_t)w[0];
+            } else if (w.size() == 2 && w[0] >= 0xD800 && w[0] <= 0xDBFF && w[1] >= 0xDC00 && w[1] <= 0xDFFF) {
                 cp = 0x10000u + (((uint32_t)w[0] - 0xD800u) << 10) + ((uint32_t)w[1] - 0xDC00u);
             } else {
-                cp = (uint32_t)w[0];
+                return false;
             }
+
             if (cp != 0 && cp <= 0x10FFFFu && !(cp >= 0xD800u && cp <= 0xDFFFu)) {
                 outCp = cp;
                 return true;
@@ -1731,17 +1761,7 @@ static bool TryParseUnicodeCodepointString(const std::string& in, uint32_t& outC
         }
     }
 
-    try {
-        size_t idx = 0;
-        unsigned long v = std::stoul(hex, &idx, 16);
-        if (idx == 0) return false;
-        if (v == 0 || v > 0x10FFFFul) return false;
-        if (v >= 0xD800ul && v <= 0xDFFFul) return false;
-        outCp = (uint32_t)v;
-        return true;
-    } catch (...) {
-        return false;
-    }
+    return false;
 }
 
 void KeyRebindFromToml(const toml::table& tbl, KeyRebind& cfg) {

@@ -22,4 +22,5 @@ void RemoveBrowserOverlayFromCache(const std::string& overlayId);
 void RequestBrowserOverlayRefresh(const std::string& overlayId);
 const BrowserOverlayConfig* FindBrowserOverlayConfig(const std::string& overlayId);
 const BrowserOverlayConfig* FindBrowserOverlayConfigIn(const std::string& overlayId, const Config& config);
+bool StageBrowserOverlayTestFrame(const BrowserOverlayConfig& config, const std::vector<unsigned char>& rgbaPixels, int width, int height);
 bool PrepareBrowserOverlayTexture(const BrowserOverlayConfig& config, BrowserOverlayTextureFrame& outFrame);

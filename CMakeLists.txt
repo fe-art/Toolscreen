@@ -612,9 +612,56 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     config-load-expression-mode-dimensions
     config-load-legacy-version-upgrade
     config-load-clamp-global-values
+    config-load-mode-default-dimensions-restored
+    config-load-mode-legacy-source-lists-migrated
+    config-load-mode-percentage-dimensions-detected
+    config-load-mode-empty-source-ids-dropped
+    config-load-empty-main-hotkey-fallback
+    config-load-missing-gui-hotkey-defaulted
+    config-load-empty-gui-hotkey-defaulted
+    config-load-legacy-mirror-gamma-migrated
+    config-load-mirror-capture-dimensions-clamped
+    config-load-eyezoom-clone-width-normalized
+    config-load-eyezoom-overlay-width-defaulted
+    config-load-eyezoom-overlay-width-clamped
+    config-load-eyezoom-legacy-margins-migrated
+    config-load-eyezoom-legacy-custom-position-migrated
+    config-load-eyezoom-invalid-active-overlay-reset
+    config-load-window-overlay-capture-method-migrated
+    config-load-key-rebind-unicode-string-parsed
+    config-load-key-rebind-escaped-unicode-string-parsed
+    config-load-key-rebind-hex-unicode-string-parsed
+    config-load-key-rebind-invalid-unicode-defaulted
+    config-load-fullscreen-stretch-repaired
+    config-load-preemptive-sync-existing-mode
+    config-load-thin-min-width-enforced
+    config-load-browser-overlay-defaults
+    config-load-window-overlay-defaults
+    config-load-image-defaults
+    config-load-hotkey-default-flags
+    config-load-sensitivity-hotkey-default-flags
+    config-load-image-color-key-default-sensitivity
+    config-load-window-overlay-color-key-default-sensitivity
+    config-load-browser-overlay-color-key-default-sensitivity
+    mode-window-overlay-render
+    mode-browser-overlay-render
     config-error-gui
     settings-gui-basic
     settings-gui-advanced
+    settings-tab-general-default
+    settings-tab-other-default
+    settings-tab-supporters-default
+    settings-tab-modes-default
+    settings-tab-mirrors-default
+    settings-tab-images-default
+    settings-tab-window-overlays-default
+    settings-tab-browser-overlays-default
+    settings-tab-hotkeys-default
+    settings-tab-inputs-mouse-default
+    settings-tab-inputs-keyboard-default
+    settings-tab-settings-default
+    settings-tab-appearance-default
+    settings-tab-misc-default
     settings-tab-general-populated
     settings-tab-other-populated
     settings-tab-modes-populated

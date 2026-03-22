@@ -147,6 +147,7 @@ void QueueOverlayReload(const std::string& overlayId, const WindowOverlayConfig&
 void CleanupWindowOverlayCache();
 void CleanupWindowOverlayCacheEntry(const std::string& overlayId);
 void RemoveWindowOverlayFromCache(const std::string& overlayId);
+bool StageWindowOverlayTestFrame(const WindowOverlayConfig& config, const std::vector<unsigned char>& rgbaPixels, int width, int height);
 void UpdateWindowOverlay(const std::string& overlayId);
 void UpdateWindowOverlayFPS(const std::string& overlayId, int newFPS);
 void UpdateWindowOverlaySearchInterval(const std::string& overlayId, int newSearchInterval);

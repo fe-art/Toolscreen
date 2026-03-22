@@ -1056,6 +1056,51 @@ void SyncBrowserOverlayEntry(const BrowserOverlayConfig& config) {
     }
 }
 
+
+bool StageBrowserOverlayTestFrameInternal(const BrowserOverlayConfig& config, const std::vector<unsigned char>& rgbaPixels, int width,
+                                         int height) {
+    if (width <= 0 || height <= 0) {
+        return false;
+    }
+
+    const size_t expectedByteCount = static_cast<size_t>(width) * static_cast<size_t>(height) * 4u;
+    if (rgbaPixels.size() != expectedByteCount) {
+        return false;
+    }
+
+    std::shared_ptr<BrowserOverlayCacheEntry> entry;
+    {
+        std::lock_guard<std::mutex> lock(g_browserOverlayCacheMutex);
+        auto& slot = g_browserOverlayCache[config.name];
+        if (!slot) {
+            slot = std::make_shared<BrowserOverlayCacheEntry>();
+        }
+
+        entry = slot;
+        entry->name = config.name;
+        entry->url = config.url;
+        entry->customCss = config.customCss;
+        entry->browserWidth = (std::max)(1, config.browserWidth);
+        entry->browserHeight = (std::max)(1, config.browserHeight);
+        entry->fps = (std::max)(1, config.fps);
+        entry->transparentBackground = config.transparentBackground;
+        entry->muteAudio = config.muteAudio;
+        entry->allowSystemMediaKeys = config.allowSystemMediaKeys;
+        entry->reloadOnUpdate = config.reloadOnUpdate;
+        entry->reloadInterval = (std::max)(0, config.reloadInterval);
+        entry->markedForRemoval = false;
+    }
+
+    std::lock_guard<std::mutex> swapLock(entry->swapMutex);
+    entry->readyBuffer = std::make_unique<BrowserOverlayRenderData>();
+    entry->readyBuffer->pixelData = new unsigned char[expectedByteCount];
+    std::copy(rgbaPixels.begin(), rgbaPixels.end(), entry->readyBuffer->pixelData);
+    entry->readyBuffer->width = width;
+    entry->readyBuffer->height = height;
+    entry->lastUploadedRenderData = nullptr;
+    entry->hasNewFrame.store(true, std::memory_order_release);
+    return true;
+}
 void ReconcileBrowserOverlays() {
     auto snapshot = GetConfigSnapshot();
     if (!snapshot) {
@@ -1386,6 +1431,10 @@ void BrowserOverlayThreadFunc() {
 }
 
 } // namespace
+
+bool StageBrowserOverlayTestFrame(const BrowserOverlayConfig& config, const std::vector<unsigned char>& rgbaPixels, int width, int height) {
+    return StageBrowserOverlayTestFrameInternal(config, rgbaPixels, width, height);
+}
 
 const BrowserOverlayConfig* FindBrowserOverlayConfig(const std::string& overlayId) {
     const auto& overlays = g_config.browserOverlays;

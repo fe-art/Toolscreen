@@ -1,9 +1,12 @@
 #include "common/i18n.h"
 #include "common/utils.h"
 #include "config/config_toml.h"
+#include "features/browser_overlay.h"
+#include "features/window_overlay.h"
 #include "gui/gui.h"
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_win32.h"
+#include "render/render.h"
 #include "runtime/logic_thread.h"
 
 #include <GL/glew.h>
@@ -12,6 +15,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <cstdint>
 #include <cmath>
 #include <stdexcept>
 #include <array>
@@ -400,6 +404,60 @@ void ExpectColorNear(const Color& actual, const Color& expected, const std::stri
     ExpectFloatNear(actual.a, expected.a, message + " [a]", epsilon);
 }
 
+std::vector<unsigned char> MakeSolidRgbaPixels(int width, int height, std::uint8_t r, std::uint8_t g, std::uint8_t b,
+                                               std::uint8_t a = 255) {
+    const size_t byteCount = static_cast<size_t>(width) * static_cast<size_t>(height) * 4u;
+    std::vector<unsigned char> pixels(byteCount);
+    for (size_t i = 0; i < byteCount; i += 4) {
+        pixels[i + 0] = r;
+        pixels[i + 1] = g;
+        pixels[i + 2] = b;
+        pixels[i + 3] = a;
+    }
+    return pixels;
+}
+
+Color ReadFramebufferPixelColor(int screenX, int screenY, int surfaceHeight) {
+    std::array<unsigned char, 4> pixel{ 0, 0, 0, 0 };
+    glReadPixels(screenX, surfaceHeight - screenY - 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+    return {
+        static_cast<float>(pixel[0]) / 255.0f,
+        static_cast<float>(pixel[1]) / 255.0f,
+        static_cast<float>(pixel[2]) / 255.0f,
+        static_cast<float>(pixel[3]) / 255.0f,
+    };
+}
+
+void ExpectFramebufferPixelColorNear(int screenX, int screenY, int surfaceHeight, const Color& expected,
+                                     const std::string& message, float epsilon = 0.02f) {
+    glFinish();
+    ExpectColorNear(ReadFramebufferPixelColor(screenX, screenY, surfaceHeight), expected, message, epsilon);
+}
+
+void ResetOverlayRenderTestResources() {
+    InvalidateConfigLookupCaches();
+    g_windowOverlaysVisible.store(true, std::memory_order_release);
+    g_browserOverlaysVisible.store(true, std::memory_order_release);
+    CleanupBrowserOverlayCache();
+    CleanupWindowOverlayCache();
+    CleanupGPUResources();
+    CleanupShaders();
+    InitializeGPUResources();
+}
+
+void RenderModeOverlayFrame(DummyWindow& window, const Config& config, const ModeConfig& mode) {
+    Expect(window.PrepareRenderSurface(), "GUI integration test window closed unexpectedly.");
+
+    GLState state{};
+    SaveGLState(&state);
+
+    const int surfaceWidth = (std::max)(1, GetCachedWindowWidth());
+    const int surfaceHeight = (std::max)(1, GetCachedWindowHeight());
+    const bool rendered = RenderModeOverlaysForIntegrationTest(config, mode, state, surfaceWidth, surfaceHeight, 0, 0,
+                                                               surfaceWidth, surfaceHeight, false);
+    Expect(rendered, "Expected mode overlay render path to produce overlay output.");
+}
+
 template <typename T>
 void ExpectVectorEquals(const std::vector<T>& actual, const std::vector<T>& expected, const std::string& message) {
     Expect(actual == expected, message);
@@ -451,6 +509,15 @@ void WriteConfigFixtureToDisk(const Config& config) {
     g_configIsDirty.store(true, std::memory_order_release);
     SaveConfigImmediate();
     Expect(std::filesystem::exists(GetCurrentConfigPath()), "Failed to write config fixture to disk.");
+}
+
+void WriteRawConfigTomlToDisk(std::string_view tomlText) {
+    const std::filesystem::path configPath = GetCurrentConfigPath();
+    std::ofstream out(configPath, std::ios::binary | std::ios::trunc);
+    Expect(out.is_open(), "Failed to open config fixture for raw TOML write.");
+    out << tomlText;
+    out.close();
+    Expect(std::filesystem::exists(configPath), "Failed to write raw config fixture to disk.");
 }
 
 void ExpectConfigLoadSucceeded(const std::string& context) {
@@ -533,6 +600,16 @@ const HotkeyConfig& FindHotkeyBySecondaryModeOrThrow(std::string_view secondaryM
     }
 
     throw std::runtime_error("Missing hotkey for mode: " + std::string(secondaryModeId));
+}
+
+const HotkeyConfig& FindHotkeyByKeysOrThrow(const std::vector<DWORD>& keys) {
+    for (const auto& hotkey : g_config.hotkeys) {
+        if (hotkey.keys == keys) {
+            return hotkey;
+        }
+    }
+
+    throw std::runtime_error("Missing hotkey fixture.");
 }
 
 const SensitivityHotkeyConfig& FindSensitivityHotkeyOrThrow(const std::vector<DWORD>& keys) {
@@ -1341,6 +1418,32 @@ void PrepareRichConfigForGui(std::string_view caseName) {
     ExpectConfigLoadSucceeded(std::string(caseName) + " GUI fixture reload");
 }
 
+void PrepareDefaultConfigForGui(std::string_view caseName, bool basicModeEnabled) {
+    const std::filesystem::path root = PrepareCaseDirectory(caseName);
+    ResetGlobalTestState(root);
+    LoadConfig();
+    ExpectConfigLoadSucceeded(std::string(caseName) + " default GUI fixture load");
+    g_config.basicModeEnabled = basicModeEnabled;
+    g_configIsDirty.store(false, std::memory_order_release);
+}
+
+void RunDefaultSettingsTabCase(std::string_view caseName, const std::string& topLevelTabLabel,
+                               const std::string& inputsSubTabLabel, bool basicModeEnabled,
+                               TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    PrepareDefaultConfigForGui(caseName, basicModeEnabled);
+
+    if (runMode == TestRunMode::Visual) {
+        RunVisualLoop(window, caseName, [&](DummyWindow& visualWindow) {
+            RenderSettingsFrame(visualWindow, topLevelTabLabel.c_str(),
+                                inputsSubTabLabel.empty() ? nullptr : inputsSubTabLabel.c_str());
+        });
+        return;
+    }
+
+    RenderSettingsFrame(window, topLevelTabLabel.c_str(), inputsSubTabLabel.empty() ? nullptr : inputsSubTabLabel.c_str());
+}
+
 void RunPopulatedSettingsTabCase(std::string_view caseName, const std::string& topLevelTabLabel,
                                  const std::string& inputsSubTabLabel = std::string(),
                                  TestRunMode runMode = TestRunMode::Automated) {
@@ -1677,6 +1780,811 @@ void RunConfigLoadClampGlobalValuesTest(TestRunMode runMode = TestRunMode::Autom
                       runMode);
 }
 
+void RunConfigLoadModeDefaultDimensionsRestoredTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_mode_default_dimensions_restored",
+                      []() {
+                          WriteRawConfigTomlToDisk(R"(configVersion = 4
+defaultMode = "Wide"
+
+[[mode]]
+id = "Wide"
+width = 1
+height = 0
+)");
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-mode-default-dimensions-restored");
+                          const ModeConfig& wideMode = FindModeOrThrow("Wide");
+                          Expect(wideMode.useRelativeSize, "Expected repaired Wide mode to remain relative-sized.");
+                          Expect(!wideMode.widthExpr.empty(), "Expected repaired Wide mode width expression to come from embedded defaults.");
+                          ExpectFloatNear(wideMode.relativeHeight, 0.25f,
+                                          "Expected repaired Wide mode relativeHeight to come from embedded defaults.");
+                          Expect(wideMode.width > 1, "Expected repaired Wide mode width to be recomputed from the restored default expression.");
+                          Expect(wideMode.height > 1, "Expected repaired Wide mode height to be recomputed from the restored default percentage.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadModeLegacySourceListsMigratedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_mode_legacy_source_lists_migrated",
+                      []() {
+                          WriteRawConfigTomlToDisk(R"(configVersion = 4
+defaultMode = "Legacy Sources"
+
+[[mode]]
+id = "Legacy Sources"
+width = 800
+height = 600
+mirrorIds = ["Mirror One"]
+mirrorGroupIds = ["Group One"]
+imageIds = ["Image One"]
+windowOverlayIds = ["Window One"]
+browserOverlayIds = ["Browser One"]
+)");
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-mode-legacy-source-lists-migrated");
+                          const ModeConfig& mode = FindModeOrThrow("Legacy Sources");
+                          Expect(mode.sources.size() == 5, "Expected legacy source lists to migrate into typed mode sources.");
+                          Expect(mode.sources[0].type == ModeSourceType::Mirror && mode.sources[0].id == "Mirror One",
+                                 "Expected legacy mirrorIds to migrate first.");
+                          Expect(mode.sources[1].type == ModeSourceType::MirrorGroup && mode.sources[1].id == "Group One",
+                                 "Expected legacy mirrorGroupIds to migrate second.");
+                          Expect(mode.sources[2].type == ModeSourceType::Image && mode.sources[2].id == "Image One",
+                                 "Expected legacy imageIds to migrate third.");
+                          Expect(mode.sources[3].type == ModeSourceType::WindowOverlay && mode.sources[3].id == "Window One",
+                                 "Expected legacy windowOverlayIds to migrate fourth.");
+                          Expect(mode.sources[4].type == ModeSourceType::BrowserOverlay && mode.sources[4].id == "Browser One",
+                                 "Expected legacy browserOverlayIds to migrate fifth.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadModePercentageDimensionsDetectedTest(TestRunMode runMode = TestRunMode::Automated) {
+    int expectedWidth = 1;
+    int expectedHeight = 1;
+
+    RunConfigLoadCase("config_load_mode_percentage_dimensions_detected",
+                      [&]() {
+                          const int screenWidth = (std::max)(1, GetCachedWindowWidth());
+                          const int screenHeight = (std::max)(1, GetCachedWindowHeight());
+                          expectedWidth = (std::max)(1, static_cast<int>(std::lround(0.5f * static_cast<float>(screenWidth))));
+                          expectedHeight = (std::max)(1, static_cast<int>(std::lround(0.25f * static_cast<float>(screenHeight))));
+
+                          WriteRawConfigTomlToDisk(R"(configVersion = 4
+defaultMode = "Percentage Mode"
+
+[[mode]]
+id = "Percentage Mode"
+width = 0.5
+height = 0.25
+)");
+                      },
+                      [&]() {
+                          ExpectConfigLoadSucceeded("config-load-mode-percentage-dimensions-detected");
+                          const ModeConfig& mode = FindModeOrThrow("Percentage Mode");
+                          Expect(mode.useRelativeSize, "Expected percentage width/height values to mark the mode as relative-sized.");
+                          ExpectFloatNear(mode.relativeWidth, 0.5f, "Expected percentage width to map to relativeWidth.");
+                          ExpectFloatNear(mode.relativeHeight, 0.25f, "Expected percentage height to map to relativeHeight.");
+                          Expect(mode.width == expectedWidth, "Expected percentage width to resolve against the cached window width.");
+                          Expect(mode.height == expectedHeight, "Expected percentage height to resolve against the cached window height.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadModeEmptySourceIdsDroppedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_mode_empty_source_ids_dropped",
+                      []() {
+                          WriteRawConfigTomlToDisk(R"(configVersion = 4
+defaultMode = "Source Filter"
+
+[[mode]]
+id = "Source Filter"
+width = 800
+height = 600
+sources = [
+    { type = "Mirror", id = "" },
+    { type = "Mirror", id = "Valid Mirror" },
+    { type = "Image", id = "" }
+]
+)");
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-mode-empty-source-ids-dropped");
+                          const ModeConfig& mode = FindModeOrThrow("Source Filter");
+                          Expect(mode.sources.size() == 1, "Expected empty mode source ids to be filtered out during load.");
+                          Expect(mode.sources.front().type == ModeSourceType::Mirror && mode.sources.front().id == "Valid Mirror",
+                                 "Expected only the valid mode source to remain after load.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadEmptyMainHotkeyFallbackTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_empty_main_hotkey_fallback",
+                      []() {
+                          Config config;
+                          config.defaultMode = kPrecisionModeId;
+
+                          ModeConfig precisionMode;
+                          precisionMode.id = kPrecisionModeId;
+                          precisionMode.width = 900;
+                          precisionMode.height = 500;
+                          precisionMode.manualWidth = 900;
+                          precisionMode.manualHeight = 500;
+                          config.modes.push_back(precisionMode);
+
+                          HotkeyConfig hotkey;
+                          hotkey.keys = { VK_F2 };
+                          hotkey.mainMode.clear();
+                          hotkey.secondaryMode = kPrecisionModeId;
+                          config.hotkeys.push_back(hotkey);
+
+                          WriteConfigFixtureToDisk(config);
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-empty-main-hotkey-fallback");
+                          const HotkeyConfig& hotkey = FindHotkeyByKeysOrThrow({ VK_F2 });
+                          Expect(hotkey.mainMode == kPrecisionModeId,
+                                 "Expected a hotkey with an empty main mode to fall back to the default mode.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadMissingGuiHotkeyDefaultedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_missing_gui_hotkey_defaulted",
+                      []() {
+                          WriteRawConfigTomlToDisk(R"(configVersion = 4
+defaultMode = "Fullscreen"
+)");
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-missing-gui-hotkey-defaulted");
+                          ExpectVectorEquals(g_config.guiHotkey, ConfigDefaults::GetDefaultGuiHotkey(),
+                                             "Expected a missing guiHotkey to default to the configured hotkey.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadEmptyGuiHotkeyDefaultedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_empty_gui_hotkey_defaulted",
+                      []() {
+                          WriteRawConfigTomlToDisk(R"(configVersion = 4
+defaultMode = "Fullscreen"
+guiHotkey = []
+)");
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-empty-gui-hotkey-defaulted");
+                          ExpectVectorEquals(g_config.guiHotkey, ConfigDefaults::GetDefaultGuiHotkey(),
+                                             "Expected an empty guiHotkey array to fall back to the configured default hotkey.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadLegacyMirrorGammaMigratedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_legacy_mirror_gamma_migrated",
+                      []() {
+                          WriteRawConfigTomlToDisk(R"(configVersion = 4
+defaultMode = "Fullscreen"
+
+[[mirror]]
+name = "Legacy Gamma"
+gammaMode = "Linear"
+)");
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-legacy-mirror-gamma-migrated");
+                          Expect(g_config.mirrorGammaMode == MirrorGammaMode::AssumeLinear,
+                                 "Expected legacy per-mirror gammaMode to migrate into the global mirror gamma mode.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadMirrorCaptureDimensionsClampedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_mirror_capture_dimensions_clamped",
+                      []() {
+                          Config config;
+                          config.defaultMode = "Fullscreen";
+
+                          MirrorConfig mirror;
+                          mirror.name = "Clamp Mirror";
+                          mirror.captureWidth = ConfigDefaults::MIRROR_CAPTURE_MAX_DIMENSION + 200;
+                          mirror.captureHeight = 0;
+                          config.mirrors.push_back(mirror);
+
+                          WriteConfigFixtureToDisk(config);
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-mirror-capture-dimensions-clamped");
+                          const MirrorConfig& mirror = FindMirrorOrThrow("Clamp Mirror");
+                          Expect(mirror.captureWidth == ConfigDefaults::MIRROR_CAPTURE_MAX_DIMENSION,
+                                 "Expected mirror captureWidth to clamp to MIRROR_CAPTURE_MAX_DIMENSION.");
+                          Expect(mirror.captureHeight == ConfigDefaults::MIRROR_CAPTURE_MIN_DIMENSION,
+                                 "Expected mirror captureHeight to clamp to MIRROR_CAPTURE_MIN_DIMENSION.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadEyeZoomCloneWidthNormalizedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_eyezoom_clone_width_normalized",
+                      []() {
+                          WriteRawConfigTomlToDisk(R"(configVersion = 4
+defaultMode = "Fullscreen"
+
+[eyezoom]
+cloneWidth = 15
+)");
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-eyezoom-clone-width-normalized");
+                          Expect(g_config.eyezoom.cloneWidth == 14,
+                                 "Expected odd eyezoom cloneWidth values to normalize to the nearest even width.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadEyeZoomOverlayWidthDefaultedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_eyezoom_overlay_width_defaulted",
+                      []() {
+                          WriteRawConfigTomlToDisk(R"(configVersion = 4
+defaultMode = "Fullscreen"
+
+[eyezoom]
+cloneWidth = 14
+)");
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-eyezoom-overlay-width-defaulted");
+                          Expect(g_config.eyezoom.overlayWidth == 7,
+                                 "Expected a missing eyezoom overlayWidth to default to half of cloneWidth.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadEyeZoomOverlayWidthClampedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_eyezoom_overlay_width_clamped",
+                      []() {
+                          WriteRawConfigTomlToDisk(R"(configVersion = 4
+defaultMode = "Fullscreen"
+
+[eyezoom]
+cloneWidth = 10
+overlayWidth = 99
+)");
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-eyezoom-overlay-width-clamped");
+                          Expect(g_config.eyezoom.overlayWidth == 5,
+                                 "Expected eyezoom overlayWidth to clamp to half of cloneWidth.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadEyeZoomLegacyMarginsMigratedTest(TestRunMode runMode = TestRunMode::Automated) {
+    int expectedWidth = 1;
+    int expectedHeight = 1;
+
+    RunConfigLoadCase("config_load_eyezoom_legacy_margins_migrated",
+                      [&]() {
+                          const int screenWidth = (std::max)(1, GetCachedWindowWidth());
+                          const int screenHeight = (std::max)(1, GetCachedWindowHeight());
+                          const int viewportX = (screenWidth - 400) / 2;
+                          expectedWidth = (viewportX > 0) ? (viewportX - (2 * 20)) : screenWidth;
+                          expectedHeight = screenHeight - (2 * 30);
+
+                          WriteRawConfigTomlToDisk(R"(configVersion = 4
+defaultMode = "Fullscreen"
+
+[eyezoom]
+windowWidth = 400
+horizontalMargin = 20
+verticalMargin = 30
+)");
+                      },
+                      [&]() {
+                          ExpectConfigLoadSucceeded("config-load-eyezoom-legacy-margins-migrated");
+                          Expect(g_config.eyezoom.zoomAreaWidth == expectedWidth,
+                                 "Expected legacy eyezoom horizontalMargin to migrate into zoomAreaWidth.");
+                          Expect(g_config.eyezoom.zoomAreaHeight == expectedHeight,
+                                 "Expected legacy eyezoom verticalMargin to migrate into zoomAreaHeight.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadEyeZoomLegacyCustomPositionMigratedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_eyezoom_legacy_custom_position_migrated",
+                      []() {
+                          WriteRawConfigTomlToDisk(R"(configVersion = 4
+defaultMode = "Fullscreen"
+
+[eyezoom]
+useCustomPosition = true
+)");
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-eyezoom-legacy-custom-position-migrated");
+                          Expect(g_config.eyezoom.useCustomSizePosition,
+                                 "Expected legacy eyezoom useCustomPosition to map to useCustomSizePosition.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadEyeZoomInvalidActiveOverlayResetTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_eyezoom_invalid_active_overlay_reset",
+                      []() {
+                          Config config;
+                          config.defaultMode = "Fullscreen";
+                          config.eyezoom.activeOverlayIndex = 4;
+                          config.eyezoom.overlays = {
+                              { "Only Overlay", "C:\\temp\\overlay.png", EyeZoomOverlayDisplayMode::Fit, 120, 80, 0.75f },
+                          };
+                          WriteConfigFixtureToDisk(config);
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-eyezoom-invalid-active-overlay-reset");
+                          Expect(g_config.eyezoom.activeOverlayIndex == -1,
+                                 "Expected out-of-range eyezoom activeOverlayIndex values to reset to -1.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadWindowOverlayCaptureMethodMigratedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_window_overlay_capture_method_migrated",
+                      []() {
+                          WriteRawConfigTomlToDisk(R"(configVersion = 4
+defaultMode = "Fullscreen"
+
+[[windowOverlay]]
+name = "Legacy Capture"
+captureMethod = "Auto"
+)");
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-window-overlay-capture-method-migrated");
+                          const WindowOverlayConfig& overlay = FindWindowOverlayOrThrow("Legacy Capture");
+                          Expect(overlay.captureMethod == "Windows 10+",
+                                 "Expected legacy window overlay captureMethod values to migrate to Windows 10+.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadKeyRebindUnicodeStringParsedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_key_rebind_unicode_string_parsed",
+                      []() {
+                          WriteRawConfigTomlToDisk(R"(configVersion = 4
+defaultMode = "Fullscreen"
+
+[keyRebinds]
+enabled = true
+resolveRebindTargetsForHotkeys = false
+toggleHotkey = []
+
+[[keyRebinds.rebinds]]
+fromKey = 74
+toKey = 75
+enabled = true
+useCustomOutput = true
+customOutputUnicode = "U+00F8"
+shiftLayerEnabled = true
+shiftLayerOutputUnicode = "{00D8}"
+)");
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-key-rebind-unicode-string-parsed");
+                          Expect(g_config.keyRebinds.rebinds.size() == 1, "Expected exactly one key rebind fixture to load.");
+                          const KeyRebind& rebind = g_config.keyRebinds.rebinds.front();
+                          Expect(rebind.customOutputUnicode == 0x00F8,
+                                 "Expected customOutputUnicode strings to parse into Unicode code points.");
+                          Expect(rebind.shiftLayerOutputUnicode == 0x00D8,
+                                 "Expected shiftLayerOutputUnicode strings to parse into Unicode code points.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadKeyRebindEscapedUnicodeStringParsedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_key_rebind_escaped_unicode_string_parsed",
+                      []() {
+                          WriteRawConfigTomlToDisk(R"(configVersion = 4
+defaultMode = "Fullscreen"
+
+[keyRebinds]
+enabled = true
+resolveRebindTargetsForHotkeys = false
+toggleHotkey = []
+
+[[keyRebinds.rebinds]]
+fromKey = 74
+toKey = 75
+enabled = true
+useCustomOutput = true
+customOutputUnicode = "\\u00f8"
+shiftLayerEnabled = true
+shiftLayerOutputUnicode = "\\U00D8"
+)");
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-key-rebind-escaped-unicode-string-parsed");
+                          Expect(g_config.keyRebinds.rebinds.size() == 1, "Expected exactly one key rebind fixture to load.");
+                          const KeyRebind& rebind = g_config.keyRebinds.rebinds.front();
+                          Expect(rebind.customOutputUnicode == 0x00F8,
+                                 "Expected escaped customOutputUnicode strings to parse into Unicode code points.");
+                          Expect(rebind.shiftLayerOutputUnicode == 0x00D8,
+                                 "Expected escaped shiftLayerOutputUnicode strings to parse into Unicode code points.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadKeyRebindHexUnicodeStringParsedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_key_rebind_hex_unicode_string_parsed",
+                      []() {
+                          WriteRawConfigTomlToDisk(R"(configVersion = 4
+defaultMode = "Fullscreen"
+
+[keyRebinds]
+enabled = true
+resolveRebindTargetsForHotkeys = false
+toggleHotkey = []
+
+[[keyRebinds.rebinds]]
+fromKey = 74
+toKey = 75
+enabled = true
+useCustomOutput = true
+customOutputUnicode = " 0x00f8 "
+shiftLayerEnabled = true
+shiftLayerOutputUnicode = " 0X00D8 "
+)");
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-key-rebind-hex-unicode-string-parsed");
+                          Expect(g_config.keyRebinds.rebinds.size() == 1, "Expected exactly one key rebind fixture to load.");
+                          const KeyRebind& rebind = g_config.keyRebinds.rebinds.front();
+                          Expect(rebind.customOutputUnicode == 0x00F8,
+                                 "Expected hexadecimal customOutputUnicode strings to parse into Unicode code points.");
+                          Expect(rebind.shiftLayerOutputUnicode == 0x00D8,
+                                 "Expected hexadecimal shiftLayerOutputUnicode strings to parse into Unicode code points.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadKeyRebindInvalidUnicodeDefaultedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_key_rebind_invalid_unicode_defaulted",
+                      []() {
+                          WriteRawConfigTomlToDisk(R"(configVersion = 4
+defaultMode = "Fullscreen"
+
+[keyRebinds]
+enabled = true
+resolveRebindTargetsForHotkeys = false
+toggleHotkey = []
+
+[[keyRebinds.rebinds]]
+fromKey = 74
+toKey = 75
+enabled = true
+useCustomOutput = true
+customOutputUnicode = "bogus"
+shiftLayerEnabled = true
+shiftLayerOutputUnicode = "U+D800"
+)");
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-key-rebind-invalid-unicode-defaulted");
+                          Expect(g_config.keyRebinds.rebinds.size() == 1, "Expected exactly one key rebind fixture to load.");
+                          const KeyRebind& rebind = g_config.keyRebinds.rebinds.front();
+                          Expect(rebind.customOutputUnicode == ConfigDefaults::KEY_REBIND_CUSTOM_OUTPUT_UNICODE,
+                                 "Expected invalid customOutputUnicode strings to fall back to the configured default.");
+                          Expect(rebind.shiftLayerOutputUnicode == ConfigDefaults::KEY_REBIND_SHIFT_LAYER_OUTPUT_UNICODE,
+                                 "Expected invalid shiftLayerOutputUnicode strings to fall back to the configured default.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadFullscreenStretchRepairedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_fullscreen_stretch_repaired",
+                      []() {
+                          Config config;
+                          config.defaultMode = "Fullscreen";
+
+                          ModeConfig fullscreenMode;
+                          fullscreenMode.id = "Fullscreen";
+                          fullscreenMode.width = 0;
+                          fullscreenMode.height = 0;
+                          fullscreenMode.manualWidth = 0;
+                          fullscreenMode.manualHeight = 0;
+                          fullscreenMode.stretch.enabled = false;
+                          fullscreenMode.stretch.x = 33;
+                          fullscreenMode.stretch.y = 44;
+                          fullscreenMode.stretch.width = 55;
+                          fullscreenMode.stretch.height = 66;
+                          config.modes.push_back(fullscreenMode);
+
+                          WriteConfigFixtureToDisk(config);
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-fullscreen-stretch-repaired");
+                          const ModeConfig& fullscreenMode = FindModeOrThrow("Fullscreen");
+                          Expect(fullscreenMode.width > 0 && fullscreenMode.height > 0,
+                                 "Expected Fullscreen mode dimensions to repair to valid values.");
+                          Expect(fullscreenMode.manualWidth == fullscreenMode.width && fullscreenMode.manualHeight == fullscreenMode.height,
+                                 "Expected Fullscreen manual dimensions to repair alongside the live dimensions.");
+                          Expect(fullscreenMode.stretch.enabled, "Expected Fullscreen stretch to be forced on during load.");
+                          Expect(fullscreenMode.stretch.x == 0 && fullscreenMode.stretch.y == 0,
+                                 "Expected Fullscreen stretch origin to reset to the top-left corner.");
+                          Expect(fullscreenMode.stretch.width == fullscreenMode.width &&
+                                     fullscreenMode.stretch.height == fullscreenMode.height,
+                                 "Expected Fullscreen stretch bounds to match the repaired mode dimensions.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadPreemptiveSyncExistingModeTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_preemptive_sync_existing_mode",
+                      []() {
+                          Config config;
+                          config.defaultMode = "EyeZoom";
+
+                          ModeConfig eyezoomMode;
+                          eyezoomMode.id = "EyeZoom";
+                          eyezoomMode.width = 640;
+                          eyezoomMode.height = 1200;
+                          eyezoomMode.manualWidth = 640;
+                          eyezoomMode.manualHeight = 1200;
+                          config.modes.push_back(eyezoomMode);
+
+                          ModeConfig preemptiveMode;
+                          preemptiveMode.id = "Preemptive";
+                          preemptiveMode.width = 123;
+                          preemptiveMode.height = 456;
+                          preemptiveMode.manualWidth = 123;
+                          preemptiveMode.manualHeight = 456;
+                          preemptiveMode.useRelativeSize = true;
+                          preemptiveMode.relativeWidth = 0.5f;
+                          preemptiveMode.relativeHeight = 0.25f;
+                          config.modes.push_back(preemptiveMode);
+
+                          WriteConfigFixtureToDisk(config);
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-preemptive-sync-existing-mode");
+                          const ModeConfig& eyezoomMode = FindModeOrThrow("EyeZoom");
+                          const ModeConfig& preemptiveMode = FindModeOrThrow("Preemptive");
+                          Expect(preemptiveMode.width == eyezoomMode.width && preemptiveMode.height == eyezoomMode.height,
+                                 "Expected Preemptive mode dimensions to sync to EyeZoom during load.");
+                          Expect(preemptiveMode.manualWidth == eyezoomMode.manualWidth &&
+                                     preemptiveMode.manualHeight == eyezoomMode.manualHeight,
+                                 "Expected Preemptive manual dimensions to sync to EyeZoom during load.");
+                          Expect(!preemptiveMode.useRelativeSize && preemptiveMode.relativeWidth < 0.0f &&
+                                     preemptiveMode.relativeHeight < 0.0f,
+                                 "Expected Preemptive relative sizing to clear when it is resynced from EyeZoom.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadThinMinWidthEnforcedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_thin_min_width_enforced",
+                      []() {
+                          Config config;
+                          config.defaultMode = "Thin";
+
+                          ModeConfig thinMode;
+                          thinMode.id = "Thin";
+                          thinMode.width = 100;
+                          thinMode.height = 700;
+                          thinMode.manualWidth = 100;
+                          thinMode.manualHeight = 700;
+                          config.modes.push_back(thinMode);
+
+                          WriteConfigFixtureToDisk(config);
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-thin-min-width-enforced");
+                          const ModeConfig& thinMode = FindModeOrThrow("Thin");
+                          Expect(thinMode.width == 330, "Expected Thin mode width to clamp to the hard minimum during load.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadBrowserOverlayDefaultsTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_browser_overlay_defaults",
+                      []() {
+                          WriteRawConfigTomlToDisk(R"(configVersion = 4
+defaultMode = "Fullscreen"
+
+[[browserOverlay]]
+name = "Default Browser"
+)");
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-browser-overlay-defaults");
+                          const BrowserOverlayConfig& overlay = FindBrowserOverlayOrThrow("Default Browser");
+                          Expect(overlay.url == "https://example.com", "Expected browser overlay URL to default when omitted.");
+                          Expect(overlay.browserWidth == ConfigDefaults::BROWSER_OVERLAY_WIDTH,
+                                 "Expected browser overlay width to default when omitted.");
+                          Expect(overlay.browserHeight == ConfigDefaults::BROWSER_OVERLAY_HEIGHT,
+                                 "Expected browser overlay height to default when omitted.");
+                          Expect(overlay.transparentBackground == ConfigDefaults::BROWSER_OVERLAY_TRANSPARENT_BACKGROUND,
+                                 "Expected browser overlay transparentBackground to default when omitted.");
+                          Expect(overlay.reloadInterval == ConfigDefaults::BROWSER_OVERLAY_RELOAD_INTERVAL,
+                                 "Expected browser overlay reloadInterval to default when omitted.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadWindowOverlayDefaultsTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_window_overlay_defaults",
+                      []() {
+                          WriteRawConfigTomlToDisk(R"(configVersion = 4
+defaultMode = "Fullscreen"
+
+[[windowOverlay]]
+name = "Default Window"
+)");
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-window-overlay-defaults");
+                          const WindowOverlayConfig& overlay = FindWindowOverlayOrThrow("Default Window");
+                          Expect(overlay.windowMatchPriority == ConfigDefaults::WINDOW_OVERLAY_MATCH_PRIORITY,
+                                 "Expected window overlay match priority to default when omitted.");
+                          Expect(overlay.captureMethod == ConfigDefaults::WINDOW_OVERLAY_CAPTURE_METHOD,
+                                 "Expected window overlay captureMethod to default when omitted.");
+                          Expect(overlay.fps == ConfigDefaults::WINDOW_OVERLAY_FPS,
+                                 "Expected window overlay FPS to default when omitted.");
+                          Expect(overlay.searchInterval == ConfigDefaults::WINDOW_OVERLAY_SEARCH_INTERVAL,
+                                 "Expected window overlay searchInterval to default when omitted.");
+                          Expect(overlay.enableInteraction == ConfigDefaults::WINDOW_OVERLAY_ENABLE_INTERACTION,
+                                 "Expected window overlay enableInteraction to default when omitted.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadImageDefaultsTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_image_defaults",
+                      []() {
+                          WriteRawConfigTomlToDisk(R"(configVersion = 4
+defaultMode = "Fullscreen"
+
+[[image]]
+name = "Default Image"
+)");
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-image-defaults");
+                          const ImageConfig& image = FindImageOrThrow("Default Image");
+                          ExpectFloatNear(image.scale, ConfigDefaults::IMAGE_SCALE, "Expected image scale to default when omitted.");
+                          Expect(image.relativeSizing == ConfigDefaults::IMAGE_RELATIVE_SIZING,
+                                 "Expected image relativeSizing to default when omitted.");
+                          Expect(image.relativeTo == ConfigDefaults::IMAGE_RELATIVE_TO,
+                                 "Expected image relativeTo to default when omitted.");
+                          ExpectFloatNear(image.opacity, ConfigDefaults::IMAGE_OPACITY,
+                                          "Expected image opacity to default when omitted.");
+                          Expect(image.onlyOnMyScreen == ConfigDefaults::IMAGE_ONLY_ON_MY_SCREEN,
+                                 "Expected image onlyOnMyScreen to default when omitted.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadHotkeyDefaultFlagsTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_hotkey_default_flags",
+                      []() {
+                          WriteRawConfigTomlToDisk(R"(configVersion = 4
+defaultMode = "Fullscreen"
+
+[[mode]]
+id = "Target Mode"
+width = 800
+height = 600
+
+[[hotkey]]
+keys = [65]
+mainMode = "Fullscreen"
+secondaryMode = "Target Mode"
+)");
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-hotkey-default-flags");
+                          const HotkeyConfig& hotkey = FindHotkeyByKeysOrThrow({ 65 });
+                          Expect(hotkey.debounce == ConfigDefaults::HOTKEY_DEBOUNCE,
+                                 "Expected hotkey debounce to default when omitted.");
+                          Expect(!hotkey.triggerOnRelease && !hotkey.triggerOnHold,
+                                 "Expected hotkey trigger flags to default to false when omitted.");
+                          Expect(!hotkey.blockKeyFromGame && !hotkey.allowExitToFullscreenRegardlessOfGameState,
+                                 "Expected hotkey behavior flags to default to false when omitted.");
+                          Expect(hotkey.conditions.gameState.empty() && hotkey.conditions.exclusions.empty(),
+                                 "Expected omitted hotkey conditions to remain empty.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadSensitivityHotkeyDefaultFlagsTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_sensitivity_hotkey_default_flags",
+                      []() {
+                          WriteRawConfigTomlToDisk(R"(configVersion = 4
+defaultMode = "Fullscreen"
+
+[[sensitivityHotkey]]
+keys = [70]
+)");
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-sensitivity-hotkey-default-flags");
+                          const SensitivityHotkeyConfig& hotkey = FindSensitivityHotkeyOrThrow({ 70 });
+                          ExpectFloatNear(hotkey.sensitivity, 1.0f, "Expected sensitivity hotkey sensitivity to default when omitted.");
+                          Expect(!hotkey.separateXY, "Expected sensitivity hotkey separateXY to default to false when omitted.");
+                          ExpectFloatNear(hotkey.sensitivityX, 1.0f,
+                                          "Expected sensitivity hotkey sensitivityX to default when omitted.");
+                          ExpectFloatNear(hotkey.sensitivityY, 1.0f,
+                                          "Expected sensitivity hotkey sensitivityY to default when omitted.");
+                          Expect(hotkey.debounce == ConfigDefaults::HOTKEY_DEBOUNCE,
+                                 "Expected sensitivity hotkey debounce to default when omitted.");
+                          Expect(!hotkey.toggle, "Expected sensitivity hotkey toggle to default to false when omitted.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadImageColorKeyDefaultSensitivityTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_image_color_key_default_sensitivity",
+                      []() {
+                          WriteRawConfigTomlToDisk(R"(configVersion = 4
+defaultMode = "Fullscreen"
+
+[[image]]
+name = "Color Key Image"
+colorKeys = [{ color = [255, 0, 255] }]
+)");
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-image-color-key-default-sensitivity");
+                          const ImageConfig& image = FindImageOrThrow("Color Key Image");
+                          Expect(image.colorKeys.size() == 1, "Expected image color key fixture to load.");
+                          ExpectFloatNear(image.colorKeys.front().sensitivity, ConfigDefaults::COLOR_KEY_SENSITIVITY,
+                                          "Expected image color key sensitivity to default when omitted.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadWindowOverlayColorKeyDefaultSensitivityTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_window_overlay_color_key_default_sensitivity",
+                      []() {
+                          WriteRawConfigTomlToDisk(R"(configVersion = 4
+defaultMode = "Fullscreen"
+
+[[windowOverlay]]
+name = "Color Key Window"
+colorKeys = [{ color = [0, 255, 0] }]
+)");
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-window-overlay-color-key-default-sensitivity");
+                          const WindowOverlayConfig& overlay = FindWindowOverlayOrThrow("Color Key Window");
+                          Expect(overlay.colorKeys.size() == 1, "Expected window overlay color key fixture to load.");
+                          ExpectFloatNear(overlay.colorKeys.front().sensitivity, ConfigDefaults::COLOR_KEY_SENSITIVITY,
+                                          "Expected window overlay color key sensitivity to default when omitted.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadBrowserOverlayColorKeyDefaultSensitivityTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_browser_overlay_color_key_default_sensitivity",
+                      []() {
+                          WriteRawConfigTomlToDisk(R"(configVersion = 4
+defaultMode = "Fullscreen"
+
+[[browserOverlay]]
+name = "Color Key Browser"
+colorKeys = [{ color = [0, 0, 0] }]
+)");
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-browser-overlay-color-key-default-sensitivity");
+                          const BrowserOverlayConfig& overlay = FindBrowserOverlayOrThrow("Color Key Browser");
+                          Expect(overlay.colorKeys.size() == 1, "Expected browser overlay color key fixture to load.");
+                          ExpectFloatNear(overlay.colorKeys.front().sensitivity, ConfigDefaults::COLOR_KEY_SENSITIVITY,
+                                          "Expected browser overlay color key sensitivity to default when omitted.");
+                      },
+                      runMode);
+}
+
 void RunConfigErrorGuiTest(TestRunMode runMode = TestRunMode::Automated) {
     DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
     const std::filesystem::path root = PrepareCaseDirectory("config_error_gui");
@@ -1725,10 +2633,134 @@ void RunSettingsGuiBasicTest(TestRunMode runMode = TestRunMode::Automated) {
         tr("tabs.other"),
         tr("tabs.supporters"),
     };
-
     for (const std::string& tab : tabs) {
         RenderSettingsFrame(window, tab.c_str());
     }
+}
+
+void RunModeWindowOverlayRenderTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+
+    const std::filesystem::path root = PrepareCaseDirectory("mode_window_overlay_render");
+    ResetGlobalTestState(root);
+
+    constexpr char kModeId[] = "Window Overlay Render Mode";
+    constexpr char kOverlayName[] = "Window Overlay Render";
+    constexpr int kOverlayX = 48;
+    constexpr int kOverlayY = 64;
+
+    WindowOverlayConfig overlay;
+    overlay.name = kOverlayName;
+    overlay.x = kOverlayX;
+    overlay.y = kOverlayY;
+    overlay.scale = 16.0f;
+    overlay.relativeTo = "topLeftScreen";
+    overlay.opacity = 1.0f;
+    overlay.onlyOnMyScreen = false;
+    overlay.pixelatedScaling = true;
+    overlay.background.enabled = false;
+    overlay.border.enabled = false;
+
+    ModeConfig mode;
+    mode.id = kModeId;
+    mode.width = kWindowWidth;
+    mode.height = kWindowHeight;
+    mode.manualWidth = kWindowWidth;
+    mode.manualHeight = kWindowHeight;
+    mode.sources = { { ModeSourceType::WindowOverlay, kOverlayName } };
+
+    g_config.defaultMode = kModeId;
+    g_config.windowOverlays = { overlay };
+    g_config.modes = { mode };
+    g_configLoaded.store(true, std::memory_order_release);
+
+    ResetOverlayRenderTestResources();
+    Expect(StageWindowOverlayTestFrame(overlay, MakeSolidRgbaPixels(2, 2, 255, 64, 32), 2, 2),
+           "Failed to stage synthetic window overlay pixels for integration testing.");
+
+    auto renderAndAssert = [&](DummyWindow& targetWindow) {
+        RenderModeOverlayFrame(targetWindow, g_config, g_config.modes.front());
+        if (runMode == TestRunMode::Automated) {
+            ExpectFramebufferPixelColorNear(kOverlayX + 12, kOverlayY + 12, GetCachedWindowHeight(),
+                                            { 1.0f, 64.0f / 255.0f, 32.0f / 255.0f, 1.0f },
+                                            "Expected the mode-assigned window overlay to render its staged texture color.");
+        }
+    };
+
+    if (runMode == TestRunMode::Visual) {
+        RunVisualLoop(window, "mode-window-overlay-render", [&](DummyWindow& visualWindow) { renderAndAssert(visualWindow); });
+    } else {
+        renderAndAssert(window);
+    }
+
+    CleanupBrowserOverlayCache();
+    CleanupWindowOverlayCache();
+    CleanupGPUResources();
+    CleanupShaders();
+}
+
+void RunModeBrowserOverlayRenderTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+
+    const std::filesystem::path root = PrepareCaseDirectory("mode_browser_overlay_render");
+    ResetGlobalTestState(root);
+
+    constexpr char kModeId[] = "Browser Overlay Render Mode";
+    constexpr char kOverlayName[] = "Browser Overlay Render";
+    constexpr int kOverlayX = 132;
+    constexpr int kOverlayY = 96;
+
+    BrowserOverlayConfig overlay;
+    overlay.name = kOverlayName;
+    overlay.url = "https://example.com/render-test";
+    overlay.browserWidth = 2;
+    overlay.browserHeight = 2;
+    overlay.x = kOverlayX;
+    overlay.y = kOverlayY;
+    overlay.scale = 18.0f;
+    overlay.relativeTo = "topLeftScreen";
+    overlay.opacity = 1.0f;
+    overlay.onlyOnMyScreen = false;
+    overlay.pixelatedScaling = true;
+    overlay.background.enabled = false;
+    overlay.border.enabled = false;
+
+    ModeConfig mode;
+    mode.id = kModeId;
+    mode.width = kWindowWidth;
+    mode.height = kWindowHeight;
+    mode.manualWidth = kWindowWidth;
+    mode.manualHeight = kWindowHeight;
+    mode.sources = { { ModeSourceType::BrowserOverlay, kOverlayName } };
+
+    g_config.defaultMode = kModeId;
+    g_config.browserOverlays = { overlay };
+    g_config.modes = { mode };
+    g_configLoaded.store(true, std::memory_order_release);
+
+    ResetOverlayRenderTestResources();
+    Expect(StageBrowserOverlayTestFrame(overlay, MakeSolidRgbaPixels(2, 2, 32, 192, 96), 2, 2),
+           "Failed to stage synthetic browser overlay pixels for integration testing.");
+
+    auto renderAndAssert = [&](DummyWindow& targetWindow) {
+        RenderModeOverlayFrame(targetWindow, g_config, g_config.modes.front());
+        if (runMode == TestRunMode::Automated) {
+            ExpectFramebufferPixelColorNear(kOverlayX + 12, kOverlayY + 12, GetCachedWindowHeight(),
+                                            { 32.0f / 255.0f, 192.0f / 255.0f, 96.0f / 255.0f, 1.0f },
+                                            "Expected the mode-assigned browser overlay to render its staged texture color.");
+        }
+    };
+
+    if (runMode == TestRunMode::Visual) {
+        RunVisualLoop(window, "mode-browser-overlay-render", [&](DummyWindow& visualWindow) { renderAndAssert(visualWindow); });
+    } else {
+        renderAndAssert(window);
+    }
+
+    CleanupBrowserOverlayCache();
+    CleanupWindowOverlayCache();
+    CleanupGPUResources();
+    CleanupShaders();
 }
 
 void RunSettingsGuiAdvancedTest(TestRunMode runMode = TestRunMode::Automated) {
@@ -1832,6 +2864,63 @@ void RunSettingsTabSupportersPopulatedTest(TestRunMode runMode = TestRunMode::Au
     RunPopulatedSettingsTabCase("settings_tab_supporters_populated", tr("tabs.supporters"), std::string(), runMode);
 }
 
+void RunSettingsTabGeneralDefaultTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunDefaultSettingsTabCase("settings_tab_general_default", tr("tabs.general"), std::string(), true, runMode);
+}
+
+void RunSettingsTabOtherDefaultTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunDefaultSettingsTabCase("settings_tab_other_default", tr("tabs.other"), std::string(), true, runMode);
+}
+
+void RunSettingsTabSupportersDefaultTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunDefaultSettingsTabCase("settings_tab_supporters_default", tr("tabs.supporters"), std::string(), true, runMode);
+}
+
+void RunSettingsTabModesDefaultTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunDefaultSettingsTabCase("settings_tab_modes_default", tr("tabs.modes"), std::string(), false, runMode);
+}
+
+void RunSettingsTabMirrorsDefaultTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunDefaultSettingsTabCase("settings_tab_mirrors_default", tr("tabs.mirrors"), std::string(), false, runMode);
+}
+
+void RunSettingsTabImagesDefaultTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunDefaultSettingsTabCase("settings_tab_images_default", tr("tabs.images"), std::string(), false, runMode);
+}
+
+void RunSettingsTabWindowOverlaysDefaultTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunDefaultSettingsTabCase("settings_tab_window_overlays_default", tr("tabs.window_overlays"), std::string(), false, runMode);
+}
+
+void RunSettingsTabBrowserOverlaysDefaultTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunDefaultSettingsTabCase("settings_tab_browser_overlays_default", tr("tabs.browser_overlays"), std::string(), false,
+                              runMode);
+}
+
+void RunSettingsTabHotkeysDefaultTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunDefaultSettingsTabCase("settings_tab_hotkeys_default", tr("tabs.hotkeys"), std::string(), false, runMode);
+}
+
+void RunSettingsTabInputsMouseDefaultTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunDefaultSettingsTabCase("settings_tab_inputs_mouse_default", tr("tabs.inputs"), tr("inputs.mouse"), false, runMode);
+}
+
+void RunSettingsTabInputsKeyboardDefaultTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunDefaultSettingsTabCase("settings_tab_inputs_keyboard_default", tr("tabs.inputs"), tr("inputs.keyboard"), false, runMode);
+}
+
+void RunSettingsTabSettingsDefaultTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunDefaultSettingsTabCase("settings_tab_settings_default", tr("tabs.settings"), std::string(), false, runMode);
+}
+
+void RunSettingsTabAppearanceDefaultTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunDefaultSettingsTabCase("settings_tab_appearance_default", tr("tabs.appearance"), std::string(), false, runMode);
+}
+
+void RunSettingsTabMiscDefaultTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunDefaultSettingsTabCase("settings_tab_misc_default", tr("tabs.misc"), std::string(), false, runMode);
+}
+
 struct TestCaseDefinition {
     const char* name;
     void (*run)(TestRunMode runMode);
@@ -1859,9 +2948,56 @@ const auto& GetTestCaseDefinitions() {
         {"config-load-expression-mode-dimensions", &RunConfigLoadExpressionModeDimensionsTest},
         {"config-load-legacy-version-upgrade", &RunConfigLoadLegacyVersionUpgradeTest},
         {"config-load-clamp-global-values", &RunConfigLoadClampGlobalValuesTest},
+        {"config-load-mode-default-dimensions-restored", &RunConfigLoadModeDefaultDimensionsRestoredTest},
+        {"config-load-mode-legacy-source-lists-migrated", &RunConfigLoadModeLegacySourceListsMigratedTest},
+        {"config-load-mode-percentage-dimensions-detected", &RunConfigLoadModePercentageDimensionsDetectedTest},
+        {"config-load-mode-empty-source-ids-dropped", &RunConfigLoadModeEmptySourceIdsDroppedTest},
+        {"config-load-empty-main-hotkey-fallback", &RunConfigLoadEmptyMainHotkeyFallbackTest},
+        {"config-load-missing-gui-hotkey-defaulted", &RunConfigLoadMissingGuiHotkeyDefaultedTest},
+        {"config-load-empty-gui-hotkey-defaulted", &RunConfigLoadEmptyGuiHotkeyDefaultedTest},
+        {"config-load-legacy-mirror-gamma-migrated", &RunConfigLoadLegacyMirrorGammaMigratedTest},
+        {"config-load-mirror-capture-dimensions-clamped", &RunConfigLoadMirrorCaptureDimensionsClampedTest},
+        {"config-load-eyezoom-clone-width-normalized", &RunConfigLoadEyeZoomCloneWidthNormalizedTest},
+        {"config-load-eyezoom-overlay-width-defaulted", &RunConfigLoadEyeZoomOverlayWidthDefaultedTest},
+        {"config-load-eyezoom-overlay-width-clamped", &RunConfigLoadEyeZoomOverlayWidthClampedTest},
+        {"config-load-eyezoom-legacy-margins-migrated", &RunConfigLoadEyeZoomLegacyMarginsMigratedTest},
+        {"config-load-eyezoom-legacy-custom-position-migrated", &RunConfigLoadEyeZoomLegacyCustomPositionMigratedTest},
+        {"config-load-eyezoom-invalid-active-overlay-reset", &RunConfigLoadEyeZoomInvalidActiveOverlayResetTest},
+        {"config-load-window-overlay-capture-method-migrated", &RunConfigLoadWindowOverlayCaptureMethodMigratedTest},
+        {"config-load-key-rebind-unicode-string-parsed", &RunConfigLoadKeyRebindUnicodeStringParsedTest},
+        {"config-load-key-rebind-escaped-unicode-string-parsed", &RunConfigLoadKeyRebindEscapedUnicodeStringParsedTest},
+        {"config-load-key-rebind-hex-unicode-string-parsed", &RunConfigLoadKeyRebindHexUnicodeStringParsedTest},
+        {"config-load-key-rebind-invalid-unicode-defaulted", &RunConfigLoadKeyRebindInvalidUnicodeDefaultedTest},
+        {"config-load-fullscreen-stretch-repaired", &RunConfigLoadFullscreenStretchRepairedTest},
+        {"config-load-preemptive-sync-existing-mode", &RunConfigLoadPreemptiveSyncExistingModeTest},
+        {"config-load-thin-min-width-enforced", &RunConfigLoadThinMinWidthEnforcedTest},
+        {"config-load-browser-overlay-defaults", &RunConfigLoadBrowserOverlayDefaultsTest},
+        {"config-load-window-overlay-defaults", &RunConfigLoadWindowOverlayDefaultsTest},
+        {"config-load-image-defaults", &RunConfigLoadImageDefaultsTest},
+        {"config-load-hotkey-default-flags", &RunConfigLoadHotkeyDefaultFlagsTest},
+        {"config-load-sensitivity-hotkey-default-flags", &RunConfigLoadSensitivityHotkeyDefaultFlagsTest},
+        {"config-load-image-color-key-default-sensitivity", &RunConfigLoadImageColorKeyDefaultSensitivityTest},
+        {"config-load-window-overlay-color-key-default-sensitivity", &RunConfigLoadWindowOverlayColorKeyDefaultSensitivityTest},
+        {"config-load-browser-overlay-color-key-default-sensitivity", &RunConfigLoadBrowserOverlayColorKeyDefaultSensitivityTest},
+        {"mode-window-overlay-render", &RunModeWindowOverlayRenderTest},
+        {"mode-browser-overlay-render", &RunModeBrowserOverlayRenderTest},
         {"config-error-gui", &RunConfigErrorGuiTest},
         {"settings-gui-basic", &RunSettingsGuiBasicTest},
         {"settings-gui-advanced", &RunSettingsGuiAdvancedTest},
+        {"settings-tab-general-default", &RunSettingsTabGeneralDefaultTest},
+        {"settings-tab-other-default", &RunSettingsTabOtherDefaultTest},
+        {"settings-tab-supporters-default", &RunSettingsTabSupportersDefaultTest},
+        {"settings-tab-modes-default", &RunSettingsTabModesDefaultTest},
+        {"settings-tab-mirrors-default", &RunSettingsTabMirrorsDefaultTest},
+        {"settings-tab-images-default", &RunSettingsTabImagesDefaultTest},
+        {"settings-tab-window-overlays-default", &RunSettingsTabWindowOverlaysDefaultTest},
+        {"settings-tab-browser-overlays-default", &RunSettingsTabBrowserOverlaysDefaultTest},
+        {"settings-tab-hotkeys-default", &RunSettingsTabHotkeysDefaultTest},
+        {"settings-tab-inputs-mouse-default", &RunSettingsTabInputsMouseDefaultTest},
+        {"settings-tab-inputs-keyboard-default", &RunSettingsTabInputsKeyboardDefaultTest},
+        {"settings-tab-settings-default", &RunSettingsTabSettingsDefaultTest},
+        {"settings-tab-appearance-default", &RunSettingsTabAppearanceDefaultTest},
+        {"settings-tab-misc-default", &RunSettingsTabMiscDefaultTest},
         {"settings-tab-general-populated", &RunSettingsTabGeneralPopulatedTest},
         {"settings-tab-other-populated", &RunSettingsTabOtherPopulatedTest},
         {"settings-tab-modes-populated", &RunSettingsTabModesPopulatedTest},

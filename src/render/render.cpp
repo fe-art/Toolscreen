@@ -4384,6 +4384,44 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
            request.showTextureGrid || request.showEyeZoom || request.showWelcomeToast;
 }
 
+bool RenderModeOverlaysForIntegrationTest(const Config& config, const ModeConfig& modeToRender, const GLState& s, int fullW,
+                                          int fullH, int gameX, int gameY, int gameW, int gameH,
+                                          bool excludeOnlyOnMyScreen) {
+    SameThreadOverlayState request;
+    request.fullW = fullW;
+    request.fullH = fullH;
+    request.gameW = gameW;
+    request.gameH = gameH;
+    request.finalX = gameX;
+    request.finalY = gameY;
+    request.finalW = gameW;
+    request.finalH = gameH;
+    request.modeId = modeToRender.id;
+    request.overlayOpacity = 1.0f;
+    request.excludeOnlyOnMyScreen = excludeOnlyOnMyScreen;
+    request.skipAnimation = true;
+    request.relativeStretching = modeToRender.relativeStretching;
+    request.transitionProgress = 1.0f;
+    request.fromX = gameX;
+    request.fromY = gameY;
+    request.fromW = gameW;
+    request.fromH = gameH;
+    request.toX = gameX;
+    request.toY = gameY;
+    request.toW = gameW;
+    request.toH = gameH;
+    request.modeHasMirrors = false;
+    request.modeHasImages = false;
+    request.modeHasWindowOverlays = g_windowOverlaysVisible.load(std::memory_order_acquire) &&
+                                    ModeHasSourceType(modeToRender, ModeSourceType::WindowOverlay);
+    request.modeHasBrowserOverlays = g_browserOverlaysVisible.load(std::memory_order_acquire) &&
+                                     ModeHasSourceType(modeToRender, ModeSourceType::BrowserOverlay);
+    request.isRawWindowedMode = true;
+    request.toSlideMirrorsIn = modeToRender.slideMirrorsIn;
+    request.mirrorSlideProgress = 1.0f;
+    return RenderSameThreadOverlayPass(request, config, s);
+}
+
 static void EnsureSameThreadObsComposeTarget(int fullW, int fullH) {
     if (fullW <= 0 || fullH <= 0) { return; }
 
