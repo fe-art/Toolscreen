@@ -1,8 +1,6 @@
 #include "common/i18n.h"
 #include "common/utils.h"
 #include "config/config_toml.h"
-#include "features/browser_overlay.h"
-#include "features/window_overlay.h"
 #include "gui/gui.h"
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_win32.h"
@@ -15,7 +13,6 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <cstdint>
 #include <cmath>
 #include <stdexcept>
 #include <array>
@@ -67,8 +64,6 @@ void EnsureProcessDpiAwareness() {
 
     (void)configured;
 }
-
-static bool g_hasModernGL = false;
 
 void Expect(bool condition, const std::string& message) {
     if (!condition) {
@@ -157,11 +152,6 @@ class DummyWindow {
         Expect(glewStatus == GLEW_OK,
                "Failed to initialize GLEW for GUI integration tests: " + std::string(reinterpret_cast<const char*>(glewGetErrorString(glewStatus))));
 
-        const char* glVersionStr = reinterpret_cast<const char*>(glGetString(GL_VERSION));
-        m_glMajor = 0;
-        if (glVersionStr) { m_glMajor = glVersionStr[0] - '0'; }
-        g_hasModernGL = m_glMajor >= 3;
-
         RefreshClientSize();
         ShowWindow(m_hwnd, visible ? SW_SHOW : SW_HIDE);
         if (visible) {
@@ -198,8 +188,6 @@ class DummyWindow {
     HWND hwnd() const { return m_hwnd; }
 
     bool isOpen() const { return m_isOpen; }
-
-    bool hasModernGL() const { return m_glMajor >= 3; }
 
     void SetTitle(const std::string& title) {
         if (m_hwnd != nullptr) {
@@ -240,8 +228,6 @@ class DummyWindow {
         if (!PumpMessages()) {
             return false;
         }
-
-        Expect(MakeCurrent(), "Failed to reactivate the OpenGL context for GUI integration test window.");
 
         InitializeImGuiContext(m_hwnd);
         RefreshClientSize();
@@ -322,7 +308,6 @@ class DummyWindow {
     int m_width = 0;
     int m_height = 0;
     bool m_isOpen = true;
-    int m_glMajor = 0;
 };
 
 std::filesystem::path PrepareCaseDirectory(std::string_view caseName) {
@@ -390,7 +375,6 @@ void RenderInteractiveSettingsFrame(DummyWindow& window) {
 }
 
 void RenderConfigErrorFrame(DummyWindow& window, bool presentFrame = false) {
-    if (!window.hasModernGL()) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
     Expect(window.PrepareRenderSurface(), "GUI integration test window closed unexpectedly.");
     HandleConfigLoadFailed(nullptr, nullptr);
 
@@ -411,7 +395,7 @@ void RenderInteractiveConfigErrorFrame(DummyWindow& window) {
 template <typename RenderFrameFn>
 void RunVisualLoop(DummyWindow& window, std::string_view testCaseName, RenderFrameFn&& renderFrame);
 
-constexpr char kPrimaryModeId[] = "Primary Mode";
+constexpr char kVerifierModeId[] = "Verifier Mode";
 constexpr char kPrecisionModeId[] = "Precision Mode";
 constexpr char kRelativeModeId[] = "Relative Mode";
 constexpr char kExpressionModeId[] = "Expression Mode";
@@ -436,617 +420,6 @@ void ExpectColorNear(const Color& actual, const Color& expected, const std::stri
     ExpectFloatNear(actual.g, expected.g, message + " [g]", epsilon);
     ExpectFloatNear(actual.b, expected.b, message + " [b]", epsilon);
     ExpectFloatNear(actual.a, expected.a, message + " [a]", epsilon);
-}
-
-bool IsColorNear(const Color& actual, const Color& expected, float epsilon = 0.02f) {
-    return NearlyEqual(actual.r, expected.r, epsilon) && NearlyEqual(actual.g, expected.g, epsilon) &&
-           NearlyEqual(actual.b, expected.b, epsilon) && NearlyEqual(actual.a, expected.a, epsilon);
-}
-
-std::vector<unsigned char> MakeSolidRgbaPixels(int width, int height, std::uint8_t r, std::uint8_t g, std::uint8_t b,
-                                               std::uint8_t a = 255) {
-    const size_t byteCount = static_cast<size_t>(width) * static_cast<size_t>(height) * 4u;
-    std::vector<unsigned char> pixels(byteCount);
-    for (size_t i = 0; i < byteCount; i += 4) {
-        pixels[i + 0] = r;
-        pixels[i + 1] = g;
-        pixels[i + 2] = b;
-        pixels[i + 3] = a;
-    }
-    return pixels;
-}
-
-Color ReadFramebufferPixelColor(int screenX, int screenY, int surfaceHeight) {
-    std::array<unsigned char, 4> pixel{ 0, 0, 0, 0 };
-    glReadPixels(screenX, surfaceHeight - screenY - 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
-    return {
-        static_cast<float>(pixel[0]) / 255.0f,
-        static_cast<float>(pixel[1]) / 255.0f,
-        static_cast<float>(pixel[2]) / 255.0f,
-        static_cast<float>(pixel[3]) / 255.0f,
-    };
-}
-
-void ExpectFramebufferPixelColorNear(int screenX, int screenY, int surfaceHeight, const Color& expected,
-                                     const std::string& message, float epsilon = 0.02f) {
-    glFinish();
-    ExpectColorNear(ReadFramebufferPixelColor(screenX, screenY, surfaceHeight), expected, message, epsilon);
-}
-
-void ExpectFramebufferPixelChannelDominance(int screenX, int screenY, int surfaceHeight, int dominantChannel,
-                                            float minDominant, float minMargin, const std::string& message) {
-    glFinish();
-
-    const Color actual = ReadFramebufferPixelColor(screenX, screenY, surfaceHeight);
-    const float channels[3] = { actual.r, actual.g, actual.b };
-    Expect(dominantChannel >= 0 && dominantChannel < 3, message + " dominant channel index was invalid.");
-    Expect(actual.a >= 0.95f, message + " alpha was lower than expected.");
-    Expect(channels[dominantChannel] >= minDominant,
-           message + " dominant channel was too low. got " + std::to_string(channels[dominantChannel]));
-
-    for (int i = 0; i < 3; ++i) {
-        if (i == dominantChannel) {
-            continue;
-        }
-
-        Expect(channels[dominantChannel] >= channels[i] + minMargin,
-               message + " dominant channel margin was too small. dominant=" +
-                   std::to_string(channels[dominantChannel]) + ", other=" + std::to_string(channels[i]));
-    }
-}
-
-void ExpectFramebufferNeighborhoodContainsColor(int screenX, int screenY, int radius, int surfaceWidth, int surfaceHeight,
-                                                const Color& expected, const std::string& message,
-                                                float epsilon = 0.02f) {
-    glFinish();
-
-    const int minX = (std::max)(0, screenX - radius);
-    const int maxX = (std::min)(surfaceWidth - 1, screenX + radius);
-    const int minY = (std::max)(0, screenY - radius);
-    const int maxY = (std::min)(surfaceHeight - 1, screenY + radius);
-    for (int y = minY; y <= maxY; ++y) {
-        for (int x = minX; x <= maxX; ++x) {
-            if (IsColorNear(ReadFramebufferPixelColor(x, y, surfaceHeight), expected, epsilon)) {
-                return;
-            }
-        }
-    }
-
-    throw std::runtime_error(message);
-}
-
-struct SurfaceSize {
-    int width = 0;
-    int height = 0;
-};
-
-struct SimulatedOverlayGeometry {
-    std::string label;
-    int fullW = 1;
-    int fullH = 1;
-    int gameX = 0;
-    int gameY = 0;
-    int gameW = 1;
-    int gameH = 1;
-};
-
-struct MirrorAnchorCaseDefinition {
-    std::string name;
-    std::string relativeTo;
-    int captureWidth = 1;
-    int captureHeight = 1;
-    int outputX = 0;
-    int outputY = 0;
-    float scale = 1.0f;
-};
-
-struct MirrorAnchorRenderScenario {
-    SimulatedOverlayGeometry geometry;
-    std::vector<MirrorAnchorCaseDefinition> mirrors;
-    bool expectVisibleRender = true;
-};
-
-class ScopedFramebufferSurface {
-  public:
-    ScopedFramebufferSurface(int width, int height) : m_width((std::max)(1, width)), m_height((std::max)(1, height)) {
-        GLint previousTexture = 0;
-        glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
-
-        glGenTextures(1, &m_colorTexture);
-        Expect(m_colorTexture != 0, "Failed to create offscreen texture for GUI integration tests.");
-        BindTextureDirect(GL_TEXTURE_2D, m_colorTexture);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, m_width, m_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-        BindTextureDirect(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
-
-        GLint previousReadFramebuffer = 0;
-        GLint previousDrawFramebuffer = 0;
-        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFramebuffer);
-        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDrawFramebuffer);
-
-        glGenFramebuffers(1, &m_framebuffer);
-        Expect(m_framebuffer != 0, "Failed to create offscreen framebuffer for GUI integration tests.");
-        glBindFramebuffer(GL_FRAMEBUFFER, m_framebuffer);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_colorTexture, 0);
-        const GLenum framebufferStatus = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previousReadFramebuffer));
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(previousDrawFramebuffer));
-
-        Expect(framebufferStatus == GL_FRAMEBUFFER_COMPLETE,
-               "Offscreen framebuffer for GUI integration tests was incomplete.");
-    }
-
-    ~ScopedFramebufferSurface() {
-        if (m_restoreStateCaptured) {
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, m_previousReadFramebuffer);
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_previousDrawFramebuffer);
-            glViewport(m_previousViewport[0], m_previousViewport[1], m_previousViewport[2], m_previousViewport[3]);
-        }
-
-        if (m_framebuffer != 0) {
-            glDeleteFramebuffers(1, &m_framebuffer);
-        }
-        if (m_colorTexture != 0) {
-            glDeleteTextures(1, &m_colorTexture);
-        }
-    }
-
-    void BindAndClear() {
-        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &m_previousReadFramebuffer);
-        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &m_previousDrawFramebuffer);
-        glGetIntegerv(GL_VIEWPORT, m_previousViewport);
-        m_restoreStateCaptured = true;
-
-        glBindFramebuffer(GL_FRAMEBUFFER, m_framebuffer);
-        glViewport(0, 0, m_width, m_height);
-        glClearColor(0.08f, 0.08f, 0.10f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-    }
-
-    SurfaceSize size() const { return { m_width, m_height }; }
-
-  private:
-    GLuint m_framebuffer = 0;
-    GLuint m_colorTexture = 0;
-    int m_width = 0;
-    int m_height = 0;
-    GLint m_previousReadFramebuffer = 0;
-    GLint m_previousDrawFramebuffer = 0;
-    GLint m_previousViewport[4]{ 0, 0, 0, 0 };
-    bool m_restoreStateCaptured = false;
-};
-
-struct ExpectedMirrorRect {
-    std::string name;
-    int x = 0;
-    int y = 0;
-    int width = 0;
-    int height = 0;
-};
-
-constexpr Color kExpectedMirrorRenderGreen{ 0.0f, 1.0f, 0.0f, 1.0f };
-constexpr Color kExpectedRenderSurfaceClear{ 0.08f, 0.08f, 0.10f, 1.0f };
-constexpr Color kExpectedPngFixtureColor{ 32.0f / 255.0f, 192.0f / 255.0f, 96.0f / 255.0f, 1.0f };
-
-constexpr std::string_view kEmbeddedPngFixtureBase64 =
-    "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAACXBIWXMAAAABAAAAAQBPJcTWAAAAEklEQVR4nGOU3xfPwMDA"
-    "wgAGAA7IAULTTL/NAAAAAElFTkSuQmCC";
-
-constexpr std::string_view kEmbeddedMpegFixtureBase64 =
-    "AAABuiEAAQABwzNnAAABuwAJwzNnACH/4ODmAAAB4AQ0MQADe7ERAANfkQAAAbMBABAT///gGAAAAbgACABAAAABAAAP//gA"
-    "AAEBE/IUpS+Zv3CAAAABswEAEBP//+AYAAABuAAIAMAAAAEAAA//+AAAAQET8hSlL5m/cIAAAAGzAQAQE///4BgAAAG4AAgB"
-    "QAAAAQAAD//4AAABARPyFKUvmb9wgAAAAbMBABAT///gGAAAAbgACAHAAAABAAAP//gAAAEBE/IUpS+Zv3CAAAABswEAEBP/"
-    "/+AYAAABuAAIAkAAAAEAAA//+AAAAQET8hSlL5m/cIAAAAGzAQAQE///4BgAAAG4AAgCwAAAAQAAD//4AAABARPyFKUvmb9w"
-    "gAAAAbMBABAT///gGAAAAbgACANAAAABAAAP//gAAAEBE/IUpS+Zv3CAAAABswEAEBP//+AYAAABuAAIA8AAAAEAAA//+AAA"
-    "AQET8hSlL5m/cIAAAAGzAQAQE///4BgAAAG4AAgEQAAAAQAAD//4AAABARPyFKUvmb9wgAAAAbMBABAT///gGAAAAbgACATA"
-    "AAABAAAP//gAAAEBE/IUpS+Zv3CAAAABswEAEBP//+AYAAABuAAIBUAAAAEAAA//+AAAAQET8hSlL5m/cIAAAAGzAQAQE///"
-    "4BgAAAG4AAgFwAAAAQAAD//4AAABARPyFKUvmb9wgAAAAbMBABAT///gGAAAAbgACAZAAAABAAAP//gAAAEBE/IUpS+Zv3CA"
-    "AAABswEAEBP//+AYAAABuAAIBsAAAAEAAA//+AAAAQET+UUpS/cLzYAAAAGzAQAQE///4BgAAAG4AAgHQAAAAQAAD//4AAAB"
-    "ARP5RSlL9wvNgAAAAbMBABAT///gGAAAAbgACAfAAAABAAAP//gAAAEBE/lFKUv3C82AAAABswEAEBP//+AYAAABuAAICEAA"
-    "AAEAAA//+AAAAQET+UUpS/cLzYAAAAGzAQAQE///4BgAAAG4AAgIwAAAAQAAD//4AAABARP5RSlL9wvNgAAAAbMBABAT///g"
-    "GAAAAbgACAlAAAABAAAP//gAAAEBE/lFKUv3C82AAAABswEAEBP//+AYAAABuAAICcAAAAEAAA//+AAAAQET+UUpS/cLzYAA"
-    "AAGzAQAQE///4BgAAAG4AAgKQAAAAQAAD//4AAABARP5RSlL9wvNgAAAAbMBABAT///gGAAAAbgACArAAAABAAAP//gAAAEB"
-    "E/lFKUv3C82AAAABswEAEBP//+AYAAABuAAIC0AAAAEAAA//+AAAAQET+UUpS/cLzYAAAAGzAQAQE///4BgAAAG4AAgLwAAA"
-    "AQAAD//4AAABARP5RSlL9wvNgAAAAbMBABAT///gGAAAAbgACAxAAAABAAAP//gAAAEBE/lFKUv3C82AAAABswEAEBP//+AY"
-    "AAABuAAIIEAAAAEAAA//+AAAAQET+UUpS/cLzYAAAAG+A6UP////////////////////////////////////////////////"
-    "////////////////////////////////////////////////////////////////////////////////////////////////"
-    "////////////////////////////////////////////////////////////////////////////////////////////////"
-    "////////////////////////////////////////////////////////////////////////////////////////////////"
-    "////////////////////////////////////////////////////////////////////////////////////////////////"
-    "////////////////////////////////////////////////////////////////////////////////////////////////"
-    "////////////////////////////////////////////////////////////////////////////////////////////////"
-    "////////////////////////////////////////////////////////////////////////////////////////////////"
-    "////////////////////////////////////////////////////////////////////////////////////////////////"
-    "////////////////////////////////////////////////////////////////////////////////////////////////"
-    "////////////////////////////////////////////////////////////////////////////////////////////////"
-    "////////////////////////////////////////////////////////////////////////////////////////////////"
-    "////////////////////////////////////////////////////////////////////////////////////////////////"
-    "//////////////////////////////////////////8=";
-
-int DecodeBase64Value(char ch) {
-    if (ch >= 'A' && ch <= 'Z') {
-        return ch - 'A';
-    }
-    if (ch >= 'a' && ch <= 'z') {
-        return ch - 'a' + 26;
-    }
-    if (ch >= '0' && ch <= '9') {
-        return ch - '0' + 52;
-    }
-    if (ch == '+') {
-        return 62;
-    }
-    if (ch == '/') {
-        return 63;
-    }
-    return -1;
-}
-
-std::vector<unsigned char> DecodeBase64(std::string_view encoded) {
-    std::vector<unsigned char> decoded;
-    decoded.reserve((encoded.size() * 3u) / 4u);
-
-    unsigned int accumulator = 0;
-    int bitCount = -8;
-    for (char ch : encoded) {
-        if (ch == '=') {
-            break;
-        }
-
-        const int value = DecodeBase64Value(ch);
-        if (value < 0) {
-            continue;
-        }
-
-        accumulator = (accumulator << 6) | static_cast<unsigned int>(value);
-        bitCount += 6;
-        if (bitCount >= 0) {
-            decoded.push_back(static_cast<unsigned char>((accumulator >> bitCount) & 0xFFu));
-            bitCount -= 8;
-        }
-    }
-
-    return decoded;
-}
-
-std::filesystem::path WriteEmbeddedFixtureToDisk(const std::filesystem::path& root, const std::filesystem::path& relativePath,
-                                                 std::string_view base64Payload) {
-    const std::filesystem::path fixturePath = root / relativePath;
-    std::error_code error;
-    std::filesystem::create_directories(fixturePath.parent_path(), error);
-    Expect(!error, "Failed to create fixture directory: " + Narrow(fixturePath.parent_path().wstring()));
-
-    const std::vector<unsigned char> decodedBytes = DecodeBase64(base64Payload);
-    Expect(!decodedBytes.empty(), "Embedded fixture payload decoded to zero bytes for: " + relativePath.generic_string());
-
-    std::ofstream out(fixturePath, std::ios::binary | std::ios::trunc);
-    Expect(out.is_open(), "Failed to open embedded fixture path for writing: " + Narrow(fixturePath.wstring()));
-    out.write(reinterpret_cast<const char*>(decodedBytes.data()), static_cast<std::streamsize>(decodedBytes.size()));
-    out.close();
-    Expect(std::filesystem::exists(fixturePath), "Failed to write embedded fixture file: " + Narrow(fixturePath.wstring()));
-    return fixturePath;
-}
-
-bool WaitForUserImageTextureUpload(const std::string& imageName, int timeoutMs = 2000) {
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
-    while (std::chrono::steady_clock::now() < deadline) {
-        ProcessPendingDecodedImages();
-        {
-            std::lock_guard<std::mutex> lock(g_userImagesMutex);
-            auto it = g_userImages.find(imageName);
-            if (it != g_userImages.end() && it->second.textureId != 0) {
-                return true;
-            }
-        }
-        Sleep(10);
-    }
-
-    return false;
-}
-
-ImageConfig MakeTopLeftImageRenderTestConfig(std::string_view name, std::string path, int x, int y, float scale) {
-    ImageConfig image;
-    image.name = std::string(name);
-    image.path = std::move(path);
-    image.x = x;
-    image.y = y;
-    image.scale = scale;
-    image.relativeSizing = true;
-    image.relativeTo = "topLeftScreen";
-    image.opacity = 1.0f;
-    image.onlyOnMyScreen = false;
-    image.pixelatedScaling = true;
-    image.background.enabled = false;
-    image.border.enabled = false;
-    return image;
-}
-
-void ResetOverlayRenderTestResources();
-
-void LoadImageFixtureForRenderTest(DummyWindow& window, const ImageConfig& image) {
-    Expect(window.PrepareRenderSurface(), "GUI integration test window closed unexpectedly while preparing image fixture upload.");
-    ResetOverlayRenderTestResources();
-    LoadImageAsync(DecodedImageData::Type::UserImage, image.name, image.path, g_toolscreenPath);
-    Expect(WaitForUserImageTextureUpload(image.name), "Timed out waiting for image fixture upload to reach the GPU.");
-}
-
-bool EndsWith(std::string_view value, std::string_view suffix) {
-    return value.size() >= suffix.size() && value.substr(value.size() - suffix.size()) == suffix;
-}
-
-SurfaceSize GetWindowClientSize(HWND hwnd) {
-    RECT clientRect{};
-    Expect(hwnd != nullptr && GetClientRect(hwnd, &clientRect) == TRUE, "Failed to read GUI integration test window client rect.");
-    return {
-        clientRect.right - clientRect.left,
-        clientRect.bottom - clientRect.top,
-    };
-}
-
-class ScopedTexture2D {
-  public:
-    ScopedTexture2D(int width, int height, const std::vector<unsigned char>& rgbaPixels) {
-        Expect(width > 0 && height > 0, "Texture dimensions must be positive.");
-        Expect(rgbaPixels.size() == static_cast<size_t>(width) * static_cast<size_t>(height) * 4u,
-               "Texture pixel payload size did not match the requested dimensions.");
-
-        glGenTextures(1, &m_textureId);
-        Expect(m_textureId != 0, "Failed to create OpenGL texture for mirror integration test.");
-
-        GLint previousTexture = 0;
-        glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
-
-        BindTextureDirect(GL_TEXTURE_2D, m_textureId);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgbaPixels.data());
-        BindTextureDirect(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
-    }
-
-    ~ScopedTexture2D() {
-        if (m_textureId != 0) {
-            glDeleteTextures(1, &m_textureId);
-        }
-    }
-
-    GLuint id() const { return m_textureId; }
-
-  private:
-    GLuint m_textureId = 0;
-};
-
-MirrorConfig MakeMirrorRenderTestConfig(std::string_view name, int captureWidth, int captureHeight, std::string_view relativeTo,
-                                        int outputX, int outputY, float scale) {
-    MirrorConfig mirror;
-    mirror.name = std::string(name);
-    mirror.captureWidth = captureWidth;
-    mirror.captureHeight = captureHeight;
-    mirror.input = { { 0, 0, "topLeftScreen" } };
-    mirror.output.x = outputX;
-    mirror.output.y = outputY;
-    mirror.output.scale = scale;
-    mirror.output.relativeTo = std::string(relativeTo);
-    mirror.border.type = MirrorBorderType::Dynamic;
-    mirror.border.dynamicThickness = 0;
-    mirror.fps = 0;
-    mirror.opacity = 1.0f;
-    mirror.rawOutput = true;
-    mirror.colorPassthrough = false;
-    mirror.gradientOutput = false;
-    return mirror;
-}
-
-MirrorConfig BuildExpectedGroupedMirrorConfig(const MirrorConfig& mirror, const MirrorGroupConfig& group, const MirrorGroupItem& item) {
-    MirrorConfig groupedMirror = mirror;
-    groupedMirror.output.x = group.output.x + item.offsetX;
-    groupedMirror.output.y = group.output.y + item.offsetY;
-    groupedMirror.output.relativeTo = group.output.relativeTo;
-    groupedMirror.output.useRelativePosition = group.output.useRelativePosition;
-    groupedMirror.output.relativeX = group.output.relativeX;
-    groupedMirror.output.relativeY = group.output.relativeY;
-
-    groupedMirror.output.separateScale = true;
-    const float baseScaleX = mirror.output.separateScale ? mirror.output.scaleX : mirror.output.scale;
-    const float baseScaleY = mirror.output.separateScale ? mirror.output.scaleY : mirror.output.scale;
-    groupedMirror.output.scaleX = baseScaleX * item.widthPercent;
-    groupedMirror.output.scaleY = baseScaleY * item.heightPercent;
-    return groupedMirror;
-}
-
-ExpectedMirrorRect ComputeExpectedMirrorRect(const MirrorConfig& mirror, int fullW, int fullH, int gameX, int gameY, int gameW, int gameH) {
-    const float scaleX = mirror.output.separateScale ? mirror.output.scaleX : mirror.output.scale;
-    const float scaleY = mirror.output.separateScale ? mirror.output.scaleY : mirror.output.scale;
-
-    ExpectedMirrorRect rect;
-    rect.name = mirror.name;
-    rect.width = static_cast<int>(static_cast<float>(mirror.captureWidth) * scaleX);
-    rect.height = static_cast<int>(static_cast<float>(mirror.captureHeight) * scaleY);
-
-    std::string anchor = mirror.output.relativeTo;
-    bool isScreenRelative = false;
-    if (EndsWith(anchor, "Screen")) {
-        anchor.resize(anchor.size() - std::string_view("Screen").size());
-        isScreenRelative = true;
-    } else if (EndsWith(anchor, "Viewport")) {
-        anchor.resize(anchor.size() - std::string_view("Viewport").size());
-    }
-
-    const int containerX = isScreenRelative ? 0 : gameX;
-    const int containerY = isScreenRelative ? 0 : gameY;
-    const int containerW = isScreenRelative ? fullW : gameW;
-    const int containerH = isScreenRelative ? fullH : gameH;
-
-    if (anchor == "topLeft") {
-        rect.x = containerX + mirror.output.x;
-        rect.y = containerY + mirror.output.y;
-    } else if (anchor == "topRight") {
-        rect.x = containerX + containerW - rect.width - mirror.output.x;
-        rect.y = containerY + mirror.output.y;
-    } else if (anchor == "bottomLeft") {
-        rect.x = containerX + mirror.output.x;
-        rect.y = containerY + containerH - rect.height - mirror.output.y;
-    } else if (anchor == "bottomRight") {
-        rect.x = containerX + containerW - rect.width - mirror.output.x;
-        rect.y = containerY + containerH - rect.height - mirror.output.y;
-    } else if (anchor == "center") {
-        rect.x = containerX + (containerW - rect.width) / 2 + mirror.output.x;
-        rect.y = containerY + (containerH - rect.height) / 2 + mirror.output.y;
-    } else {
-        throw std::runtime_error("Unsupported mirror test anchor: " + mirror.output.relativeTo);
-    }
-
-    return rect;
-}
-
-ExpectedMirrorRect GetCachedMirrorRect(std::string_view mirrorName) {
-    std::shared_lock<std::shared_mutex> lock(g_mirrorInstancesMutex);
-    auto it = g_mirrorInstances.find(std::string(mirrorName));
-    Expect(it != g_mirrorInstances.end(), "Missing cached mirror instance for integration test: " + std::string(mirrorName));
-    Expect(it->second.cachedRenderState.isValid, "Missing cached mirror render state for integration test: " + std::string(mirrorName));
-    return {
-        it->first,
-        it->second.cachedRenderState.mirrorScreenX,
-        it->second.cachedRenderState.mirrorScreenY,
-        it->second.cachedRenderState.mirrorScreenW,
-        it->second.cachedRenderState.mirrorScreenH,
-    };
-}
-
-    void ExpectMirrorRectNear(const ExpectedMirrorRect& actual, const ExpectedMirrorRect& expected, const std::string& label,
-                     int tolerance = 2) {
-        Expect(std::abs(actual.x - expected.x) <= tolerance,
-            label + " x was outside tolerance. expected " + std::to_string(expected.x) + ", got " + std::to_string(actual.x));
-        Expect(std::abs(actual.y - expected.y) <= tolerance,
-            label + " y was outside tolerance. expected " + std::to_string(expected.y) + ", got " + std::to_string(actual.y));
-        Expect(std::abs(actual.width - expected.width) <= tolerance,
-            label + " width was outside tolerance. expected " + std::to_string(expected.width) + ", got " +
-             std::to_string(actual.width));
-        Expect(std::abs(actual.height - expected.height) <= tolerance,
-            label + " height was outside tolerance. expected " + std::to_string(expected.height) + ", got " +
-             std::to_string(actual.height));
-    }
-
-void ExpectSolidColorRect(const ExpectedMirrorRect& rect, int surfaceHeight, const Color& expected, const std::string& label) {
-    Expect(rect.width > 0 && rect.height > 0, label + " must have positive dimensions.");
-
-    const int insetX = rect.width > 4 ? rect.width / 5 : 0;
-    const int insetY = rect.height > 4 ? rect.height / 5 : 0;
-    const int left = rect.x + insetX;
-    const int right = rect.x + rect.width - 1 - insetX;
-    const int top = rect.y + insetY;
-    const int bottom = rect.y + rect.height - 1 - insetY;
-    const int centerX = rect.x + rect.width / 2;
-    const int centerY = rect.y + rect.height / 2;
-
-    ExpectFramebufferPixelColorNear(centerX, centerY, surfaceHeight, expected, label + " should match at center.");
-    ExpectFramebufferPixelColorNear(left, top, surfaceHeight, expected, label + " should match at top-left interior sample.");
-    ExpectFramebufferPixelColorNear(right, top, surfaceHeight, expected, label + " should match at top-right interior sample.");
-    ExpectFramebufferPixelColorNear(left, bottom, surfaceHeight, expected, label + " should match at bottom-left interior sample.");
-    ExpectFramebufferPixelColorNear(right, bottom, surfaceHeight, expected, label + " should match at bottom-right interior sample.");
-}
-
-void ExpectBackgroundPixel(int screenX, int screenY, int surfaceHeight, const std::string& label) {
-    ExpectFramebufferPixelColorNear(screenX, screenY, surfaceHeight, kExpectedRenderSurfaceClear, label);
-}
-
-void ResetOverlayRenderTestResources();
-
-void ExpectMirrorRenderMatchesExpectedPlacement(const MirrorConfig& mirror, const SimulatedOverlayGeometry& geometry,
-                                                const SurfaceSize& surface, const std::string& label,
-                                                bool expectVisibleRender) {
-    const ExpectedMirrorRect expectedRect = ComputeExpectedMirrorRect(mirror, surface.width, surface.height, geometry.gameX,
-                                                                      geometry.gameY, geometry.gameW, geometry.gameH);
-
-    Expect(expectedRect.width > 0 && expectedRect.height > 0,
-           label + " should resolve to a positive mirror size on the simulated surface.");
-    Expect(expectedRect.x >= 0 && expectedRect.y >= 0 && expectedRect.x + expectedRect.width <= surface.width &&
-               expectedRect.y + expectedRect.height <= surface.height,
-           label + " should remain fully inside the simulated surface.");
-
-    (void)expectVisibleRender;
-}
-
-void InitializeMirrorRenderTestResources() {
-    if (!g_hasModernGL) return;
-    ResetOverlayRenderTestResources();
-    for (const auto& mirror : g_config.mirrors) {
-        CreateMirrorGPUResources(mirror);
-    }
-}
-
-void ResetOverlayRenderTestResources() {
-    if (!g_hasModernGL) return;
-    InvalidateConfigLookupCaches();
-    g_windowOverlaysVisible.store(true, std::memory_order_release);
-    g_browserOverlaysVisible.store(true, std::memory_order_release);
-    CleanupBrowserOverlayCache();
-    CleanupWindowOverlayCache();
-    CleanupGPUResources();
-    CleanupShaders();
-    InitializeGPUResources();
-}
-
-void RenderModeOverlayFrame(DummyWindow& window, const Config& config, const ModeConfig& mode, GLuint gameTextureId = 0) {
-    if (!window.hasModernGL()) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
-    Expect(window.PrepareRenderSurface(), "GUI integration test window closed unexpectedly.");
-
-    GLState state{};
-    SaveGLState(&state);
-
-    const int surfaceWidth = (std::max)(1, GetCachedWindowWidth());
-    const int surfaceHeight = (std::max)(1, GetCachedWindowHeight());
-    const bool rendered = RenderModeOverlaysForIntegrationTest(config, mode, state, surfaceWidth, surfaceHeight, 0, 0,
-                                                               surfaceWidth, surfaceHeight, false, gameTextureId);
-    Expect(rendered, "Expected mode overlay render path to produce overlay output.");
-}
-
-template <typename AssertFn>
-void RenderModeOverlayFrameToSimulatedSurface(DummyWindow& window, const Config& config, const ModeConfig& mode,
-                                              const SimulatedOverlayGeometry& geometry, GLuint gameTextureId,
-                                              AssertFn&& assertFn) {
-    if (!window.hasModernGL()) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
-    Expect(window.PrepareRenderSurface(), "GUI integration test window closed unexpectedly.");
-
-    ScopedFramebufferSurface surface(geometry.fullW, geometry.fullH);
-    surface.BindAndClear();
-
-    GLState state{};
-    SaveGLState(&state);
-
-    const bool rendered = RenderModeOverlaysForIntegrationTest(config, mode, state, (std::max)(1, geometry.fullW),
-                                                               (std::max)(1, geometry.fullH), geometry.gameX, geometry.gameY,
-                                                               (std::max)(1, geometry.gameW), (std::max)(1, geometry.gameH),
-                                                               false, gameTextureId);
-    Expect(rendered, "Expected simulated mode overlay render path to produce overlay output.");
-
-    glFinish();
-    assertFn(surface.size());
-}
-
-template <typename AssertFn>
-void RenderModeOverlayFrameWithGeometry(DummyWindow& window, const Config& config, const ModeConfig& mode,
-                                        const SimulatedOverlayGeometry& geometry, GLuint gameTextureId,
-                                        AssertFn&& assertFn) {
-    if (!window.hasModernGL()) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
-    Expect(window.PrepareRenderSurface(), "GUI integration test window closed unexpectedly.");
-
-    const SurfaceSize surface = GetWindowClientSize(window.hwnd());
-
-    GLState state{};
-    SaveGLState(&state);
-
-    const bool rendered = RenderModeOverlaysForIntegrationTest(config, mode, state, surface.width, surface.height,
-                                                               geometry.gameX, geometry.gameY, geometry.gameW,
-                                                               geometry.gameH, false, gameTextureId);
-    Expect(rendered, "Expected window-backed mode overlay render path to produce overlay output.");
-
-    glFinish();
-    assertFn(surface);
 }
 
 template <typename T>
@@ -1100,15 +473,6 @@ void WriteConfigFixtureToDisk(const Config& config) {
     g_configIsDirty.store(true, std::memory_order_release);
     SaveConfigImmediate();
     Expect(std::filesystem::exists(GetCurrentConfigPath()), "Failed to write config fixture to disk.");
-}
-
-void WriteRawConfigTomlToDisk(std::string_view tomlText) {
-    const std::filesystem::path configPath = GetCurrentConfigPath();
-    std::ofstream out(configPath, std::ios::binary | std::ios::trunc);
-    Expect(out.is_open(), "Failed to open config fixture for raw TOML write.");
-    out << tomlText;
-    out.close();
-    Expect(std::filesystem::exists(configPath), "Failed to write raw config fixture to disk.");
 }
 
 void ExpectConfigLoadSucceeded(const std::string& context) {
@@ -1193,16 +557,6 @@ const HotkeyConfig& FindHotkeyBySecondaryModeOrThrow(std::string_view secondaryM
     throw std::runtime_error("Missing hotkey for mode: " + std::string(secondaryModeId));
 }
 
-const HotkeyConfig& FindHotkeyByKeysOrThrow(const std::vector<DWORD>& keys) {
-    for (const auto& hotkey : g_config.hotkeys) {
-        if (hotkey.keys == keys) {
-            return hotkey;
-        }
-    }
-
-    throw std::runtime_error("Missing hotkey fixture.");
-}
-
 const SensitivityHotkeyConfig& FindSensitivityHotkeyOrThrow(const std::vector<DWORD>& keys) {
     for (const auto& hotkey : g_config.sensitivityHotkeys) {
         if (hotkey.keys == keys) {
@@ -1222,31 +576,13 @@ void PopulateRichConfigFixture() {
     g_config.disableHookChaining = true;
     g_config.allowCursorEscape = true;
     g_config.mouseSensitivity = 1.75f;
+    g_config.mouseMovementPollingRate = 1150;
     g_config.windowsMouseSpeed = 13;
     g_config.hideAnimationsInGame = true;
     g_config.limitCaptureFramerate = false;
     g_config.obsFramerate = 73;
     g_config.keyRepeatStartDelay = 275;
     g_config.keyRepeatDelay = 42;
-    g_config.basicModeEnabled = false;
-    g_config.restoreWindowedModeOnFullscreenExit = false;
-    g_config.disableFullscreenPrompt = true;
-    g_config.disableConfigurePrompt = true;
-    g_config.guiHotkey = { VK_CONTROL, VK_SHIFT, 'G' };
-    g_config.borderlessHotkey = { VK_MENU, VK_RETURN };
-    g_config.autoBorderless = true;
-    g_config.imageOverlaysHotkey = { VK_F8 };
-    g_config.windowOverlaysHotkey = { VK_F7 };
-
-    g_config.debug.showPerformanceOverlay = true;
-    g_config.debug.showProfiler = true;
-    g_config.debug.profilerScale = 1.25f;
-    g_config.debug.showHotkeyDebug = true;
-    g_config.debug.fakeCursor = true;
-    g_config.debug.showTextureGrid = true;
-    g_config.debug.delayRenderingUntilFinished = true;
-    g_config.debug.virtualCameraEnabled = true;
-    g_config.debug.videoCacheBudgetMiB = 384;
     g_config.debug.logModeSwitch = true;
     g_config.debug.logAnimation = true;
     g_config.debug.logHotkey = true;
@@ -1279,7 +615,7 @@ void PopulateRichConfigFixture() {
     g_config.eyezoom.useCustomSizePosition = true;
     g_config.eyezoom.positionX = 33;
     g_config.eyezoom.positionY = 44;
-    g_config.eyezoom.fontSizeMode = EyeZoomFontSizeMode::Manual;
+    g_config.eyezoom.autoFontSize = false;
     g_config.eyezoom.textFontSize = 31;
     g_config.eyezoom.textFontPath = "C:\\Windows\\Fonts\\verdana.ttf";
     g_config.eyezoom.rectHeight = 35;
@@ -1295,8 +631,8 @@ void PopulateRichConfigFixture() {
     g_config.eyezoom.slideZoomIn = true;
     g_config.eyezoom.slideMirrorsIn = true;
     g_config.eyezoom.overlays = {
-        { "Overlay One", "C:\\temp\\overlay-one.png", EyeZoomOverlayDisplayMode::Fit, 100, 100, false, 0.5f },
-        { "Overlay Two", "C:\\temp\\overlay-two.png", EyeZoomOverlayDisplayMode::Manual, 240, 140, false, 0.85f },
+        { "Overlay One", "C:\\temp\\overlay-one.png", EyeZoomOverlayDisplayMode::Fit, 100, 100, 0.5f },
+        { "Overlay Two", "C:\\temp\\overlay-two.png", EyeZoomOverlayDisplayMode::Manual, 240, 140, 0.85f },
     };
     g_config.eyezoom.activeOverlayIndex = 1;
 
@@ -1505,54 +841,56 @@ void PopulateRichConfigFixture() {
     browserOverlay.border.radius = 10;
     g_config.browserOverlays.push_back(browserOverlay);
 
-    ModeConfig primaryMode;
-    primaryMode.id = kPrimaryModeId;
-    primaryMode.width = 1280;
-    primaryMode.height = 720;
-    primaryMode.manualWidth = 1280;
-    primaryMode.manualHeight = 720;
-    primaryMode.background.selectedMode = "gradient";
-    primaryMode.background.gradientStops = {
+    ModeConfig verifierMode;
+    verifierMode.id = kVerifierModeId;
+    verifierMode.width = 1280;
+    verifierMode.height = 720;
+    verifierMode.manualWidth = 1280;
+    verifierMode.manualHeight = 720;
+    verifierMode.background.selectedMode = "gradient";
+    verifierMode.background.gradientStops = {
         { { 0.15f, 0.2f, 0.35f, 1.0f }, 0.0f },
         { { 0.7f, 0.4f, 0.2f, 1.0f }, 1.0f },
     };
-    primaryMode.background.gradientAngle = 55.0f;
-    primaryMode.background.gradientAnimation = GradientAnimationType::Slide;
-    primaryMode.background.gradientAnimationSpeed = 1.3f;
-    primaryMode.background.gradientColorFade = true;
-    primaryMode.mirrorIds = { kVerifierMirrorName };
-    primaryMode.mirrorGroupIds = { kVerifierGroupName };
-    primaryMode.imageIds = { kVerifierImageName };
-    primaryMode.windowOverlayIds = { kVerifierWindowOverlayName };
-    primaryMode.browserOverlayIds = { kVerifierBrowserOverlayName };
-    primaryMode.stretch.enabled = true;
-    primaryMode.stretch.width = 1400;
-    primaryMode.stretch.height = 800;
-    primaryMode.stretch.x = 15;
-    primaryMode.stretch.y = 25;
-    primaryMode.gameTransition = GameTransitionType::Bounce;
-    primaryMode.overlayTransition = OverlayTransitionType::Cut;
-    primaryMode.backgroundTransition = BackgroundTransitionType::Cut;
-    primaryMode.transitionDurationMs = 777;
-    primaryMode.easeInPower = 2.5f;
-    primaryMode.easeOutPower = 4.25f;
-    primaryMode.bounceCount = 3;
-    primaryMode.bounceIntensity = 0.42f;
-    primaryMode.bounceDurationMs = 333;
-    primaryMode.relativeStretching = true;
-    primaryMode.skipAnimateX = true;
-    primaryMode.skipAnimateY = false;
-    primaryMode.border.enabled = true;
-    primaryMode.border.color = { 0.3f, 0.4f, 0.5f, 1.0f };
-    primaryMode.border.width = 9;
-    primaryMode.border.radius = 14;
-    primaryMode.sensitivityOverrideEnabled = true;
-    primaryMode.modeSensitivity = 0.88f;
-    primaryMode.separateXYSensitivity = true;
-    primaryMode.modeSensitivityX = 0.91f;
-    primaryMode.modeSensitivityY = 0.72f;
-    primaryMode.slideMirrorsIn = true;
-    g_config.modes.push_back(primaryMode);
+    verifierMode.background.gradientAngle = 55.0f;
+    verifierMode.background.gradientAnimation = GradientAnimationType::Slide;
+    verifierMode.background.gradientAnimationSpeed = 1.3f;
+    verifierMode.background.gradientColorFade = true;
+    verifierMode.sources = {
+        { ModeSourceType::Mirror, kVerifierMirrorName },
+        { ModeSourceType::MirrorGroup, kVerifierGroupName },
+        { ModeSourceType::Image, kVerifierImageName },
+        { ModeSourceType::WindowOverlay, kVerifierWindowOverlayName },
+        { ModeSourceType::BrowserOverlay, kVerifierBrowserOverlayName },
+    };
+    verifierMode.stretch.enabled = true;
+    verifierMode.stretch.width = 1400;
+    verifierMode.stretch.height = 800;
+    verifierMode.stretch.x = 15;
+    verifierMode.stretch.y = 25;
+    verifierMode.gameTransition = GameTransitionType::Bounce;
+    verifierMode.overlayTransition = OverlayTransitionType::Cut;
+    verifierMode.backgroundTransition = BackgroundTransitionType::Cut;
+    verifierMode.transitionDurationMs = 777;
+    verifierMode.easeInPower = 2.5f;
+    verifierMode.easeOutPower = 4.25f;
+    verifierMode.bounceCount = 3;
+    verifierMode.bounceIntensity = 0.42f;
+    verifierMode.bounceDurationMs = 333;
+    verifierMode.relativeStretching = true;
+    verifierMode.skipAnimateX = true;
+    verifierMode.skipAnimateY = false;
+    verifierMode.border.enabled = true;
+    verifierMode.border.color = { 0.3f, 0.4f, 0.5f, 1.0f };
+    verifierMode.border.width = 9;
+    verifierMode.border.radius = 14;
+    verifierMode.sensitivityOverrideEnabled = true;
+    verifierMode.modeSensitivity = 0.88f;
+    verifierMode.separateXYSensitivity = true;
+    verifierMode.modeSensitivityX = 0.91f;
+    verifierMode.modeSensitivityY = 0.72f;
+    verifierMode.slideMirrorsIn = true;
+    g_config.modes.push_back(verifierMode);
 
     ModeConfig precisionMode;
     precisionMode.id = kPrecisionModeId;
@@ -1562,15 +900,15 @@ void PopulateRichConfigFixture() {
     precisionMode.manualHeight = 540;
     precisionMode.background.selectedMode = "color";
     precisionMode.background.color = { 0.02f, 0.03f, 0.04f, 1.0f };
-    precisionMode.mirrorIds = { kAuxMirrorName };
+    precisionMode.sources = { { ModeSourceType::Mirror, kAuxMirrorName } };
     g_config.modes.push_back(precisionMode);
 
-    g_config.defaultMode = kPrimaryModeId;
+    g_config.defaultMode = kVerifierModeId;
 
     HotkeyConfig hotkey;
     hotkey.keys = { VK_F6, 'Q' };
     hotkey.mainMode = "Fullscreen";
-    hotkey.secondaryMode = kPrimaryModeId;
+    hotkey.secondaryMode = kVerifierModeId;
     hotkey.altSecondaryModes = { { { 'E', 'R' }, kPrecisionModeId } };
     hotkey.conditions.gameState = { "ingame", "wall" };
     hotkey.conditions.exclusions = { VK_LSHIFT, VK_RBUTTON };
@@ -1606,19 +944,14 @@ void PopulateRichConfigFixture() {
 void VerifyRichGlobalSettings() {
     Expect(g_config.lang == "zh_CN", "Expected language to roundtrip.");
     Expect(g_config.fontPath == "C:\\Windows\\Fonts\\consola.ttf", "Expected font path to roundtrip.");
-    Expect(g_config.defaultMode == kPrimaryModeId, "Expected default mode to roundtrip.");
+    Expect(g_config.defaultMode == kVerifierModeId, "Expected default mode to roundtrip.");
     Expect(g_config.fpsLimit == 144, "Expected fps limit to roundtrip.");
     Expect(g_config.fpsLimitSleepThreshold == 7, "Expected fps sleep threshold to roundtrip.");
     Expect(g_config.mirrorGammaMode == MirrorGammaMode::AssumeLinear, "Expected mirror gamma mode to roundtrip.");
     Expect(g_config.disableHookChaining, "Expected disableHookChaining to roundtrip.");
     Expect(g_config.allowCursorEscape, "Expected allowCursorEscape to roundtrip.");
     ExpectFloatNear(g_config.mouseSensitivity, 1.75f, "Expected mouse sensitivity to roundtrip.");
-    Expect(g_config.windowsMouseSpeed == 13, "Expected Windows mouse speed to roundtrip.");
-    Expect(g_config.hideAnimationsInGame, "Expected hideAnimationsInGame to roundtrip.");
-    Expect(!g_config.limitCaptureFramerate, "Expected limitCaptureFramerate to roundtrip.");
-    Expect(g_config.obsFramerate == 73, "Expected obsFramerate to roundtrip.");
-    Expect(g_config.keyRepeatStartDelay == 275, "Expected keyRepeatStartDelay to roundtrip.");
-    Expect(g_config.keyRepeatDelay == 42, "Expected keyRepeatDelay to roundtrip.");
+    Expect(!g_config.keyRepeatResumePreviousHeldKey, "Expected keyRepeatResumePreviousHeldKey to roundtrip.");
     Expect(!g_config.basicModeEnabled, "Expected basicModeEnabled to roundtrip.");
     Expect(!g_config.restoreWindowedModeOnFullscreenExit, "Expected restoreWindowedModeOnFullscreenExit to roundtrip.");
     Expect(g_config.disableFullscreenPrompt, "Expected disableFullscreenPrompt to roundtrip.");
@@ -1634,7 +967,7 @@ void VerifyRichGlobalSettings() {
         std::lock_guard<std::mutex> lock(g_modeIdMutex);
         currentModeId = g_currentModeId;
     }
-    Expect(EqualsIgnoreCase(currentModeId, kPrimaryModeId), "Expected LoadConfig to apply the saved default mode as current mode.");
+    Expect(EqualsIgnoreCase(currentModeId, kVerifierModeId), "Expected LoadConfig to apply the saved default mode as current mode.");
 }
 
 void VerifyRichDebugSettings() {
@@ -1646,7 +979,6 @@ void VerifyRichDebugSettings() {
     Expect(g_config.debug.showTextureGrid, "Expected debug.showTextureGrid to roundtrip.");
     Expect(g_config.debug.delayRenderingUntilFinished, "Expected debug.delayRenderingUntilFinished to roundtrip.");
     Expect(g_config.debug.virtualCameraEnabled, "Expected debug.virtualCameraEnabled to roundtrip.");
-    Expect(g_config.debug.videoCacheBudgetMiB == 384, "Expected debug.videoCacheBudgetMiB to roundtrip.");
     Expect(g_config.debug.logModeSwitch, "Expected debug.logModeSwitch to roundtrip.");
     Expect(g_config.debug.logAnimation, "Expected debug.logAnimation to roundtrip.");
     Expect(g_config.debug.logHotkey, "Expected debug.logHotkey to roundtrip.");
@@ -1662,61 +994,62 @@ void VerifyRichDebugSettings() {
 }
 
 void VerifyRichModes() {
-        const ModeConfig& primaryMode = FindModeOrThrow(kPrimaryModeId);
-        Expect(primaryMode.width == 1280, "Expected primary mode width to roundtrip.");
-        Expect(primaryMode.height == 720, "Expected primary mode height to roundtrip.");
-        Expect(primaryMode.manualWidth == 1280, "Expected primary mode manualWidth to roundtrip.");
-        Expect(primaryMode.manualHeight == 720, "Expected primary mode manualHeight to roundtrip.");
-        Expect(primaryMode.background.selectedMode == "gradient", "Expected primary mode background mode to roundtrip.");
-        Expect(primaryMode.background.gradientStops.size() == 2, "Expected primary mode gradient stops to roundtrip.");
-        ExpectColorNear(primaryMode.background.gradientStops[0].color, { 0.15f, 0.2f, 0.35f, 1.0f },
-                  "Expected primary mode first gradient color to roundtrip.");
-        ExpectFloatNear(primaryMode.background.gradientAngle, 55.0f, "Expected primary mode gradient angle to roundtrip.");
-        Expect(primaryMode.background.gradientAnimation == GradientAnimationType::Slide,
-            "Expected primary mode gradient animation to roundtrip.");
-        ExpectFloatNear(primaryMode.background.gradientAnimationSpeed, 1.3f,
-                  "Expected primary mode gradient animation speed to roundtrip.");
-        Expect(primaryMode.background.gradientColorFade, "Expected primary mode gradient color fade to roundtrip.");
-        ExpectVectorEquals(primaryMode.mirrorIds, std::vector<std::string>{ kVerifierMirrorName },
-                  "Expected primary mode mirrorIds to roundtrip.");
-        ExpectVectorEquals(primaryMode.mirrorGroupIds, std::vector<std::string>{ kVerifierGroupName },
-                  "Expected primary mode mirrorGroupIds to roundtrip.");
-        ExpectVectorEquals(primaryMode.imageIds, std::vector<std::string>{ kVerifierImageName },
-                  "Expected primary mode imageIds to roundtrip.");
-        ExpectVectorEquals(primaryMode.windowOverlayIds, std::vector<std::string>{ kVerifierWindowOverlayName },
-                  "Expected primary mode windowOverlayIds to roundtrip.");
-        ExpectVectorEquals(primaryMode.browserOverlayIds, std::vector<std::string>{ kVerifierBrowserOverlayName },
-                  "Expected primary mode browserOverlayIds to roundtrip.");
-        Expect(primaryMode.stretch.enabled, "Expected primary mode stretch.enabled to roundtrip.");
-        Expect(primaryMode.stretch.width == 1400 && primaryMode.stretch.height == 800,
-            "Expected primary mode stretch size to roundtrip.");
-        Expect(primaryMode.stretch.x == 15 && primaryMode.stretch.y == 25,
-            "Expected primary mode stretch position to roundtrip.");
-        Expect(primaryMode.gameTransition == GameTransitionType::Bounce, "Expected primary mode game transition to roundtrip.");
-        Expect(primaryMode.transitionDurationMs == 777, "Expected primary mode transitionDurationMs to roundtrip.");
-        ExpectFloatNear(primaryMode.easeInPower, 2.5f, "Expected primary mode easeInPower to roundtrip.");
-        ExpectFloatNear(primaryMode.easeOutPower, 4.25f, "Expected primary mode easeOutPower to roundtrip.");
-        Expect(primaryMode.bounceCount == 3, "Expected primary mode bounceCount to roundtrip.");
-        ExpectFloatNear(primaryMode.bounceIntensity, 0.42f, "Expected primary mode bounceIntensity to roundtrip.");
-        Expect(primaryMode.bounceDurationMs == 333, "Expected primary mode bounceDurationMs to roundtrip.");
-        Expect(primaryMode.relativeStretching, "Expected primary mode relativeStretching to roundtrip.");
-        Expect(primaryMode.skipAnimateX, "Expected primary mode skipAnimateX to roundtrip.");
-        Expect(!primaryMode.skipAnimateY, "Expected primary mode skipAnimateY to roundtrip.");
-        Expect(primaryMode.border.enabled, "Expected primary mode border.enabled to roundtrip.");
-        ExpectColorNear(primaryMode.border.color, { 0.3f, 0.4f, 0.5f, 1.0f }, "Expected primary mode border color to roundtrip.");
-        Expect(primaryMode.border.width == 9 && primaryMode.border.radius == 14,
-            "Expected primary mode border settings to roundtrip.");
-        Expect(primaryMode.sensitivityOverrideEnabled, "Expected primary mode sensitivityOverrideEnabled to roundtrip.");
-        ExpectFloatNear(primaryMode.modeSensitivity, 0.88f, "Expected primary mode modeSensitivity to roundtrip.");
-        Expect(primaryMode.separateXYSensitivity, "Expected primary mode separateXYSensitivity to roundtrip.");
-        ExpectFloatNear(primaryMode.modeSensitivityX, 0.91f, "Expected primary mode modeSensitivityX to roundtrip.");
-        ExpectFloatNear(primaryMode.modeSensitivityY, 0.72f, "Expected primary mode modeSensitivityY to roundtrip.");
-        Expect(primaryMode.slideMirrorsIn, "Expected primary mode slideMirrorsIn to roundtrip.");
+    const ModeConfig& verifierMode = FindModeOrThrow(kVerifierModeId);
+    Expect(verifierMode.width == 1280, "Expected verifier mode width to roundtrip.");
+    Expect(verifierMode.height == 720, "Expected verifier mode height to roundtrip.");
+    Expect(verifierMode.manualWidth == 1280, "Expected verifier mode manualWidth to roundtrip.");
+    Expect(verifierMode.manualHeight == 720, "Expected verifier mode manualHeight to roundtrip.");
+    Expect(verifierMode.background.selectedMode == "gradient", "Expected verifier mode background mode to roundtrip.");
+    Expect(verifierMode.background.gradientStops.size() == 2, "Expected verifier mode gradient stops to roundtrip.");
+    ExpectColorNear(verifierMode.background.gradientStops[0].color, { 0.15f, 0.2f, 0.35f, 1.0f },
+                    "Expected verifier mode first gradient color to roundtrip.");
+    ExpectFloatNear(verifierMode.background.gradientAngle, 55.0f, "Expected verifier mode gradient angle to roundtrip.");
+    Expect(verifierMode.background.gradientAnimation == GradientAnimationType::Slide,
+           "Expected verifier mode gradient animation to roundtrip.");
+    ExpectFloatNear(verifierMode.background.gradientAnimationSpeed, 1.3f,
+                    "Expected verifier mode gradient animation speed to roundtrip.");
+    Expect(verifierMode.background.gradientColorFade, "Expected verifier mode gradient color fade to roundtrip.");
+    Expect(verifierMode.sources.size() == 5, "Expected verifier mode source list to roundtrip.");
+    Expect(verifierMode.sources[0].type == ModeSourceType::Mirror && verifierMode.sources[0].id == kVerifierMirrorName,
+           "Expected first verifier mode source to be the custom mirror.");
+    Expect(verifierMode.sources[1].type == ModeSourceType::MirrorGroup && verifierMode.sources[1].id == kVerifierGroupName,
+           "Expected second verifier mode source to be the custom mirror group.");
+    Expect(verifierMode.sources[2].type == ModeSourceType::Image && verifierMode.sources[2].id == kVerifierImageName,
+           "Expected third verifier mode source to be the custom image.");
+    Expect(verifierMode.sources[3].type == ModeSourceType::WindowOverlay && verifierMode.sources[3].id == kVerifierWindowOverlayName,
+           "Expected fourth verifier mode source to be the custom window overlay.");
+    Expect(verifierMode.sources[4].type == ModeSourceType::BrowserOverlay && verifierMode.sources[4].id == kVerifierBrowserOverlayName,
+           "Expected fifth verifier mode source to be the custom browser overlay.");
+    Expect(verifierMode.stretch.enabled, "Expected verifier mode stretch.enabled to roundtrip.");
+    Expect(verifierMode.stretch.width == 1400 && verifierMode.stretch.height == 800,
+           "Expected verifier mode stretch size to roundtrip.");
+    Expect(verifierMode.stretch.x == 15 && verifierMode.stretch.y == 25,
+           "Expected verifier mode stretch position to roundtrip.");
+    Expect(verifierMode.gameTransition == GameTransitionType::Bounce, "Expected verifier mode game transition to roundtrip.");
+    Expect(verifierMode.transitionDurationMs == 777, "Expected verifier mode transitionDurationMs to roundtrip.");
+    ExpectFloatNear(verifierMode.easeInPower, 2.5f, "Expected verifier mode easeInPower to roundtrip.");
+    ExpectFloatNear(verifierMode.easeOutPower, 4.25f, "Expected verifier mode easeOutPower to roundtrip.");
+    Expect(verifierMode.bounceCount == 3, "Expected verifier mode bounceCount to roundtrip.");
+    ExpectFloatNear(verifierMode.bounceIntensity, 0.42f, "Expected verifier mode bounceIntensity to roundtrip.");
+    Expect(verifierMode.bounceDurationMs == 333, "Expected verifier mode bounceDurationMs to roundtrip.");
+    Expect(verifierMode.relativeStretching, "Expected verifier mode relativeStretching to roundtrip.");
+    Expect(verifierMode.skipAnimateX, "Expected verifier mode skipAnimateX to roundtrip.");
+    Expect(!verifierMode.skipAnimateY, "Expected verifier mode skipAnimateY to roundtrip.");
+    Expect(verifierMode.border.enabled, "Expected verifier mode border.enabled to roundtrip.");
+    ExpectColorNear(verifierMode.border.color, { 0.3f, 0.4f, 0.5f, 1.0f }, "Expected verifier mode border color to roundtrip.");
+    Expect(verifierMode.border.width == 9 && verifierMode.border.radius == 14,
+           "Expected verifier mode border settings to roundtrip.");
+    Expect(verifierMode.sensitivityOverrideEnabled, "Expected verifier mode sensitivityOverrideEnabled to roundtrip.");
+    ExpectFloatNear(verifierMode.modeSensitivity, 0.88f, "Expected verifier mode modeSensitivity to roundtrip.");
+    Expect(verifierMode.separateXYSensitivity, "Expected verifier mode separateXYSensitivity to roundtrip.");
+    ExpectFloatNear(verifierMode.modeSensitivityX, 0.91f, "Expected verifier mode modeSensitivityX to roundtrip.");
+    ExpectFloatNear(verifierMode.modeSensitivityY, 0.72f, "Expected verifier mode modeSensitivityY to roundtrip.");
+    Expect(verifierMode.slideMirrorsIn, "Expected verifier mode slideMirrorsIn to roundtrip.");
 
     const ModeConfig& precisionMode = FindModeOrThrow(kPrecisionModeId);
     Expect(precisionMode.width == 960 && precisionMode.height == 540, "Expected precision mode dimensions to roundtrip.");
-    ExpectVectorEquals(precisionMode.mirrorIds, std::vector<std::string>{ kAuxMirrorName },
-                       "Expected precision mode to keep its mirror source.");
+    Expect(precisionMode.sources.size() == 1 && precisionMode.sources[0].id == kAuxMirrorName,
+           "Expected precision mode to keep its mirror source.");
 }
 
 void VerifyRichMirrors() {
@@ -1854,10 +1187,10 @@ void VerifyRichBrowserOverlays() {
 }
 
 void VerifyRichHotkeys() {
-    const HotkeyConfig& hotkey = FindHotkeyBySecondaryModeOrThrow(kPrimaryModeId);
+    const HotkeyConfig& hotkey = FindHotkeyBySecondaryModeOrThrow(kVerifierModeId);
     ExpectVectorEquals(hotkey.keys, std::vector<DWORD>{ VK_F6, 'Q' }, "Expected hotkey keys to roundtrip.");
     Expect(hotkey.mainMode == "Fullscreen", "Expected hotkey main mode to roundtrip.");
-    Expect(hotkey.secondaryMode == kPrimaryModeId, "Expected hotkey secondary mode to roundtrip.");
+    Expect(hotkey.secondaryMode == kVerifierModeId, "Expected hotkey secondary mode to roundtrip.");
     Expect(hotkey.altSecondaryModes.size() == 1, "Expected alt secondary modes to roundtrip.");
     ExpectVectorEquals(hotkey.altSecondaryModes[0].keys, std::vector<DWORD>{ 'E', 'R' },
                        "Expected alt secondary mode keys to roundtrip.");
@@ -1908,8 +1241,7 @@ void VerifyRichCursorsAndEyeZoom() {
     Expect(g_config.eyezoom.useCustomSizePosition, "Expected eyezoom useCustomSizePosition to roundtrip.");
     Expect(g_config.eyezoom.positionX == 33 && g_config.eyezoom.positionY == 44,
            "Expected eyezoom position to roundtrip.");
-        Expect(g_config.eyezoom.fontSizeMode == EyeZoomFontSizeMode::Manual,
-            "Expected eyezoom fontSizeMode to roundtrip.");
+    Expect(!g_config.eyezoom.autoFontSize, "Expected eyezoom autoFontSize to roundtrip.");
     Expect(g_config.eyezoom.textFontSize == 31, "Expected eyezoom textFontSize to roundtrip.");
     Expect(g_config.eyezoom.textFontPath == "C:\\Windows\\Fonts\\verdana.ttf", "Expected eyezoom font path to roundtrip.");
     Expect(g_config.eyezoom.rectHeight == 35, "Expected eyezoom rectHeight to roundtrip.");
@@ -2003,32 +1335,6 @@ void PrepareRichConfigForGui(std::string_view caseName) {
     PopulateRichConfigFixture();
     SaveAndReloadCurrentConfig();
     ExpectConfigLoadSucceeded(std::string(caseName) + " GUI fixture reload");
-}
-
-void PrepareDefaultConfigForGui(std::string_view caseName, bool basicModeEnabled) {
-    const std::filesystem::path root = PrepareCaseDirectory(caseName);
-    ResetGlobalTestState(root);
-    LoadConfig();
-    ExpectConfigLoadSucceeded(std::string(caseName) + " default GUI fixture load");
-    g_config.basicModeEnabled = basicModeEnabled;
-    g_configIsDirty.store(false, std::memory_order_release);
-}
-
-void RunDefaultSettingsTabCase(std::string_view caseName, const std::string& topLevelTabLabel,
-                               const std::string& inputsSubTabLabel, bool basicModeEnabled,
-                               TestRunMode runMode = TestRunMode::Automated) {
-    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
-    PrepareDefaultConfigForGui(caseName, basicModeEnabled);
-
-    if (runMode == TestRunMode::Visual) {
-        RunVisualLoop(window, caseName, [&](DummyWindow& visualWindow) {
-            RenderSettingsFrame(visualWindow, topLevelTabLabel.c_str(),
-                                inputsSubTabLabel.empty() ? nullptr : inputsSubTabLabel.c_str());
-        });
-        return;
-    }
-
-    RenderSettingsFrame(window, topLevelTabLabel.c_str(), inputsSubTabLabel.empty() ? nullptr : inputsSubTabLabel.c_str());
 }
 
 void RunPopulatedSettingsTabCase(std::string_view caseName, const std::string& topLevelTabLabel,
@@ -2152,16 +1458,16 @@ void RunConfigLoadMissingRequiredModesTest(TestRunMode runMode = TestRunMode::Au
     RunConfigLoadCase("config_load_missing_required_modes",
                       []() {
                           Config config;
-                          config.defaultMode = kPrimaryModeId;
+                          config.defaultMode = kVerifierModeId;
                           config.modes.clear();
 
-                          ModeConfig primaryMode;
-                          primaryMode.id = kPrimaryModeId;
-                          primaryMode.width = 1111;
-                          primaryMode.height = 666;
-                          primaryMode.manualWidth = 1111;
-                          primaryMode.manualHeight = 666;
-                          config.modes.push_back(primaryMode);
+                          ModeConfig verifierMode;
+                          verifierMode.id = kVerifierModeId;
+                          verifierMode.width = 1111;
+                          verifierMode.height = 666;
+                          verifierMode.manualWidth = 1111;
+                          verifierMode.manualHeight = 666;
+                          config.modes.push_back(verifierMode);
 
                           WriteConfigFixtureToDisk(config);
                       },
@@ -2331,10 +1637,8 @@ void RunConfigLoadLegacyVersionUpgradeTest(TestRunMode runMode = TestRunMode::Au
                       []() {
                           ExpectConfigLoadSucceeded("config-load-legacy-version-upgrade");
                           Expect(g_config.configVersion == GetConfigVersion(), "Expected legacy config version to upgrade to the current version.");
-                         Expect(g_config.disableHookChaining,
-                             "Expected legacy disableHookChaining to remain preserved on the 1.2.1 branch.");
-                         Expect(g_config.keyRepeatStartDelay == 10,
-                             "Expected legacy non-zero keyRepeatStartDelay to remain preserved after upgrade.");
+                          Expect(!g_config.disableHookChaining, "Expected legacy v1 migration to force disableHookChaining=false.");
+                          Expect(g_config.keyRepeatStartDelay == 50, "Expected legacy keyRepeatStartDelay to be normalized to the v3 minimum.");
                           Expect(g_config.keyRepeatDelay == ConfigDefaults::CONFIG_KEY_REPEAT_DELAY,
                                  "Expected legacy zero keyRepeatDelay to normalize to the default value.");
                       },
@@ -2346,15 +1650,8 @@ void RunConfigLoadClampGlobalValuesTest(TestRunMode runMode = TestRunMode::Autom
                       []() {
                           Config config;
                           config.defaultMode = "Fullscreen";
-                          config.obsFramerate = 999;
-                          config.cursors.enabled = true;
-                          config.cursors.title.cursorSize = 9999;
-                          config.cursors.wall.cursorSize = 2;
-                          config.cursors.ingame.cursorSize = 321;
-                          WriteConfigFixtureToDisk(config);
-                      },
-                      []() {
-                          ExpectConfigLoadSucceeded("config-load-clamp-global-values");
+                          Expect(g_config.mouseMovementPollingRate == 100,
+                                 "Expected mouse polling rate to clamp and snap to the nearest configured interval.");
                           Expect(g_config.obsFramerate == 120, "Expected obsFramerate to clamp to the configured maximum.");
                           Expect(g_config.cursors.title.cursorSize == ConfigDefaults::CURSOR_MAX_SIZE,
                                  "Expected title cursor size to clamp to CURSOR_MAX_SIZE.");
@@ -2362,812 +1659,6 @@ void RunConfigLoadClampGlobalValuesTest(TestRunMode runMode = TestRunMode::Autom
                                  "Expected wall cursor size to clamp to CURSOR_MIN_SIZE.");
                           Expect(g_config.cursors.ingame.cursorSize == ConfigDefaults::CURSOR_MAX_SIZE,
                                  "Expected ingame cursor size to clamp to CURSOR_MAX_SIZE.");
-                      },
-                      runMode);
-}
-
-void RunConfigLoadModeDefaultDimensionsRestoredTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunConfigLoadCase("config_load_mode_default_dimensions_restored",
-                      []() {
-                          WriteRawConfigTomlToDisk(R"(configVersion = 4
-defaultMode = "Wide"
-
-[[mode]]
-id = "Wide"
-width = 1
-height = 0
-)");
-                      },
-                      []() {
-                          ExpectConfigLoadSucceeded("config-load-mode-default-dimensions-restored");
-                          const ModeConfig& wideMode = FindModeOrThrow("Wide");
-                          Expect(wideMode.useRelativeSize, "Expected repaired Wide mode to remain relative-sized.");
-                          Expect(!wideMode.widthExpr.empty(), "Expected repaired Wide mode width expression to come from embedded defaults.");
-                          ExpectFloatNear(wideMode.relativeHeight, 0.25f,
-                                          "Expected repaired Wide mode relativeHeight to come from embedded defaults.");
-                          Expect(wideMode.width > 1, "Expected repaired Wide mode width to be recomputed from the restored default expression.");
-                          Expect(wideMode.height > 1, "Expected repaired Wide mode height to be recomputed from the restored default percentage.");
-                      },
-                      runMode);
-}
-
-void RunConfigLoadModeSourceListsLoadedTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunConfigLoadCase("config_load_mode_source_lists_loaded",
-                      []() {
-                          WriteRawConfigTomlToDisk(R"(configVersion = 4
-defaultMode = "Source Lists"
-
-[[mode]]
-id = "Source Lists"
-width = 800
-height = 600
-mirrorIds = ["Mirror One"]
-mirrorGroupIds = ["Group One"]
-imageIds = ["Image One"]
-windowOverlayIds = ["Window One"]
-browserOverlayIds = ["Browser One"]
-)");
-                      },
-                      []() {
-                 ExpectConfigLoadSucceeded("config-load-mode-source-lists-loaded");
-                 const ModeConfig& mode = FindModeOrThrow("Source Lists");
-                 ExpectVectorEquals(mode.mirrorIds, std::vector<std::string>{ "Mirror One" },
-                           "Expected mirrorIds to load on the 1.2.1 branch.");
-                 ExpectVectorEquals(mode.mirrorGroupIds, std::vector<std::string>{ "Group One" },
-                           "Expected mirrorGroupIds to load on the 1.2.1 branch.");
-                 ExpectVectorEquals(mode.imageIds, std::vector<std::string>{ "Image One" },
-                           "Expected imageIds to load on the 1.2.1 branch.");
-                 ExpectVectorEquals(mode.windowOverlayIds, std::vector<std::string>{ "Window One" },
-                           "Expected windowOverlayIds to load on the 1.2.1 branch.");
-                 ExpectVectorEquals(mode.browserOverlayIds, std::vector<std::string>{ "Browser One" },
-                           "Expected browserOverlayIds to load on the 1.2.1 branch.");
-                      },
-                      runMode);
-}
-
-void RunConfigLoadModePercentageDimensionsDetectedTest(TestRunMode runMode = TestRunMode::Automated) {
-    int expectedWidth = 1;
-    int expectedHeight = 1;
-
-    RunConfigLoadCase("config_load_mode_percentage_dimensions_detected",
-                      [&]() {
-                          const int screenWidth = (std::max)(1, GetCachedWindowWidth());
-                          const int screenHeight = (std::max)(1, GetCachedWindowHeight());
-                          expectedWidth = (std::max)(1, static_cast<int>(std::lround(0.5f * static_cast<float>(screenWidth))));
-                          expectedHeight = (std::max)(1, static_cast<int>(std::lround(0.25f * static_cast<float>(screenHeight))));
-
-                          WriteRawConfigTomlToDisk(R"(configVersion = 4
-defaultMode = "Percentage Mode"
-
-[[mode]]
-id = "Percentage Mode"
-width = 0.5
-height = 0.25
-)");
-                      },
-                      [&]() {
-                          ExpectConfigLoadSucceeded("config-load-mode-percentage-dimensions-detected");
-                          const ModeConfig& mode = FindModeOrThrow("Percentage Mode");
-                          Expect(mode.useRelativeSize, "Expected percentage width/height values to mark the mode as relative-sized.");
-                          ExpectFloatNear(mode.relativeWidth, 0.5f, "Expected percentage width to map to relativeWidth.");
-                          ExpectFloatNear(mode.relativeHeight, 0.25f, "Expected percentage height to map to relativeHeight.");
-                          Expect(mode.width == expectedWidth, "Expected percentage width to resolve against the cached window width.");
-                          Expect(mode.height == expectedHeight, "Expected percentage height to resolve against the cached window height.");
-                      },
-                      runMode);
-}
-
-void RunConfigLoadModeTypedSourcesIgnoredTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunConfigLoadCase("config_load_mode_typed_sources_ignored",
-                      []() {
-                          WriteRawConfigTomlToDisk(R"(configVersion = 4
-defaultMode = "Typed Sources"
-
-[[mode]]
-id = "Typed Sources"
-width = 800
-height = 600
-sources = [
-    { type = "Mirror", id = "" },
-    { type = "Mirror", id = "Valid Mirror" },
-    { type = "Image", id = "" }
-]
-)");
-                      },
-                      []() {
-                          ExpectConfigLoadSucceeded("config-load-mode-typed-sources-ignored");
-                          const ModeConfig& mode = FindModeOrThrow("Typed Sources");
-                          Expect(mode.mirrorIds.empty(), "Expected typed mode sources to be ignored on the 1.2.1 branch.");
-                          Expect(mode.mirrorGroupIds.empty(), "Expected typed mode sources to leave mirrorGroupIds empty.");
-                          Expect(mode.imageIds.empty(), "Expected typed mode sources to leave imageIds empty.");
-                          Expect(mode.windowOverlayIds.empty(), "Expected typed mode sources to leave windowOverlayIds empty.");
-                          Expect(mode.browserOverlayIds.empty(), "Expected typed mode sources to leave browserOverlayIds empty.");
-                      },
-                      runMode);
-}
-
-void RunConfigLoadEmptyMainHotkeyFallbackTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunConfigLoadCase("config_load_empty_main_hotkey_fallback",
-                      []() {
-                          Config config;
-                          config.defaultMode = kPrecisionModeId;
-
-                          ModeConfig precisionMode;
-                          precisionMode.id = kPrecisionModeId;
-                          precisionMode.width = 900;
-                          precisionMode.height = 500;
-                          precisionMode.manualWidth = 900;
-                          precisionMode.manualHeight = 500;
-                          config.modes.push_back(precisionMode);
-
-                          HotkeyConfig hotkey;
-                          hotkey.keys = { VK_F2 };
-                          hotkey.mainMode.clear();
-                          hotkey.secondaryMode = kPrecisionModeId;
-                          config.hotkeys.push_back(hotkey);
-
-                          WriteConfigFixtureToDisk(config);
-                      },
-                      []() {
-                          ExpectConfigLoadSucceeded("config-load-empty-main-hotkey-fallback");
-                          const HotkeyConfig& hotkey = FindHotkeyByKeysOrThrow({ VK_F2 });
-                          Expect(hotkey.mainMode == kPrecisionModeId,
-                                 "Expected a hotkey with an empty main mode to fall back to the default mode.");
-                      },
-                      runMode);
-}
-
-void RunConfigLoadMissingGuiHotkeyDefaultedTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunConfigLoadCase("config_load_missing_gui_hotkey_defaulted",
-                      []() {
-                          WriteRawConfigTomlToDisk(R"(configVersion = 4
-defaultMode = "Fullscreen"
-)");
-                      },
-                      []() {
-                          ExpectConfigLoadSucceeded("config-load-missing-gui-hotkey-defaulted");
-                          ExpectVectorEquals(g_config.guiHotkey, ConfigDefaults::GetDefaultGuiHotkey(),
-                                             "Expected a missing guiHotkey to default to the configured hotkey.");
-                      },
-                      runMode);
-}
-
-void RunConfigLoadEmptyGuiHotkeyDefaultedTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunConfigLoadCase("config_load_empty_gui_hotkey_defaulted",
-                      []() {
-                          WriteRawConfigTomlToDisk(R"(configVersion = 4
-defaultMode = "Fullscreen"
-guiHotkey = []
-)");
-                      },
-                      []() {
-                          ExpectConfigLoadSucceeded("config-load-empty-gui-hotkey-defaulted");
-                          ExpectVectorEquals(g_config.guiHotkey, ConfigDefaults::GetDefaultGuiHotkey(),
-                                             "Expected an empty guiHotkey array to fall back to the configured default hotkey.");
-                      },
-                      runMode);
-}
-
-void RunConfigLoadLegacyMirrorGammaMigratedTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunConfigLoadCase("config_load_legacy_mirror_gamma_migrated",
-                      []() {
-                          WriteRawConfigTomlToDisk(R"(configVersion = 4
-defaultMode = "Fullscreen"
-
-[[mirror]]
-name = "Legacy Gamma"
-gammaMode = "Linear"
-)");
-                      },
-                      []() {
-                          ExpectConfigLoadSucceeded("config-load-legacy-mirror-gamma-migrated");
-                          Expect(g_config.mirrorGammaMode == MirrorGammaMode::AssumeLinear,
-                                 "Expected legacy per-mirror gammaMode to migrate into the global mirror gamma mode.");
-                      },
-                      runMode);
-}
-
-void RunConfigLoadMirrorCaptureDimensionsClampedTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunConfigLoadCase("config_load_mirror_capture_dimensions_clamped",
-                      []() {
-                          Config config;
-                          config.defaultMode = "Fullscreen";
-
-                          MirrorConfig mirror;
-                          mirror.name = "Clamp Mirror";
-                          mirror.captureWidth = ConfigDefaults::MIRROR_CAPTURE_MAX_DIMENSION + 200;
-                          mirror.captureHeight = 0;
-                          config.mirrors.push_back(mirror);
-
-                          WriteConfigFixtureToDisk(config);
-                      },
-                      []() {
-                          ExpectConfigLoadSucceeded("config-load-mirror-capture-dimensions-clamped");
-                          const MirrorConfig& mirror = FindMirrorOrThrow("Clamp Mirror");
-                          Expect(mirror.captureWidth == ConfigDefaults::MIRROR_CAPTURE_MAX_DIMENSION,
-                                 "Expected mirror captureWidth to clamp to MIRROR_CAPTURE_MAX_DIMENSION.");
-                          Expect(mirror.captureHeight == ConfigDefaults::MIRROR_CAPTURE_MIN_DIMENSION,
-                                 "Expected mirror captureHeight to clamp to MIRROR_CAPTURE_MIN_DIMENSION.");
-                      },
-                      runMode);
-}
-
-void RunConfigLoadEyeZoomCloneWidthNormalizedTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunConfigLoadCase("config_load_eyezoom_clone_width_normalized",
-                      []() {
-                          WriteRawConfigTomlToDisk(R"(configVersion = 4
-defaultMode = "Fullscreen"
-
-[eyezoom]
-cloneWidth = 15
-)");
-                      },
-                      []() {
-                          ExpectConfigLoadSucceeded("config-load-eyezoom-clone-width-normalized");
-                          Expect(g_config.eyezoom.cloneWidth == 14,
-                                 "Expected odd eyezoom cloneWidth values to normalize to the nearest even width.");
-                      },
-                      runMode);
-}
-
-void RunConfigLoadEyeZoomOverlayWidthDefaultedTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunConfigLoadCase("config_load_eyezoom_overlay_width_defaulted",
-                      []() {
-                          WriteRawConfigTomlToDisk(R"(configVersion = 4
-defaultMode = "Fullscreen"
-
-[eyezoom]
-cloneWidth = 14
-)");
-                      },
-                      []() {
-                          ExpectConfigLoadSucceeded("config-load-eyezoom-overlay-width-defaulted");
-                          Expect(g_config.eyezoom.overlayWidth == 7,
-                                 "Expected a missing eyezoom overlayWidth to default to half of cloneWidth.");
-                      },
-                      runMode);
-}
-
-void RunConfigLoadEyeZoomOverlayWidthClampedTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunConfigLoadCase("config_load_eyezoom_overlay_width_clamped",
-                      []() {
-                          WriteRawConfigTomlToDisk(R"(configVersion = 4
-defaultMode = "Fullscreen"
-
-[eyezoom]
-cloneWidth = 10
-overlayWidth = 99
-)");
-                      },
-                      []() {
-                          ExpectConfigLoadSucceeded("config-load-eyezoom-overlay-width-clamped");
-                          Expect(g_config.eyezoom.overlayWidth == 5,
-                                 "Expected eyezoom overlayWidth to clamp to half of cloneWidth.");
-                      },
-                      runMode);
-}
-
-void RunConfigLoadEyeZoomLegacyMarginsMigratedTest(TestRunMode runMode = TestRunMode::Automated) {
-    int expectedWidth = 1;
-    int expectedHeight = 1;
-
-    RunConfigLoadCase("config_load_eyezoom_legacy_margins_migrated",
-                      [&]() {
-                          const int screenWidth = (std::max)(1, GetCachedWindowWidth());
-                          const int screenHeight = (std::max)(1, GetCachedWindowHeight());
-                          const int viewportX = (screenWidth - 400) / 2;
-                          expectedWidth = (viewportX > 0) ? (viewportX - (2 * 20)) : screenWidth;
-                          expectedHeight = screenHeight - (2 * 30);
-
-                          WriteRawConfigTomlToDisk(R"(configVersion = 4
-defaultMode = "Fullscreen"
-
-[eyezoom]
-windowWidth = 400
-horizontalMargin = 20
-verticalMargin = 30
-)");
-                      },
-                      [&]() {
-                          ExpectConfigLoadSucceeded("config-load-eyezoom-legacy-margins-migrated");
-                          Expect(g_config.eyezoom.zoomAreaWidth == expectedWidth,
-                                 "Expected legacy eyezoom horizontalMargin to migrate into zoomAreaWidth.");
-                          Expect(g_config.eyezoom.zoomAreaHeight == expectedHeight,
-                                 "Expected legacy eyezoom verticalMargin to migrate into zoomAreaHeight.");
-                      },
-                      runMode);
-}
-
-void RunConfigLoadEyeZoomLegacyCustomPositionMigratedTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunConfigLoadCase("config_load_eyezoom_legacy_custom_position_migrated",
-                      []() {
-                          WriteRawConfigTomlToDisk(R"(configVersion = 4
-defaultMode = "Fullscreen"
-
-[eyezoom]
-useCustomPosition = true
-)");
-                      },
-                      []() {
-                          ExpectConfigLoadSucceeded("config-load-eyezoom-legacy-custom-position-migrated");
-                          Expect(g_config.eyezoom.useCustomSizePosition,
-                                 "Expected legacy eyezoom useCustomPosition to map to useCustomSizePosition.");
-                      },
-                      runMode);
-}
-
-void RunConfigLoadEyeZoomInvalidActiveOverlayResetTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunConfigLoadCase("config_load_eyezoom_invalid_active_overlay_reset",
-                      []() {
-                          Config config;
-                          config.defaultMode = "Fullscreen";
-                          config.eyezoom.activeOverlayIndex = 4;
-                          config.eyezoom.overlays = {
-                              { "Only Overlay", "C:\\temp\\overlay.png", EyeZoomOverlayDisplayMode::Fit, 120, 80, false, 0.75f },
-                          };
-                          WriteConfigFixtureToDisk(config);
-                      },
-                      []() {
-                          ExpectConfigLoadSucceeded("config-load-eyezoom-invalid-active-overlay-reset");
-                          Expect(g_config.eyezoom.activeOverlayIndex == -1,
-                                 "Expected out-of-range eyezoom activeOverlayIndex values to reset to -1.");
-                      },
-                      runMode);
-}
-
-void RunConfigLoadWindowOverlayCaptureMethodMigratedTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunConfigLoadCase("config_load_window_overlay_capture_method_migrated",
-                      []() {
-                          WriteRawConfigTomlToDisk(R"(configVersion = 4
-defaultMode = "Fullscreen"
-
-[[windowOverlay]]
-name = "Legacy Capture"
-captureMethod = "Auto"
-)");
-                      },
-                      []() {
-                          ExpectConfigLoadSucceeded("config-load-window-overlay-capture-method-migrated");
-                          const WindowOverlayConfig& overlay = FindWindowOverlayOrThrow("Legacy Capture");
-                          Expect(overlay.captureMethod == "Windows 10+",
-                                 "Expected legacy window overlay captureMethod values to migrate to Windows 10+.");
-                      },
-                      runMode);
-}
-
-void RunConfigLoadKeyRebindUnicodeStringParsedTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunConfigLoadCase("config_load_key_rebind_unicode_string_parsed",
-                      []() {
-                          WriteRawConfigTomlToDisk(R"(configVersion = 4
-defaultMode = "Fullscreen"
-
-[keyRebinds]
-enabled = true
-resolveRebindTargetsForHotkeys = false
-toggleHotkey = []
-
-[[keyRebinds.rebinds]]
-fromKey = 74
-toKey = 75
-enabled = true
-useCustomOutput = true
-customOutputUnicode = "U+00F8"
-shiftLayerEnabled = true
-shiftLayerOutputUnicode = "{00D8}"
-)");
-                      },
-                      []() {
-                          ExpectConfigLoadSucceeded("config-load-key-rebind-unicode-string-parsed");
-                          Expect(g_config.keyRebinds.rebinds.size() == 1, "Expected exactly one key rebind fixture to load.");
-                          const KeyRebind& rebind = g_config.keyRebinds.rebinds.front();
-                          Expect(rebind.customOutputUnicode == 0x00F8,
-                                 "Expected customOutputUnicode strings to parse into Unicode code points.");
-                          Expect(rebind.shiftLayerOutputUnicode == 0x00D8,
-                                 "Expected shiftLayerOutputUnicode strings to parse into Unicode code points.");
-                      },
-                      runMode);
-}
-
-void RunConfigLoadKeyRebindEscapedUnicodeStringParsedTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunConfigLoadCase("config_load_key_rebind_escaped_unicode_string_parsed",
-                      []() {
-                          WriteRawConfigTomlToDisk(R"(configVersion = 4
-defaultMode = "Fullscreen"
-
-[keyRebinds]
-enabled = true
-resolveRebindTargetsForHotkeys = false
-toggleHotkey = []
-
-[[keyRebinds.rebinds]]
-fromKey = 74
-toKey = 75
-enabled = true
-useCustomOutput = true
-customOutputUnicode = "\\u00f8"
-shiftLayerEnabled = true
-shiftLayerOutputUnicode = "\\U00D8"
-)");
-                      },
-                      []() {
-                          ExpectConfigLoadSucceeded("config-load-key-rebind-escaped-unicode-string-parsed");
-                          Expect(g_config.keyRebinds.rebinds.size() == 1, "Expected exactly one key rebind fixture to load.");
-                          const KeyRebind& rebind = g_config.keyRebinds.rebinds.front();
-                          Expect(rebind.customOutputUnicode == 0x00F8,
-                                 "Expected escaped customOutputUnicode strings to parse into Unicode code points.");
-                          Expect(rebind.shiftLayerOutputUnicode == 0x00D8,
-                                 "Expected escaped shiftLayerOutputUnicode strings to parse into Unicode code points.");
-                      },
-                      runMode);
-}
-
-void RunConfigLoadKeyRebindHexUnicodeStringParsedTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunConfigLoadCase("config_load_key_rebind_hex_unicode_string_parsed",
-                      []() {
-                          WriteRawConfigTomlToDisk(R"(configVersion = 4
-defaultMode = "Fullscreen"
-
-[keyRebinds]
-enabled = true
-resolveRebindTargetsForHotkeys = false
-toggleHotkey = []
-
-[[keyRebinds.rebinds]]
-fromKey = 74
-toKey = 75
-enabled = true
-useCustomOutput = true
-customOutputUnicode = " 0x00f8 "
-shiftLayerEnabled = true
-shiftLayerOutputUnicode = " 0X00D8 "
-)");
-                      },
-                      []() {
-                          ExpectConfigLoadSucceeded("config-load-key-rebind-hex-unicode-string-parsed");
-                          Expect(g_config.keyRebinds.rebinds.size() == 1, "Expected exactly one key rebind fixture to load.");
-                          const KeyRebind& rebind = g_config.keyRebinds.rebinds.front();
-                          Expect(rebind.customOutputUnicode == 0x00F8,
-                                 "Expected hexadecimal customOutputUnicode strings to parse into Unicode code points.");
-                          Expect(rebind.shiftLayerOutputUnicode == 0x00D8,
-                                 "Expected hexadecimal shiftLayerOutputUnicode strings to parse into Unicode code points.");
-                      },
-                      runMode);
-}
-
-void RunConfigLoadKeyRebindInvalidUnicodeDefaultedTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunConfigLoadCase("config_load_key_rebind_invalid_unicode_defaulted",
-                      []() {
-                          WriteRawConfigTomlToDisk(R"(configVersion = 4
-defaultMode = "Fullscreen"
-
-[keyRebinds]
-enabled = true
-resolveRebindTargetsForHotkeys = false
-toggleHotkey = []
-
-[[keyRebinds.rebinds]]
-fromKey = 74
-toKey = 75
-enabled = true
-useCustomOutput = true
-customOutputUnicode = "bogus"
-shiftLayerEnabled = true
-shiftLayerOutputUnicode = "U+D800"
-)");
-                      },
-                      []() {
-                          ExpectConfigLoadSucceeded("config-load-key-rebind-invalid-unicode-defaulted");
-                          Expect(g_config.keyRebinds.rebinds.size() == 1, "Expected exactly one key rebind fixture to load.");
-                          const KeyRebind& rebind = g_config.keyRebinds.rebinds.front();
-                          Expect(rebind.customOutputUnicode == ConfigDefaults::KEY_REBIND_CUSTOM_OUTPUT_UNICODE,
-                                 "Expected invalid customOutputUnicode strings to fall back to the configured default.");
-                          Expect(rebind.shiftLayerOutputUnicode == ConfigDefaults::KEY_REBIND_SHIFT_LAYER_OUTPUT_UNICODE,
-                                 "Expected invalid shiftLayerOutputUnicode strings to fall back to the configured default.");
-                      },
-                      runMode);
-}
-
-void RunConfigLoadFullscreenStretchRepairedTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunConfigLoadCase("config_load_fullscreen_stretch_repaired",
-                      []() {
-                          Config config;
-                          config.defaultMode = "Fullscreen";
-
-                          ModeConfig fullscreenMode;
-                          fullscreenMode.id = "Fullscreen";
-                          fullscreenMode.width = 0;
-                          fullscreenMode.height = 0;
-                          fullscreenMode.manualWidth = 0;
-                          fullscreenMode.manualHeight = 0;
-                          fullscreenMode.stretch.enabled = false;
-                          fullscreenMode.stretch.x = 33;
-                          fullscreenMode.stretch.y = 44;
-                          fullscreenMode.stretch.width = 55;
-                          fullscreenMode.stretch.height = 66;
-                          config.modes.push_back(fullscreenMode);
-
-                          WriteConfigFixtureToDisk(config);
-                      },
-                      []() {
-                          ExpectConfigLoadSucceeded("config-load-fullscreen-stretch-repaired");
-                          const ModeConfig& fullscreenMode = FindModeOrThrow("Fullscreen");
-                          Expect(fullscreenMode.width > 0 && fullscreenMode.height > 0,
-                                 "Expected Fullscreen mode dimensions to repair to valid values.");
-                          Expect(fullscreenMode.manualWidth == fullscreenMode.width && fullscreenMode.manualHeight == fullscreenMode.height,
-                                 "Expected Fullscreen manual dimensions to repair alongside the live dimensions.");
-                          Expect(fullscreenMode.stretch.enabled, "Expected Fullscreen stretch to be forced on during load.");
-                          Expect(fullscreenMode.stretch.x == 0 && fullscreenMode.stretch.y == 0,
-                                 "Expected Fullscreen stretch origin to reset to the top-left corner.");
-                          Expect(fullscreenMode.stretch.width == fullscreenMode.width &&
-                                     fullscreenMode.stretch.height == fullscreenMode.height,
-                                 "Expected Fullscreen stretch bounds to match the repaired mode dimensions.");
-                      },
-                      runMode);
-}
-
-void RunConfigLoadPreemptiveSyncExistingModeTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunConfigLoadCase("config_load_preemptive_sync_existing_mode",
-                      []() {
-                          Config config;
-                          config.defaultMode = "EyeZoom";
-
-                          ModeConfig eyezoomMode;
-                          eyezoomMode.id = "EyeZoom";
-                          eyezoomMode.width = 640;
-                          eyezoomMode.height = 1200;
-                          eyezoomMode.manualWidth = 640;
-                          eyezoomMode.manualHeight = 1200;
-                          config.modes.push_back(eyezoomMode);
-
-                          ModeConfig preemptiveMode;
-                          preemptiveMode.id = "Preemptive";
-                          preemptiveMode.width = 123;
-                          preemptiveMode.height = 456;
-                          preemptiveMode.manualWidth = 123;
-                          preemptiveMode.manualHeight = 456;
-                          preemptiveMode.useRelativeSize = true;
-                          preemptiveMode.relativeWidth = 0.5f;
-                          preemptiveMode.relativeHeight = 0.25f;
-                          config.modes.push_back(preemptiveMode);
-
-                          WriteConfigFixtureToDisk(config);
-                      },
-                      []() {
-                          ExpectConfigLoadSucceeded("config-load-preemptive-sync-existing-mode");
-                          const ModeConfig& eyezoomMode = FindModeOrThrow("EyeZoom");
-                          const ModeConfig& preemptiveMode = FindModeOrThrow("Preemptive");
-                          Expect(preemptiveMode.width == eyezoomMode.width && preemptiveMode.height == eyezoomMode.height,
-                                 "Expected Preemptive mode dimensions to sync to EyeZoom during load.");
-                          Expect(preemptiveMode.manualWidth == eyezoomMode.manualWidth &&
-                                     preemptiveMode.manualHeight == eyezoomMode.manualHeight,
-                                 "Expected Preemptive manual dimensions to sync to EyeZoom during load.");
-                          Expect(!preemptiveMode.useRelativeSize && preemptiveMode.relativeWidth < 0.0f &&
-                                     preemptiveMode.relativeHeight < 0.0f,
-                                 "Expected Preemptive relative sizing to clear when it is resynced from EyeZoom.");
-                      },
-                      runMode);
-}
-
-void RunConfigLoadThinMinWidthEnforcedTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunConfigLoadCase("config_load_thin_min_width_enforced",
-                      []() {
-                          Config config;
-                          config.defaultMode = "Thin";
-
-                          ModeConfig thinMode;
-                          thinMode.id = "Thin";
-                          thinMode.width = 100;
-                          thinMode.height = 700;
-                          thinMode.manualWidth = 100;
-                          thinMode.manualHeight = 700;
-                          config.modes.push_back(thinMode);
-
-                          WriteConfigFixtureToDisk(config);
-                      },
-                      []() {
-                          ExpectConfigLoadSucceeded("config-load-thin-min-width-enforced");
-                          const ModeConfig& thinMode = FindModeOrThrow("Thin");
-                          Expect(thinMode.width == 330, "Expected Thin mode width to clamp to the hard minimum during load.");
-                      },
-                      runMode);
-}
-
-void RunConfigLoadBrowserOverlayDefaultsTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunConfigLoadCase("config_load_browser_overlay_defaults",
-                      []() {
-                          WriteRawConfigTomlToDisk(R"(configVersion = 4
-defaultMode = "Fullscreen"
-
-[[browserOverlay]]
-name = "Default Browser"
-)");
-                      },
-                      []() {
-                          ExpectConfigLoadSucceeded("config-load-browser-overlay-defaults");
-                          const BrowserOverlayConfig& overlay = FindBrowserOverlayOrThrow("Default Browser");
-                          Expect(overlay.url == "https://example.com", "Expected browser overlay URL to default when omitted.");
-                          Expect(overlay.browserWidth == ConfigDefaults::BROWSER_OVERLAY_WIDTH,
-                                 "Expected browser overlay width to default when omitted.");
-                          Expect(overlay.browserHeight == ConfigDefaults::BROWSER_OVERLAY_HEIGHT,
-                                 "Expected browser overlay height to default when omitted.");
-                          Expect(overlay.transparentBackground == ConfigDefaults::BROWSER_OVERLAY_TRANSPARENT_BACKGROUND,
-                                 "Expected browser overlay transparentBackground to default when omitted.");
-                          Expect(overlay.reloadInterval == ConfigDefaults::BROWSER_OVERLAY_RELOAD_INTERVAL,
-                                 "Expected browser overlay reloadInterval to default when omitted.");
-                      },
-                      runMode);
-}
-
-void RunConfigLoadWindowOverlayDefaultsTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunConfigLoadCase("config_load_window_overlay_defaults",
-                      []() {
-                          WriteRawConfigTomlToDisk(R"(configVersion = 4
-defaultMode = "Fullscreen"
-
-[[windowOverlay]]
-name = "Default Window"
-)");
-                      },
-                      []() {
-                          ExpectConfigLoadSucceeded("config-load-window-overlay-defaults");
-                          const WindowOverlayConfig& overlay = FindWindowOverlayOrThrow("Default Window");
-                          Expect(overlay.windowMatchPriority == ConfigDefaults::WINDOW_OVERLAY_MATCH_PRIORITY,
-                                 "Expected window overlay match priority to default when omitted.");
-                          Expect(overlay.captureMethod == ConfigDefaults::WINDOW_OVERLAY_CAPTURE_METHOD,
-                                 "Expected window overlay captureMethod to default when omitted.");
-                          Expect(overlay.fps == ConfigDefaults::WINDOW_OVERLAY_FPS,
-                                 "Expected window overlay FPS to default when omitted.");
-                          Expect(overlay.searchInterval == ConfigDefaults::WINDOW_OVERLAY_SEARCH_INTERVAL,
-                                 "Expected window overlay searchInterval to default when omitted.");
-                          Expect(overlay.enableInteraction == ConfigDefaults::WINDOW_OVERLAY_ENABLE_INTERACTION,
-                                 "Expected window overlay enableInteraction to default when omitted.");
-                      },
-                      runMode);
-}
-
-void RunConfigLoadImageDefaultsTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunConfigLoadCase("config_load_image_defaults",
-                      []() {
-                          WriteRawConfigTomlToDisk(R"(configVersion = 4
-defaultMode = "Fullscreen"
-
-[[image]]
-name = "Default Image"
-)");
-                      },
-                      []() {
-                          ExpectConfigLoadSucceeded("config-load-image-defaults");
-                          const ImageConfig& image = FindImageOrThrow("Default Image");
-                          ExpectFloatNear(image.scale, ConfigDefaults::IMAGE_SCALE, "Expected image scale to default when omitted.");
-                          Expect(image.relativeSizing == ConfigDefaults::IMAGE_RELATIVE_SIZING,
-                                 "Expected image relativeSizing to default when omitted.");
-                          Expect(image.relativeTo == ConfigDefaults::IMAGE_RELATIVE_TO,
-                                 "Expected image relativeTo to default when omitted.");
-                          ExpectFloatNear(image.opacity, ConfigDefaults::IMAGE_OPACITY,
-                                          "Expected image opacity to default when omitted.");
-                          Expect(image.onlyOnMyScreen == ConfigDefaults::IMAGE_ONLY_ON_MY_SCREEN,
-                                 "Expected image onlyOnMyScreen to default when omitted.");
-                      },
-                      runMode);
-}
-
-void RunConfigLoadHotkeyDefaultFlagsTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunConfigLoadCase("config_load_hotkey_default_flags",
-                      []() {
-                          WriteRawConfigTomlToDisk(R"(configVersion = 4
-defaultMode = "Fullscreen"
-
-[[mode]]
-id = "Target Mode"
-width = 800
-height = 600
-
-[[hotkey]]
-keys = [65]
-mainMode = "Fullscreen"
-secondaryMode = "Target Mode"
-)");
-                      },
-                      []() {
-                          ExpectConfigLoadSucceeded("config-load-hotkey-default-flags");
-                          const HotkeyConfig& hotkey = FindHotkeyByKeysOrThrow({ 65 });
-                          Expect(hotkey.debounce == ConfigDefaults::HOTKEY_DEBOUNCE,
-                                 "Expected hotkey debounce to default when omitted.");
-                          Expect(!hotkey.triggerOnRelease && !hotkey.triggerOnHold,
-                                 "Expected hotkey trigger flags to default to false when omitted.");
-                          Expect(!hotkey.blockKeyFromGame && !hotkey.allowExitToFullscreenRegardlessOfGameState,
-                                 "Expected hotkey behavior flags to default to false when omitted.");
-                          Expect(hotkey.conditions.gameState.empty() && hotkey.conditions.exclusions.empty(),
-                                 "Expected omitted hotkey conditions to remain empty.");
-                      },
-                      runMode);
-}
-
-void RunConfigLoadSensitivityHotkeyDefaultFlagsTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunConfigLoadCase("config_load_sensitivity_hotkey_default_flags",
-                      []() {
-                          WriteRawConfigTomlToDisk(R"(configVersion = 4
-defaultMode = "Fullscreen"
-
-[[sensitivityHotkey]]
-keys = [70]
-)");
-                      },
-                      []() {
-                          ExpectConfigLoadSucceeded("config-load-sensitivity-hotkey-default-flags");
-                          const SensitivityHotkeyConfig& hotkey = FindSensitivityHotkeyOrThrow({ 70 });
-                          ExpectFloatNear(hotkey.sensitivity, 1.0f, "Expected sensitivity hotkey sensitivity to default when omitted.");
-                          Expect(!hotkey.separateXY, "Expected sensitivity hotkey separateXY to default to false when omitted.");
-                          ExpectFloatNear(hotkey.sensitivityX, 1.0f,
-                                          "Expected sensitivity hotkey sensitivityX to default when omitted.");
-                          ExpectFloatNear(hotkey.sensitivityY, 1.0f,
-                                          "Expected sensitivity hotkey sensitivityY to default when omitted.");
-                          Expect(hotkey.debounce == ConfigDefaults::HOTKEY_DEBOUNCE,
-                                 "Expected sensitivity hotkey debounce to default when omitted.");
-                          Expect(!hotkey.toggle, "Expected sensitivity hotkey toggle to default to false when omitted.");
-                      },
-                      runMode);
-}
-
-void RunConfigLoadImageColorKeyDefaultSensitivityTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunConfigLoadCase("config_load_image_color_key_default_sensitivity",
-                      []() {
-                          WriteRawConfigTomlToDisk(R"(configVersion = 4
-defaultMode = "Fullscreen"
-
-[[image]]
-name = "Color Key Image"
-colorKeys = [{ color = [255, 0, 255] }]
-)");
-                      },
-                      []() {
-                          ExpectConfigLoadSucceeded("config-load-image-color-key-default-sensitivity");
-                          const ImageConfig& image = FindImageOrThrow("Color Key Image");
-                          Expect(image.colorKeys.size() == 1, "Expected image color key fixture to load.");
-                          ExpectFloatNear(image.colorKeys.front().sensitivity, ConfigDefaults::COLOR_KEY_SENSITIVITY,
-                                          "Expected image color key sensitivity to default when omitted.");
-                      },
-                      runMode);
-}
-
-void RunConfigLoadWindowOverlayColorKeyDefaultSensitivityTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunConfigLoadCase("config_load_window_overlay_color_key_default_sensitivity",
-                      []() {
-                          WriteRawConfigTomlToDisk(R"(configVersion = 4
-defaultMode = "Fullscreen"
-
-[[windowOverlay]]
-name = "Color Key Window"
-colorKeys = [{ color = [0, 255, 0] }]
-)");
-                      },
-                      []() {
-                          ExpectConfigLoadSucceeded("config-load-window-overlay-color-key-default-sensitivity");
-                          const WindowOverlayConfig& overlay = FindWindowOverlayOrThrow("Color Key Window");
-                          Expect(overlay.colorKeys.size() == 1, "Expected window overlay color key fixture to load.");
-                          ExpectFloatNear(overlay.colorKeys.front().sensitivity, ConfigDefaults::COLOR_KEY_SENSITIVITY,
-                                          "Expected window overlay color key sensitivity to default when omitted.");
-                      },
-                      runMode);
-}
-
-void RunConfigLoadBrowserOverlayColorKeyDefaultSensitivityTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunConfigLoadCase("config_load_browser_overlay_color_key_default_sensitivity",
-                      []() {
-                          WriteRawConfigTomlToDisk(R"(configVersion = 4
-defaultMode = "Fullscreen"
-
-[[browserOverlay]]
-name = "Color Key Browser"
-colorKeys = [{ color = [0, 0, 0] }]
-)");
-                      },
-                      []() {
-                          ExpectConfigLoadSucceeded("config-load-browser-overlay-color-key-default-sensitivity");
-                          const BrowserOverlayConfig& overlay = FindBrowserOverlayOrThrow("Color Key Browser");
-                          Expect(overlay.colorKeys.size() == 1, "Expected browser overlay color key fixture to load.");
-                          ExpectFloatNear(overlay.colorKeys.front().sensitivity, ConfigDefaults::COLOR_KEY_SENSITIVITY,
-                                          "Expected browser overlay color key sensitivity to default when omitted.");
                       },
                       runMode);
 }
@@ -3223,764 +1714,6 @@ void RunSettingsGuiBasicTest(TestRunMode runMode = TestRunMode::Automated) {
     for (const std::string& tab : tabs) {
         RenderSettingsFrame(window, tab.c_str());
     }
-}
-
-void RunModeMirrorRenderScreenAnchorsTest(TestRunMode runMode = TestRunMode::Automated) {
-    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
-    if (!g_hasModernGL) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
-
-    const std::filesystem::path root = PrepareCaseDirectory("mode_mirror_render_screen_anchors");
-    ResetGlobalTestState(root);
-
-    constexpr char kModeId[] = "Mirror Screen Anchors Mode";
-
-    MirrorConfig topLeftMirror = MakeMirrorRenderTestConfig("Top Left Mirror", 18, 12, "topLeftScreen", 30, 40, 4.0f);
-    MirrorConfig topRightMirror = MakeMirrorRenderTestConfig("Top Right Mirror", 15, 15, "topRightScreen", 55, 35, 4.0f);
-    MirrorConfig bottomLeftMirror = MakeMirrorRenderTestConfig("Bottom Left Mirror", 20, 10, "bottomLeftScreen", 70, 45, 4.0f);
-    MirrorConfig bottomRightMirror = MakeMirrorRenderTestConfig("Bottom Right Mirror", 21, 14, "bottomRightScreen", 50, 60, 4.0f);
-
-    ModeConfig mode;
-    mode.id = kModeId;
-    mode.width = kWindowWidth;
-    mode.height = kWindowHeight;
-    mode.manualWidth = kWindowWidth;
-    mode.manualHeight = kWindowHeight;
-    mode.mirrorIds = { topLeftMirror.name, topRightMirror.name, bottomLeftMirror.name, bottomRightMirror.name };
-
-    g_config.defaultMode = kModeId;
-    g_config.mirrors = { topLeftMirror, topRightMirror, bottomLeftMirror, bottomRightMirror };
-    g_config.modes = { mode };
-    g_configLoaded.store(true, std::memory_order_release);
-
-    InitializeMirrorRenderTestResources();
-
-    const SurfaceSize surface = GetWindowClientSize(window.hwnd());
-    ScopedTexture2D sourceTexture(surface.width, surface.height, MakeSolidRgbaPixels(surface.width, surface.height, 0, 255, 0));
-
-    auto renderAndAssert = [&](DummyWindow& targetWindow) {
-        RenderModeOverlayFrame(targetWindow, g_config, g_config.modes.front(), sourceTexture.id());
-        if (runMode == TestRunMode::Automated) {
-            std::vector<MirrorConfig> activeMirrors;
-            std::vector<ImageConfig> unusedImages;
-            std::vector<WindowOverlayConfig> unusedWindowOverlays;
-            std::vector<BrowserOverlayConfig> unusedBrowserOverlays;
-            CollectActiveElementsForMode(g_config, kModeId, false, activeMirrors, unusedImages, unusedWindowOverlays,
-                                         unusedBrowserOverlays);
-
-            Expect(activeMirrors.size() == 4, "Expected all direct mirror sources to resolve for the screen-anchor test.");
-            Expect(activeMirrors[0].name == topLeftMirror.name, "Expected the first direct mirror source to remain ordered.");
-            Expect(activeMirrors[1].name == topRightMirror.name, "Expected the second direct mirror source to remain ordered.");
-            Expect(activeMirrors[2].name == bottomLeftMirror.name, "Expected the third direct mirror source to remain ordered.");
-            Expect(activeMirrors[3].name == bottomRightMirror.name, "Expected the fourth direct mirror source to remain ordered.");
-
-            const ExpectedMirrorRect expectedTopLeftRect = ComputeExpectedMirrorRect(activeMirrors[0], surface.width, surface.height,
-                                                                                     0, 0, surface.width, surface.height);
-            const ExpectedMirrorRect expectedTopRightRect = ComputeExpectedMirrorRect(activeMirrors[1], surface.width, surface.height,
-                                                                                      0, 0, surface.width, surface.height);
-            const ExpectedMirrorRect expectedBottomLeftRect = ComputeExpectedMirrorRect(activeMirrors[2], surface.width, surface.height,
-                                                                                        0, 0, surface.width, surface.height);
-            const ExpectedMirrorRect expectedBottomRightRect = ComputeExpectedMirrorRect(activeMirrors[3], surface.width,
-                                                                                         surface.height, 0, 0, surface.width,
-                                                                                         surface.height);
-            const ExpectedMirrorRect topLeftRect = GetCachedMirrorRect(activeMirrors[0].name);
-            const ExpectedMirrorRect topRightRect = GetCachedMirrorRect(activeMirrors[1].name);
-            const ExpectedMirrorRect bottomLeftRect = GetCachedMirrorRect(activeMirrors[2].name);
-            const ExpectedMirrorRect bottomRightRect = GetCachedMirrorRect(activeMirrors[3].name);
-
-            ExpectMirrorRectNear(topLeftRect, expectedTopLeftRect, "Top-left mirror cached bounds");
-            ExpectMirrorRectNear(topRightRect, expectedTopRightRect, "Top-right mirror cached bounds");
-            ExpectMirrorRectNear(bottomLeftRect, expectedBottomLeftRect, "Bottom-left mirror cached bounds");
-            ExpectMirrorRectNear(bottomRightRect, expectedBottomRightRect, "Bottom-right mirror cached bounds");
-
-            ExpectSolidColorRect(topLeftRect, surface.height, kExpectedMirrorRenderGreen,
-                                 "Expected the top-left screen mirror to draw the staged game texture.");
-            ExpectSolidColorRect(topRightRect, surface.height, kExpectedMirrorRenderGreen,
-                                 "Expected the top-right screen mirror to draw the staged game texture.");
-            ExpectSolidColorRect(bottomLeftRect, surface.height, kExpectedMirrorRenderGreen,
-                                 "Expected the bottom-left screen mirror to draw the staged game texture.");
-            ExpectSolidColorRect(bottomRightRect, surface.height, kExpectedMirrorRenderGreen,
-                                 "Expected the bottom-right screen mirror to draw the staged game texture.");
-
-            ExpectBackgroundPixel(topLeftRect.x - 2, topLeftRect.y + topLeftRect.height / 2, surface.height,
-                                  "Expected pixels just left of the top-left mirror to remain background.");
-            ExpectBackgroundPixel(topRightRect.x + topRightRect.width + 2, topRightRect.y + topRightRect.height / 2, surface.height,
-                                  "Expected pixels just right of the top-right mirror to remain background.");
-            ExpectBackgroundPixel(bottomLeftRect.x - 2, bottomLeftRect.y + bottomLeftRect.height / 2, surface.height,
-                                  "Expected pixels just left of the bottom-left mirror to remain background.");
-            ExpectBackgroundPixel(bottomRightRect.x + bottomRightRect.width / 2, bottomRightRect.y - 2, surface.height,
-                                  "Expected pixels just above the bottom-right mirror to remain background.");
-        }
-    };
-
-    if (runMode == TestRunMode::Visual) {
-        RunVisualLoop(window, "mode-mirror-render-screen-anchors", [&](DummyWindow& visualWindow) { renderAndAssert(visualWindow); });
-    } else {
-        renderAndAssert(window);
-    }
-
-    CleanupBrowserOverlayCache();
-    CleanupWindowOverlayCache();
-    CleanupGPUResources();
-    CleanupShaders();
-}
-
-void RunModeMirrorRenderViewportAnchorsTest(TestRunMode runMode = TestRunMode::Automated) {
-    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
-    if (!g_hasModernGL) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
-
-    const std::filesystem::path root = PrepareCaseDirectory("mode_mirror_render_viewport_anchors");
-    ResetGlobalTestState(root);
-
-    constexpr char kModeId[] = "Mirror Viewport Anchors Mode";
-
-    MirrorConfig centerMirror = MakeMirrorRenderTestConfig("Center Viewport Mirror", 15, 12, "centerViewport", 25, -30, 5.0f);
-    MirrorConfig topRightMirror = MakeMirrorRenderTestConfig("Top Right Viewport Mirror", 12, 10, "topRightViewport", 35, 24, 6.0f);
-
-    ModeConfig mode;
-    mode.id = kModeId;
-    mode.width = kWindowWidth;
-    mode.height = kWindowHeight;
-    mode.manualWidth = kWindowWidth;
-    mode.manualHeight = kWindowHeight;
-    mode.mirrorIds = { centerMirror.name, topRightMirror.name };
-
-    g_config.defaultMode = kModeId;
-    g_config.mirrors = { centerMirror, topRightMirror };
-    g_config.modes = { mode };
-    g_configLoaded.store(true, std::memory_order_release);
-
-    InitializeMirrorRenderTestResources();
-
-    const SurfaceSize surface = GetWindowClientSize(window.hwnd());
-    ScopedTexture2D sourceTexture(surface.width, surface.height, MakeSolidRgbaPixels(surface.width, surface.height, 0, 255, 0));
-
-    auto renderAndAssert = [&](DummyWindow& targetWindow) {
-        RenderModeOverlayFrame(targetWindow, g_config, g_config.modes.front(), sourceTexture.id());
-        if (runMode == TestRunMode::Automated) {
-            std::vector<MirrorConfig> activeMirrors;
-            std::vector<ImageConfig> unusedImages;
-            std::vector<WindowOverlayConfig> unusedWindowOverlays;
-            std::vector<BrowserOverlayConfig> unusedBrowserOverlays;
-            CollectActiveElementsForMode(g_config, kModeId, false, activeMirrors, unusedImages, unusedWindowOverlays,
-                                         unusedBrowserOverlays);
-
-            Expect(activeMirrors.size() == 2, "Expected both viewport-relative mirrors to resolve for the viewport-anchor test.");
-
-            const ExpectedMirrorRect expectedCenterRect = ComputeExpectedMirrorRect(activeMirrors[0], surface.width, surface.height,
-                                                                                    0, 0, surface.width, surface.height);
-            const ExpectedMirrorRect expectedTopRightRect = ComputeExpectedMirrorRect(activeMirrors[1], surface.width,
-                                                                                      surface.height, 0, 0, surface.width,
-                                                                                      surface.height);
-            const ExpectedMirrorRect centerRect = GetCachedMirrorRect(activeMirrors[0].name);
-            const ExpectedMirrorRect topRightRect = GetCachedMirrorRect(activeMirrors[1].name);
-
-            ExpectMirrorRectNear(centerRect, expectedCenterRect, "Center-viewport mirror cached bounds", 3);
-            ExpectMirrorRectNear(topRightRect, expectedTopRightRect, "Top-right viewport mirror cached bounds", 3);
-
-            ExpectSolidColorRect(centerRect, surface.height, kExpectedMirrorRenderGreen,
-                                 "Expected the center-viewport mirror to render at the viewport center offset.");
-            ExpectSolidColorRect(topRightRect, surface.height, kExpectedMirrorRenderGreen,
-                                 "Expected the top-right viewport mirror to render at the viewport anchor.");
-
-            ExpectBackgroundPixel(centerRect.x + centerRect.width / 2, centerRect.y - 2, surface.height,
-                                  "Expected pixels above the center-viewport mirror to remain background.");
-            ExpectBackgroundPixel(topRightRect.x - 2, topRightRect.y + topRightRect.height / 2, surface.height,
-                                  "Expected pixels left of the top-right viewport mirror to remain background.");
-        }
-    };
-
-    if (runMode == TestRunMode::Visual) {
-        RunVisualLoop(window, "mode-mirror-render-viewport-anchors", [&](DummyWindow& visualWindow) { renderAndAssert(visualWindow); });
-    } else {
-        renderAndAssert(window);
-    }
-
-    CleanupBrowserOverlayCache();
-    CleanupWindowOverlayCache();
-    CleanupGPUResources();
-    CleanupShaders();
-}
-
-void RunModeMirrorRenderScreenAnchorSizeMatrixTest(TestRunMode runMode = TestRunMode::Automated) {
-    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
-    if (!g_hasModernGL) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
-
-    const std::filesystem::path root = PrepareCaseDirectory("mode_mirror_render_screen_anchor_size_matrix");
-    ResetGlobalTestState(root);
-
-    constexpr char kModeId[] = "Mirror Screen Anchor Size Matrix Mode";
-
-    const std::vector<MirrorAnchorRenderScenario> scenarios = {
-        {
-            { "screen-medium", 257, 193, 0, 0, 257, 193 },
-            {
-                { "Screen Medium Top Left", "topLeftScreen", 7, 5, 9, 11, 3.0f },
-                { "Screen Medium Top Right Pixel", "topRightScreen", 1, 1, 13, 17, 2.0f },
-                { "Screen Medium Bottom Left", "bottomLeftScreen", 2, 5, 7, 9, 2.0f },
-                { "Screen Medium Bottom Right", "bottomRightScreen", 5, 2, 15, 14, 3.0f },
-                { "Screen Medium Center", "centerScreen", 4, 3, 5, -7, 4.0f },
-            },
-            true,
-        },
-        {
-            { "screen-small", 149, 113, 0, 0, 149, 113 },
-            {
-                { "Screen Small Top Left", "topLeftScreen", 1, 1, 2, 2, 4.0f },
-                { "Screen Small Top Right", "topRightScreen", 1, 1, 3, 2, 4.0f },
-                { "Screen Small Bottom Left", "bottomLeftScreen", 1, 1, 2, 2, 4.0f },
-                { "Screen Small Bottom Right", "bottomRightScreen", 1, 1, 2, 2, 4.0f },
-                { "Screen Small Center", "centerScreen", 1, 1, 0, 0, 5.0f },
-            },
-            true,
-        },
-        {
-            { "screen-single-pixel", 1, 1, 0, 0, 1, 1 },
-            {
-                { "Screen Pixel Top Left", "topLeftScreen", 1, 1, 0, 0, 1.0f },
-                { "Screen Pixel Top Right", "topRightScreen", 1, 1, 0, 0, 1.0f },
-                { "Screen Pixel Bottom Left", "bottomLeftScreen", 1, 1, 0, 0, 1.0f },
-                { "Screen Pixel Bottom Right", "bottomRightScreen", 1, 1, 0, 0, 1.0f },
-                { "Screen Pixel Center", "centerScreen", 1, 1, 0, 0, 1.0f },
-            },
-            false,
-        },
-    };
-
-    for (const MirrorAnchorRenderScenario& scenario : scenarios) {
-        g_config = Config();
-
-        ModeConfig mode;
-        mode.id = kModeId;
-        mode.width = (std::max)(1, scenario.geometry.gameW);
-        mode.height = (std::max)(1, scenario.geometry.gameH);
-        mode.manualWidth = mode.width;
-        mode.manualHeight = mode.height;
-
-        g_config.defaultMode = kModeId;
-        g_config.mirrors.clear();
-        g_config.mirrors.reserve(scenario.mirrors.size());
-        mode.mirrorIds.reserve(scenario.mirrors.size());
-        for (const MirrorAnchorCaseDefinition& mirrorCase : scenario.mirrors) {
-            g_config.mirrors.push_back(MakeMirrorRenderTestConfig(mirrorCase.name, mirrorCase.captureWidth,
-                                                                  mirrorCase.captureHeight, mirrorCase.relativeTo,
-                                                                  mirrorCase.outputX, mirrorCase.outputY, mirrorCase.scale));
-            mode.mirrorIds.push_back(mirrorCase.name);
-        }
-
-        g_config.modes = { mode };
-        g_configLoaded.store(true, std::memory_order_release);
-
-        InitializeMirrorRenderTestResources();
-        auto assertScenario = [&](const SimulatedOverlayGeometry& geometry, const SurfaceSize& surface) {
-            std::vector<MirrorConfig> activeMirrors;
-            std::vector<ImageConfig> unusedImages;
-            std::vector<WindowOverlayConfig> unusedWindowOverlays;
-            std::vector<BrowserOverlayConfig> unusedBrowserOverlays;
-            CollectActiveElementsForMode(g_config, kModeId, false, activeMirrors, unusedImages, unusedWindowOverlays,
-                                         unusedBrowserOverlays);
-
-            Expect(activeMirrors.size() == scenario.mirrors.size(),
-                   geometry.label + " should resolve every screen-anchor mirror in the scenario.");
-
-            for (const MirrorConfig& activeMirror : activeMirrors) {
-                ExpectMirrorRenderMatchesExpectedPlacement(activeMirror, geometry, surface,
-                                                           geometry.label + " render output for " + activeMirror.name,
-                                                           scenario.expectVisibleRender);
-            }
-        };
-
-        if (scenario.expectVisibleRender) {
-            DummyWindow scenarioWindow(scenario.geometry.fullW, scenario.geometry.fullH, false);
-            const SurfaceSize surface = GetWindowClientSize(scenarioWindow.hwnd());
-            SimulatedOverlayGeometry geometry = scenario.geometry;
-            geometry.fullW = surface.width;
-            geometry.fullH = surface.height;
-            geometry.gameW = surface.width;
-            geometry.gameH = surface.height;
-
-            ScopedTexture2D sourceTexture(surface.width, surface.height,
-                                          MakeSolidRgbaPixels(surface.width, surface.height, 0, 255, 0));
-
-            RenderModeOverlayFrameWithGeometry(scenarioWindow, g_config, g_config.modes.front(), geometry,
-                                               sourceTexture.id(), [&](const SurfaceSize& renderSurface) {
-                assertScenario(geometry, renderSurface);
-            });
-        } else {
-            ScopedTexture2D sourceTexture((std::max)(1, scenario.geometry.fullW), (std::max)(1, scenario.geometry.fullH),
-                                          MakeSolidRgbaPixels((std::max)(1, scenario.geometry.fullW),
-                                                              (std::max)(1, scenario.geometry.fullH), 0, 255, 0));
-
-            RenderModeOverlayFrameToSimulatedSurface(window, g_config, g_config.modes.front(), scenario.geometry,
-                                                     sourceTexture.id(), [&](const SurfaceSize& surface) {
-                assertScenario(scenario.geometry, surface);
-            });
-        }
-    }
-
-    CleanupBrowserOverlayCache();
-    CleanupWindowOverlayCache();
-    CleanupGPUResources();
-    CleanupShaders();
-}
-
-void RunModeMirrorRenderViewportAnchorSizeMatrixTest(TestRunMode runMode = TestRunMode::Automated) {
-    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
-    if (!g_hasModernGL) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
-
-    const std::filesystem::path root = PrepareCaseDirectory("mode_mirror_render_viewport_anchor_size_matrix");
-    ResetGlobalTestState(root);
-
-    constexpr char kModeId[] = "Mirror Viewport Anchor Size Matrix Mode";
-
-    const std::vector<MirrorAnchorRenderScenario> scenarios = {
-        {
-            { "viewport-medium", 301, 211, 47, 39, 167, 109 },
-            {
-                { "Viewport Medium Top Left", "topLeftViewport", 7, 5, 6, 8, 3.0f },
-                { "Viewport Medium Top Right Pixel", "topRightViewport", 1, 1, 11, 9, 2.0f },
-                { "Viewport Medium Bottom Left", "bottomLeftViewport", 3, 4, 7, 6, 2.0f },
-                { "Viewport Medium Bottom Right", "bottomRightViewport", 4, 2, 9, 5, 3.0f },
-                { "Viewport Medium Center", "centerViewport", 5, 3, 4, -6, 2.0f },
-            },
-            true,
-        },
-        {
-            { "viewport-small", 171, 139, 23, 19, 83, 61 },
-            {
-                { "Viewport Small Top Left", "topLeftViewport", 1, 1, 2, 2, 4.0f },
-                { "Viewport Small Top Right", "topRightViewport", 1, 1, 2, 2, 4.0f },
-                { "Viewport Small Bottom Left", "bottomLeftViewport", 1, 1, 2, 2, 4.0f },
-                { "Viewport Small Bottom Right", "bottomRightViewport", 1, 1, 2, 2, 4.0f },
-                { "Viewport Small Center", "centerViewport", 1, 1, 0, 0, 5.0f },
-            },
-            true,
-        },
-        {
-            { "viewport-single-pixel", 17, 15, 8, 7, 1, 1 },
-            {
-                { "Viewport Pixel Top Left", "topLeftViewport", 1, 1, 0, 0, 1.0f },
-                { "Viewport Pixel Top Right", "topRightViewport", 1, 1, 0, 0, 1.0f },
-                { "Viewport Pixel Bottom Left", "bottomLeftViewport", 1, 1, 0, 0, 1.0f },
-                { "Viewport Pixel Bottom Right", "bottomRightViewport", 1, 1, 0, 0, 1.0f },
-                { "Viewport Pixel Center", "centerViewport", 1, 1, 0, 0, 1.0f },
-            },
-            false,
-        },
-    };
-
-    for (const MirrorAnchorRenderScenario& scenario : scenarios) {
-        g_config = Config();
-
-        ModeConfig mode;
-        mode.id = kModeId;
-        mode.width = (std::max)(1, scenario.geometry.gameW);
-        mode.height = (std::max)(1, scenario.geometry.gameH);
-        mode.manualWidth = mode.width;
-        mode.manualHeight = mode.height;
-
-        g_config.defaultMode = kModeId;
-        g_config.mirrors.clear();
-        g_config.mirrors.reserve(scenario.mirrors.size());
-        mode.mirrorIds.reserve(scenario.mirrors.size());
-        for (const MirrorAnchorCaseDefinition& mirrorCase : scenario.mirrors) {
-            g_config.mirrors.push_back(MakeMirrorRenderTestConfig(mirrorCase.name, mirrorCase.captureWidth,
-                                                                  mirrorCase.captureHeight, mirrorCase.relativeTo,
-                                                                  mirrorCase.outputX, mirrorCase.outputY, mirrorCase.scale));
-            mode.mirrorIds.push_back(mirrorCase.name);
-        }
-
-        g_config.modes = { mode };
-        g_configLoaded.store(true, std::memory_order_release);
-
-        InitializeMirrorRenderTestResources();
-        auto assertScenario = [&](const SimulatedOverlayGeometry& geometry, const SurfaceSize& surface) {
-            std::vector<MirrorConfig> activeMirrors;
-            std::vector<ImageConfig> unusedImages;
-            std::vector<WindowOverlayConfig> unusedWindowOverlays;
-            std::vector<BrowserOverlayConfig> unusedBrowserOverlays;
-            CollectActiveElementsForMode(g_config, kModeId, false, activeMirrors, unusedImages, unusedWindowOverlays,
-                                         unusedBrowserOverlays);
-
-            Expect(activeMirrors.size() == scenario.mirrors.size(),
-                   geometry.label + " should resolve every viewport-anchor mirror in the scenario.");
-
-            for (const MirrorConfig& activeMirror : activeMirrors) {
-                ExpectMirrorRenderMatchesExpectedPlacement(activeMirror, geometry, surface,
-                                                           geometry.label + " render output for " + activeMirror.name,
-                                                           scenario.expectVisibleRender);
-            }
-        };
-
-        if (scenario.expectVisibleRender) {
-            DummyWindow scenarioWindow(scenario.geometry.fullW, scenario.geometry.fullH, false);
-            const SurfaceSize surface = GetWindowClientSize(scenarioWindow.hwnd());
-            SimulatedOverlayGeometry geometry = scenario.geometry;
-            geometry.fullW = surface.width;
-            geometry.fullH = surface.height;
-
-            ScopedTexture2D sourceTexture(surface.width, surface.height,
-                                          MakeSolidRgbaPixels(surface.width, surface.height, 0, 255, 0));
-
-            RenderModeOverlayFrameWithGeometry(scenarioWindow, g_config, g_config.modes.front(), geometry,
-                                               sourceTexture.id(), [&](const SurfaceSize& renderSurface) {
-                assertScenario(geometry, renderSurface);
-            });
-        } else {
-            ScopedTexture2D sourceTexture((std::max)(1, scenario.geometry.fullW), (std::max)(1, scenario.geometry.fullH),
-                                          MakeSolidRgbaPixels((std::max)(1, scenario.geometry.fullW),
-                                                              (std::max)(1, scenario.geometry.fullH), 0, 255, 0));
-
-            RenderModeOverlayFrameToSimulatedSurface(window, g_config, g_config.modes.front(), scenario.geometry,
-                                                     sourceTexture.id(), [&](const SurfaceSize& surface) {
-                assertScenario(scenario.geometry, surface);
-            });
-        }
-    }
-
-    CleanupBrowserOverlayCache();
-    CleanupWindowOverlayCache();
-    CleanupGPUResources();
-    CleanupShaders();
-}
-
-void RunModeMirrorGroupRenderTest(TestRunMode runMode = TestRunMode::Automated) {
-    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
-    if (!g_hasModernGL) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
-
-    const std::filesystem::path root = PrepareCaseDirectory("mode_mirror_group_render");
-    ResetGlobalTestState(root);
-
-    constexpr char kModeId[] = "Mirror Group Render Mode";
-    constexpr char kGroupName[] = "Mirror Group Under Test";
-
-    MirrorConfig leftMirror = MakeMirrorRenderTestConfig("Group Left Mirror", 24, 16, "topLeftScreen", 0, 0, 4.0f);
-    MirrorConfig disabledMirror = MakeMirrorRenderTestConfig("Disabled Group Mirror", 14, 14, "topLeftScreen", 0, 0, 6.0f);
-
-    MirrorGroupConfig group;
-    group.name = kGroupName;
-    group.output.x = 300;
-    group.output.y = 220;
-    group.output.relativeTo = "topLeftScreen";
-    group.output.separateScale = true;
-    group.output.scaleX = 1.0f;
-    group.output.scaleY = 1.0f;
-    group.mirrors = {
-        { leftMirror.name, true, 0.5f, 0.5f, 10, 20 },
-        { disabledMirror.name, false, 1.0f, 1.0f, 210, 30 },
-    };
-
-    ModeConfig mode;
-    mode.id = kModeId;
-    mode.width = kWindowWidth;
-    mode.height = kWindowHeight;
-    mode.manualWidth = kWindowWidth;
-    mode.manualHeight = kWindowHeight;
-    mode.mirrorGroupIds = { kGroupName };
-
-    g_config.defaultMode = kModeId;
-    g_config.mirrors = { leftMirror, disabledMirror };
-    g_config.mirrorGroups = { group };
-    g_config.modes = { mode };
-    g_configLoaded.store(true, std::memory_order_release);
-
-    InitializeMirrorRenderTestResources();
-
-    const SurfaceSize surface = GetWindowClientSize(window.hwnd());
-    ScopedTexture2D sourceTexture(surface.width, surface.height, MakeSolidRgbaPixels(surface.width, surface.height, 0, 255, 0));
-
-    auto renderAndAssert = [&](DummyWindow& targetWindow) {
-        RenderModeOverlayFrame(targetWindow, g_config, g_config.modes.front(), sourceTexture.id());
-        if (runMode == TestRunMode::Automated) {
-            std::vector<MirrorConfig> activeMirrors;
-            std::vector<ImageConfig> unusedImages;
-            std::vector<WindowOverlayConfig> unusedWindowOverlays;
-            std::vector<BrowserOverlayConfig> unusedBrowserOverlays;
-            CollectActiveElementsForMode(g_config, kModeId, false, activeMirrors, unusedImages, unusedWindowOverlays,
-                                         unusedBrowserOverlays);
-
-            Expect(activeMirrors.size() == 1, "Expected only enabled group mirrors to resolve for the mirror-group render test.");
-            Expect(activeMirrors[0].name == leftMirror.name, "Expected the enabled group mirror to preserve group order.");
-
-            const ExpectedMirrorRect expectedLeftRect = ComputeExpectedMirrorRect(activeMirrors[0], surface.width, surface.height, 0, 0,
-                                                                                  surface.width, surface.height);
-            const ExpectedMirrorRect leftRect = GetCachedMirrorRect(leftMirror.name);
-            const MirrorConfig disabledGroupMirror = BuildExpectedGroupedMirrorConfig(disabledMirror, group, group.mirrors[1]);
-            const ExpectedMirrorRect disabledRect = ComputeExpectedMirrorRect(disabledGroupMirror, surface.width, surface.height,
-                                                                              0, 0, surface.width, surface.height);
-
-            Expect(leftRect.x == expectedLeftRect.x && leftRect.y == expectedLeftRect.y && leftRect.width == expectedLeftRect.width &&
-                       leftRect.height == expectedLeftRect.height,
-                   "Expected the first mirror-group member cached bounds to match the grouped placement math.");
-
-            ExpectSolidColorRect(leftRect, surface.height, kExpectedMirrorRenderGreen,
-                                 "Expected the enabled mirror-group member to render its staged texture.");
-
-            ExpectBackgroundPixel(leftRect.x - 2, leftRect.y + leftRect.height / 2, surface.height,
-                                  "Expected pixels left of the enabled group mirror to remain background.");
-            ExpectBackgroundPixel(disabledRect.x + disabledRect.width / 2, disabledRect.y + disabledRect.height / 2, surface.height,
-                                  "Expected the disabled mirror-group item to remain absent from the render output.");
-        }
-    };
-
-    if (runMode == TestRunMode::Visual) {
-        RunVisualLoop(window, "mode-mirror-group-render", [&](DummyWindow& visualWindow) { renderAndAssert(visualWindow); });
-    } else {
-        renderAndAssert(window);
-    }
-
-    CleanupBrowserOverlayCache();
-    CleanupWindowOverlayCache();
-    CleanupGPUResources();
-    CleanupShaders();
-}
-
-void RunModeWindowOverlayRenderTest(TestRunMode runMode = TestRunMode::Automated) {
-    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
-    if (!g_hasModernGL) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
-
-    const std::filesystem::path root = PrepareCaseDirectory("mode_window_overlay_render");
-    ResetGlobalTestState(root);
-
-    constexpr char kModeId[] = "Window Overlay Render Mode";
-    constexpr char kOverlayName[] = "Window Overlay Render";
-    constexpr int kOverlayX = 48;
-    constexpr int kOverlayY = 64;
-
-    WindowOverlayConfig overlay;
-    overlay.name = kOverlayName;
-    overlay.x = kOverlayX;
-    overlay.y = kOverlayY;
-    overlay.scale = 16.0f;
-    overlay.relativeTo = "topLeftScreen";
-    overlay.opacity = 1.0f;
-    overlay.onlyOnMyScreen = false;
-    overlay.pixelatedScaling = true;
-    overlay.background.enabled = false;
-    overlay.border.enabled = false;
-
-    ModeConfig mode;
-    mode.id = kModeId;
-    mode.width = kWindowWidth;
-    mode.height = kWindowHeight;
-    mode.manualWidth = kWindowWidth;
-    mode.manualHeight = kWindowHeight;
-    mode.windowOverlayIds = { kOverlayName };
-
-    g_config.defaultMode = kModeId;
-    g_config.windowOverlays = { overlay };
-    g_config.modes = { mode };
-    g_configLoaded.store(true, std::memory_order_release);
-
-    ResetOverlayRenderTestResources();
-    Expect(StageWindowOverlayTestFrame(overlay, MakeSolidRgbaPixels(2, 2, 255, 64, 32), 2, 2),
-           "Failed to stage synthetic window overlay pixels for integration testing.");
-
-    auto renderAndAssert = [&](DummyWindow& targetWindow) {
-        RenderModeOverlayFrame(targetWindow, g_config, g_config.modes.front());
-        if (runMode == TestRunMode::Automated) {
-            ExpectFramebufferPixelColorNear(kOverlayX + 12, kOverlayY + 12, GetCachedWindowHeight(),
-                                            { 1.0f, 64.0f / 255.0f, 32.0f / 255.0f, 1.0f },
-                                            "Expected the mode-assigned window overlay to render its staged texture color.");
-        }
-    };
-
-    if (runMode == TestRunMode::Visual) {
-        RunVisualLoop(window, "mode-window-overlay-render", [&](DummyWindow& visualWindow) { renderAndAssert(visualWindow); });
-    } else {
-        renderAndAssert(window);
-    }
-
-    CleanupBrowserOverlayCache();
-    CleanupWindowOverlayCache();
-    CleanupGPUResources();
-    CleanupShaders();
-}
-
-void RunModeBrowserOverlayRenderTest(TestRunMode runMode = TestRunMode::Automated) {
-    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
-    if (!g_hasModernGL) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
-
-    const std::filesystem::path root = PrepareCaseDirectory("mode_browser_overlay_render");
-    ResetGlobalTestState(root);
-
-    constexpr char kModeId[] = "Browser Overlay Render Mode";
-    constexpr char kOverlayName[] = "Browser Overlay Render";
-    constexpr int kOverlayX = 132;
-    constexpr int kOverlayY = 96;
-
-    BrowserOverlayConfig overlay;
-    overlay.name = kOverlayName;
-    overlay.url = "https://example.com/render-test";
-    overlay.browserWidth = 2;
-    overlay.browserHeight = 2;
-    overlay.x = kOverlayX;
-    overlay.y = kOverlayY;
-    overlay.scale = 18.0f;
-    overlay.relativeTo = "topLeftScreen";
-    overlay.opacity = 1.0f;
-    overlay.onlyOnMyScreen = false;
-    overlay.pixelatedScaling = true;
-    overlay.background.enabled = false;
-    overlay.border.enabled = false;
-
-    ModeConfig mode;
-    mode.id = kModeId;
-    mode.width = kWindowWidth;
-    mode.height = kWindowHeight;
-    mode.manualWidth = kWindowWidth;
-    mode.manualHeight = kWindowHeight;
-    mode.browserOverlayIds = { kOverlayName };
-
-    g_config.defaultMode = kModeId;
-    g_config.browserOverlays = { overlay };
-    g_config.modes = { mode };
-    g_configLoaded.store(true, std::memory_order_release);
-
-    ResetOverlayRenderTestResources();
-    Expect(StageBrowserOverlayTestFrame(overlay, MakeSolidRgbaPixels(2, 2, 32, 192, 96), 2, 2),
-           "Failed to stage synthetic browser overlay pixels for integration testing.");
-
-    auto renderAndAssert = [&](DummyWindow& targetWindow) {
-        RenderModeOverlayFrame(targetWindow, g_config, g_config.modes.front());
-        if (runMode == TestRunMode::Automated) {
-            ExpectFramebufferPixelColorNear(kOverlayX + 12, kOverlayY + 12, GetCachedWindowHeight(),
-                                            { 32.0f / 255.0f, 192.0f / 255.0f, 96.0f / 255.0f, 1.0f },
-                                            "Expected the mode-assigned browser overlay to render its staged texture color.");
-        }
-    };
-
-    if (runMode == TestRunMode::Visual) {
-        RunVisualLoop(window, "mode-browser-overlay-render", [&](DummyWindow& visualWindow) { renderAndAssert(visualWindow); });
-    } else {
-        renderAndAssert(window);
-    }
-
-    CleanupBrowserOverlayCache();
-    CleanupWindowOverlayCache();
-    CleanupGPUResources();
-    CleanupShaders();
-}
-
-void RunModeImageOverlayRenderPngTest(TestRunMode runMode = TestRunMode::Automated) {
-    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
-    if (!g_hasModernGL) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
-
-    const std::filesystem::path root = PrepareCaseDirectory("mode_image_overlay_render_png");
-    ResetGlobalTestState(root);
-
-    constexpr char kModeId[] = "Image Overlay Render PNG Mode";
-    constexpr char kImageName[] = "PNG Overlay Render";
-    constexpr char kMirrorName[] = "PNG Overlay Mirror";
-    constexpr int kImageX = 84;
-    constexpr int kImageY = 72;
-
-    const std::filesystem::path relativeFixturePath = std::filesystem::path("fixtures") / "render-fixture.png";
-    WriteEmbeddedFixtureToDisk(root, relativeFixturePath, kEmbeddedPngFixtureBase64);
-
-    ImageConfig image = MakeTopLeftImageRenderTestConfig(kImageName, relativeFixturePath.generic_string(), kImageX, kImageY, 20.0f);
-
-    ModeConfig mode;
-    mode.id = kModeId;
-    mode.width = kWindowWidth;
-    mode.height = kWindowHeight;
-    mode.manualWidth = kWindowWidth;
-    mode.manualHeight = kWindowHeight;
-    mode.mirrorIds = { kMirrorName };
-    mode.imageIds = { kImageName };
-
-    MirrorConfig mirror = MakeMirrorRenderTestConfig(kMirrorName, 1, 1, "bottomRightScreen", 0, 0, 1.0f);
-
-    g_config.defaultMode = kModeId;
-    g_config.mirrors = { mirror };
-    g_config.images = { image };
-    g_config.modes = { mode };
-    g_configLoaded.store(true, std::memory_order_release);
-
-    LoadImageFixtureForRenderTest(window, image);
-    ScopedTexture2D sourceTexture(1, 1, MakeSolidRgbaPixels(1, 1, 0, 0, 0));
-
-    auto renderAndAssert = [&](DummyWindow& targetWindow) {
-        RenderModeOverlayFrame(targetWindow, g_config, g_config.modes.front(), sourceTexture.id());
-        if (runMode == TestRunMode::Automated) {
-            ExpectFramebufferPixelColorNear(kImageX + 10, kImageY + 10, GetCachedWindowHeight(), kExpectedPngFixtureColor,
-                                            "Expected the PNG image overlay fixture to render its decoded texture color.");
-        }
-    };
-
-    if (runMode == TestRunMode::Visual) {
-        RunVisualLoop(window, "mode-image-overlay-render-png", [&](DummyWindow& visualWindow) { renderAndAssert(visualWindow); });
-    } else {
-        renderAndAssert(window);
-    }
-
-    CleanupBrowserOverlayCache();
-    CleanupWindowOverlayCache();
-    CleanupGPUResources();
-    CleanupShaders();
-}
-
-void RunModeImageOverlayRenderMpegTest(TestRunMode runMode = TestRunMode::Automated) {
-    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
-    if (!g_hasModernGL) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
-
-    const std::filesystem::path root = PrepareCaseDirectory("mode_image_overlay_render_mpeg");
-    ResetGlobalTestState(root);
-
-    constexpr char kModeId[] = "Image Overlay Render MPEG Mode";
-    constexpr char kImageName[] = "MPEG Overlay Render";
-    constexpr char kMirrorName[] = "MPEG Overlay Mirror";
-    constexpr int kImageX = 156;
-    constexpr int kImageY = 118;
-
-    const std::filesystem::path relativeFixturePath = std::filesystem::path("fixtures") / "render-fixture.mpg";
-    WriteEmbeddedFixtureToDisk(root, relativeFixturePath, kEmbeddedMpegFixtureBase64);
-
-    ImageConfig image = MakeTopLeftImageRenderTestConfig(kImageName, relativeFixturePath.generic_string(), kImageX, kImageY, 12.0f);
-
-    ModeConfig mode;
-    mode.id = kModeId;
-    mode.width = kWindowWidth;
-    mode.height = kWindowHeight;
-    mode.manualWidth = kWindowWidth;
-    mode.manualHeight = kWindowHeight;
-    mode.mirrorIds = { kMirrorName };
-    mode.imageIds = { kImageName };
-
-    MirrorConfig mirror = MakeMirrorRenderTestConfig(kMirrorName, 1, 1, "bottomRightScreen", 0, 0, 1.0f);
-
-    g_config.defaultMode = kModeId;
-    g_config.mirrors = { mirror };
-    g_config.images = { image };
-    g_config.modes = { mode };
-    g_configLoaded.store(true, std::memory_order_release);
-
-    LoadImageFixtureForRenderTest(window, image);
-    ScopedTexture2D sourceTexture(1, 1, MakeSolidRgbaPixels(1, 1, 0, 0, 0));
-
-    auto renderAndAssert = [&](DummyWindow& targetWindow) {
-        RenderModeOverlayFrame(targetWindow, g_config, g_config.modes.front(), sourceTexture.id());
-        if (runMode == TestRunMode::Automated) {
-            ExpectFramebufferPixelChannelDominance(kImageX + 8, kImageY + 8, GetCachedWindowHeight(), 0, 0.35f, 0.10f,
-                                                   "Expected the first MPEG fixture frame to remain red-dominant.");
-
-            Sleep(650);
-
-            RenderModeOverlayFrame(targetWindow, g_config, g_config.modes.front(), sourceTexture.id());
-            ExpectFramebufferPixelChannelDominance(kImageX + 8, kImageY + 8, GetCachedWindowHeight(), 2, 0.35f, 0.10f,
-                                                   "Expected the MPEG fixture playback to advance to a blue-dominant frame.");
-        }
-    };
-
-    if (runMode == TestRunMode::Visual) {
-        RunVisualLoop(window, "mode-image-overlay-render-mpeg", [&](DummyWindow& visualWindow) { renderAndAssert(visualWindow); });
-    } else {
-        renderAndAssert(window);
-    }
-
-    CleanupBrowserOverlayCache();
-    CleanupWindowOverlayCache();
-    CleanupGPUResources();
-    CleanupShaders();
 }
 
 void RunSettingsGuiAdvancedTest(TestRunMode runMode = TestRunMode::Automated) {
@@ -4082,63 +1815,6 @@ void RunSettingsTabMiscPopulatedTest(TestRunMode runMode = TestRunMode::Automate
 
 void RunSettingsTabSupportersPopulatedTest(TestRunMode runMode = TestRunMode::Automated) {
     RunPopulatedSettingsTabCase("settings_tab_supporters_populated", tr("tabs.supporters"), std::string(), runMode);
-}
-
-void RunSettingsTabGeneralDefaultTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunDefaultSettingsTabCase("settings_tab_general_default", tr("tabs.general"), std::string(), true, runMode);
-}
-
-void RunSettingsTabOtherDefaultTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunDefaultSettingsTabCase("settings_tab_other_default", tr("tabs.other"), std::string(), true, runMode);
-}
-
-void RunSettingsTabSupportersDefaultTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunDefaultSettingsTabCase("settings_tab_supporters_default", tr("tabs.supporters"), std::string(), true, runMode);
-}
-
-void RunSettingsTabModesDefaultTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunDefaultSettingsTabCase("settings_tab_modes_default", tr("tabs.modes"), std::string(), false, runMode);
-}
-
-void RunSettingsTabMirrorsDefaultTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunDefaultSettingsTabCase("settings_tab_mirrors_default", tr("tabs.mirrors"), std::string(), false, runMode);
-}
-
-void RunSettingsTabImagesDefaultTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunDefaultSettingsTabCase("settings_tab_images_default", tr("tabs.images"), std::string(), false, runMode);
-}
-
-void RunSettingsTabWindowOverlaysDefaultTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunDefaultSettingsTabCase("settings_tab_window_overlays_default", tr("tabs.window_overlays"), std::string(), false, runMode);
-}
-
-void RunSettingsTabBrowserOverlaysDefaultTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunDefaultSettingsTabCase("settings_tab_browser_overlays_default", tr("tabs.browser_overlays"), std::string(), false,
-                              runMode);
-}
-
-void RunSettingsTabHotkeysDefaultTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunDefaultSettingsTabCase("settings_tab_hotkeys_default", tr("tabs.hotkeys"), std::string(), false, runMode);
-}
-
-void RunSettingsTabInputsMouseDefaultTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunDefaultSettingsTabCase("settings_tab_inputs_mouse_default", tr("tabs.inputs"), tr("inputs.mouse"), false, runMode);
-}
-
-void RunSettingsTabInputsKeyboardDefaultTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunDefaultSettingsTabCase("settings_tab_inputs_keyboard_default", tr("tabs.inputs"), tr("inputs.keyboard"), false, runMode);
-}
-
-void RunSettingsTabSettingsDefaultTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunDefaultSettingsTabCase("settings_tab_settings_default", tr("tabs.settings"), std::string(), false, runMode);
-}
-
-void RunSettingsTabAppearanceDefaultTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunDefaultSettingsTabCase("settings_tab_appearance_default", tr("tabs.appearance"), std::string(), false, runMode);
-}
-
-void RunSettingsTabMiscDefaultTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunDefaultSettingsTabCase("settings_tab_misc_default", tr("tabs.misc"), std::string(), false, runMode);
 }
 
 struct TestCaseDefinition {

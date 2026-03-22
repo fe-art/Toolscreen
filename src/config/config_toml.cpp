@@ -2372,8 +2372,6 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
             }
         }
     }
-
-    config.configVersion = ConfigDefaults::DEFAULT_CONFIG_VERSION;
 }
 
 bool SaveConfigToTomlFile(const Config& config, const std::wstring& path) {
