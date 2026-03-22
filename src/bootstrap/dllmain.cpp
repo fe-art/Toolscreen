@@ -2151,7 +2151,8 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
             PROFILE_SCOPE_CAT("Capture Virtual Camera Frame", "VirtualCamera");
             const int virtualCameraSourceW = hasWindowClientSize ? windowWidth : fullW;
             const int virtualCameraSourceH = hasWindowClientSize ? windowHeight : fullH;
-            CaptureSameThreadVirtualCameraBackbufferFrame(virtualCameraSourceW, virtualCameraSourceH, true);
+            CaptureSameThreadVirtualCameraBackbufferFrame(&modeToRenderCopy, s, current_gameW, current_gameH,
+                                                          virtualCameraSourceW, virtualCameraSourceH, true, false);
         }
 
         {

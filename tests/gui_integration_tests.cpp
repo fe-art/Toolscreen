@@ -812,7 +812,8 @@ void ResetOverlayRenderTestResources() {
     InitializeGPUResources();
 }
 
-void RenderModeOverlayFrame(DummyWindow& window, const Config& config, const ModeConfig& mode, GLuint gameTextureId = 0) {
+void RenderModeOverlayFrame(DummyWindow& window, const Config& config, const ModeConfig& mode,
+                            bool excludeOnlyOnMyScreen = false, GLuint gameTextureId = 0) {
     Expect(window.PrepareRenderSurface(), "GUI integration test window closed unexpectedly.");
 
     GLState state{};
@@ -821,7 +822,8 @@ void RenderModeOverlayFrame(DummyWindow& window, const Config& config, const Mod
     const int surfaceWidth = (std::max)(1, GetCachedWindowWidth());
     const int surfaceHeight = (std::max)(1, GetCachedWindowHeight());
     const bool rendered = RenderModeOverlaysForIntegrationTest(config, mode, state, surfaceWidth, surfaceHeight, 0, 0,
-                                                               surfaceWidth, surfaceHeight, false, gameTextureId);
+                                                               surfaceWidth, surfaceHeight, excludeOnlyOnMyScreen,
+                                                               gameTextureId);
     Expect(rendered, "Expected mode overlay render path to produce overlay output.");
 }
 
@@ -3084,7 +3086,7 @@ void RunModeMirrorRenderScreenAnchorsTest(TestRunMode runMode = TestRunMode::Aut
     ScopedTexture2D sourceTexture(surface.width, surface.height, MakeSolidRgbaPixels(surface.width, surface.height, 0, 255, 0));
 
     auto renderAndAssert = [&](DummyWindow& targetWindow) {
-        RenderModeOverlayFrame(targetWindow, g_config, g_config.modes.front(), sourceTexture.id());
+        RenderModeOverlayFrame(targetWindow, g_config, g_config.modes.front(), false, sourceTexture.id());
         if (runMode == TestRunMode::Automated) {
             std::vector<MirrorConfig> activeMirrors;
             std::vector<ImageConfig> unusedImages;
@@ -3183,7 +3185,7 @@ void RunModeMirrorRenderViewportAnchorsTest(TestRunMode runMode = TestRunMode::A
     ScopedTexture2D sourceTexture(surface.width, surface.height, MakeSolidRgbaPixels(surface.width, surface.height, 0, 255, 0));
 
     auto renderAndAssert = [&](DummyWindow& targetWindow) {
-        RenderModeOverlayFrame(targetWindow, g_config, g_config.modes.front(), sourceTexture.id());
+        RenderModeOverlayFrame(targetWindow, g_config, g_config.modes.front(), false, sourceTexture.id());
         if (runMode == TestRunMode::Automated) {
             std::vector<MirrorConfig> activeMirrors;
             std::vector<ImageConfig> unusedImages;
@@ -3514,7 +3516,7 @@ void RunModeMirrorGroupRenderTest(TestRunMode runMode = TestRunMode::Automated) 
     ScopedTexture2D sourceTexture(surface.width, surface.height, MakeSolidRgbaPixels(surface.width, surface.height, 0, 255, 0));
 
     auto renderAndAssert = [&](DummyWindow& targetWindow) {
-        RenderModeOverlayFrame(targetWindow, g_config, g_config.modes.front(), sourceTexture.id());
+        RenderModeOverlayFrame(targetWindow, g_config, g_config.modes.front(), false, sourceTexture.id());
         if (runMode == TestRunMode::Automated) {
             std::vector<MirrorConfig> activeMirrors;
             std::vector<ImageConfig> unusedImages;
@@ -3674,6 +3676,70 @@ void RunModeBrowserOverlayRenderTest(TestRunMode runMode = TestRunMode::Automate
 
     if (runMode == TestRunMode::Visual) {
         RunVisualLoop(window, "mode-browser-overlay-render", [&](DummyWindow& visualWindow) { renderAndAssert(visualWindow); });
+    } else {
+        renderAndAssert(window);
+    }
+
+    CleanupBrowserOverlayCache();
+    CleanupWindowOverlayCache();
+    CleanupGPUResources();
+    CleanupShaders();
+}
+
+void RunModeBrowserOverlayOnlyOnMyScreenExclusionTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+
+    const std::filesystem::path root = PrepareCaseDirectory("mode_browser_overlay_only_on_my_screen_exclusion");
+    ResetGlobalTestState(root);
+
+    constexpr char kModeId[] = "Browser Overlay Exclusion Mode";
+    constexpr char kOverlayName[] = "Browser Overlay Exclusion";
+    constexpr int kOverlayX = 144;
+    constexpr int kOverlayY = 104;
+
+    BrowserOverlayConfig overlay;
+    overlay.name = kOverlayName;
+    overlay.url = "https://example.com/exclusion-test";
+    overlay.browserWidth = 2;
+    overlay.browserHeight = 2;
+    overlay.x = kOverlayX;
+    overlay.y = kOverlayY;
+    overlay.scale = 18.0f;
+    overlay.relativeTo = "topLeftScreen";
+    overlay.opacity = 1.0f;
+    overlay.onlyOnMyScreen = true;
+    overlay.pixelatedScaling = true;
+    overlay.background.enabled = false;
+    overlay.border.enabled = false;
+
+    ModeConfig mode;
+    mode.id = kModeId;
+    mode.width = kWindowWidth;
+    mode.height = kWindowHeight;
+    mode.manualWidth = kWindowWidth;
+    mode.manualHeight = kWindowHeight;
+    mode.sources = { { ModeSourceType::BrowserOverlay, kOverlayName } };
+
+    g_config.defaultMode = kModeId;
+    g_config.browserOverlays = { overlay };
+    g_config.modes = { mode };
+    g_configLoaded.store(true, std::memory_order_release);
+
+    ResetOverlayRenderTestResources();
+    Expect(StageBrowserOverlayTestFrame(overlay, MakeSolidRgbaPixels(2, 2, 40, 180, 90), 2, 2),
+           "Failed to stage synthetic browser overlay pixels for only-on-my-screen exclusion testing.");
+
+    auto renderAndAssert = [&](DummyWindow& targetWindow) {
+        RenderModeOverlayFrame(targetWindow, g_config, g_config.modes.front(), true);
+        if (runMode == TestRunMode::Automated) {
+            ExpectBackgroundPixel(kOverlayX + 12, kOverlayY + 12, GetCachedWindowHeight(),
+                                  "Expected excluded browser overlay pixels to remain background when only-on-my-screen is filtered.");
+        }
+    };
+
+    if (runMode == TestRunMode::Visual) {
+        RunVisualLoop(window, "mode-browser-overlay-only-on-my-screen-exclusion",
+                      [&](DummyWindow& visualWindow) { renderAndAssert(visualWindow); });
     } else {
         renderAndAssert(window);
     }
@@ -3907,6 +3973,7 @@ const auto& GetTestCaseDefinitions() {
         {"mode-mirror-group-render", &RunModeMirrorGroupRenderTest},
         {"mode-window-overlay-render", &RunModeWindowOverlayRenderTest},
         {"mode-browser-overlay-render", &RunModeBrowserOverlayRenderTest},
+        {"mode-browser-overlay-only-on-my-screen-exclusion", &RunModeBrowserOverlayOnlyOnMyScreenExclusionTest},
         {"config-error-gui", &RunConfigErrorGuiTest},
         {"settings-gui-basic", &RunSettingsGuiBasicTest},
         {"settings-gui-advanced", &RunSettingsGuiAdvancedTest},

@@ -488,6 +488,10 @@ static int g_sameThreadObsComposeW = 0;
 static int g_sameThreadObsComposeH = 0;
 static int g_sameThreadObsComposePublishedIndex = -1;
 static int g_sameThreadObsComposeWriteIndex = 0;
+static GLuint g_sameThreadVirtualCameraComposeFBO = 0;
+static GLuint g_sameThreadVirtualCameraComposeTexture = 0;
+static int g_sameThreadVirtualCameraComposeW = 0;
+static int g_sameThreadVirtualCameraComposeH = 0;
 static GLuint g_sameThreadVirtualCameraScaleFBO = 0;
 static GLuint g_sameThreadVirtualCameraScaleTexture = 0;
 static int g_sameThreadVirtualCameraScaleW = 0;
@@ -522,6 +526,9 @@ static int g_sameThreadVirtualCameraCaptureSourceH = 0;
 
 static bool ConvertSameThreadVirtualCameraTextureToNv12(GLuint srcTexture, int srcW, int srcH,
                                                         const SameThreadVirtualCameraReadbackSlot& slot);
+static bool RenderSameThreadVirtualCameraComposeFrame(const ModeConfig* modeToRender, const GLState& s, int current_gameW,
+                                                      int current_gameH, int fullW, int fullH, bool skipAnimation,
+                                                      GLuint& outTexture);
 
 GLuint g_fullscreenQuadVAO = 0;
 GLuint g_fullscreenQuadVBO = 0;
@@ -619,6 +626,10 @@ void ResetSameThreadVirtualCameraCaptureState() {
     DiscardSameThreadVirtualCameraReadbacks();
     g_sameThreadVirtualCameraSynchronousRecoveryFrames = 0;
 
+    if (g_sameThreadVirtualCameraComposeTexture != 0) {
+        glDeleteTextures(1, &g_sameThreadVirtualCameraComposeTexture);
+        g_sameThreadVirtualCameraComposeTexture = 0;
+    }
     if (g_sameThreadVirtualCameraScaleTexture != 0) {
         glDeleteTextures(1, &g_sameThreadVirtualCameraScaleTexture);
         g_sameThreadVirtualCameraScaleTexture = 0;
@@ -635,6 +646,10 @@ void ResetSameThreadVirtualCameraCaptureState() {
         glDeleteFramebuffers(1, &g_sameThreadVirtualCameraScaleFBO);
         g_sameThreadVirtualCameraScaleFBO = 0;
     }
+    if (g_sameThreadVirtualCameraComposeFBO != 0) {
+        glDeleteFramebuffers(1, &g_sameThreadVirtualCameraComposeFBO);
+        g_sameThreadVirtualCameraComposeFBO = 0;
+    }
     if (g_sameThreadVirtualCameraReadFBO != 0) {
         glDeleteFramebuffers(1, &g_sameThreadVirtualCameraReadFBO);
         g_sameThreadVirtualCameraReadFBO = 0;
@@ -644,6 +659,8 @@ void ResetSameThreadVirtualCameraCaptureState() {
         g_sameThreadVirtualCameraConvertFBO = 0;
     }
 
+    g_sameThreadVirtualCameraComposeW = 0;
+    g_sameThreadVirtualCameraComposeH = 0;
     g_sameThreadVirtualCameraScaleW = 0;
     g_sameThreadVirtualCameraScaleH = 0;
     g_sameThreadVirtualCameraNv12W = 0;
@@ -2135,6 +2152,13 @@ void CleanupGPUResources() {
                 g_sameThreadObsComposeTextures[i] = 0;
             }
         }
+        if (g_sameThreadVirtualCameraComposeTexture) {
+            trackCleanupResource("<global>", "g_sameThreadVirtualCameraComposeTexture",
+                                 static_cast<uintptr_t>(g_sameThreadVirtualCameraComposeTexture));
+            glDeleteTextures(1, &g_sameThreadVirtualCameraComposeTexture);
+            while (glGetError() != GL_NO_ERROR) {}
+            g_sameThreadVirtualCameraComposeTexture = 0;
+        }
         if (g_sameThreadVirtualCameraScaleTexture) {
             trackCleanupResource("<global>", "g_sameThreadVirtualCameraScaleTexture",
                                  static_cast<uintptr_t>(g_sameThreadVirtualCameraScaleTexture));
@@ -2162,6 +2186,13 @@ void CleanupGPUResources() {
             while (glGetError() != GL_NO_ERROR) {}
             g_sameThreadVirtualCameraScaleFBO = 0;
         }
+        if (g_sameThreadVirtualCameraComposeFBO) {
+            trackCleanupResource("<global>", "g_sameThreadVirtualCameraComposeFBO",
+                                 static_cast<uintptr_t>(g_sameThreadVirtualCameraComposeFBO));
+            glDeleteFramebuffers(1, &g_sameThreadVirtualCameraComposeFBO);
+            while (glGetError() != GL_NO_ERROR) {}
+            g_sameThreadVirtualCameraComposeFBO = 0;
+        }
         if (g_sameThreadVirtualCameraConvertFBO) {
             trackCleanupResource("<global>", "g_sameThreadVirtualCameraConvertFBO",
                                  static_cast<uintptr_t>(g_sameThreadVirtualCameraConvertFBO));
@@ -2177,6 +2208,8 @@ void CleanupGPUResources() {
         }
         trackCleanupResource("<global>", "ReleaseSameThreadVirtualCameraReadbacks", 0);
         ReleaseSameThreadVirtualCameraReadbacks();
+        g_sameThreadVirtualCameraComposeW = 0;
+        g_sameThreadVirtualCameraComposeH = 0;
         g_sameThreadVirtualCameraScaleW = 0;
         g_sameThreadVirtualCameraScaleH = 0;
         g_sameThreadVirtualCameraNv12W = 0;
@@ -4489,6 +4522,39 @@ static void EnsureSameThreadVirtualCameraScaleTarget(int outW, int outH) {
     g_sameThreadVirtualCameraScaleH = outH;
 }
 
+static bool EnsureSameThreadVirtualCameraComposeTarget(int fullW, int fullH) {
+    if (fullW <= 0 || fullH <= 0) { return false; }
+    if (g_sameThreadVirtualCameraComposeW == fullW && g_sameThreadVirtualCameraComposeH == fullH &&
+        g_sameThreadVirtualCameraComposeFBO != 0 && g_sameThreadVirtualCameraComposeTexture != 0) {
+        return true;
+    }
+
+    if (g_sameThreadVirtualCameraComposeFBO == 0) { glGenFramebuffers(1, &g_sameThreadVirtualCameraComposeFBO); }
+    if (g_sameThreadVirtualCameraComposeTexture != 0) {
+        glDeleteTextures(1, &g_sameThreadVirtualCameraComposeTexture);
+        g_sameThreadVirtualCameraComposeTexture = 0;
+    }
+
+    glGenTextures(1, &g_sameThreadVirtualCameraComposeTexture);
+    BindTextureDirect(GL_TEXTURE_2D, g_sameThreadVirtualCameraComposeTexture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, fullW, fullH, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, g_sameThreadVirtualCameraComposeFBO);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_sameThreadVirtualCameraComposeTexture, 0);
+    const bool complete = (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    BindTextureDirect(GL_TEXTURE_2D, 0);
+    if (!complete) { return false; }
+
+    g_sameThreadVirtualCameraComposeW = fullW;
+    g_sameThreadVirtualCameraComposeH = fullH;
+    return true;
+}
+
 static GLuint PrepareSameThreadVirtualCameraTexture(GLuint srcTexture, int srcW, int srcH, int outW, int outH) {
     if (srcTexture == 0 || srcW <= 0 || srcH <= 0 || outW <= 0 || outH <= 0) { return 0; }
     if (srcW == outW && srcH == outH) { return srcTexture; }
@@ -4668,8 +4734,10 @@ static bool ConvertSameThreadVirtualCameraTextureToNv12(GLuint srcTexture, int s
     return true;
 }
 
-void CaptureSameThreadVirtualCameraBackbufferFrame(int sourceW, int sourceH, bool captureVirtualCameraFrame) {
-    if (!captureVirtualCameraFrame || !IsVirtualCameraActive()) { return; }
+void CaptureSameThreadVirtualCameraBackbufferFrame(const ModeConfig* modeToRender, const GLState& s, int current_gameW,
+                                                   int current_gameH, int sourceW, int sourceH,
+                                                   bool captureVirtualCameraFrame, bool skipAnimation) {
+    if (!captureVirtualCameraFrame || !IsVirtualCameraActive() || !modeToRender) { return; }
     if (sourceW <= 0 || sourceH <= 0) { return; }
 
     uint32_t vcWidth = 0;
@@ -4695,7 +4763,14 @@ void CaptureSameThreadVirtualCameraBackbufferFrame(int sourceW, int sourceH, boo
 
     HarvestSameThreadVirtualCameraReadback();
 
-    GLuint readTexture = PrepareSameThreadVirtualCameraBackbufferTexture(sourceW, sourceH, outW, outH);
+    GLuint composedTexture = 0;
+    if (!RenderSameThreadVirtualCameraComposeFrame(modeToRender, s, current_gameW, current_gameH, sourceW, sourceH,
+                                                   skipAnimation, composedTexture) ||
+        composedTexture == 0) {
+        return;
+    }
+
+    GLuint readTexture = PrepareSameThreadVirtualCameraTexture(composedTexture, sourceW, sourceH, outW, outH);
     if (readTexture == 0) { return; }
 
     LARGE_INTEGER counter;
@@ -5102,6 +5177,240 @@ bool RenderSameThreadObsFrame(const ModeConfig* modeToRender, const GLState& s, 
         g_sameThreadObsComposeWriteIndex = (composeIndex + 1) % SAME_THREAD_OBS_BUFFER_COUNT;
     }
     return true;
+}
+
+static bool RenderSameThreadVirtualCameraComposeFrame(const ModeConfig* modeToRender, const GLState& s, int current_gameW,
+                                                      int current_gameH, int fullW, int fullH, bool skipAnimation,
+                                                      GLuint& outTexture) {
+    outTexture = 0;
+    if (!modeToRender || fullW <= 0 || fullH <= 0) { return false; }
+    if (!EnsureSameThreadVirtualCameraComposeTarget(fullW, fullH) || g_sameThreadVirtualCameraComposeFBO == 0 ||
+        g_sameThreadVirtualCameraComposeTexture == 0) {
+        return false;
+    }
+
+    ModeTransitionState transitionState;
+    bool isAnimating = false;
+    std::string fromModeId;
+    bool transitioningToFullscreen = false;
+    const ModeConfig* fromMode = nullptr;
+    int finalX = 0;
+    int finalY = 0;
+    int finalW = 0;
+    int finalH = 0;
+    {
+        PROFILE_SCOPE_CAT("Resolve VC Frame Geometry", "VirtualCamera");
+        transitionState = GetModeTransitionState();
+        const bool transitionEffectivelyComplete =
+            transitionState.active && transitionState.width == transitionState.targetWidth &&
+            transitionState.height == transitionState.targetHeight && transitionState.x == transitionState.targetX &&
+            transitionState.y == transitionState.targetY;
+        isAnimating = transitionState.active && !skipAnimation && !transitionEffectivelyComplete;
+        fromModeId = transitionState.fromModeId;
+        transitioningToFullscreen = isAnimating && EqualsIgnoreCase(modeToRender->id, "Fullscreen");
+
+        int modeWidth = modeToRender->width;
+        int modeHeight = modeToRender->height;
+        int modeX = 0;
+        int modeY = 0;
+        if (isAnimating) {
+            modeWidth = transitionState.width;
+            modeHeight = transitionState.height;
+            modeX = transitionState.x;
+            modeY = transitionState.y;
+        }
+
+        if (isAnimating) {
+            finalX = modeX;
+            finalY = modeY;
+            finalW = modeWidth;
+            finalH = modeHeight;
+        } else if (modeToRender->stretch.enabled) {
+            finalX = modeToRender->stretch.x;
+            finalY = modeToRender->stretch.y;
+            finalW = modeToRender->stretch.width;
+            finalH = modeToRender->stretch.height;
+        } else {
+            finalW = modeWidth;
+            finalH = modeHeight;
+            finalX = (fullW - finalW) / 2;
+            finalY = (fullH - finalH) / 2;
+        }
+    }
+
+    GLuint gameTextureToUse = 0;
+    int gameTextureW = 0;
+    int gameTextureH = 0;
+    {
+        PROFILE_SCOPE_CAT("Resolve VC Source Texture", "VirtualCamera");
+        if (!SelectSameThreadGameTexture(g_cachedGameTextureId.load(std::memory_order_acquire), current_gameW, current_gameH,
+                                         gameTextureToUse, gameTextureW, gameTextureH)) {
+            return false;
+        }
+    }
+
+    GLState vcState = s;
+    vcState.fb = g_sameThreadVirtualCameraComposeFBO;
+    vcState.read_fb = g_sameThreadVirtualCameraComposeFBO;
+    vcState.draw_fb = g_sameThreadVirtualCameraComposeFBO;
+    vcState.draw_buffer = GL_COLOR_ATTACHMENT0;
+    vcState.read_buffer = GL_COLOR_ATTACHMENT0;
+
+    {
+        PROFILE_SCOPE_CAT("Prepare VC Compose State", "VirtualCamera");
+        PrepareSameThreadOverlayState(vcState, fullW, fullH);
+    }
+
+    bool useFromBackground = false;
+    BackgroundConfig fromBackground;
+    BorderConfig fromBorder;
+    {
+        PROFILE_SCOPE_CAT("Resolve VC Background Source", "VirtualCamera");
+        if (isAnimating && !fromModeId.empty()) {
+            fromMode = GetMode_Internal(fromModeId);
+            if (fromMode) {
+                fromBackground = fromMode->background;
+                fromBorder = fromMode->border;
+                const bool fromHasSpecialBackground =
+                    (fromBackground.selectedMode == "gradient" || fromBackground.selectedMode == "image");
+                useFromBackground = transitioningToFullscreen || fromHasSpecialBackground;
+            }
+        }
+    }
+
+    GLuint backgroundTexture = 0;
+    {
+        PROFILE_SCOPE_CAT("Resolve VC Background Texture", "VirtualCamera");
+        if (useFromBackground) {
+            if (fromBackground.selectedMode == "image") {
+                backgroundTexture = ResolveModeBackgroundTextureId(fromModeId);
+            }
+        } else if (modeToRender->background.selectedMode == "image") {
+            backgroundTexture = ResolveModeBackgroundTextureId(modeToRender->id);
+        }
+    }
+
+    {
+        PROFILE_SCOPE_CAT("Render VC Background", "VirtualCamera");
+        if (useFromBackground) {
+            RenderSameThreadObsBackgroundConfig(fromBackground, backgroundTexture, fullW, fullH);
+        } else {
+            RenderSameThreadObsBackgroundConfig(modeToRender->background, backgroundTexture, fullW, fullH);
+        }
+    }
+
+    {
+        PROFILE_SCOPE_CAT("Render VC Game View", "VirtualCamera");
+        const float sourceRect[] = { 0.0f, 0.0f, 1.0f, 1.0f };
+        const int dstBottom = fullH - finalY - finalH;
+        DrawPassthroughTextureRegion(gameTextureToUse, sourceRect, finalX, dstBottom, finalX + finalW, dstBottom + finalH, fullW,
+                                     fullH, 1.0f);
+    }
+
+    {
+        PROFILE_SCOPE_CAT("Render VC Border", "VirtualCamera");
+        if (transitioningToFullscreen && fromBorder.enabled && fromBorder.width > 0) {
+            RenderGameBorder(finalX, finalY, finalW, finalH, fromBorder.width, fromBorder.radius, fromBorder.color, fullW, fullH);
+        } else if (modeToRender->border.enabled && modeToRender->border.width > 0) {
+            RenderGameBorder(finalX, finalY, finalW, finalH, modeToRender->border.width, modeToRender->border.radius,
+                             modeToRender->border.color, fullW, fullH);
+        }
+    }
+
+    if (auto cfgSnap = GetConfigSnapshot()) {
+        SameThreadOverlayState request;
+        {
+            PROFILE_SCOPE_CAT("Build VC Overlay Request", "VirtualCamera");
+            request.fullW = fullW;
+            request.fullH = fullH;
+            request.gameW = current_gameW;
+            request.gameH = current_gameH;
+            request.finalX = finalX;
+            request.finalY = finalY;
+            request.finalW = finalW;
+            request.finalH = finalH;
+            request.gameTextureId = gameTextureToUse;
+            request.modeId = modeToRender->id;
+            request.isAnimating = isAnimating;
+            request.overlayOpacity = 1.0f;
+            request.excludeOnlyOnMyScreen = true;
+            request.skipAnimation = skipAnimation;
+            request.relativeStretching = modeToRender->relativeStretching;
+
+            const bool transitionEffectivelyCompleteForOverlays = transitionState.active && transitionState.moveProgress >= 1.0f;
+            const bool overlaysShouldLerp = transitionState.active && !transitionEffectivelyCompleteForOverlays &&
+                                            transitionState.overlayTransition != OverlayTransitionType::Cut;
+            if (overlaysShouldLerp) {
+                request.transitionProgress = transitionState.moveProgress;
+                request.fromW = transitionState.fromWidth;
+                request.fromH = transitionState.fromHeight;
+                request.fromX = transitionState.fromX;
+                request.fromY = transitionState.fromY;
+                request.toW = transitionState.targetWidth;
+                request.toH = transitionState.targetHeight;
+                request.toX = transitionState.targetX;
+                request.toY = transitionState.targetY;
+            } else if (transitionState.active) {
+                request.transitionProgress = 1.0f;
+                request.fromX = transitionState.fromX;
+                request.fromY = transitionState.fromY;
+                request.fromW = transitionState.fromWidth;
+                request.fromH = transitionState.fromHeight;
+                request.toX = transitionState.targetX;
+                request.toY = transitionState.targetY;
+                request.toW = transitionState.targetWidth;
+                request.toH = transitionState.targetHeight;
+            } else {
+                request.transitionProgress = 1.0f;
+                request.fromX = finalX;
+                request.fromY = finalY;
+                request.fromW = finalW;
+                request.fromH = finalH;
+                request.toX = finalX;
+                request.toY = finalY;
+                request.toW = finalW;
+                request.toH = finalH;
+            }
+
+            request.isTransitioningFromEyeZoom = g_isTransitioningFromEyeZoom.load(std::memory_order_acquire);
+            request.shouldRenderGui = g_shouldRenderGui.load(std::memory_order_relaxed);
+            request.showPerformanceOverlay = false;
+            request.showProfiler = false;
+            request.showEyeZoom = g_showEyeZoom.load(std::memory_order_relaxed) ||
+                                  (request.isTransitioningFromEyeZoom && !request.skipAnimation);
+            request.eyeZoomFadeOpacity = g_eyeZoomFadeOpacity.load(std::memory_order_relaxed);
+            request.eyeZoomAnimatedViewportX = skipAnimation ? -1 : g_eyeZoomAnimatedViewportX.load(std::memory_order_relaxed);
+            request.eyeZoomSnapshotTexture = GetEyeZoomSnapshotTexture();
+            request.eyeZoomSnapshotWidth = GetEyeZoomSnapshotWidth();
+            request.eyeZoomSnapshotHeight = GetEyeZoomSnapshotHeight();
+            request.showTextureGrid = false;
+            request.textureGridModeWidth = 0;
+            request.textureGridModeHeight = 0;
+            request.showWelcomeToast = false;
+            request.welcomeToastIsFullscreen = false;
+            request.modeHasMirrors = ModeHasAnyMirrorSources(*modeToRender);
+            request.modeHasImages = g_imageOverlaysVisible.load(std::memory_order_acquire) &&
+                                    ModeHasSourceType(*modeToRender, ModeSourceType::Image);
+            request.modeHasWindowOverlays = g_windowOverlaysVisible.load(std::memory_order_acquire) &&
+                                            ModeHasSourceType(*modeToRender, ModeSourceType::WindowOverlay);
+            request.modeHasBrowserOverlays = g_browserOverlaysVisible.load(std::memory_order_acquire) &&
+                                             ModeHasSourceType(*modeToRender, ModeSourceType::BrowserOverlay);
+            request.isRawWindowedMode = false;
+            request.fromModeId = transitionState.fromModeId;
+            request.fromSlideMirrorsIn = fromMode && fromMode->slideMirrorsIn;
+            request.toSlideMirrorsIn = modeToRender->slideMirrorsIn;
+            request.mirrorSlideProgress =
+                (transitionState.active && transitionState.moveProgress < 1.0f) ? transitionState.moveProgress : 1.0f;
+            request.allowMirrorCaptureReuse = true;
+            request.mirrorCaptureFrameTag = s_sameThreadMirrorCaptureFrameTag;
+        }
+
+        PROFILE_SCOPE_CAT("Render VC Overlays", "VirtualCamera");
+        RenderSameThreadOverlayPass(request, *cfgSnap, vcState);
+    }
+
+    outTexture = g_sameThreadVirtualCameraComposeTexture;
+    return outTexture != 0;
 }
 
 void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fullW, int fullH, float opacity,
