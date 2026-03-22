@@ -1,5 +1,6 @@
 #include "common/i18n.h"
 #include "common/utils.h"
+#include "config/config_toml.h"
 #include "gui/gui.h"
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_win32.h"
@@ -11,7 +12,9 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <cmath>
 #include <stdexcept>
+#include <array>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -24,6 +27,42 @@ namespace {
 constexpr int kWindowWidth = 1600;
 constexpr int kWindowHeight = 900;
 constexpr wchar_t kWindowClassName[] = L"ToolscreenGuiIntegrationTestWindow";
+constexpr char kDefaultVisualTestCase[] = "settings-gui-advanced";
+
+enum class TestRunMode {
+    Automated,
+    Visual,
+};
+
+using SetProcessDpiAwarenessContextFn = BOOL(WINAPI*)(DPI_AWARENESS_CONTEXT value);
+using SetProcessDPIAwareFn = BOOL(WINAPI*)();
+
+void EnsureProcessDpiAwareness() {
+    static const bool configured = []() {
+        if (HMODULE user32 = GetModuleHandleW(L"user32.dll")) {
+            if (auto setDpiAwarenessContext = reinterpret_cast<SetProcessDpiAwarenessContextFn>(
+                    GetProcAddress(user32, "SetProcessDpiAwarenessContext"))) {
+                if (setDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)) {
+                    return true;
+                }
+
+                if (setDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE)) {
+                    return true;
+                }
+            }
+
+            if (auto setProcessDpiAware = reinterpret_cast<SetProcessDPIAwareFn>(GetProcAddress(user32, "SetProcessDPIAware"))) {
+                if (setProcessDpiAware()) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }();
+
+    (void)configured;
+}
 
 void Expect(bool condition, const std::string& message) {
     if (!condition) {
@@ -39,6 +78,12 @@ LRESULT CALLBACK TestWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
     if (ImGui_ImplWin32_WndProcHandler(hwnd, message, wParam, lParam)) {
         return TRUE;
     }
+
+    if (message == WM_CLOSE) {
+        DestroyWindow(hwnd);
+        return 0;
+    }
+
     return DefWindowProcW(hwnd, message, wParam, lParam);
 }
 
@@ -68,7 +113,7 @@ class ScopedTabSelection {
 
 class DummyWindow {
   public:
-    DummyWindow(int width, int height) : m_width(width), m_height(height) {
+        DummyWindow(int width, int height, bool visible = false) : m_width(width), m_height(height) {
         RegisterWindowClass();
 
         m_hwnd = CreateWindowExW(0, kWindowClassName, L"Toolscreen GUI Integration Tests", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
@@ -103,8 +148,13 @@ class DummyWindow {
         Expect(glewStatus == GLEW_OK,
                "Failed to initialize GLEW for GUI integration tests: " + std::string(reinterpret_cast<const char*>(glewGetErrorString(glewStatus))));
 
-        ShowWindow(m_hwnd, SW_HIDE);
-        UpdateCachedWindowMetricsFromSize(m_width, m_height);
+        RefreshClientSize();
+        ShowWindow(m_hwnd, visible ? SW_SHOW : SW_HIDE);
+        if (visible) {
+            UpdateWindow(m_hwnd);
+            SetForegroundWindow(m_hwnd);
+            SetFocus(m_hwnd);
+        }
         g_minecraftHwnd.store(m_hwnd, std::memory_order_release);
     }
 
@@ -130,48 +180,113 @@ class DummyWindow {
 
     HWND hwnd() const { return m_hwnd; }
 
-    void PumpMessages() {
-        MSG message{};
-        while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
-            TranslateMessage(&message);
-            DispatchMessageW(&message);
+    bool isOpen() const { return m_isOpen; }
+
+    void SetTitle(const std::string& title) {
+        if (m_hwnd != nullptr) {
+            SetWindowTextW(m_hwnd, Utf8ToWide(title).c_str());
         }
     }
 
-    void BeginFrame() {
-        PumpMessages();
+    void Show(bool visible) {
+        if (m_hwnd == nullptr) {
+            return;
+        }
+
+        ShowWindow(m_hwnd, visible ? SW_SHOW : SW_HIDE);
+        if (visible) {
+            UpdateWindow(m_hwnd);
+            SetForegroundWindow(m_hwnd);
+            SetFocus(m_hwnd);
+        }
+    }
+
+    bool PumpMessages() {
+        MSG message{};
+        while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+            if (message.message == WM_QUIT) {
+                m_isOpen = false;
+                return false;
+            }
+
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+
+        m_isOpen = m_hwnd != nullptr && IsWindow(m_hwnd) != FALSE;
+        return m_isOpen;
+    }
+
+    bool PrepareRenderSurface() {
+        if (!PumpMessages()) {
+            return false;
+        }
+
         InitializeImGuiContext(m_hwnd);
+        RefreshClientSize();
 
         glViewport(0, 0, m_width, m_height);
         glClearColor(0.08f, 0.08f, 0.10f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
+        return true;
+    }
+
+    bool BeginFrame() {
+        if (!PrepareRenderSurface()) {
+            return false;
+        }
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplWin32_NewFrame();
         SyncImGuiDisplayMetrics(m_hwnd);
         ApplyDynamicGuiFontRefresh();
         ImGui::NewFrame();
+        return true;
     }
 
     void EndFrame() {
         ImGui::Render();
-
-        const ImDrawData* drawData = ImGui::GetDrawData();
-        Expect(drawData != nullptr, "Expected ImGui draw data to exist after rendering.");
-        Expect(drawData->CmdListsCount > 0, "Expected rendered GUI to contain at least one command list.");
-        Expect(drawData->TotalVtxCount > 0, "Expected rendered GUI to contain at least one vertex.");
-
+        ValidateDrawData();
         RenderImGuiWithStateProtection(true);
+        PresentSurface();
+    }
+
+    void PresentSurface() {
         Expect(SwapBuffers(m_hdc) == TRUE, "SwapBuffers failed for GUI integration test window.");
         PumpMessages();
     }
 
   private:
+    void RefreshClientSize() {
+        RECT clientRect{};
+        if (m_hwnd == nullptr || GetClientRect(m_hwnd, &clientRect) == FALSE) {
+            return;
+        }
+
+        const int clientWidth = clientRect.right - clientRect.left;
+        const int clientHeight = clientRect.bottom - clientRect.top;
+        if (clientWidth <= 0 || clientHeight <= 0) {
+            return;
+        }
+
+        m_width = clientWidth;
+        m_height = clientHeight;
+        UpdateCachedWindowMetricsFromSize(m_width, m_height);
+    }
+
+    static void ValidateDrawData() {
+        const ImDrawData* drawData = ImGui::GetDrawData();
+        Expect(drawData != nullptr, "Expected ImGui draw data to exist after rendering.");
+        Expect(drawData->CmdListsCount > 0, "Expected rendered GUI to contain at least one command list.");
+        Expect(drawData->TotalVtxCount > 0, "Expected rendered GUI to contain at least one vertex.");
+    }
+
     HWND m_hwnd = nullptr;
     HDC m_hdc = nullptr;
     HGLRC m_glContext = nullptr;
     int m_width = 0;
     int m_height = 0;
+    bool m_isOpen = true;
 };
 
 std::filesystem::path PrepareCaseDirectory(std::string_view caseName) {
@@ -223,24 +338,1043 @@ void ResetGlobalTestState(const std::filesystem::path& root) {
 
 void RenderSettingsFrame(DummyWindow& window, const char* topLevelTabLabel, const char* inputsSubTabLabel = nullptr) {
     ScopedTabSelection scopedSelection(topLevelTabLabel, inputsSubTabLabel);
-    window.BeginFrame();
+    Expect(window.BeginFrame(), "GUI integration test window closed unexpectedly.");
     RenderSettingsGUI();
     window.EndFrame();
 }
 
-void RenderConfigErrorFrame(DummyWindow& window) {
-    window.PumpMessages();
-    InitializeImGuiContext(window.hwnd());
+void RenderInteractiveSettingsFrame(DummyWindow& window) {
+    if (!window.BeginFrame()) {
+        return;
+    }
+
+    RenderSettingsGUI();
+    window.EndFrame();
+}
+
+void RenderConfigErrorFrame(DummyWindow& window, bool presentFrame = false) {
+    Expect(window.PrepareRenderSurface(), "GUI integration test window closed unexpectedly.");
     HandleConfigLoadFailed(nullptr, nullptr);
 
     const ImDrawData* drawData = ImGui::GetDrawData();
     Expect(drawData != nullptr, "Expected config-error rendering path to produce ImGui draw data.");
     Expect(drawData->DisplaySize.x > 0.0f && drawData->DisplaySize.y > 0.0f,
            "Expected config-error rendering path to populate a valid ImGui display size.");
+
+    if (presentFrame) {
+        window.PresentSurface();
+    }
 }
 
-void RunConfigDefaultLoadTest() {
-    DummyWindow window(kWindowWidth, kWindowHeight);
+void RenderInteractiveConfigErrorFrame(DummyWindow& window) {
+    RenderConfigErrorFrame(window, true);
+}
+
+template <typename RenderFrameFn>
+void RunVisualLoop(DummyWindow& window, std::string_view testCaseName, RenderFrameFn&& renderFrame);
+
+constexpr char kVerifierModeId[] = "Verifier Mode";
+constexpr char kPrecisionModeId[] = "Precision Mode";
+constexpr char kRelativeModeId[] = "Relative Mode";
+constexpr char kExpressionModeId[] = "Expression Mode";
+constexpr char kVerifierMirrorName[] = "Verifier Mirror";
+constexpr char kAuxMirrorName[] = "Aux Mirror";
+constexpr char kVerifierGroupName[] = "Verifier Group";
+constexpr char kVerifierImageName[] = "Checklist Image";
+constexpr char kVerifierWindowOverlayName[] = "Verifier Window";
+constexpr char kVerifierBrowserOverlayName[] = "Verifier Browser";
+
+bool NearlyEqual(float actual, float expected, float epsilon = 0.0001f) {
+    return std::fabs(actual - expected) <= epsilon;
+}
+
+void ExpectFloatNear(float actual, float expected, const std::string& message, float epsilon = 0.0001f) {
+    Expect(NearlyEqual(actual, expected, epsilon), message + " (expected " + std::to_string(expected) + ", got " +
+                                             std::to_string(actual) + ")");
+}
+
+void ExpectColorNear(const Color& actual, const Color& expected, const std::string& message, float epsilon = 0.005f) {
+    ExpectFloatNear(actual.r, expected.r, message + " [r]", epsilon);
+    ExpectFloatNear(actual.g, expected.g, message + " [g]", epsilon);
+    ExpectFloatNear(actual.b, expected.b, message + " [b]", epsilon);
+    ExpectFloatNear(actual.a, expected.a, message + " [a]", epsilon);
+}
+
+template <typename T>
+void ExpectVectorEquals(const std::vector<T>& actual, const std::vector<T>& expected, const std::string& message) {
+    Expect(actual == expected, message);
+}
+
+std::filesystem::path GetCurrentConfigPath() {
+    return std::filesystem::path(g_toolscreenPath) / "config.toml";
+}
+
+void ResetRuntimeStateForReload() {
+    g_config = Config();
+    g_configIsDirty.store(false, std::memory_order_release);
+    g_configLoadFailed.store(false, std::memory_order_release);
+    g_configLoaded.store(false, std::memory_order_release);
+    g_showGui.store(true, std::memory_order_release);
+    g_welcomeToastVisible.store(false, std::memory_order_release);
+    g_configurePromptDismissedThisSession.store(false, std::memory_order_release);
+    g_screenshotRequested.store(false, std::memory_order_release);
+
+    {
+        std::lock_guard<std::mutex> lock(g_modeIdMutex);
+        g_currentModeId.clear();
+        g_modeIdBuffers[0].clear();
+        g_modeIdBuffers[1].clear();
+    }
+    g_currentModeIdIndex.store(0, std::memory_order_release);
+
+    {
+        std::lock_guard<std::mutex> lock(g_configErrorMutex);
+        g_configLoadError.clear();
+    }
+
+    ResetTransientBindingUiState();
+}
+
+void ReloadConfigFromDisk() {
+    ResetRuntimeStateForReload();
+    LoadConfig();
+}
+
+void SaveAndReloadCurrentConfig() {
+    g_configIsDirty.store(true, std::memory_order_release);
+    SaveConfigImmediate();
+    ReloadConfigFromDisk();
+}
+
+void WriteConfigFixtureToDisk(const Config& config) {
+    g_config = config;
+    g_configIsDirty.store(true, std::memory_order_release);
+    SaveConfigImmediate();
+    Expect(std::filesystem::exists(GetCurrentConfigPath()), "Failed to write config fixture to disk.");
+}
+
+void ExpectConfigLoadSucceeded(const std::string& context) {
+    std::string loadError;
+    {
+        std::lock_guard<std::mutex> lock(g_configErrorMutex);
+        loadError = g_configLoadError;
+    }
+
+    Expect(!g_configLoadFailed.load(std::memory_order_acquire),
+           context + " should load without config errors." + (loadError.empty() ? std::string() : (" Error: " + loadError)));
+    Expect(g_configLoaded.load(std::memory_order_acquire), context + " should mark the config as loaded.");
+}
+
+const ModeConfig& FindModeOrThrow(std::string_view modeId) {
+    for (const auto& mode : g_config.modes) {
+        if (EqualsIgnoreCase(mode.id, std::string(modeId))) {
+            return mode;
+        }
+    }
+
+    throw std::runtime_error("Missing mode: " + std::string(modeId));
+}
+
+const MirrorConfig& FindMirrorOrThrow(std::string_view mirrorName) {
+    for (const auto& mirror : g_config.mirrors) {
+        if (EqualsIgnoreCase(mirror.name, std::string(mirrorName))) {
+            return mirror;
+        }
+    }
+
+    throw std::runtime_error("Missing mirror: " + std::string(mirrorName));
+}
+
+const MirrorGroupConfig& FindMirrorGroupOrThrow(std::string_view groupName) {
+    for (const auto& group : g_config.mirrorGroups) {
+        if (EqualsIgnoreCase(group.name, std::string(groupName))) {
+            return group;
+        }
+    }
+
+    throw std::runtime_error("Missing mirror group: " + std::string(groupName));
+}
+
+const ImageConfig& FindImageOrThrow(std::string_view imageName) {
+    for (const auto& image : g_config.images) {
+        if (EqualsIgnoreCase(image.name, std::string(imageName))) {
+            return image;
+        }
+    }
+
+    throw std::runtime_error("Missing image: " + std::string(imageName));
+}
+
+const WindowOverlayConfig& FindWindowOverlayOrThrow(std::string_view overlayName) {
+    for (const auto& overlay : g_config.windowOverlays) {
+        if (EqualsIgnoreCase(overlay.name, std::string(overlayName))) {
+            return overlay;
+        }
+    }
+
+    throw std::runtime_error("Missing window overlay: " + std::string(overlayName));
+}
+
+const BrowserOverlayConfig& FindBrowserOverlayOrThrow(std::string_view overlayName) {
+    for (const auto& overlay : g_config.browserOverlays) {
+        if (EqualsIgnoreCase(overlay.name, std::string(overlayName))) {
+            return overlay;
+        }
+    }
+
+    throw std::runtime_error("Missing browser overlay: " + std::string(overlayName));
+}
+
+const HotkeyConfig& FindHotkeyBySecondaryModeOrThrow(std::string_view secondaryModeId) {
+    for (const auto& hotkey : g_config.hotkeys) {
+        if (EqualsIgnoreCase(hotkey.secondaryMode, std::string(secondaryModeId))) {
+            return hotkey;
+        }
+    }
+
+    throw std::runtime_error("Missing hotkey for mode: " + std::string(secondaryModeId));
+}
+
+const SensitivityHotkeyConfig& FindSensitivityHotkeyOrThrow(const std::vector<DWORD>& keys) {
+    for (const auto& hotkey : g_config.sensitivityHotkeys) {
+        if (hotkey.keys == keys) {
+            return hotkey;
+        }
+    }
+
+    throw std::runtime_error("Missing sensitivity hotkey fixture.");
+}
+
+void PopulateRichConfigFixture() {
+    g_config.lang = "zh_CN";
+    g_config.fontPath = "C:\\Windows\\Fonts\\consola.ttf";
+    g_config.fpsLimit = 144;
+    g_config.fpsLimitSleepThreshold = 7;
+    g_config.mirrorGammaMode = MirrorGammaMode::AssumeLinear;
+    g_config.disableHookChaining = true;
+    g_config.allowCursorEscape = true;
+    g_config.mouseSensitivity = 1.75f;
+    g_config.mouseMovementPollingRate = 1150;
+    g_config.windowsMouseSpeed = 13;
+    g_config.hideAnimationsInGame = true;
+    g_config.limitCaptureFramerate = false;
+    g_config.obsFramerate = 73;
+    g_config.keyRepeatStartDelay = 275;
+    g_config.keyRepeatDelay = 42;
+    g_config.keyRepeatResumePreviousHeldKey = false;
+    g_config.basicModeEnabled = false;
+    g_config.restoreWindowedModeOnFullscreenExit = false;
+    g_config.disableFullscreenPrompt = true;
+    g_config.disableConfigurePrompt = true;
+    g_config.guiHotkey = { VK_CONTROL, VK_SHIFT, 'G' };
+    g_config.borderlessHotkey = { VK_MENU, VK_RETURN };
+    g_config.autoBorderless = true;
+    g_config.imageOverlaysHotkey = { VK_F8 };
+    g_config.windowOverlaysHotkey = { VK_F7 };
+
+    g_config.debug.showPerformanceOverlay = true;
+    g_config.debug.showProfiler = true;
+    g_config.debug.profilerScale = 1.25f;
+    g_config.debug.showHotkeyDebug = true;
+    g_config.debug.fakeCursor = true;
+    g_config.debug.showTextureGrid = true;
+    g_config.debug.delayRenderingUntilFinished = true;
+    g_config.debug.virtualCameraEnabled = true;
+    g_config.debug.logModeSwitch = true;
+    g_config.debug.logAnimation = true;
+    g_config.debug.logHotkey = true;
+    g_config.debug.logObs = true;
+    g_config.debug.logWindowOverlay = true;
+    g_config.debug.logFileMonitor = true;
+    g_config.debug.logImageMonitor = true;
+    g_config.debug.logPerformance = true;
+    g_config.debug.logTextureOps = true;
+    g_config.debug.logGui = true;
+    g_config.debug.logInit = true;
+    g_config.debug.logCursorTextures = true;
+
+    g_config.cursors.enabled = true;
+    g_config.cursors.title.cursorName = "title.cur";
+    g_config.cursors.title.cursorSize = 64;
+    g_config.cursors.wall.cursorName = "wall.cur";
+    g_config.cursors.wall.cursorSize = 72;
+    g_config.cursors.ingame.cursorName = "ingame.cur";
+    g_config.cursors.ingame.cursorSize = 88;
+
+    g_config.eyezoom.cloneWidth = 28;
+    g_config.eyezoom.overlayWidth = 9;
+    g_config.eyezoom.cloneHeight = 1500;
+    g_config.eyezoom.stretchWidth = 600;
+    g_config.eyezoom.windowWidth = 420;
+    g_config.eyezoom.windowHeight = 9000;
+    g_config.eyezoom.zoomAreaWidth = 222;
+    g_config.eyezoom.zoomAreaHeight = 777;
+    g_config.eyezoom.useCustomSizePosition = true;
+    g_config.eyezoom.positionX = 33;
+    g_config.eyezoom.positionY = 44;
+    g_config.eyezoom.autoFontSize = false;
+    g_config.eyezoom.textFontSize = 31;
+    g_config.eyezoom.textFontPath = "C:\\Windows\\Fonts\\verdana.ttf";
+    g_config.eyezoom.rectHeight = 35;
+    g_config.eyezoom.linkRectToFont = false;
+    g_config.eyezoom.gridColor1 = { 0.2f, 0.4f, 0.6f, 1.0f };
+    g_config.eyezoom.gridColor1Opacity = 0.8f;
+    g_config.eyezoom.gridColor2 = { 0.6f, 0.3f, 0.2f, 1.0f };
+    g_config.eyezoom.gridColor2Opacity = 0.7f;
+    g_config.eyezoom.centerLineColor = { 0.9f, 0.8f, 0.1f, 1.0f };
+    g_config.eyezoom.centerLineColorOpacity = 0.65f;
+    g_config.eyezoom.textColor = { 0.1f, 0.2f, 0.3f, 1.0f };
+    g_config.eyezoom.textColorOpacity = 0.95f;
+    g_config.eyezoom.slideZoomIn = true;
+    g_config.eyezoom.slideMirrorsIn = true;
+    g_config.eyezoom.overlays = {
+        { "Overlay One", "C:\\temp\\overlay-one.png", EyeZoomOverlayDisplayMode::Fit, 100, 100, 0.5f },
+        { "Overlay Two", "C:\\temp\\overlay-two.png", EyeZoomOverlayDisplayMode::Manual, 240, 140, 0.85f },
+    };
+    g_config.eyezoom.activeOverlayIndex = 1;
+
+    g_config.keyRebinds.enabled = true;
+    g_config.keyRebinds.resolveRebindTargetsForHotkeys = false;
+    g_config.keyRebinds.toggleHotkey = { VK_F4 };
+    KeyRebind rebind;
+    rebind.fromKey = 'J';
+    rebind.toKey = 'K';
+    rebind.enabled = true;
+    rebind.useCustomOutput = true;
+    rebind.customOutputVK = 'L';
+    rebind.customOutputUnicode = 0x00F8;
+    rebind.customOutputScanCode = 0x26;
+    rebind.baseOutputShifted = true;
+    rebind.shiftLayerEnabled = true;
+    rebind.shiftLayerOutputVK = 'P';
+    rebind.shiftLayerOutputUnicode = 0x00D8;
+    rebind.shiftLayerOutputShifted = true;
+    g_config.keyRebinds.rebinds = { rebind };
+
+    g_config.appearance.theme = "Sunrise";
+    g_config.appearance.customColors["WindowBg"] = { 0.1f, 0.11f, 0.12f, 1.0f };
+    g_config.appearance.customColors["Header"] = { 0.8f, 0.4f, 0.2f, 1.0f };
+
+    MirrorConfig verifierMirror;
+    verifierMirror.name = kVerifierMirrorName;
+    verifierMirror.captureWidth = 73;
+    verifierMirror.captureHeight = 41;
+    verifierMirror.input = {
+        { 10, 20, "centerViewport" },
+        { -5, 8, "topLeftScreen" },
+    };
+    verifierMirror.output.x = 30;
+    verifierMirror.output.y = -40;
+    verifierMirror.output.useRelativePosition = true;
+    verifierMirror.output.relativeX = 0.25f;
+    verifierMirror.output.relativeY = 0.75f;
+    verifierMirror.output.scale = 1.25f;
+    verifierMirror.output.separateScale = true;
+    verifierMirror.output.scaleX = 0.9f;
+    verifierMirror.output.scaleY = 1.1f;
+    verifierMirror.output.relativeTo = "centerViewport";
+    verifierMirror.colors.targetColors = {
+        { 1.0f, 0.0f, 0.0f, 1.0f },
+        { 0.0f, 1.0f, 0.0f, 1.0f },
+    };
+    verifierMirror.colors.output = { 0.1f, 0.2f, 0.3f, 0.4f };
+    verifierMirror.colors.border = { 0.7f, 0.8f, 0.2f, 1.0f };
+    verifierMirror.colorSensitivity = 0.123f;
+    verifierMirror.border.type = MirrorBorderType::Static;
+    verifierMirror.border.staticShape = MirrorBorderShape::Circle;
+    verifierMirror.border.staticColor = { 0.4f, 0.5f, 0.6f, 1.0f };
+    verifierMirror.border.staticThickness = 5;
+    verifierMirror.border.staticRadius = 18;
+    verifierMirror.border.staticOffsetX = 7;
+    verifierMirror.border.staticOffsetY = -4;
+    verifierMirror.border.staticWidth = 91;
+    verifierMirror.border.staticHeight = 87;
+    verifierMirror.fps = 48;
+    verifierMirror.opacity = 0.654f;
+    verifierMirror.rawOutput = true;
+    verifierMirror.colorPassthrough = true;
+    verifierMirror.gradientOutput = true;
+    verifierMirror.gradient.gradientStops = {
+        { { 0.2f, 0.1f, 0.8f, 1.0f }, 0.0f },
+        { { 0.8f, 0.9f, 0.2f, 1.0f }, 1.0f },
+    };
+    verifierMirror.gradient.gradientAngle = 42.0f;
+    verifierMirror.gradient.gradientAnimation = GradientAnimationType::Rotate;
+    verifierMirror.gradient.gradientAnimationSpeed = 1.7f;
+    verifierMirror.gradient.gradientColorFade = true;
+    verifierMirror.onlyOnMyScreen = true;
+
+    MirrorConfig auxMirror;
+    auxMirror.name = kAuxMirrorName;
+    auxMirror.captureWidth = 88;
+    auxMirror.captureHeight = 66;
+    auxMirror.input = { { 3, 4, "centerViewport" } };
+    auxMirror.output.x = 12;
+    auxMirror.output.y = 18;
+    auxMirror.output.scale = 0.95f;
+    auxMirror.output.relativeTo = "topLeftScreen";
+    auxMirror.fps = 30;
+    auxMirror.opacity = 0.95f;
+
+    g_config.mirrors.push_back(verifierMirror);
+    g_config.mirrors.push_back(auxMirror);
+
+    MirrorGroupConfig group;
+    group.name = kVerifierGroupName;
+    group.output.x = 15;
+    group.output.y = 25;
+    group.output.useRelativePosition = true;
+    group.output.relativeX = 0.5f;
+    group.output.relativeY = 0.4f;
+    group.output.separateScale = true;
+    group.output.scaleX = 1.3f;
+    group.output.scaleY = 0.7f;
+    group.output.relativeTo = "topLeftScreen";
+    group.mirrors = {
+        { kVerifierMirrorName, true, 0.6f, 0.4f, 10, -10 },
+        { kAuxMirrorName, false, 0.4f, 0.6f, -20, 30 },
+    };
+    g_config.mirrorGroups.push_back(group);
+
+    ImageConfig image;
+    image.name = kVerifierImageName;
+    image.path = "C:\\temp\\checklist.png";
+    image.x = 11;
+    image.y = 22;
+    image.scale = 1.6f;
+    image.relativeSizing = false;
+    image.width = 320;
+    image.height = 180;
+    image.relativeTo = "centerViewport";
+    image.crop_top = 3;
+    image.crop_bottom = 4;
+    image.crop_left = 5;
+    image.crop_right = 6;
+    image.enableColorKey = true;
+    image.colorKeys = {
+        { { 1.0f, 0.0f, 1.0f, 1.0f }, 0.02f },
+        { { 0.0f, 1.0f, 1.0f, 1.0f }, 0.03f },
+    };
+    image.opacity = 0.81f;
+    image.background.enabled = true;
+    image.background.color = { 0.2f, 0.3f, 0.4f, 1.0f };
+    image.background.opacity = 0.33f;
+    image.pixelatedScaling = true;
+    image.onlyOnMyScreen = true;
+    image.border.enabled = true;
+    image.border.color = { 0.9f, 0.5f, 0.1f, 1.0f };
+    image.border.width = 7;
+    image.border.radius = 12;
+    g_config.images.push_back(image);
+
+    WindowOverlayConfig windowOverlay;
+    windowOverlay.name = kVerifierWindowOverlayName;
+    windowOverlay.windowTitle = "Speedrun Timer";
+    windowOverlay.windowClass = "TimerClass";
+    windowOverlay.executableName = "Timer.exe";
+    windowOverlay.windowMatchPriority = "title_executable";
+    windowOverlay.x = -30;
+    windowOverlay.y = 45;
+    windowOverlay.scale = 1.2f;
+    windowOverlay.relativeTo = "centerViewport";
+    windowOverlay.crop_top = 4;
+    windowOverlay.crop_bottom = 5;
+    windowOverlay.crop_left = 6;
+    windowOverlay.crop_right = 7;
+    windowOverlay.enableColorKey = true;
+    windowOverlay.colorKeys = {
+        { { 0.1f, 0.9f, 0.1f, 1.0f }, 0.05f },
+    };
+    windowOverlay.opacity = 0.71f;
+    windowOverlay.background.enabled = true;
+    windowOverlay.background.color = { 0.05f, 0.06f, 0.07f, 1.0f };
+    windowOverlay.background.opacity = 0.4f;
+    windowOverlay.pixelatedScaling = true;
+    windowOverlay.onlyOnMyScreen = true;
+    windowOverlay.fps = 27;
+    windowOverlay.searchInterval = 2500;
+    windowOverlay.captureMethod = "BitBlt";
+    windowOverlay.forceUpdate = true;
+    windowOverlay.enableInteraction = true;
+    windowOverlay.border.enabled = true;
+    windowOverlay.border.color = { 0.4f, 0.7f, 0.9f, 1.0f };
+    windowOverlay.border.width = 3;
+    windowOverlay.border.radius = 8;
+    g_config.windowOverlays.push_back(windowOverlay);
+
+    BrowserOverlayConfig browserOverlay;
+    browserOverlay.name = kVerifierBrowserOverlayName;
+    browserOverlay.url = "https://example.com/dashboard";
+    browserOverlay.customCss = "body { background: transparent; }";
+    browserOverlay.browserWidth = 1024;
+    browserOverlay.browserHeight = 576;
+    browserOverlay.x = 9;
+    browserOverlay.y = 19;
+    browserOverlay.scale = 1.15f;
+    browserOverlay.relativeTo = "centerViewport";
+    browserOverlay.crop_top = 8;
+    browserOverlay.crop_bottom = 7;
+    browserOverlay.crop_left = 6;
+    browserOverlay.crop_right = 5;
+    browserOverlay.enableColorKey = true;
+    browserOverlay.colorKeys = {
+        { { 0.9f, 0.2f, 0.2f, 1.0f }, 0.04f },
+    };
+    browserOverlay.opacity = 0.67f;
+    browserOverlay.background.enabled = true;
+    browserOverlay.background.color = { 0.1f, 0.11f, 0.12f, 1.0f };
+    browserOverlay.background.opacity = 0.44f;
+    browserOverlay.pixelatedScaling = true;
+    browserOverlay.onlyOnMyScreen = true;
+    browserOverlay.fps = 25;
+    browserOverlay.transparentBackground = true;
+    browserOverlay.muteAudio = false;
+    browserOverlay.allowSystemMediaKeys = false;
+    browserOverlay.reloadOnUpdate = true;
+    browserOverlay.reloadInterval = 2500;
+    browserOverlay.border.enabled = true;
+    browserOverlay.border.color = { 0.8f, 0.3f, 0.2f, 1.0f };
+    browserOverlay.border.width = 4;
+    browserOverlay.border.radius = 10;
+    g_config.browserOverlays.push_back(browserOverlay);
+
+    ModeConfig verifierMode;
+    verifierMode.id = kVerifierModeId;
+    verifierMode.width = 1280;
+    verifierMode.height = 720;
+    verifierMode.manualWidth = 1280;
+    verifierMode.manualHeight = 720;
+    verifierMode.background.selectedMode = "gradient";
+    verifierMode.background.gradientStops = {
+        { { 0.15f, 0.2f, 0.35f, 1.0f }, 0.0f },
+        { { 0.7f, 0.4f, 0.2f, 1.0f }, 1.0f },
+    };
+    verifierMode.background.gradientAngle = 55.0f;
+    verifierMode.background.gradientAnimation = GradientAnimationType::Slide;
+    verifierMode.background.gradientAnimationSpeed = 1.3f;
+    verifierMode.background.gradientColorFade = true;
+    verifierMode.sources = {
+        { ModeSourceType::Mirror, kVerifierMirrorName },
+        { ModeSourceType::MirrorGroup, kVerifierGroupName },
+        { ModeSourceType::Image, kVerifierImageName },
+        { ModeSourceType::WindowOverlay, kVerifierWindowOverlayName },
+        { ModeSourceType::BrowserOverlay, kVerifierBrowserOverlayName },
+    };
+    verifierMode.stretch.enabled = true;
+    verifierMode.stretch.width = 1400;
+    verifierMode.stretch.height = 800;
+    verifierMode.stretch.x = 15;
+    verifierMode.stretch.y = 25;
+    verifierMode.gameTransition = GameTransitionType::Bounce;
+    verifierMode.overlayTransition = OverlayTransitionType::Cut;
+    verifierMode.backgroundTransition = BackgroundTransitionType::Cut;
+    verifierMode.transitionDurationMs = 777;
+    verifierMode.easeInPower = 2.5f;
+    verifierMode.easeOutPower = 4.25f;
+    verifierMode.bounceCount = 3;
+    verifierMode.bounceIntensity = 0.42f;
+    verifierMode.bounceDurationMs = 333;
+    verifierMode.relativeStretching = true;
+    verifierMode.skipAnimateX = true;
+    verifierMode.skipAnimateY = false;
+    verifierMode.border.enabled = true;
+    verifierMode.border.color = { 0.3f, 0.4f, 0.5f, 1.0f };
+    verifierMode.border.width = 9;
+    verifierMode.border.radius = 14;
+    verifierMode.sensitivityOverrideEnabled = true;
+    verifierMode.modeSensitivity = 0.88f;
+    verifierMode.separateXYSensitivity = true;
+    verifierMode.modeSensitivityX = 0.91f;
+    verifierMode.modeSensitivityY = 0.72f;
+    verifierMode.slideMirrorsIn = true;
+    g_config.modes.push_back(verifierMode);
+
+    ModeConfig precisionMode;
+    precisionMode.id = kPrecisionModeId;
+    precisionMode.width = 960;
+    precisionMode.height = 540;
+    precisionMode.manualWidth = 960;
+    precisionMode.manualHeight = 540;
+    precisionMode.background.selectedMode = "color";
+    precisionMode.background.color = { 0.02f, 0.03f, 0.04f, 1.0f };
+    precisionMode.sources = { { ModeSourceType::Mirror, kAuxMirrorName } };
+    g_config.modes.push_back(precisionMode);
+
+    g_config.defaultMode = kVerifierModeId;
+
+    HotkeyConfig hotkey;
+    hotkey.keys = { VK_F6, 'Q' };
+    hotkey.mainMode = "Fullscreen";
+    hotkey.secondaryMode = kVerifierModeId;
+    hotkey.altSecondaryModes = { { { 'E', 'R' }, kPrecisionModeId } };
+    hotkey.conditions.gameState = { "ingame", "wall" };
+    hotkey.conditions.exclusions = { VK_LSHIFT, VK_RBUTTON };
+    hotkey.debounce = 220;
+    hotkey.triggerOnRelease = true;
+    hotkey.triggerOnHold = true;
+    hotkey.blockKeyFromGame = true;
+    hotkey.allowExitToFullscreenRegardlessOfGameState = true;
+    g_config.hotkeys.push_back(hotkey);
+
+    SensitivityHotkeyConfig sensitivityHotkey;
+    sensitivityHotkey.keys = { VK_F9 };
+    sensitivityHotkey.sensitivity = 0.55f;
+    sensitivityHotkey.separateXY = true;
+    sensitivityHotkey.sensitivityX = 0.75f;
+    sensitivityHotkey.sensitivityY = 0.95f;
+    sensitivityHotkey.toggle = true;
+    sensitivityHotkey.conditions.gameState = { "menu" };
+    sensitivityHotkey.conditions.exclusions = { VK_MENU };
+    sensitivityHotkey.debounce = 350;
+    g_config.sensitivityHotkeys.push_back(sensitivityHotkey);
+
+    ResizeHotkeySecondaryModes(g_config.hotkeys.size());
+    ResetAllHotkeySecondaryModes(g_config);
+    {
+        std::lock_guard<std::mutex> hotkeyLock(g_hotkeyMainKeysMutex);
+        RebuildHotkeyMainKeys_Internal();
+    }
+
+    g_configIsDirty.store(true, std::memory_order_release);
+}
+
+void VerifyRichGlobalSettings() {
+    Expect(g_config.lang == "zh_CN", "Expected language to roundtrip.");
+    Expect(g_config.fontPath == "C:\\Windows\\Fonts\\consola.ttf", "Expected font path to roundtrip.");
+    Expect(g_config.defaultMode == kVerifierModeId, "Expected default mode to roundtrip.");
+    Expect(g_config.fpsLimit == 144, "Expected fps limit to roundtrip.");
+    Expect(g_config.fpsLimitSleepThreshold == 7, "Expected fps sleep threshold to roundtrip.");
+    Expect(g_config.mirrorGammaMode == MirrorGammaMode::AssumeLinear, "Expected mirror gamma mode to roundtrip.");
+    Expect(g_config.disableHookChaining, "Expected disableHookChaining to roundtrip.");
+    Expect(g_config.allowCursorEscape, "Expected allowCursorEscape to roundtrip.");
+    ExpectFloatNear(g_config.mouseSensitivity, 1.75f, "Expected mouse sensitivity to roundtrip.");
+    Expect(g_config.mouseMovementPollingRate == 1150, "Expected polling rate to roundtrip.");
+    Expect(g_config.windowsMouseSpeed == 13, "Expected Windows mouse speed to roundtrip.");
+    Expect(g_config.hideAnimationsInGame, "Expected hideAnimationsInGame to roundtrip.");
+    Expect(!g_config.limitCaptureFramerate, "Expected limitCaptureFramerate to roundtrip.");
+    Expect(g_config.obsFramerate == 73, "Expected obsFramerate to roundtrip.");
+    Expect(g_config.keyRepeatStartDelay == 275, "Expected keyRepeatStartDelay to roundtrip.");
+    Expect(g_config.keyRepeatDelay == 42, "Expected keyRepeatDelay to roundtrip.");
+    Expect(!g_config.keyRepeatResumePreviousHeldKey, "Expected keyRepeatResumePreviousHeldKey to roundtrip.");
+    Expect(!g_config.basicModeEnabled, "Expected basicModeEnabled to roundtrip.");
+    Expect(!g_config.restoreWindowedModeOnFullscreenExit, "Expected restoreWindowedModeOnFullscreenExit to roundtrip.");
+    Expect(g_config.disableFullscreenPrompt, "Expected disableFullscreenPrompt to roundtrip.");
+    Expect(g_config.disableConfigurePrompt, "Expected disableConfigurePrompt to roundtrip.");
+    ExpectVectorEquals(g_config.guiHotkey, std::vector<DWORD>{ VK_CONTROL, VK_SHIFT, 'G' }, "Expected GUI hotkey to roundtrip.");
+    ExpectVectorEquals(g_config.borderlessHotkey, std::vector<DWORD>{ VK_MENU, VK_RETURN }, "Expected borderless hotkey to roundtrip.");
+    Expect(g_config.autoBorderless, "Expected autoBorderless to roundtrip.");
+    ExpectVectorEquals(g_config.imageOverlaysHotkey, std::vector<DWORD>{ VK_F8 }, "Expected image overlay hotkey to roundtrip.");
+    ExpectVectorEquals(g_config.windowOverlaysHotkey, std::vector<DWORD>{ VK_F7 }, "Expected window overlay hotkey to roundtrip.");
+
+    std::string currentModeId;
+    {
+        std::lock_guard<std::mutex> lock(g_modeIdMutex);
+        currentModeId = g_currentModeId;
+    }
+    Expect(EqualsIgnoreCase(currentModeId, kVerifierModeId), "Expected LoadConfig to apply the saved default mode as current mode.");
+}
+
+void VerifyRichDebugSettings() {
+    Expect(g_config.debug.showPerformanceOverlay, "Expected debug.showPerformanceOverlay to roundtrip.");
+    Expect(g_config.debug.showProfiler, "Expected debug.showProfiler to roundtrip.");
+    ExpectFloatNear(g_config.debug.profilerScale, 1.25f, "Expected debug.profilerScale to roundtrip.");
+    Expect(g_config.debug.showHotkeyDebug, "Expected debug.showHotkeyDebug to roundtrip.");
+    Expect(g_config.debug.fakeCursor, "Expected debug.fakeCursor to roundtrip.");
+    Expect(g_config.debug.showTextureGrid, "Expected debug.showTextureGrid to roundtrip.");
+    Expect(g_config.debug.delayRenderingUntilFinished, "Expected debug.delayRenderingUntilFinished to roundtrip.");
+    Expect(g_config.debug.virtualCameraEnabled, "Expected debug.virtualCameraEnabled to roundtrip.");
+    Expect(g_config.debug.logModeSwitch, "Expected debug.logModeSwitch to roundtrip.");
+    Expect(g_config.debug.logAnimation, "Expected debug.logAnimation to roundtrip.");
+    Expect(g_config.debug.logHotkey, "Expected debug.logHotkey to roundtrip.");
+    Expect(g_config.debug.logObs, "Expected debug.logObs to roundtrip.");
+    Expect(g_config.debug.logWindowOverlay, "Expected debug.logWindowOverlay to roundtrip.");
+    Expect(g_config.debug.logFileMonitor, "Expected debug.logFileMonitor to roundtrip.");
+    Expect(g_config.debug.logImageMonitor, "Expected debug.logImageMonitor to roundtrip.");
+    Expect(g_config.debug.logPerformance, "Expected debug.logPerformance to roundtrip.");
+    Expect(g_config.debug.logTextureOps, "Expected debug.logTextureOps to roundtrip.");
+    Expect(g_config.debug.logGui, "Expected debug.logGui to roundtrip.");
+    Expect(g_config.debug.logInit, "Expected debug.logInit to roundtrip.");
+    Expect(g_config.debug.logCursorTextures, "Expected debug.logCursorTextures to roundtrip.");
+}
+
+void VerifyRichModes() {
+    const ModeConfig& verifierMode = FindModeOrThrow(kVerifierModeId);
+    Expect(verifierMode.width == 1280, "Expected verifier mode width to roundtrip.");
+    Expect(verifierMode.height == 720, "Expected verifier mode height to roundtrip.");
+    Expect(verifierMode.manualWidth == 1280, "Expected verifier mode manualWidth to roundtrip.");
+    Expect(verifierMode.manualHeight == 720, "Expected verifier mode manualHeight to roundtrip.");
+    Expect(verifierMode.background.selectedMode == "gradient", "Expected verifier mode background mode to roundtrip.");
+    Expect(verifierMode.background.gradientStops.size() == 2, "Expected verifier mode gradient stops to roundtrip.");
+    ExpectColorNear(verifierMode.background.gradientStops[0].color, { 0.15f, 0.2f, 0.35f, 1.0f },
+                    "Expected verifier mode first gradient color to roundtrip.");
+    ExpectFloatNear(verifierMode.background.gradientAngle, 55.0f, "Expected verifier mode gradient angle to roundtrip.");
+    Expect(verifierMode.background.gradientAnimation == GradientAnimationType::Slide,
+           "Expected verifier mode gradient animation to roundtrip.");
+    ExpectFloatNear(verifierMode.background.gradientAnimationSpeed, 1.3f,
+                    "Expected verifier mode gradient animation speed to roundtrip.");
+    Expect(verifierMode.background.gradientColorFade, "Expected verifier mode gradient color fade to roundtrip.");
+    Expect(verifierMode.sources.size() == 5, "Expected verifier mode source list to roundtrip.");
+    Expect(verifierMode.sources[0].type == ModeSourceType::Mirror && verifierMode.sources[0].id == kVerifierMirrorName,
+           "Expected first verifier mode source to be the custom mirror.");
+    Expect(verifierMode.sources[1].type == ModeSourceType::MirrorGroup && verifierMode.sources[1].id == kVerifierGroupName,
+           "Expected second verifier mode source to be the custom mirror group.");
+    Expect(verifierMode.sources[2].type == ModeSourceType::Image && verifierMode.sources[2].id == kVerifierImageName,
+           "Expected third verifier mode source to be the custom image.");
+    Expect(verifierMode.sources[3].type == ModeSourceType::WindowOverlay && verifierMode.sources[3].id == kVerifierWindowOverlayName,
+           "Expected fourth verifier mode source to be the custom window overlay.");
+    Expect(verifierMode.sources[4].type == ModeSourceType::BrowserOverlay && verifierMode.sources[4].id == kVerifierBrowserOverlayName,
+           "Expected fifth verifier mode source to be the custom browser overlay.");
+    Expect(verifierMode.stretch.enabled, "Expected verifier mode stretch.enabled to roundtrip.");
+    Expect(verifierMode.stretch.width == 1400 && verifierMode.stretch.height == 800,
+           "Expected verifier mode stretch size to roundtrip.");
+    Expect(verifierMode.stretch.x == 15 && verifierMode.stretch.y == 25,
+           "Expected verifier mode stretch position to roundtrip.");
+    Expect(verifierMode.gameTransition == GameTransitionType::Bounce, "Expected verifier mode game transition to roundtrip.");
+    Expect(verifierMode.transitionDurationMs == 777, "Expected verifier mode transitionDurationMs to roundtrip.");
+    ExpectFloatNear(verifierMode.easeInPower, 2.5f, "Expected verifier mode easeInPower to roundtrip.");
+    ExpectFloatNear(verifierMode.easeOutPower, 4.25f, "Expected verifier mode easeOutPower to roundtrip.");
+    Expect(verifierMode.bounceCount == 3, "Expected verifier mode bounceCount to roundtrip.");
+    ExpectFloatNear(verifierMode.bounceIntensity, 0.42f, "Expected verifier mode bounceIntensity to roundtrip.");
+    Expect(verifierMode.bounceDurationMs == 333, "Expected verifier mode bounceDurationMs to roundtrip.");
+    Expect(verifierMode.relativeStretching, "Expected verifier mode relativeStretching to roundtrip.");
+    Expect(verifierMode.skipAnimateX, "Expected verifier mode skipAnimateX to roundtrip.");
+    Expect(!verifierMode.skipAnimateY, "Expected verifier mode skipAnimateY to roundtrip.");
+    Expect(verifierMode.border.enabled, "Expected verifier mode border.enabled to roundtrip.");
+    ExpectColorNear(verifierMode.border.color, { 0.3f, 0.4f, 0.5f, 1.0f }, "Expected verifier mode border color to roundtrip.");
+    Expect(verifierMode.border.width == 9 && verifierMode.border.radius == 14,
+           "Expected verifier mode border settings to roundtrip.");
+    Expect(verifierMode.sensitivityOverrideEnabled, "Expected verifier mode sensitivityOverrideEnabled to roundtrip.");
+    ExpectFloatNear(verifierMode.modeSensitivity, 0.88f, "Expected verifier mode modeSensitivity to roundtrip.");
+    Expect(verifierMode.separateXYSensitivity, "Expected verifier mode separateXYSensitivity to roundtrip.");
+    ExpectFloatNear(verifierMode.modeSensitivityX, 0.91f, "Expected verifier mode modeSensitivityX to roundtrip.");
+    ExpectFloatNear(verifierMode.modeSensitivityY, 0.72f, "Expected verifier mode modeSensitivityY to roundtrip.");
+    Expect(verifierMode.slideMirrorsIn, "Expected verifier mode slideMirrorsIn to roundtrip.");
+
+    const ModeConfig& precisionMode = FindModeOrThrow(kPrecisionModeId);
+    Expect(precisionMode.width == 960 && precisionMode.height == 540, "Expected precision mode dimensions to roundtrip.");
+    Expect(precisionMode.sources.size() == 1 && precisionMode.sources[0].id == kAuxMirrorName,
+           "Expected precision mode to keep its mirror source.");
+}
+
+void VerifyRichMirrors() {
+    const MirrorConfig& verifierMirror = FindMirrorOrThrow(kVerifierMirrorName);
+    Expect(verifierMirror.captureWidth == 73 && verifierMirror.captureHeight == 41,
+           "Expected verifier mirror capture dimensions to roundtrip.");
+    Expect(verifierMirror.input.size() == 2, "Expected verifier mirror input zones to roundtrip.");
+    Expect(verifierMirror.input[0].x == 10 && verifierMirror.input[0].y == 20 && verifierMirror.input[0].relativeTo == "centerViewport",
+           "Expected verifier mirror first input zone to roundtrip.");
+    Expect(verifierMirror.output.useRelativePosition, "Expected verifier mirror relative output positioning to roundtrip.");
+    ExpectFloatNear(verifierMirror.output.relativeX, 0.25f, "Expected verifier mirror output.relativeX to roundtrip.");
+    ExpectFloatNear(verifierMirror.output.relativeY, 0.75f, "Expected verifier mirror output.relativeY to roundtrip.");
+    ExpectFloatNear(verifierMirror.output.scale, 1.25f, "Expected verifier mirror output.scale to roundtrip.");
+    Expect(verifierMirror.output.separateScale, "Expected verifier mirror output.separateScale to roundtrip.");
+    ExpectFloatNear(verifierMirror.output.scaleX, 0.9f, "Expected verifier mirror output.scaleX to roundtrip.");
+    ExpectFloatNear(verifierMirror.output.scaleY, 1.1f, "Expected verifier mirror output.scaleY to roundtrip.");
+    Expect(verifierMirror.colors.targetColors.size() == 2, "Expected verifier mirror target colors to roundtrip.");
+    ExpectColorNear(verifierMirror.colors.output, { 0.1f, 0.2f, 0.3f, 0.4f }, "Expected verifier mirror output color to roundtrip.");
+    ExpectColorNear(verifierMirror.colors.border, { 0.7f, 0.8f, 0.2f, 1.0f }, "Expected verifier mirror border color to roundtrip.");
+    ExpectFloatNear(verifierMirror.colorSensitivity, 0.123f, "Expected verifier mirror color sensitivity to roundtrip.");
+    Expect(verifierMirror.border.type == MirrorBorderType::Static, "Expected verifier mirror border type to roundtrip.");
+    Expect(verifierMirror.border.staticShape == MirrorBorderShape::Circle, "Expected verifier mirror border shape to roundtrip.");
+    ExpectColorNear(verifierMirror.border.staticColor, { 0.4f, 0.5f, 0.6f, 1.0f },
+                    "Expected verifier mirror static border color to roundtrip.");
+    Expect(verifierMirror.border.staticThickness == 5 && verifierMirror.border.staticRadius == 18,
+           "Expected verifier mirror static border size to roundtrip.");
+    Expect(verifierMirror.border.staticOffsetX == 7 && verifierMirror.border.staticOffsetY == -4,
+           "Expected verifier mirror static border offsets to roundtrip.");
+    Expect(verifierMirror.border.staticWidth == 91 && verifierMirror.border.staticHeight == 87,
+           "Expected verifier mirror static border dimensions to roundtrip.");
+    Expect(verifierMirror.fps == 48, "Expected verifier mirror fps to roundtrip.");
+    ExpectFloatNear(verifierMirror.opacity, 0.654f, "Expected verifier mirror opacity to roundtrip.");
+    Expect(verifierMirror.rawOutput, "Expected verifier mirror rawOutput to roundtrip.");
+    Expect(verifierMirror.colorPassthrough, "Expected verifier mirror colorPassthrough to roundtrip.");
+    Expect(verifierMirror.gradientOutput, "Expected verifier mirror gradientOutput to roundtrip.");
+    Expect(verifierMirror.gradient.gradientStops.size() == 2, "Expected verifier mirror gradient stops to roundtrip.");
+    ExpectFloatNear(verifierMirror.gradient.gradientAngle, 42.0f, "Expected verifier mirror gradient angle to roundtrip.");
+    Expect(verifierMirror.gradient.gradientAnimation == GradientAnimationType::Rotate,
+           "Expected verifier mirror gradient animation to roundtrip.");
+    ExpectFloatNear(verifierMirror.gradient.gradientAnimationSpeed, 1.7f,
+                    "Expected verifier mirror gradient animation speed to roundtrip.");
+    Expect(verifierMirror.gradient.gradientColorFade, "Expected verifier mirror gradient color fade to roundtrip.");
+    Expect(verifierMirror.onlyOnMyScreen, "Expected verifier mirror onlyOnMyScreen to roundtrip.");
+
+    const MirrorConfig& auxMirror = FindMirrorOrThrow(kAuxMirrorName);
+    Expect(auxMirror.captureWidth == 88 && auxMirror.captureHeight == 66, "Expected aux mirror capture dimensions to roundtrip.");
+}
+
+void VerifyRichMirrorGroups() {
+    const MirrorGroupConfig& group = FindMirrorGroupOrThrow(kVerifierGroupName);
+    Expect(group.output.useRelativePosition, "Expected mirror group relative positioning to roundtrip.");
+    ExpectFloatNear(group.output.relativeX, 0.5f, "Expected mirror group output.relativeX to roundtrip.");
+    ExpectFloatNear(group.output.relativeY, 0.4f, "Expected mirror group output.relativeY to roundtrip.");
+    Expect(group.output.separateScale, "Expected mirror group separateScale to roundtrip.");
+    ExpectFloatNear(group.output.scaleX, 1.3f, "Expected mirror group scaleX to roundtrip.");
+    ExpectFloatNear(group.output.scaleY, 0.7f, "Expected mirror group scaleY to roundtrip.");
+    Expect(group.mirrors.size() == 2, "Expected mirror group items to roundtrip.");
+    Expect(group.mirrors[0].mirrorId == kVerifierMirrorName && group.mirrors[0].enabled,
+           "Expected mirror group first mirror item to roundtrip.");
+    ExpectFloatNear(group.mirrors[0].widthPercent, 0.6f, "Expected mirror group widthPercent to roundtrip.");
+    ExpectFloatNear(group.mirrors[1].heightPercent, 0.6f, "Expected mirror group second heightPercent to roundtrip.");
+    Expect(group.mirrors[1].offsetX == -20 && group.mirrors[1].offsetY == 30,
+           "Expected mirror group second offsets to roundtrip.");
+}
+
+void VerifyRichImages() {
+    const ImageConfig& image = FindImageOrThrow(kVerifierImageName);
+    Expect(image.path == "C:\\temp\\checklist.png", "Expected image path to roundtrip.");
+    Expect(image.x == 11 && image.y == 22, "Expected image position to roundtrip.");
+    ExpectFloatNear(image.scale, 1.6f, "Expected image scale to roundtrip.");
+    Expect(!image.relativeSizing, "Expected image relativeSizing to roundtrip.");
+    Expect(image.width == 320 && image.height == 180, "Expected image dimensions to roundtrip.");
+    Expect(image.relativeTo == "centerViewport", "Expected image relativeTo to roundtrip.");
+    Expect(image.crop_top == 3 && image.crop_bottom == 4 && image.crop_left == 5 && image.crop_right == 6,
+           "Expected image crop values to roundtrip.");
+    Expect(image.enableColorKey, "Expected image enableColorKey to roundtrip.");
+    Expect(image.colorKeys.size() == 2, "Expected image color keys to roundtrip.");
+    ExpectFloatNear(image.colorKeys[0].sensitivity, 0.02f, "Expected image color key sensitivity to roundtrip.");
+    ExpectFloatNear(image.opacity, 0.81f, "Expected image opacity to roundtrip.");
+    Expect(image.background.enabled, "Expected image background.enabled to roundtrip.");
+    ExpectColorNear(image.background.color, { 0.2f, 0.3f, 0.4f, 1.0f }, "Expected image background color to roundtrip.");
+    ExpectFloatNear(image.background.opacity, 0.33f, "Expected image background opacity to roundtrip.");
+    Expect(image.pixelatedScaling, "Expected image pixelatedScaling to roundtrip.");
+    Expect(image.onlyOnMyScreen, "Expected image onlyOnMyScreen to roundtrip.");
+    Expect(image.border.enabled, "Expected image border.enabled to roundtrip.");
+    Expect(image.border.width == 7 && image.border.radius == 12, "Expected image border geometry to roundtrip.");
+}
+
+void VerifyRichWindowOverlays() {
+    const WindowOverlayConfig& overlay = FindWindowOverlayOrThrow(kVerifierWindowOverlayName);
+    Expect(overlay.windowTitle == "Speedrun Timer", "Expected window overlay title to roundtrip.");
+    Expect(overlay.windowClass == "TimerClass", "Expected window overlay class to roundtrip.");
+    Expect(overlay.executableName == "Timer.exe", "Expected window overlay executable to roundtrip.");
+    Expect(overlay.windowMatchPriority == "title_executable", "Expected window overlay match priority to roundtrip.");
+    Expect(overlay.x == -30 && overlay.y == 45, "Expected window overlay position to roundtrip.");
+    ExpectFloatNear(overlay.scale, 1.2f, "Expected window overlay scale to roundtrip.");
+    Expect(overlay.relativeTo == "centerViewport", "Expected window overlay relativeTo to roundtrip.");
+    Expect(overlay.crop_top == 4 && overlay.crop_bottom == 5 && overlay.crop_left == 6 && overlay.crop_right == 7,
+           "Expected window overlay crop values to roundtrip.");
+    Expect(overlay.enableColorKey, "Expected window overlay enableColorKey to roundtrip.");
+    Expect(overlay.colorKeys.size() == 1, "Expected window overlay color keys to roundtrip.");
+    ExpectFloatNear(overlay.opacity, 0.71f, "Expected window overlay opacity to roundtrip.");
+    Expect(overlay.background.enabled, "Expected window overlay background.enabled to roundtrip.");
+    Expect(overlay.pixelatedScaling, "Expected window overlay pixelatedScaling to roundtrip.");
+    Expect(overlay.onlyOnMyScreen, "Expected window overlay onlyOnMyScreen to roundtrip.");
+    Expect(overlay.fps == 27, "Expected window overlay fps to roundtrip.");
+    Expect(overlay.searchInterval == 2500, "Expected window overlay searchInterval to roundtrip.");
+    Expect(overlay.captureMethod == "BitBlt", "Expected window overlay captureMethod to roundtrip.");
+    Expect(overlay.forceUpdate, "Expected window overlay forceUpdate to roundtrip.");
+    Expect(overlay.enableInteraction, "Expected window overlay enableInteraction to roundtrip.");
+    Expect(overlay.border.enabled, "Expected window overlay border.enabled to roundtrip.");
+}
+
+void VerifyRichBrowserOverlays() {
+    const BrowserOverlayConfig& overlay = FindBrowserOverlayOrThrow(kVerifierBrowserOverlayName);
+    Expect(overlay.url == "https://example.com/dashboard", "Expected browser overlay URL to roundtrip.");
+    Expect(overlay.customCss == "body { background: transparent; }", "Expected browser overlay CSS to roundtrip.");
+    Expect(overlay.browserWidth == 1024 && overlay.browserHeight == 576, "Expected browser overlay dimensions to roundtrip.");
+    Expect(overlay.x == 9 && overlay.y == 19, "Expected browser overlay position to roundtrip.");
+    ExpectFloatNear(overlay.scale, 1.15f, "Expected browser overlay scale to roundtrip.");
+    Expect(overlay.relativeTo == "centerViewport", "Expected browser overlay relativeTo to roundtrip.");
+    Expect(overlay.enableColorKey, "Expected browser overlay enableColorKey to roundtrip.");
+    Expect(overlay.colorKeys.size() == 1, "Expected browser overlay color keys to roundtrip.");
+    ExpectFloatNear(overlay.opacity, 0.67f, "Expected browser overlay opacity to roundtrip.");
+    Expect(overlay.background.enabled, "Expected browser overlay background.enabled to roundtrip.");
+    Expect(overlay.pixelatedScaling, "Expected browser overlay pixelatedScaling to roundtrip.");
+    Expect(overlay.onlyOnMyScreen, "Expected browser overlay onlyOnMyScreen to roundtrip.");
+    Expect(overlay.fps == 25, "Expected browser overlay fps to roundtrip.");
+    Expect(overlay.transparentBackground, "Expected browser overlay transparentBackground to roundtrip.");
+    Expect(!overlay.muteAudio, "Expected browser overlay muteAudio to roundtrip.");
+    Expect(!overlay.allowSystemMediaKeys, "Expected browser overlay allowSystemMediaKeys to roundtrip.");
+    Expect(overlay.reloadOnUpdate, "Expected browser overlay reloadOnUpdate to roundtrip.");
+    Expect(overlay.reloadInterval == 2500, "Expected browser overlay reloadInterval to roundtrip.");
+    Expect(overlay.border.enabled, "Expected browser overlay border.enabled to roundtrip.");
+}
+
+void VerifyRichHotkeys() {
+    const HotkeyConfig& hotkey = FindHotkeyBySecondaryModeOrThrow(kVerifierModeId);
+    ExpectVectorEquals(hotkey.keys, std::vector<DWORD>{ VK_F6, 'Q' }, "Expected hotkey keys to roundtrip.");
+    Expect(hotkey.mainMode == "Fullscreen", "Expected hotkey main mode to roundtrip.");
+    Expect(hotkey.secondaryMode == kVerifierModeId, "Expected hotkey secondary mode to roundtrip.");
+    Expect(hotkey.altSecondaryModes.size() == 1, "Expected alt secondary modes to roundtrip.");
+    ExpectVectorEquals(hotkey.altSecondaryModes[0].keys, std::vector<DWORD>{ 'E', 'R' },
+                       "Expected alt secondary mode keys to roundtrip.");
+    Expect(hotkey.altSecondaryModes[0].mode == kPrecisionModeId, "Expected alt secondary mode target to roundtrip.");
+    ExpectVectorEquals(hotkey.conditions.gameState, std::vector<std::string>{ "ingame", "wall" },
+                       "Expected hotkey gameState conditions to roundtrip.");
+    ExpectVectorEquals(hotkey.conditions.exclusions, std::vector<DWORD>{ VK_LSHIFT, VK_RBUTTON },
+                       "Expected hotkey exclusions to roundtrip.");
+    Expect(hotkey.debounce == 220, "Expected hotkey debounce to roundtrip.");
+    Expect(hotkey.triggerOnRelease, "Expected hotkey triggerOnRelease to roundtrip.");
+    Expect(hotkey.triggerOnHold, "Expected hotkey triggerOnHold to roundtrip.");
+    Expect(hotkey.blockKeyFromGame, "Expected hotkey blockKeyFromGame to roundtrip.");
+    Expect(hotkey.allowExitToFullscreenRegardlessOfGameState,
+           "Expected hotkey allowExitToFullscreenRegardlessOfGameState to roundtrip.");
+}
+
+void VerifyRichSensitivityHotkeys() {
+    const SensitivityHotkeyConfig& hotkey = FindSensitivityHotkeyOrThrow({ VK_F9 });
+    ExpectFloatNear(hotkey.sensitivity, 0.55f, "Expected sensitivity hotkey sensitivity to roundtrip.");
+    Expect(hotkey.separateXY, "Expected sensitivity hotkey separateXY to roundtrip.");
+    ExpectFloatNear(hotkey.sensitivityX, 0.75f, "Expected sensitivity hotkey sensitivityX to roundtrip.");
+    ExpectFloatNear(hotkey.sensitivityY, 0.95f, "Expected sensitivity hotkey sensitivityY to roundtrip.");
+    Expect(hotkey.toggle, "Expected sensitivity hotkey toggle to roundtrip.");
+    ExpectVectorEquals(hotkey.conditions.gameState, std::vector<std::string>{ "menu" },
+                       "Expected sensitivity hotkey gameState conditions to roundtrip.");
+    ExpectVectorEquals(hotkey.conditions.exclusions, std::vector<DWORD>{ VK_MENU },
+                       "Expected sensitivity hotkey exclusions to roundtrip.");
+    Expect(hotkey.debounce == 350, "Expected sensitivity hotkey debounce to roundtrip.");
+}
+
+void VerifyRichCursorsAndEyeZoom() {
+    Expect(g_config.cursors.enabled, "Expected cursors.enabled to roundtrip.");
+    Expect(g_config.cursors.title.cursorName == "title.cur" && g_config.cursors.title.cursorSize == 64,
+           "Expected title cursor config to roundtrip.");
+    Expect(g_config.cursors.wall.cursorName == "wall.cur" && g_config.cursors.wall.cursorSize == 72,
+           "Expected wall cursor config to roundtrip.");
+    Expect(g_config.cursors.ingame.cursorName == "ingame.cur" && g_config.cursors.ingame.cursorSize == 88,
+           "Expected ingame cursor config to roundtrip.");
+
+    Expect(g_config.eyezoom.cloneWidth == 28, "Expected eyezoom cloneWidth to roundtrip.");
+    Expect(g_config.eyezoom.overlayWidth == 9, "Expected eyezoom overlayWidth to roundtrip.");
+    Expect(g_config.eyezoom.cloneHeight == 1500, "Expected eyezoom cloneHeight to roundtrip.");
+    Expect(g_config.eyezoom.stretchWidth == 600, "Expected eyezoom stretchWidth to roundtrip.");
+    Expect(g_config.eyezoom.windowWidth == 420, "Expected eyezoom windowWidth to roundtrip.");
+    Expect(g_config.eyezoom.windowHeight == 9000, "Expected eyezoom windowHeight to roundtrip.");
+    Expect(g_config.eyezoom.zoomAreaWidth == 222 && g_config.eyezoom.zoomAreaHeight == 777,
+           "Expected eyezoom zoom area to roundtrip.");
+    Expect(g_config.eyezoom.useCustomSizePosition, "Expected eyezoom useCustomSizePosition to roundtrip.");
+    Expect(g_config.eyezoom.positionX == 33 && g_config.eyezoom.positionY == 44,
+           "Expected eyezoom position to roundtrip.");
+    Expect(!g_config.eyezoom.autoFontSize, "Expected eyezoom autoFontSize to roundtrip.");
+    Expect(g_config.eyezoom.textFontSize == 31, "Expected eyezoom textFontSize to roundtrip.");
+    Expect(g_config.eyezoom.textFontPath == "C:\\Windows\\Fonts\\verdana.ttf", "Expected eyezoom font path to roundtrip.");
+    Expect(g_config.eyezoom.rectHeight == 35, "Expected eyezoom rectHeight to roundtrip.");
+    Expect(!g_config.eyezoom.linkRectToFont, "Expected eyezoom linkRectToFont to roundtrip.");
+    ExpectColorNear(g_config.eyezoom.gridColor1, { 0.2f, 0.4f, 0.6f, 1.0f }, "Expected eyezoom gridColor1 to roundtrip.");
+    ExpectFloatNear(g_config.eyezoom.gridColor1Opacity, 0.8f, "Expected eyezoom gridColor1Opacity to roundtrip.");
+    ExpectColorNear(g_config.eyezoom.gridColor2, { 0.6f, 0.3f, 0.2f, 1.0f }, "Expected eyezoom gridColor2 to roundtrip.");
+    ExpectFloatNear(g_config.eyezoom.gridColor2Opacity, 0.7f, "Expected eyezoom gridColor2Opacity to roundtrip.");
+    ExpectColorNear(g_config.eyezoom.centerLineColor, { 0.9f, 0.8f, 0.1f, 1.0f }, "Expected eyezoom centerLineColor to roundtrip.");
+    ExpectFloatNear(g_config.eyezoom.centerLineColorOpacity, 0.65f, "Expected eyezoom centerLineColorOpacity to roundtrip.");
+    ExpectColorNear(g_config.eyezoom.textColor, { 0.1f, 0.2f, 0.3f, 1.0f }, "Expected eyezoom textColor to roundtrip.");
+    ExpectFloatNear(g_config.eyezoom.textColorOpacity, 0.95f, "Expected eyezoom textColorOpacity to roundtrip.");
+    Expect(g_config.eyezoom.slideZoomIn, "Expected eyezoom slideZoomIn to roundtrip.");
+    Expect(g_config.eyezoom.slideMirrorsIn, "Expected eyezoom slideMirrorsIn to roundtrip.");
+    Expect(g_config.eyezoom.overlays.size() == 2, "Expected eyezoom overlays to roundtrip.");
+    Expect(g_config.eyezoom.overlays[1].name == "Overlay Two", "Expected eyezoom second overlay name to roundtrip.");
+    Expect(g_config.eyezoom.overlays[1].displayMode == EyeZoomOverlayDisplayMode::Manual,
+           "Expected eyezoom second overlay displayMode to roundtrip.");
+    Expect(g_config.eyezoom.activeOverlayIndex == 1, "Expected eyezoom activeOverlayIndex to roundtrip.");
+}
+
+void VerifyRichKeyRebindsAndAppearance() {
+    Expect(g_config.keyRebinds.enabled, "Expected keyRebinds.enabled to roundtrip.");
+    Expect(!g_config.keyRebinds.resolveRebindTargetsForHotkeys,
+           "Expected keyRebinds.resolveRebindTargetsForHotkeys to roundtrip.");
+    ExpectVectorEquals(g_config.keyRebinds.toggleHotkey, std::vector<DWORD>{ VK_F4 },
+                       "Expected keyRebinds.toggleHotkey to roundtrip.");
+    Expect(g_config.keyRebinds.rebinds.size() == 1, "Expected key rebind list to roundtrip.");
+    const KeyRebind& rebind = g_config.keyRebinds.rebinds.front();
+    Expect(rebind.fromKey == 'J' && rebind.toKey == 'K', "Expected key rebind source/target to roundtrip.");
+    Expect(rebind.enabled, "Expected key rebind enabled flag to roundtrip.");
+    Expect(rebind.useCustomOutput, "Expected key rebind useCustomOutput to roundtrip.");
+    Expect(rebind.customOutputVK == 'L', "Expected key rebind customOutputVK to roundtrip.");
+    Expect(rebind.customOutputUnicode == 0x00F8, "Expected key rebind customOutputUnicode to roundtrip.");
+    Expect(rebind.customOutputScanCode == 0x26, "Expected key rebind customOutputScanCode to roundtrip.");
+    Expect(rebind.baseOutputShifted, "Expected key rebind baseOutputShifted to roundtrip.");
+    Expect(rebind.shiftLayerEnabled, "Expected key rebind shiftLayerEnabled to roundtrip.");
+    Expect(rebind.shiftLayerOutputVK == 'P', "Expected key rebind shiftLayerOutputVK to roundtrip.");
+    Expect(rebind.shiftLayerOutputUnicode == 0x00D8, "Expected key rebind shiftLayerOutputUnicode to roundtrip.");
+    Expect(rebind.shiftLayerOutputShifted, "Expected key rebind shiftLayerOutputShifted to roundtrip.");
+
+    Expect(g_config.appearance.theme == "Sunrise", "Expected appearance theme to roundtrip.");
+    Expect(g_config.appearance.customColors.size() == 2, "Expected appearance custom colors to roundtrip.");
+    ExpectColorNear(g_config.appearance.customColors.at("WindowBg"), { 0.1f, 0.11f, 0.12f, 1.0f },
+                    "Expected appearance WindowBg custom color to roundtrip.");
+    ExpectColorNear(g_config.appearance.customColors.at("Header"), { 0.8f, 0.4f, 0.2f, 1.0f },
+                    "Expected appearance Header custom color to roundtrip.");
+}
+
+template <typename VerifyFn>
+void RunRichConfigRoundtripCase(std::string_view caseName, VerifyFn&& verify, TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    const std::filesystem::path root = PrepareCaseDirectory(caseName);
+    ResetGlobalTestState(root);
+
+    LoadConfig();
+    ExpectConfigLoadSucceeded(std::string(caseName) + " initial default load");
+
+    PopulateRichConfigFixture();
+    SaveAndReloadCurrentConfig();
+    ExpectConfigLoadSucceeded(std::string(caseName) + " roundtrip reload");
+
+    verify();
+
+    if (runMode == TestRunMode::Visual) {
+        RunVisualLoop(window, caseName, &RenderInteractiveSettingsFrame);
+    }
+}
+
+template <typename WriteFixtureFn, typename VerifyFn>
+void RunConfigLoadCase(std::string_view caseName, WriteFixtureFn&& writeFixture, VerifyFn&& verify,
+                       TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    const std::filesystem::path root = PrepareCaseDirectory(caseName);
+    ResetGlobalTestState(root);
+
+    writeFixture();
+    LoadConfig();
+    verify();
+
+    if (runMode == TestRunMode::Visual) {
+        RunVisualLoop(window, caseName, &RenderInteractiveSettingsFrame);
+    }
+}
+
+void PrepareRichConfigForGui(std::string_view caseName) {
+    const std::filesystem::path root = PrepareCaseDirectory(caseName);
+    ResetGlobalTestState(root);
+    LoadConfig();
+    ExpectConfigLoadSucceeded(std::string(caseName) + " initial GUI fixture load");
+    PopulateRichConfigFixture();
+    SaveAndReloadCurrentConfig();
+    ExpectConfigLoadSucceeded(std::string(caseName) + " GUI fixture reload");
+}
+
+void RunPopulatedSettingsTabCase(std::string_view caseName, const std::string& topLevelTabLabel,
+                                 const std::string& inputsSubTabLabel = std::string(),
+                                 TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    PrepareRichConfigForGui(caseName);
+
+    if (runMode == TestRunMode::Visual) {
+        RunVisualLoop(window, caseName, [&](DummyWindow& visualWindow) {
+            RenderSettingsFrame(visualWindow, topLevelTabLabel.c_str(),
+                                inputsSubTabLabel.empty() ? nullptr : inputsSubTabLabel.c_str());
+        });
+        return;
+    }
+
+    RenderSettingsFrame(window, topLevelTabLabel.c_str(), inputsSubTabLabel.empty() ? nullptr : inputsSubTabLabel.c_str());
+}
+
+template <typename RenderFrameFn>
+void RunVisualLoop(DummyWindow& window, std::string_view testCaseName, RenderFrameFn&& renderFrame) {
+    window.SetTitle("Toolscreen GUI Integration Tests [visual] - " + std::string(testCaseName));
+
+    std::cout << "VISUAL " << testCaseName << std::endl;
+    std::cout << "Close the dummy test window to exit visual mode." << std::endl;
+
+    while (window.PumpMessages()) {
+        renderFrame(window);
+        Sleep(16);
+    }
+
+    std::cout << "EXIT " << testCaseName << std::endl;
+}
+
+void RunConfigDefaultLoadTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
     const std::filesystem::path root = PrepareCaseDirectory("config_default_load");
     ResetGlobalTestState(root);
 
@@ -253,50 +1387,298 @@ void RunConfigDefaultLoadTest() {
     Expect(!g_config.modes.empty(), "Expected loaded config to contain at least one mode.");
     Expect(!g_config.hotkeys.empty(), "Expected loaded config to contain at least one hotkey.");
     Expect(!g_config.defaultMode.empty(), "Expected loaded config to have a default mode.");
+
+    if (runMode == TestRunMode::Visual) {
+        RunVisualLoop(window, "config-default-load", &RenderInteractiveSettingsFrame);
+    }
 }
 
-void RunConfigRoundtripTest() {
-    DummyWindow window(kWindowWidth, kWindowHeight);
-    const std::filesystem::path root = PrepareCaseDirectory("config_roundtrip");
-    ResetGlobalTestState(root);
-
-    LoadConfig();
-    Expect(!g_configLoadFailed.load(std::memory_order_acquire), "Expected initial config load to succeed before roundtrip.");
-
-    g_config.lang = "zh_CN";
-    g_config.mouseSensitivity = 1.75f;
-    g_config.basicModeEnabled = true;
-    g_config.disableConfigurePrompt = true;
-    g_configIsDirty.store(true, std::memory_order_release);
-    SaveConfigImmediate();
-
-    g_config = Config();
-    g_configLoadFailed.store(false, std::memory_order_release);
-    g_configLoaded.store(false, std::memory_order_release);
-    {
-        std::lock_guard<std::mutex> lock(g_configErrorMutex);
-        g_configLoadError.clear();
-    }
-    {
-        std::lock_guard<std::mutex> lock(g_modeIdMutex);
-        g_currentModeId.clear();
-        g_modeIdBuffers[0].clear();
-        g_modeIdBuffers[1].clear();
-    }
-    g_currentModeIdIndex.store(0, std::memory_order_release);
-
-    LoadConfig();
-
-    Expect(!g_configLoadFailed.load(std::memory_order_acquire), "Expected config reload to succeed after roundtrip save.");
-    Expect(g_config.lang == "zh_CN", "Expected saved language to roundtrip through config.toml.");
-    Expect(std::abs(g_config.mouseSensitivity - 1.75f) < 0.0001f,
-           "Expected saved mouse sensitivity to roundtrip through config.toml.");
-    Expect(g_config.basicModeEnabled, "Expected saved basic-mode flag to roundtrip through config.toml.");
-    Expect(g_config.disableConfigurePrompt, "Expected saved configure-prompt flag to roundtrip through config.toml.");
+void RunConfigRoundtripTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunRichConfigRoundtripCase("config_roundtrip", []() {
+        VerifyRichGlobalSettings();
+        VerifyRichModes();
+        VerifyRichMirrors();
+        VerifyRichMirrorGroups();
+        VerifyRichImages();
+        VerifyRichWindowOverlays();
+        VerifyRichBrowserOverlays();
+        VerifyRichHotkeys();
+        VerifyRichSensitivityHotkeys();
+        VerifyRichCursorsAndEyeZoom();
+        VerifyRichKeyRebindsAndAppearance();
+        VerifyRichDebugSettings();
+    }, runMode);
 }
 
-void RunConfigErrorGuiTest() {
-    DummyWindow window(kWindowWidth, kWindowHeight);
+void RunConfigRoundtripGlobalSettingsTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunRichConfigRoundtripCase("config_roundtrip_global_settings", &VerifyRichGlobalSettings, runMode);
+}
+
+void RunConfigRoundtripModesTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunRichConfigRoundtripCase("config_roundtrip_modes", &VerifyRichModes, runMode);
+}
+
+void RunConfigRoundtripMirrorsTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunRichConfigRoundtripCase("config_roundtrip_mirrors", &VerifyRichMirrors, runMode);
+}
+
+void RunConfigRoundtripMirrorGroupsTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunRichConfigRoundtripCase("config_roundtrip_mirror_groups", &VerifyRichMirrorGroups, runMode);
+}
+
+void RunConfigRoundtripImagesTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunRichConfigRoundtripCase("config_roundtrip_images", &VerifyRichImages, runMode);
+}
+
+void RunConfigRoundtripWindowOverlaysTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunRichConfigRoundtripCase("config_roundtrip_window_overlays", &VerifyRichWindowOverlays, runMode);
+}
+
+void RunConfigRoundtripBrowserOverlaysTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunRichConfigRoundtripCase("config_roundtrip_browser_overlays", &VerifyRichBrowserOverlays, runMode);
+}
+
+void RunConfigRoundtripHotkeysTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunRichConfigRoundtripCase("config_roundtrip_hotkeys", &VerifyRichHotkeys, runMode);
+}
+
+void RunConfigRoundtripSensitivityHotkeysTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunRichConfigRoundtripCase("config_roundtrip_sensitivity_hotkeys", &VerifyRichSensitivityHotkeys, runMode);
+}
+
+void RunConfigRoundtripCursorsAndEyeZoomTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunRichConfigRoundtripCase("config_roundtrip_cursors_eyezoom", &VerifyRichCursorsAndEyeZoom, runMode);
+}
+
+void RunConfigRoundtripKeyRebindsAndAppearanceTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunRichConfigRoundtripCase("config_roundtrip_key_rebinds_appearance", &VerifyRichKeyRebindsAndAppearance, runMode);
+}
+
+void RunConfigRoundtripDebugSettingsTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunRichConfigRoundtripCase("config_roundtrip_debug_settings", &VerifyRichDebugSettings, runMode);
+}
+
+void RunConfigLoadMissingRequiredModesTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_missing_required_modes",
+                      []() {
+                          Config config;
+                          config.defaultMode = kVerifierModeId;
+                          config.modes.clear();
+
+                          ModeConfig verifierMode;
+                          verifierMode.id = kVerifierModeId;
+                          verifierMode.width = 1111;
+                          verifierMode.height = 666;
+                          verifierMode.manualWidth = 1111;
+                          verifierMode.manualHeight = 666;
+                          config.modes.push_back(verifierMode);
+
+                          WriteConfigFixtureToDisk(config);
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-missing-required-modes");
+                          const ModeConfig& fullscreen = FindModeOrThrow("Fullscreen");
+                          const ModeConfig& eyezoom = FindModeOrThrow("EyeZoom");
+                          const ModeConfig& preemptive = FindModeOrThrow("Preemptive");
+                          const ModeConfig& thin = FindModeOrThrow("Thin");
+                          const ModeConfig& wide = FindModeOrThrow("Wide");
+                          (void)thin;
+                          (void)wide;
+                          Expect(fullscreen.stretch.enabled, "Expected missing Fullscreen mode to be recreated with stretch enabled.");
+                          Expect(fullscreen.width > 0 && fullscreen.height > 0,
+                                 "Expected recreated Fullscreen mode to receive valid dimensions.");
+                          Expect(eyezoom.width > 0 && eyezoom.height > 0, "Expected missing EyeZoom mode to be recreated.");
+                          Expect(preemptive.width == eyezoom.width && preemptive.height == eyezoom.height,
+                                 "Expected missing Preemptive mode to inherit EyeZoom dimensions.");
+                          Expect(!preemptive.useRelativeSize, "Expected recreated Preemptive mode to use absolute sizing.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadInvalidHotkeyModeReferencesTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_invalid_hotkey_mode_references",
+                      []() {
+                          Config config;
+                          config.defaultMode = kPrecisionModeId;
+                          config.modes.clear();
+
+                          ModeConfig precisionMode;
+                          precisionMode.id = kPrecisionModeId;
+                          precisionMode.width = 900;
+                          precisionMode.height = 500;
+                          precisionMode.manualWidth = 900;
+                          precisionMode.manualHeight = 500;
+                          config.modes.push_back(precisionMode);
+
+                          HotkeyConfig invalidHotkey;
+                          invalidHotkey.keys = { VK_F2 };
+                          invalidHotkey.mainMode = "Missing Main";
+                          invalidHotkey.secondaryMode = "Missing Secondary";
+                          invalidHotkey.altSecondaryModes = {
+                              { { 'A' }, "Missing Alt" },
+                              { { 'B' }, kPrecisionModeId },
+                          };
+                          config.hotkeys = { invalidHotkey };
+
+                          WriteConfigFixtureToDisk(config);
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-invalid-hotkey-mode-references");
+                          Expect(!g_config.hotkeys.empty(), "Expected hotkey fixture to load.");
+                          const HotkeyConfig& hotkey = g_config.hotkeys.front();
+                          Expect(hotkey.mainMode == kPrecisionModeId,
+                                 "Expected invalid hotkey main mode to reset to the existing default mode.");
+                          Expect(hotkey.secondaryMode.empty(), "Expected invalid hotkey secondary mode to be cleared.");
+                          Expect(hotkey.altSecondaryModes.size() == 1, "Expected invalid alt secondary modes to be removed.");
+                          Expect(hotkey.altSecondaryModes.front().mode == kPrecisionModeId,
+                                 "Expected valid alt secondary mode to remain after sanitization.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadRelativeModeDimensionsTest(TestRunMode runMode = TestRunMode::Automated) {
+    int expectedWidth = 1000;
+    int expectedHeight = 600;
+
+    RunConfigLoadCase("config_load_relative_mode_dimensions",
+                      [&]() {
+                          Config config;
+                          config.defaultMode = kRelativeModeId;
+                          config.modes.clear();
+
+                          ModeConfig relativeMode;
+                          relativeMode.id = kRelativeModeId;
+                          relativeMode.useRelativeSize = true;
+                          relativeMode.relativeWidth = 0.625f;
+                          relativeMode.relativeHeight = 0.4f;
+                          relativeMode.width = 1000;
+                          relativeMode.height = 600;
+                          relativeMode.manualWidth = 1000;
+                          relativeMode.manualHeight = 600;
+                          config.modes.push_back(relativeMode);
+
+                          const int loadScreenWidth = (std::max)(1, GetCachedWindowWidth());
+                          const int loadScreenHeight = (std::max)(1, GetCachedWindowHeight());
+                          expectedWidth = (std::max)(1, static_cast<int>(std::lround(0.625f * static_cast<float>(loadScreenWidth))));
+                          expectedHeight = (std::max)(1, static_cast<int>(std::lround(0.4f * static_cast<float>(loadScreenHeight))));
+
+                          WriteConfigFixtureToDisk(config);
+                      },
+                      [&]() {
+                          ExpectConfigLoadSucceeded("config-load-relative-mode-dimensions");
+                          const ModeConfig& relativeMode = FindModeOrThrow(kRelativeModeId);
+                          Expect(relativeMode.useRelativeSize, "Expected relative mode to stay marked as relative.");
+                          ExpectFloatNear(relativeMode.relativeWidth, 0.625f, "Expected relative mode relativeWidth to roundtrip.");
+                          ExpectFloatNear(relativeMode.relativeHeight, 0.4f, "Expected relative mode relativeHeight to roundtrip.");
+                          Expect(relativeMode.width == expectedWidth, "Expected relative mode width to be recomputed from cached client width.");
+                          Expect(relativeMode.height == expectedHeight,
+                                 "Expected relative mode height to be recomputed from cached client height.");
+                          Expect(relativeMode.manualWidth == 1000 && relativeMode.manualHeight == 600,
+                                 "Expected relative mode manual dimensions to preserve their persisted values.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadExpressionModeDimensionsTest(TestRunMode runMode = TestRunMode::Automated) {
+    int expectedWidth = 123;
+    int expectedHeight = 456;
+
+    RunConfigLoadCase("config_load_expression_mode_dimensions",
+                      [&]() {
+                          Config config;
+                          config.defaultMode = kExpressionModeId;
+                          config.modes.clear();
+
+                          ModeConfig expressionMode;
+                          expressionMode.id = kExpressionModeId;
+                          expressionMode.widthExpr = "screenWidth / 3";
+                          expressionMode.heightExpr = "screenHeight - 111";
+                          expressionMode.width = 123;
+                          expressionMode.height = 456;
+                          expressionMode.manualWidth = 123;
+                          expressionMode.manualHeight = 456;
+                          config.modes.push_back(expressionMode);
+
+                          const int loadScreenWidth = (std::max)(1, GetCachedWindowWidth());
+                          const int loadScreenHeight = (std::max)(1, GetCachedWindowHeight());
+                          expectedWidth = (std::max)(1, loadScreenWidth / 3);
+                          expectedHeight = (std::max)(1, loadScreenHeight - 111);
+
+                          WriteConfigFixtureToDisk(config);
+                      },
+                      [&]() {
+                          ExpectConfigLoadSucceeded("config-load-expression-mode-dimensions");
+                          const ModeConfig& expressionMode = FindModeOrThrow(kExpressionModeId);
+                          Expect(expressionMode.widthExpr == "screenWidth / 3", "Expected width expression to roundtrip.");
+                          Expect(expressionMode.heightExpr == "screenHeight - 111", "Expected height expression to roundtrip.");
+                          Expect(expressionMode.width == expectedWidth, "Expected width expression to be evaluated during load.");
+                          Expect(expressionMode.height == expectedHeight, "Expected height expression to be evaluated during load.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadLegacyVersionUpgradeTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_legacy_version_upgrade",
+                      []() {
+                          Config config;
+                          config.configVersion = 1;
+                          config.disableHookChaining = true;
+                          config.defaultMode = kPrecisionModeId;
+                          config.keyRepeatStartDelay = 10;
+                          config.keyRepeatDelay = 0;
+                          config.modes.clear();
+
+                          ModeConfig precisionMode;
+                          precisionMode.id = kPrecisionModeId;
+                          precisionMode.width = 800;
+                          precisionMode.height = 450;
+                          precisionMode.manualWidth = 800;
+                          precisionMode.manualHeight = 450;
+                          config.modes.push_back(precisionMode);
+
+                          WriteConfigFixtureToDisk(config);
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-legacy-version-upgrade");
+                          Expect(g_config.configVersion == GetConfigVersion(), "Expected legacy config version to upgrade to the current version.");
+                          Expect(!g_config.disableHookChaining, "Expected legacy v1 migration to force disableHookChaining=false.");
+                          Expect(g_config.keyRepeatStartDelay == 50, "Expected legacy keyRepeatStartDelay to be normalized to the v3 minimum.");
+                          Expect(g_config.keyRepeatDelay == ConfigDefaults::CONFIG_KEY_REPEAT_DELAY,
+                                 "Expected legacy zero keyRepeatDelay to normalize to the default value.");
+                      },
+                      runMode);
+}
+
+void RunConfigLoadClampGlobalValuesTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_clamp_global_values",
+                      []() {
+                          Config config;
+                          config.defaultMode = "Fullscreen";
+                          config.mouseMovementPollingRate = 123;
+                          config.obsFramerate = 999;
+                          config.cursors.enabled = true;
+                          config.cursors.title.cursorSize = 9999;
+                          config.cursors.wall.cursorSize = 2;
+                          config.cursors.ingame.cursorSize = 321;
+                          WriteConfigFixtureToDisk(config);
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-clamp-global-values");
+                          Expect(g_config.mouseMovementPollingRate == 100,
+                                 "Expected mouse polling rate to clamp and snap to the nearest configured interval.");
+                          Expect(g_config.obsFramerate == 120, "Expected obsFramerate to clamp to the configured maximum.");
+                          Expect(g_config.cursors.title.cursorSize == ConfigDefaults::CURSOR_MAX_SIZE,
+                                 "Expected title cursor size to clamp to CURSOR_MAX_SIZE.");
+                          Expect(g_config.cursors.wall.cursorSize == ConfigDefaults::CURSOR_MIN_SIZE,
+                                 "Expected wall cursor size to clamp to CURSOR_MIN_SIZE.");
+                          Expect(g_config.cursors.ingame.cursorSize == ConfigDefaults::CURSOR_MAX_SIZE,
+                                 "Expected ingame cursor size to clamp to CURSOR_MAX_SIZE.");
+                      },
+                      runMode);
+}
+
+void RunConfigErrorGuiTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
     const std::filesystem::path root = PrepareCaseDirectory("config_error_gui");
     ResetGlobalTestState(root);
 
@@ -314,11 +1696,16 @@ void RunConfigErrorGuiTest() {
         Expect(!g_configLoadError.empty(), "Expected invalid TOML to populate a config error message.");
     }
 
+    if (runMode == TestRunMode::Visual) {
+        RunVisualLoop(window, "config-error-gui", &RenderInteractiveConfigErrorFrame);
+        return;
+    }
+
     RenderConfigErrorFrame(window);
 }
 
-void RunSettingsGuiBasicTest() {
-    DummyWindow window(kWindowWidth, kWindowHeight);
+void RunSettingsGuiBasicTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
     const std::filesystem::path root = PrepareCaseDirectory("settings_gui_basic");
     ResetGlobalTestState(root);
 
@@ -327,6 +1714,11 @@ void RunSettingsGuiBasicTest() {
 
     g_config.basicModeEnabled = true;
     g_configIsDirty.store(false, std::memory_order_release);
+
+    if (runMode == TestRunMode::Visual) {
+        RunVisualLoop(window, "settings-gui-basic", &RenderInteractiveSettingsFrame);
+        return;
+    }
 
     const std::vector<std::string> tabs = {
         tr("tabs.general"),
@@ -339,8 +1731,8 @@ void RunSettingsGuiBasicTest() {
     }
 }
 
-void RunSettingsGuiAdvancedTest() {
-    DummyWindow window(kWindowWidth, kWindowHeight);
+void RunSettingsGuiAdvancedTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
     const std::filesystem::path root = PrepareCaseDirectory("settings_gui_advanced");
     ResetGlobalTestState(root);
 
@@ -349,6 +1741,11 @@ void RunSettingsGuiAdvancedTest() {
 
     g_config.basicModeEnabled = false;
     g_configIsDirty.store(false, std::memory_order_release);
+
+    if (runMode == TestRunMode::Visual) {
+        RunVisualLoop(window, "settings-gui-advanced", &RenderInteractiveSettingsFrame);
+        return;
+    }
 
     const std::string inputsTab = tr("tabs.inputs");
     const std::string mouseSubTab = tr("inputs.mouse");
@@ -379,31 +1776,459 @@ void RunSettingsGuiAdvancedTest() {
     }
 }
 
+void RunSettingsTabGeneralPopulatedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunPopulatedSettingsTabCase("settings_tab_general_populated", tr("tabs.general"), std::string(), runMode);
+}
+
+void RunSettingsTabOtherPopulatedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunPopulatedSettingsTabCase("settings_tab_other_populated", tr("tabs.other"), std::string(), runMode);
+}
+
+void RunSettingsTabModesPopulatedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunPopulatedSettingsTabCase("settings_tab_modes_populated", tr("tabs.modes"), std::string(), runMode);
+}
+
+void RunSettingsTabMirrorsPopulatedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunPopulatedSettingsTabCase("settings_tab_mirrors_populated", tr("tabs.mirrors"), std::string(), runMode);
+}
+
+void RunSettingsTabImagesPopulatedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunPopulatedSettingsTabCase("settings_tab_images_populated", tr("tabs.images"), std::string(), runMode);
+}
+
+void RunSettingsTabWindowOverlaysPopulatedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunPopulatedSettingsTabCase("settings_tab_window_overlays_populated", tr("tabs.window_overlays"), std::string(), runMode);
+}
+
+void RunSettingsTabBrowserOverlaysPopulatedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunPopulatedSettingsTabCase("settings_tab_browser_overlays_populated", tr("tabs.browser_overlays"), std::string(), runMode);
+}
+
+void RunSettingsTabHotkeysPopulatedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunPopulatedSettingsTabCase("settings_tab_hotkeys_populated", tr("tabs.hotkeys"), std::string(), runMode);
+}
+
+void RunSettingsTabInputsMousePopulatedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunPopulatedSettingsTabCase("settings_tab_inputs_mouse_populated", tr("tabs.inputs"), tr("inputs.mouse"), runMode);
+}
+
+void RunSettingsTabInputsKeyboardPopulatedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunPopulatedSettingsTabCase("settings_tab_inputs_keyboard_populated", tr("tabs.inputs"), tr("inputs.keyboard"), runMode);
+}
+
+void RunSettingsTabSettingsPopulatedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunPopulatedSettingsTabCase("settings_tab_settings_populated", tr("tabs.settings"), std::string(), runMode);
+}
+
+void RunSettingsTabAppearancePopulatedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunPopulatedSettingsTabCase("settings_tab_appearance_populated", tr("tabs.appearance"), std::string(), runMode);
+}
+
+void RunSettingsTabMiscPopulatedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunPopulatedSettingsTabCase("settings_tab_misc_populated", tr("tabs.misc"), std::string(), runMode);
+}
+
+void RunSettingsTabSupportersPopulatedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunPopulatedSettingsTabCase("settings_tab_supporters_populated", tr("tabs.supporters"), std::string(), runMode);
+}
+
+struct TestCaseDefinition {
+    const char* name;
+    void (*run)(TestRunMode runMode);
+};
+
+const auto& GetTestCaseDefinitions() {
+    static const std::vector<TestCaseDefinition> testCases = {
+        {"config-default-load", &RunConfigDefaultLoadTest},
+        {"config-roundtrip", &RunConfigRoundtripTest},
+        {"config-roundtrip-global-settings", &RunConfigRoundtripGlobalSettingsTest},
+        {"config-roundtrip-modes", &RunConfigRoundtripModesTest},
+        {"config-roundtrip-mirrors", &RunConfigRoundtripMirrorsTest},
+        {"config-roundtrip-mirror-groups", &RunConfigRoundtripMirrorGroupsTest},
+        {"config-roundtrip-images", &RunConfigRoundtripImagesTest},
+        {"config-roundtrip-window-overlays", &RunConfigRoundtripWindowOverlaysTest},
+        {"config-roundtrip-browser-overlays", &RunConfigRoundtripBrowserOverlaysTest},
+        {"config-roundtrip-hotkeys", &RunConfigRoundtripHotkeysTest},
+        {"config-roundtrip-sensitivity-hotkeys", &RunConfigRoundtripSensitivityHotkeysTest},
+        {"config-roundtrip-cursors-eyezoom", &RunConfigRoundtripCursorsAndEyeZoomTest},
+        {"config-roundtrip-key-rebinds-appearance", &RunConfigRoundtripKeyRebindsAndAppearanceTest},
+        {"config-roundtrip-debug-settings", &RunConfigRoundtripDebugSettingsTest},
+        {"config-load-missing-required-modes", &RunConfigLoadMissingRequiredModesTest},
+        {"config-load-invalid-hotkey-mode-references", &RunConfigLoadInvalidHotkeyModeReferencesTest},
+        {"config-load-relative-mode-dimensions", &RunConfigLoadRelativeModeDimensionsTest},
+        {"config-load-expression-mode-dimensions", &RunConfigLoadExpressionModeDimensionsTest},
+        {"config-load-legacy-version-upgrade", &RunConfigLoadLegacyVersionUpgradeTest},
+        {"config-load-clamp-global-values", &RunConfigLoadClampGlobalValuesTest},
+        {"config-error-gui", &RunConfigErrorGuiTest},
+        {"settings-gui-basic", &RunSettingsGuiBasicTest},
+        {"settings-gui-advanced", &RunSettingsGuiAdvancedTest},
+        {"settings-tab-general-populated", &RunSettingsTabGeneralPopulatedTest},
+        {"settings-tab-other-populated", &RunSettingsTabOtherPopulatedTest},
+        {"settings-tab-modes-populated", &RunSettingsTabModesPopulatedTest},
+        {"settings-tab-mirrors-populated", &RunSettingsTabMirrorsPopulatedTest},
+        {"settings-tab-images-populated", &RunSettingsTabImagesPopulatedTest},
+        {"settings-tab-window-overlays-populated", &RunSettingsTabWindowOverlaysPopulatedTest},
+        {"settings-tab-browser-overlays-populated", &RunSettingsTabBrowserOverlaysPopulatedTest},
+        {"settings-tab-hotkeys-populated", &RunSettingsTabHotkeysPopulatedTest},
+        {"settings-tab-inputs-mouse-populated", &RunSettingsTabInputsMousePopulatedTest},
+        {"settings-tab-inputs-keyboard-populated", &RunSettingsTabInputsKeyboardPopulatedTest},
+        {"settings-tab-settings-populated", &RunSettingsTabSettingsPopulatedTest},
+        {"settings-tab-appearance-populated", &RunSettingsTabAppearancePopulatedTest},
+        {"settings-tab-misc-populated", &RunSettingsTabMiscPopulatedTest},
+        {"settings-tab-supporters-populated", &RunSettingsTabSupportersPopulatedTest},
+    };
+
+    return testCases;
+}
+
+const TestCaseDefinition* FindTestCaseDefinition(std::string_view testCaseName) {
+    for (const TestCaseDefinition& testCase : GetTestCaseDefinitions()) {
+        if (testCase.name == testCaseName) {
+            return &testCase;
+        }
+    }
+
+    return nullptr;
+}
+
+void RunTestCaseByName(std::string_view testCaseName, TestRunMode runMode = TestRunMode::Automated);
+void RunAllTestCases();
+
+void PrintTestCaseList(std::ostream& stream) {
+    stream << "Available test cases:" << std::endl;
+    for (const TestCaseDefinition& testCase : GetTestCaseDefinitions()) {
+        stream << "  " << testCase.name << std::endl;
+    }
+}
+
+int FindDefaultVisualTestCaseIndex() {
+    const auto& testCases = GetTestCaseDefinitions();
+    for (size_t i = 0; i < testCases.size(); ++i) {
+        if (std::string_view(testCases[i].name) == kDefaultVisualTestCase) {
+            return static_cast<int>(i);
+        }
+    }
+
+    return 0;
+}
+
+enum class LauncherAction {
+    None,
+    RunSelectedAutomated,
+    RunSelectedVisual,
+    RunAllAutomated,
+    Exit,
+};
+
+struct LauncherState {
+    int selectedTestCaseIndex = FindDefaultVisualTestCaseIndex();
+    std::string lastStatus = "Choose a test case and a run mode.";
+};
+
+LauncherAction RenderLauncherFrame(LauncherState& launcherState) {
+    const auto& testCases = GetTestCaseDefinitions();
+    LauncherAction action = LauncherAction::None;
+
+    ImGui::SetNextWindowPos(ImVec2(40.0f, 40.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(620.0f, 420.0f), ImGuiCond_Always);
+
+    if (ImGui::Begin("Toolscreen GUI Integration Test Runner", nullptr,
+                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings)) {
+        ImGui::TextWrapped("Select a test case, then choose whether to run it interactively or as an automated pass/fail check.");
+        ImGui::Spacing();
+
+        if (ImGui::BeginListBox("##gui-test-cases", ImVec2(-1.0f, 180.0f))) {
+            for (int i = 0; i < static_cast<int>(testCases.size()); ++i) {
+                const bool isSelected = launcherState.selectedTestCaseIndex == i;
+                if (ImGui::Selectable(testCases[i].name, isSelected)) {
+                    launcherState.selectedTestCaseIndex = i;
+                }
+                if (isSelected) {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
+            ImGui::EndListBox();
+        }
+
+        ImGui::Spacing();
+        ImGui::Text("Selected: %s", testCases[launcherState.selectedTestCaseIndex].name);
+
+        if (ImGui::Button("Run Selected Visual", ImVec2(190.0f, 0.0f))) {
+            action = LauncherAction::RunSelectedVisual;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Run Selected Automated", ImVec2(190.0f, 0.0f))) {
+            action = LauncherAction::RunSelectedAutomated;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Run All Automated", ImVec2(190.0f, 0.0f))) {
+            action = LauncherAction::RunAllAutomated;
+        }
+
+        ImGui::Spacing();
+        if (ImGui::Button("Close Launcher", ImVec2(190.0f, 0.0f))) {
+            action = LauncherAction::Exit;
+        }
+
+        ImGui::Separator();
+        ImGui::TextWrapped("%s", launcherState.lastStatus.c_str());
+    }
+    ImGui::End();
+
+    return action;
+}
+
+std::string ExecuteLauncherAction(DummyWindow& launcherWindow, const LauncherAction action, const LauncherState& launcherState) {
+    const auto& testCases = GetTestCaseDefinitions();
+    const char* selectedTestCaseName = testCases[launcherState.selectedTestCaseIndex].name;
+
+    auto runSingle = [&](const TestRunMode runMode) {
+        const bool hideLauncher = runMode == TestRunMode::Visual;
+        if (hideLauncher) {
+            launcherWindow.Show(false);
+        }
+
+        HandleImGuiContextReset();
+
+        try {
+            RunTestCaseByName(selectedTestCaseName, runMode);
+        } catch (...) {
+            g_minecraftHwnd.store(launcherWindow.hwnd(), std::memory_order_release);
+            launcherWindow.SetTitle("Toolscreen GUI Integration Tests - Launcher");
+            if (hideLauncher) {
+                launcherWindow.Show(true);
+            }
+            throw;
+        }
+
+        g_minecraftHwnd.store(launcherWindow.hwnd(), std::memory_order_release);
+        launcherWindow.SetTitle("Toolscreen GUI Integration Tests - Launcher");
+        if (hideLauncher) {
+            launcherWindow.Show(true);
+        }
+
+        return std::string("PASS ") + selectedTestCaseName + (runMode == TestRunMode::Visual ? " [visual]" : " [automated]");
+    };
+
+    switch (action) {
+        case LauncherAction::RunSelectedAutomated:
+            return runSingle(TestRunMode::Automated);
+        case LauncherAction::RunSelectedVisual:
+            return runSingle(TestRunMode::Visual);
+        case LauncherAction::RunAllAutomated:
+            HandleImGuiContextReset();
+            RunAllTestCases();
+            g_minecraftHwnd.store(launcherWindow.hwnd(), std::memory_order_release);
+            launcherWindow.SetTitle("Toolscreen GUI Integration Tests - Launcher");
+            return "PASS all automated test cases";
+        case LauncherAction::Exit:
+            return "Launcher closed.";
+        case LauncherAction::None:
+            break;
+    }
+
+    return launcherState.lastStatus;
+}
+
+void RunLauncherGui() {
+    DummyWindow launcherWindow(kWindowWidth, kWindowHeight, true);
+    launcherWindow.SetTitle("Toolscreen GUI Integration Tests - Launcher");
+
+    LauncherState launcherState;
+    while (launcherWindow.PumpMessages()) {
+        if (!launcherWindow.BeginFrame()) {
+            break;
+        }
+
+        const LauncherAction action = RenderLauncherFrame(launcherState);
+        launcherWindow.EndFrame();
+
+        if (action == LauncherAction::Exit) {
+            break;
+        }
+
+        if (action != LauncherAction::None) {
+            try {
+                launcherState.lastStatus = ExecuteLauncherAction(launcherWindow, action, launcherState);
+            } catch (const std::exception& ex) {
+                launcherState.lastStatus = std::string("FAIL: ") + ex.what();
+            }
+        }
+
+        Sleep(16);
+    }
+}
+
+void PrintUsage(std::ostream& stream) {
+    stream << "Usage:" << std::endl;
+    stream << "  toolscreen_gui_integration_tests" << std::endl;
+    stream << "  toolscreen_gui_integration_tests --run-all" << std::endl;
+    stream << "  toolscreen_gui_integration_tests <test-case>" << std::endl;
+    stream << "  toolscreen_gui_integration_tests --visual [<test-case>]" << std::endl;
+    stream << "  toolscreen_gui_integration_tests --list" << std::endl;
+    stream << "  toolscreen_gui_integration_tests --help" << std::endl;
+    stream << std::endl;
+    stream << "No arguments opens a launcher GUI where you can choose which test mode to run." << std::endl;
+    stream << "Use --run-all for pure CLI pass/fail execution of every test case." << std::endl;
+    stream << "Visual mode keeps the dummy Win32/WGL window open so the GUI can be inspected interactively." << std::endl;
+    stream << "If no visual test case is provided, it defaults to " << kDefaultVisualTestCase << "." << std::endl;
+    stream << std::endl;
+    PrintTestCaseList(stream);
+}
+
+struct CommandLineOptions {
+    bool openLauncher = false;
+    bool showUsage = false;
+    bool listOnly = false;
+    bool runAll = false;
+    TestRunMode runMode = TestRunMode::Automated;
+    std::string testCaseName;
+};
+
+CommandLineOptions ParseCommandLine(int argc, char** argv) {
+    if (argc == 1) {
+        CommandLineOptions options;
+        options.openLauncher = true;
+        return options;
+    }
+
+    if (argc > 3) {
+        throw std::runtime_error("Expected at most two arguments.");
+    }
+
+    const std::string firstArg = argv[1];
+    if (firstArg == "--help" || firstArg == "-h") {
+        if (argc != 2) {
+            throw std::runtime_error("--help does not accept additional arguments.");
+        }
+
+        CommandLineOptions options;
+        options.showUsage = true;
+        return options;
+    }
+
+    if (firstArg == "--list") {
+        if (argc != 2) {
+            throw std::runtime_error("--list does not accept additional arguments.");
+        }
+
+        CommandLineOptions options;
+        options.listOnly = true;
+        return options;
+    }
+
+    if (firstArg == "--run-all") {
+        if (argc != 2) {
+            throw std::runtime_error("--run-all does not accept additional arguments.");
+        }
+
+        CommandLineOptions options;
+        options.runAll = true;
+        return options;
+    }
+
+    if (firstArg == "--visual") {
+        CommandLineOptions options;
+        options.runMode = TestRunMode::Visual;
+        options.testCaseName = argc == 3 ? argv[2] : kDefaultVisualTestCase;
+        if (options.testCaseName == "all") {
+            throw std::runtime_error("Visual mode requires a single test case.");
+        }
+
+        return options;
+    }
+
+    if (argc != 2) {
+        throw std::runtime_error("Unexpected extra arguments.");
+    }
+
+    if (firstArg == "all") {
+        CommandLineOptions options;
+        options.runAll = true;
+        return options;
+    }
+
+    CommandLineOptions options;
+    options.testCaseName = firstArg;
+    return options;
+}
+
+void RunTestCaseByName(std::string_view testCaseName, TestRunMode runMode) {
+    const TestCaseDefinition* testCase = FindTestCaseDefinition(testCaseName);
+    if (testCase == nullptr) {
+        throw std::runtime_error("Unknown test case: " + std::string(testCaseName));
+    }
+
+    std::cout << "RUN " << testCase->name;
+    if (runMode == TestRunMode::Visual) {
+        std::cout << " [visual]";
+    }
+    std::cout << std::endl;
+
+    testCase->run(runMode);
+    std::cout << "PASS " << testCase->name;
+    if (runMode == TestRunMode::Visual) {
+        std::cout << " [visual]";
+    }
+    std::cout << std::endl;
+}
+
+void RunAllTestCases() {
+    for (const TestCaseDefinition& testCase : GetTestCaseDefinitions()) {
+        RunTestCaseByName(testCase.name);
+    }
+}
+
+bool ShouldPauseForTransientConsole() {
+    DWORD consoleProcessIds[2]{};
+    return GetConsoleProcessList(consoleProcessIds, static_cast<DWORD>(std::size(consoleProcessIds))) == 1;
+}
+
+void PauseForTransientConsole() {
+    if (!ShouldPauseForTransientConsole()) {
+        return;
+    }
+
+    std::cerr << "Press Enter to close..." << std::flush;
+    std::string ignored;
+    std::getline(std::cin, ignored);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     try {
-        Expect(argc == 2, "Expected exactly one test case argument.");
+        EnsureProcessDpiAwareness();
+        const CommandLineOptions options = ParseCommandLine(argc, argv);
 
-        const std::string testCase = argv[1];
-        if (testCase == "config-default-load") {
-            RunConfigDefaultLoadTest();
-        } else if (testCase == "config-roundtrip") {
-            RunConfigRoundtripTest();
-        } else if (testCase == "config-error-gui") {
-            RunConfigErrorGuiTest();
-        } else if (testCase == "settings-gui-basic") {
-            RunSettingsGuiBasicTest();
-        } else if (testCase == "settings-gui-advanced") {
-            RunSettingsGuiAdvancedTest();
-        } else {
-            throw std::runtime_error("Unknown test case: " + testCase);
+        if (options.openLauncher) {
+            RunLauncherGui();
+            return 0;
         }
 
-        std::cout << "PASS " << testCase << std::endl;
+        if (options.showUsage) {
+            PrintUsage(std::cout);
+            return 0;
+        }
+
+        if (options.listOnly) {
+            PrintTestCaseList(std::cout);
+            return 0;
+        }
+
+        if (options.runAll) {
+            std::cout << "Running all GUI integration tests." << std::endl;
+            PrintTestCaseList(std::cout);
+            RunAllTestCases();
+            return 0;
+        }
+
+        RunTestCaseByName(options.testCaseName, options.runMode);
         return 0;
     } catch (const std::exception& ex) {
         std::cerr << "FAIL: " << ex.what() << std::endl;
+        PrintUsage(std::cerr);
+        PauseForTransientConsole();
         return 1;
     }
 }

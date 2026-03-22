@@ -591,28 +591,51 @@ endif()
 toolscreen_configure_target_outputs(toolscreen_gui_integration_tests)
 toolscreen_enable_release_symbols(toolscreen_gui_integration_tests)
 
-add_test(
-    NAME toolscreen_integration_config_default_load
-    COMMAND $<TARGET_FILE:toolscreen_gui_integration_tests> config-default-load
+set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
+    config-default-load
+    config-roundtrip
+    config-roundtrip-global-settings
+    config-roundtrip-modes
+    config-roundtrip-mirrors
+    config-roundtrip-mirror-groups
+    config-roundtrip-images
+    config-roundtrip-window-overlays
+    config-roundtrip-browser-overlays
+    config-roundtrip-hotkeys
+    config-roundtrip-sensitivity-hotkeys
+    config-roundtrip-cursors-eyezoom
+    config-roundtrip-key-rebinds-appearance
+    config-roundtrip-debug-settings
+    config-load-missing-required-modes
+    config-load-invalid-hotkey-mode-references
+    config-load-relative-mode-dimensions
+    config-load-expression-mode-dimensions
+    config-load-legacy-version-upgrade
+    config-load-clamp-global-values
+    config-error-gui
+    settings-gui-basic
+    settings-gui-advanced
+    settings-tab-general-populated
+    settings-tab-other-populated
+    settings-tab-modes-populated
+    settings-tab-mirrors-populated
+    settings-tab-images-populated
+    settings-tab-window-overlays-populated
+    settings-tab-browser-overlays-populated
+    settings-tab-hotkeys-populated
+    settings-tab-inputs-mouse-populated
+    settings-tab-inputs-keyboard-populated
+    settings-tab-settings-populated
+    settings-tab-appearance-populated
+    settings-tab-misc-populated
+    settings-tab-supporters-populated
 )
 
-add_test(
-    NAME toolscreen_integration_config_roundtrip
-    COMMAND $<TARGET_FILE:toolscreen_gui_integration_tests> config-roundtrip
-)
-
-add_test(
-    NAME toolscreen_integration_config_error_gui
-    COMMAND $<TARGET_FILE:toolscreen_gui_integration_tests> config-error-gui
-)
-
-add_test(
-    NAME toolscreen_integration_settings_gui_basic
-    COMMAND $<TARGET_FILE:toolscreen_gui_integration_tests> settings-gui-basic
-)
-
-add_test(
-    NAME toolscreen_integration_settings_gui_advanced
-    COMMAND $<TARGET_FILE:toolscreen_gui_integration_tests> settings-gui-advanced
-)
+foreach(test_case IN LISTS TOOLSCREEN_GUI_INTEGRATION_TEST_CASES)
+    string(REPLACE "-" "_" test_name_suffix "${test_case}")
+    add_test(
+        NAME toolscreen_integration_${test_name_suffix}
+        COMMAND $<TARGET_FILE:toolscreen_gui_integration_tests> ${test_case}
+    )
+endforeach()
 
