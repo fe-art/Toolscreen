@@ -77,6 +77,14 @@ if (ImGui::BeginTabItem(trc("tabs.settings"))) {
     HelpMarker(trc("tooltip.auto_borderless"));
     ImGui::PopID();
 
+    ImGui::Spacing();
+    ImGui::SeparatorText(trc("config_mode.advanced"));
+    if (ImGui::Checkbox(trc("settings.restore_windowed_mode_on_fullscreen_exit"), &g_config.restoreWindowedModeOnFullscreenExit)) {
+        g_configIsDirty = true;
+    }
+    ImGui::SameLine();
+    HelpMarker(trc("settings.tooltip.restore_windowed_mode_on_fullscreen_exit"));
+
 /*    if (ImGui::Checkbox("Disable Fullscreen Prompt", &g_config.disableFullscreenPrompt)) { g_configIsDirty = true; }
     ImGui::SameLine();
     HelpMarker("Disables the fullscreen toast prompt (toast2).\n"
@@ -86,8 +94,6 @@ if (ImGui::BeginTabItem(trc("tabs.settings"))) {
     ImGui::SameLine();
     HelpMarker("Disables the configure toast prompt (toast1) shown in windowed mode.");*/
 
-    ImGui::Spacing();
-    ImGui::SeparatorText(trc("settings.mirrors"));
     bool driverInstalled = IsVirtualCameraDriverInstalled();
     bool inUseByOBS = driverInstalled && IsVirtualCameraInUseByOBS();
     ImGui::BeginDisabled(!driverInstalled || inUseByOBS);

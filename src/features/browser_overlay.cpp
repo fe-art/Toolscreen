@@ -29,12 +29,6 @@ extern HMODULE g_hModule;
 
 namespace {
 
-using CreateCoreWebView2EnvironmentWithOptionsFn = HRESULT(STDAPICALLTYPE*)(
-    PCWSTR browserExecutableFolder,
-    PCWSTR userDataFolder,
-    ICoreWebView2EnvironmentOptions* environmentOptions,
-    ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler* environmentCreatedHandler);
-
 constexpr wchar_t kBrowserOverlayHostClassName[] = L"ToolscreenBrowserOverlayHostWindow";
 constexpr int kBrowserOverlayOffscreenPos = -32000;
 constexpr size_t kBrowserOverlayMaxFrameBytes = 100ull * 1024ull * 1024ull;
@@ -157,8 +151,6 @@ std::map<std::string, BrowserOverlayEncodedFrame> g_browserOverlayPendingDecodeF
 std::mutex g_browserOverlayDecodeMutex;
 std::condition_variable g_browserOverlayDecodeCv;
 
-HMODULE g_webView2LoaderModule = nullptr;
-CreateCoreWebView2EnvironmentWithOptionsFn g_createEnvironmentWithOptions = nullptr;
 std::array<BrowserOverlayEnvironmentState, kBrowserOverlayEnvironmentCount> g_browserOverlayEnvironments;
 std::atomic<bool> g_browserOverlayHostClassRegistered{ false };
 
@@ -194,45 +186,6 @@ bool EnsureBrowserOverlayHostClass() {
     }
 
     g_browserOverlayHostClassRegistered.store(true, std::memory_order_release);
-    return true;
-}
-
-std::wstring GetToolscreenModuleDirectory() {
-    wchar_t modulePath[MAX_PATH] = {};
-    HMODULE moduleHandle = g_hModule ? g_hModule : GetModuleHandleW(nullptr);
-    const DWORD len = GetModuleFileNameW(moduleHandle, modulePath, static_cast<DWORD>(std::size(modulePath)));
-    if (len == 0 || len >= std::size(modulePath)) {
-        return std::filesystem::current_path().wstring();
-    }
-    return std::filesystem::path(modulePath).parent_path().wstring();
-}
-
-bool EnsureWebView2Loader() {
-    if (g_createEnvironmentWithOptions) {
-        return true;
-    }
-
-    const std::filesystem::path moduleDir(GetToolscreenModuleDirectory());
-    const std::filesystem::path localLoaderPath = moduleDir / L"WebView2Loader.dll";
-
-    g_webView2LoaderModule = LoadLibraryW(localLoaderPath.c_str());
-    if (!g_webView2LoaderModule) {
-        g_webView2LoaderModule = LoadLibraryW(L"WebView2Loader.dll");
-    }
-    if (!g_webView2LoaderModule) {
-        Log("[BrowserOverlay] WebView2Loader.dll not found. Browser overlays are disabled.");
-        return false;
-    }
-
-    g_createEnvironmentWithOptions = reinterpret_cast<CreateCoreWebView2EnvironmentWithOptionsFn>(
-        GetProcAddress(g_webView2LoaderModule, "CreateCoreWebView2EnvironmentWithOptions"));
-    if (!g_createEnvironmentWithOptions) {
-        Log("[BrowserOverlay] CreateCoreWebView2EnvironmentWithOptions not found in WebView2Loader.dll.");
-        FreeLibrary(g_webView2LoaderModule);
-        g_webView2LoaderModule = nullptr;
-        return false;
-    }
-
     return true;
 }
 
@@ -415,11 +368,6 @@ bool EnsureBrowserOverlayEnvironment(bool allowSystemMediaKeys) {
         return environmentState.ready.load(std::memory_order_acquire);
     }
 
-    if (!EnsureWebView2Loader()) {
-        environmentState.failed.store(true, std::memory_order_release);
-        return false;
-    }
-
     HANDLE completionEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     if (!completionEvent) {
         Log("[BrowserOverlay] Failed to create WebView2 environment wait event.");
@@ -438,7 +386,7 @@ bool EnsureBrowserOverlayEnvironment(bool allowSystemMediaKeys) {
         return false;
     }
 
-    const HRESULT hr = g_createEnvironmentWithOptions(
+    const HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(
         nullptr,
         userDataFolder.c_str(),
         environmentOptions.Get(),
@@ -1431,12 +1379,6 @@ void BrowserOverlayThreadFunc() {
         environmentState.ready.store(false, std::memory_order_release);
         environmentState.failed.store(false, std::memory_order_release);
         environmentState.requested.store(false, std::memory_order_release);
-    }
-
-    if (g_webView2LoaderModule) {
-        FreeLibrary(g_webView2LoaderModule);
-        g_webView2LoaderModule = nullptr;
-        g_createEnvironmentWithOptions = nullptr;
     }
 
     CoUninitialize();

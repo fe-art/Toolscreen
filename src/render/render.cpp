@@ -18,10 +18,116 @@
 #include <chrono>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <set>
 #include <shared_mutex>
 #include <unordered_map>
 #include <unordered_set>
+
+namespace {
+constexpr size_t kMaxDecodedImageUploadBytes = 512ull * 1024ull * 1024ull;
+constexpr size_t kMaxVirtualCameraSyncBytes = 128ull * 1024ull * 1024ull;
+
+bool TryMultiplySize(size_t left, size_t right, size_t& out) {
+    if (left == 0 || right == 0) {
+        out = 0;
+        return true;
+    }
+    if (left > (std::numeric_limits<size_t>::max)() / right) { return false; }
+    out = left * right;
+    return true;
+}
+
+bool TryComputeImageByteCount(int width, int height, int channels, size_t& outBytes) {
+    if (width <= 0 || height <= 0 || channels <= 0) { return false; }
+
+    size_t pixelCount = 0;
+    if (!TryMultiplySize(static_cast<size_t>(width), static_cast<size_t>(height), pixelCount)) { return false; }
+    return TryMultiplySize(pixelCount, static_cast<size_t>(channels), outBytes);
+}
+
+std::string FormatByteCount(size_t bytes) {
+    const size_t mib = 1024ull * 1024ull;
+    return std::to_string(bytes) + " bytes (" + std::to_string(bytes / mib) + " MiB)";
+}
+
+bool TryDescribeDecodedImageStorage(const DecodedImageData& imgData, size_t& outBytes, std::string& outReason) {
+    if (imgData.width <= 0 || imgData.height <= 0) {
+        outReason = "invalid dimensions " + std::to_string(imgData.width) + "x" + std::to_string(imgData.height);
+        return false;
+    }
+
+    if (imgData.isAnimated) {
+        if (imgData.frameCount <= 1) {
+            outReason = "animated image has invalid frameCount=" + std::to_string(imgData.frameCount);
+            return false;
+        }
+        if (imgData.frameHeight <= 0) {
+            outReason = "animated image has invalid frameHeight=" + std::to_string(imgData.frameHeight);
+            return false;
+        }
+
+        size_t expectedHeight = 0;
+        if (!TryMultiplySize(static_cast<size_t>(imgData.frameHeight), static_cast<size_t>(imgData.frameCount), expectedHeight)) {
+            outReason = "animated image height overflowed for frameHeight=" + std::to_string(imgData.frameHeight) +
+                        ", frameCount=" + std::to_string(imgData.frameCount);
+            return false;
+        }
+        if (expectedHeight != static_cast<size_t>(imgData.height)) {
+            outReason = "animated image height mismatch: got " + std::to_string(imgData.height) + ", expected " +
+                        std::to_string(expectedHeight);
+            return false;
+        }
+    }
+
+    if (!TryComputeImageByteCount(imgData.width, imgData.height, 4, outBytes)) {
+        outReason = "byte-count overflowed for " + std::to_string(imgData.width) + "x" + std::to_string(imgData.height) + "x4";
+        return false;
+    }
+
+    return true;
+}
+
+bool TryComputeVirtualCameraSyncBytes(int width, int height, size_t& yBytes, size_t& uvBytes, size_t& totalBytes, std::string& outReason) {
+    if (width <= 0 || height <= 0) {
+        outReason = "invalid dimensions " + std::to_string(width) + "x" + std::to_string(height);
+        return false;
+    }
+    if ((width & 1) != 0 || (height & 1) != 0) {
+        outReason = "dimensions must be even for NV12: " + std::to_string(width) + "x" + std::to_string(height);
+        return false;
+    }
+
+    if (!TryComputeImageByteCount(width, height, 1, yBytes)) {
+        outReason = "luma byte-count overflowed for " + std::to_string(width) + "x" + std::to_string(height);
+        return false;
+    }
+    uvBytes = yBytes / 2u;
+    if (!TryMultiplySize(static_cast<size_t>(width / 2), static_cast<size_t>(height / 2), totalBytes)) {
+        outReason = "chroma plane size overflowed for " + std::to_string(width) + "x" + std::to_string(height);
+        return false;
+    }
+    totalBytes = yBytes + uvBytes;
+    return true;
+}
+
+void LogVirtualCameraSyncGuardOnce(const std::string& reason, int width, int height, size_t totalBytes) {
+    static int s_lastWidth = 0;
+    static int s_lastHeight = 0;
+    static size_t s_lastBytes = 0;
+    static std::string s_lastReason;
+
+    if (s_lastWidth == width && s_lastHeight == height && s_lastBytes == totalBytes && s_lastReason == reason) { return; }
+
+    s_lastWidth = width;
+    s_lastHeight = height;
+    s_lastBytes = totalBytes;
+    s_lastReason = reason;
+
+    Log("Virtual Camera: rejecting synchronous readback at " + std::to_string(width) + "x" + std::to_string(height) +
+        " (" + FormatByteCount(totalBytes) + "): " + reason);
+}
+} // namespace
 
 static std::unordered_map<std::string, size_t> s_mirrorLookupCache;
 static std::unordered_map<std::string, size_t> s_imageLookupCache;
@@ -88,9 +194,9 @@ enum class ActiveModeSourceType {
 struct ActiveModeSourceEntry {
     ActiveModeSourceType type = ActiveModeSourceType::Mirror;
     MirrorConfig mirror;
-    const ImageConfig* image = nullptr;
-    const WindowOverlayConfig* windowOverlay = nullptr;
-    const BrowserOverlayConfig* browserOverlay = nullptr;
+    ImageConfig image;
+    WindowOverlayConfig windowOverlay;
+    BrowserOverlayConfig browserOverlay;
 };
 
 static MirrorConfig BuildGroupedMirrorConfig(const MirrorConfig& mirror, const MirrorGroupConfig& group, const MirrorGroupItem& item) {
@@ -133,10 +239,9 @@ static bool ModeHasAnyMirrorSources(const ModeConfig& mode) {
 }
 
 static void ResolveActiveElementsForMode(const Config& config, const std::string& modeId, bool onlyOnMyScreenPass,
-                                         uint64_t configVersion, std::vector<MirrorConfig>& outMirrors,
-                                         std::vector<ImageConfig>& outImages,
-                                         std::vector<const WindowOverlayConfig*>& outWindowOverlays,
-                                         std::vector<const BrowserOverlayConfig*>& outBrowserOverlays,
+                                         std::vector<MirrorConfig>& outMirrors, std::vector<ImageConfig>& outImages,
+                                         std::vector<WindowOverlayConfig>& outWindowOverlays,
+                                         std::vector<BrowserOverlayConfig>& outBrowserOverlays,
                                          std::vector<ActiveModeSourceEntry>* outOrderedSources) {
     outMirrors.clear();
     outImages.clear();
@@ -144,54 +249,42 @@ static void ResolveActiveElementsForMode(const Config& config, const std::string
     outBrowserOverlays.clear();
     if (outOrderedSources) { outOrderedSources->clear(); }
 
-    static uint64_t s_cachedConfigVersion = 0;
-    static std::unordered_map<std::string, const ModeConfig*> s_modeById;
-    static std::unordered_map<std::string, const ModeConfig*> s_modeByIdLowered;
-    static std::unordered_map<std::string, const MirrorConfig*> s_mirrorByName;
-    static std::unordered_map<std::string, const MirrorGroupConfig*> s_groupByName;
-    static std::unordered_map<std::string, const ImageConfig*> s_imageByName;
-    static std::unordered_map<std::string, const WindowOverlayConfig*> s_windowOverlayByName;
-    static std::unordered_map<std::string, const BrowserOverlayConfig*> s_browserOverlayByName;
+    std::unordered_map<std::string, const ModeConfig*> modeById;
+    std::unordered_map<std::string, const ModeConfig*> modeByIdLowered;
+    std::unordered_map<std::string, const MirrorConfig*> mirrorByName;
+    std::unordered_map<std::string, const MirrorGroupConfig*> groupByName;
+    std::unordered_map<std::string, const ImageConfig*> imageByName;
+    std::unordered_map<std::string, const WindowOverlayConfig*> windowOverlayByName;
+    std::unordered_map<std::string, const BrowserOverlayConfig*> browserOverlayByName;
 
-    if (s_cachedConfigVersion != configVersion) {
-        s_cachedConfigVersion = configVersion;
-        s_modeById.clear();
-        s_modeByIdLowered.clear();
-        s_mirrorByName.clear();
-        s_groupByName.clear();
-        s_imageByName.clear();
-        s_windowOverlayByName.clear();
-        s_browserOverlayByName.clear();
-
-        s_modeById.reserve(config.modes.size());
-        s_modeByIdLowered.reserve(config.modes.size());
-        for (const auto& m : config.modes) {
-            s_modeById[m.id] = &m;
-            s_modeByIdLowered[MakeLowercaseKey(m.id)] = &m;
-        }
-
-        s_mirrorByName.reserve(config.mirrors.size());
-        for (const auto& m : config.mirrors) { s_mirrorByName[m.name] = &m; }
-
-        s_groupByName.reserve(config.mirrorGroups.size());
-        for (const auto& g : config.mirrorGroups) { s_groupByName[g.name] = &g; }
-
-        s_imageByName.reserve(config.images.size());
-        for (const auto& img : config.images) { s_imageByName[img.name] = &img; }
-
-        s_windowOverlayByName.reserve(config.windowOverlays.size());
-        for (const auto& overlay : config.windowOverlays) { s_windowOverlayByName[overlay.name] = &overlay; }
-
-        s_browserOverlayByName.reserve(config.browserOverlays.size());
-        for (const auto& overlay : config.browserOverlays) { s_browserOverlayByName[overlay.name] = &overlay; }
+    modeById.reserve(config.modes.size());
+    modeByIdLowered.reserve(config.modes.size());
+    for (const auto& m : config.modes) {
+        modeById[m.id] = &m;
+        modeByIdLowered[MakeLowercaseKey(m.id)] = &m;
     }
 
+    mirrorByName.reserve(config.mirrors.size());
+    for (const auto& m : config.mirrors) { mirrorByName[m.name] = &m; }
+
+    groupByName.reserve(config.mirrorGroups.size());
+    for (const auto& g : config.mirrorGroups) { groupByName[g.name] = &g; }
+
+    imageByName.reserve(config.images.size());
+    for (const auto& img : config.images) { imageByName[img.name] = &img; }
+
+    windowOverlayByName.reserve(config.windowOverlays.size());
+    for (const auto& overlay : config.windowOverlays) { windowOverlayByName[overlay.name] = &overlay; }
+
+    browserOverlayByName.reserve(config.browserOverlays.size());
+    for (const auto& overlay : config.browserOverlays) { browserOverlayByName[overlay.name] = &overlay; }
+
     const ModeConfig* mode = nullptr;
-    if (auto it = s_modeById.find(modeId); it != s_modeById.end()) {
+    if (auto it = modeById.find(modeId); it != modeById.end()) {
         mode = it->second;
     } else {
-        auto loweredIt = s_modeByIdLowered.find(MakeLowercaseKey(modeId));
-        if (loweredIt != s_modeByIdLowered.end()) {
+        auto loweredIt = modeByIdLowered.find(MakeLowercaseKey(modeId));
+        if (loweredIt != modeByIdLowered.end()) {
             mode = loweredIt->second;
         }
     }
@@ -220,31 +313,31 @@ static void ResolveActiveElementsForMode(const Config& config, const std::string
     };
 
     auto appendMirrorByName = [&](const std::string& mirrorName) {
-        auto it = s_mirrorByName.find(mirrorName);
-        if (it == s_mirrorByName.end() || !it->second) return;
+        auto it = mirrorByName.find(mirrorName);
+        if (it == mirrorByName.end() || !it->second) return;
         appendMirror(*it->second);
     };
 
     auto appendMirrorGroup = [&](const std::string& groupName) {
-        auto git = s_groupByName.find(groupName);
-        if (git == s_groupByName.end() || !git->second) return;
+        auto git = groupByName.find(groupName);
+        if (git == groupByName.end() || !git->second) return;
         const auto& group = *git->second;
 
         for (const auto& item : group.mirrors) {
             if (!item.enabled) continue;
-            auto mit = s_mirrorByName.find(item.mirrorId);
-            if (mit == s_mirrorByName.end() || !mit->second) continue;
+            auto mit = mirrorByName.find(item.mirrorId);
+            if (mit == mirrorByName.end() || !mit->second) continue;
             appendMirror(BuildGroupedMirrorConfig(*mit->second, group, item));
         }
     };
 
     auto appendImage = [&](const std::string& imageName) {
         if (!imagesVisible) return;
-        auto it = s_imageByName.find(imageName);
-        if (it == s_imageByName.end() || !it->second) return;
-        const ImageConfig* image = it->second;
-        if (onlyOnMyScreenPass && !image->onlyOnMyScreen) { return; }
-        outImages.push_back(*image);
+        auto it = imageByName.find(imageName);
+        if (it == imageByName.end() || !it->second) return;
+        const ImageConfig& image = *it->second;
+        if (onlyOnMyScreenPass && !image.onlyOnMyScreen) { return; }
+        outImages.push_back(image);
         if (outOrderedSources) {
             ActiveModeSourceEntry source;
             source.type = ActiveModeSourceType::Image;
@@ -255,10 +348,10 @@ static void ResolveActiveElementsForMode(const Config& config, const std::string
 
     auto appendWindowOverlay = [&](const std::string& overlayId) {
         if (!windowOverlaysVisible) return;
-        auto it = s_windowOverlayByName.find(overlayId);
-        if (it == s_windowOverlayByName.end() || !it->second) return;
-        const WindowOverlayConfig* overlay = it->second;
-        if (onlyOnMyScreenPass && !overlay->onlyOnMyScreen) { return; }
+        auto it = windowOverlayByName.find(overlayId);
+        if (it == windowOverlayByName.end() || !it->second) return;
+        const WindowOverlayConfig& overlay = *it->second;
+        if (onlyOnMyScreenPass && !overlay.onlyOnMyScreen) { return; }
         outWindowOverlays.push_back(overlay);
         if (outOrderedSources) {
             ActiveModeSourceEntry source;
@@ -270,10 +363,10 @@ static void ResolveActiveElementsForMode(const Config& config, const std::string
 
     auto appendBrowserOverlay = [&](const std::string& overlayId) {
         if (!browserOverlaysVisible) return;
-        auto it = s_browserOverlayByName.find(overlayId);
-        if (it == s_browserOverlayByName.end() || !it->second) return;
-        const BrowserOverlayConfig* overlay = it->second;
-        if (onlyOnMyScreenPass && !overlay->onlyOnMyScreen) { return; }
+        auto it = browserOverlayByName.find(overlayId);
+        if (it == browserOverlayByName.end() || !it->second) return;
+        const BrowserOverlayConfig& overlay = *it->second;
+        if (onlyOnMyScreenPass && !overlay.onlyOnMyScreen) { return; }
         outBrowserOverlays.push_back(overlay);
         if (outOrderedSources) {
             ActiveModeSourceEntry source;
@@ -304,11 +397,11 @@ static void ResolveActiveElementsForMode(const Config& config, const std::string
     }
 }
 
-void CollectActiveElementsForMode(const Config& config, const std::string& modeId, bool onlyOnMyScreenPass, uint64_t configVersion,
+void CollectActiveElementsForMode(const Config& config, const std::string& modeId, bool onlyOnMyScreenPass,
                                   std::vector<MirrorConfig>& outMirrors, std::vector<ImageConfig>& outImages,
-                                  std::vector<const WindowOverlayConfig*>& outWindowOverlays,
-                                  std::vector<const BrowserOverlayConfig*>& outBrowserOverlays) {
-    ResolveActiveElementsForMode(config, modeId, onlyOnMyScreenPass, configVersion, outMirrors, outImages, outWindowOverlays,
+                                  std::vector<WindowOverlayConfig>& outWindowOverlays,
+                                  std::vector<BrowserOverlayConfig>& outBrowserOverlays) {
+    ResolveActiveElementsForMode(config, modeId, onlyOnMyScreenPass, outMirrors, outImages, outWindowOverlays,
                                  outBrowserOverlays, nullptr);
 }
 
@@ -455,6 +548,9 @@ POINT s_dragStartPos = { 0, 0 };
 std::string s_hoveredWindowOverlayName = "";
 std::string s_draggedWindowOverlayName = "";
 bool s_isWindowOverlayDragging = false;
+std::string s_hoveredBrowserOverlayName = "";
+std::string s_draggedBrowserOverlayName = "";
+bool s_isBrowserOverlayDragging = false;
 POINT s_windowOverlayDragStart = { 0, 0 };
 int s_initialX = 0, s_initialY = 0;
 
@@ -462,6 +558,13 @@ struct EyeZoomTextLabel {
     int number;
     float centerX;
     float centerY;
+    float boxWidth;
+    float boxHeight;
+    float clipMinX;
+    float clipMinY;
+    float clipMaxX;
+    float clipMaxY;
+    bool autoFontSize;
     Color color;
 };
 static std::vector<EyeZoomTextLabel> s_eyezoomTextLabels;
@@ -685,6 +788,20 @@ static bool SubmitSameThreadVirtualCameraFrameSync(GLuint srcTexture, int width,
     if (g_sameThreadVirtualCameraReadFBO == 0) { glGenFramebuffers(1, &g_sameThreadVirtualCameraReadFBO); }
     if (g_sameThreadVirtualCameraReadFBO == 0) { return false; }
 
+    size_t yBytes = 0;
+    size_t uvBytes = 0;
+    size_t totalBytes = 0;
+    std::string syncReason;
+    if (!TryComputeVirtualCameraSyncBytes(width, height, yBytes, uvBytes, totalBytes, syncReason)) {
+        LogVirtualCameraSyncGuardOnce(syncReason, width, height, totalBytes);
+        return false;
+    }
+    if (totalBytes > kMaxVirtualCameraSyncBytes) {
+        LogVirtualCameraSyncGuardOnce("requested buffer size exceeds guard limit of " + FormatByteCount(kMaxVirtualCameraSyncBytes),
+                                      width, height, totalBytes);
+        return false;
+    }
+
     SameThreadVirtualCameraReadbackSlot syncSlot{};
     syncSlot.yTexture = g_sameThreadVirtualCameraLumaTexture;
     syncSlot.uvTexture = g_sameThreadVirtualCameraChromaTexture;
@@ -694,8 +811,6 @@ static bool SubmitSameThreadVirtualCameraFrameSync(GLuint srcTexture, int width,
 
     static std::vector<uint8_t> yPlane;
     static std::vector<uint8_t> uvPlane;
-    const size_t yBytes = static_cast<size_t>(width) * static_cast<size_t>(height);
-    const size_t uvBytes = yBytes / 2u;
     yPlane.resize(yBytes);
     uvPlane.resize(uvBytes);
 
@@ -783,9 +898,11 @@ static std::mutex s_textureGridMutex;
 static ImFont* g_overlayTextFont = nullptr;
 static float g_overlayTextFontSize = 24.0f;
 
-static void CacheEyeZoomTextLabel(int number, float centerX, float centerY, const Color& color) {
+static void CacheEyeZoomTextLabel(int number, float centerX, float centerY, float boxWidth, float boxHeight, bool autoFontSize,
+                                  const Color& color, float clipMinX, float clipMinY, float clipMaxX, float clipMaxY) {
     std::lock_guard<std::mutex> lock(s_eyezoomTextMutex);
-    s_eyezoomTextLabels.push_back({ number, centerX, centerY, color });
+    s_eyezoomTextLabels.push_back({ number, centerX, centerY, boxWidth, boxHeight, clipMinX, clipMinY, clipMaxX, clipMaxY,
+                                    autoFontSize, color });
 }
 
 void DrawOverlayBorder(float nx1, float ny1, float nx2, float ny2, float borderWidth, float borderHeight, bool isDragging,
@@ -1637,38 +1754,35 @@ void CleanupShaders() {
     }
 }
 
-void DiscardAllGPUImages() {
+static void CollectAllGPUImageTexturesForDeletionUnsafe(std::vector<GLuint>& texturesToDelete) {
+    for (auto const& [id, inst] : g_backgroundTextures) {
+        if (inst.isAnimated) {
+            for (GLuint tex : inst.frameTextures) {
+                if (tex != 0) texturesToDelete.push_back(tex);
+            }
+        } else if (inst.textureId != 0) {
+            texturesToDelete.push_back(inst.textureId);
+        }
+    }
+    g_backgroundTextures.clear();
+
+    for (auto const& [id, inst] : g_userImages) {
+        if (inst.isAnimated) {
+            for (GLuint tex : inst.frameTextures) {
+                if (tex != 0) texturesToDelete.push_back(tex);
+            }
+        } else if (inst.textureId != 0) {
+            texturesToDelete.push_back(inst.textureId);
+        }
+    }
+    g_userImages.clear();
+}
+
+static void DiscardAllGPUImagesLocked() {
     PROFILE_SCOPE_CAT("GPU Image Discard", "GPU Operations");
     std::vector<GLuint> texturesToDelete;
 
-    {
-
-        std::lock_guard<std::mutex> bgLock(g_backgroundTexturesMutex);
-        for (auto const& [id, inst] : g_backgroundTextures) {
-            if (inst.isAnimated) {
-                for (GLuint tex : inst.frameTextures) {
-                    if (tex != 0) texturesToDelete.push_back(tex);
-                }
-            } else if (inst.textureId != 0) {
-                texturesToDelete.push_back(inst.textureId);
-            }
-        }
-        g_backgroundTextures.clear();
-    }
-
-    {
-        std::lock_guard<std::mutex> imageLock(g_userImagesMutex);
-        for (auto const& [id, inst] : g_userImages) {
-            if (inst.isAnimated) {
-                for (GLuint tex : inst.frameTextures) {
-                    if (tex != 0) texturesToDelete.push_back(tex);
-                }
-            } else if (inst.textureId != 0) {
-                texturesToDelete.push_back(inst.textureId);
-            }
-        }
-        g_userImages.clear();
-    }
+    CollectAllGPUImageTexturesForDeletionUnsafe(texturesToDelete);
 
     // Enqueue for deletion after releasing resource-map locks.
     {
@@ -1677,6 +1791,13 @@ void DiscardAllGPUImages() {
     }
     if (!texturesToDelete.empty()) { g_hasTexturesToDelete.store(true, std::memory_order_release); }
     Log("All background and user image textures have been queued for deletion.");
+}
+
+void DiscardAllGPUImages() {
+    std::lock_guard<std::mutex> bgLock(g_backgroundTexturesMutex);
+    std::lock_guard<std::mutex> imageLock(g_userImagesMutex);
+
+    DiscardAllGPUImagesLocked();
 }
 
 struct PixelStoreStateGuard {
@@ -1864,15 +1985,49 @@ void CleanupGPUResources() {
 
     // Lock all GPU resource mutexes during cleanup
     std::unique_lock<std::shared_mutex> mirrorLock(g_mirrorInstancesMutex); // Write lock - cleanup
-    std::lock_guard<std::mutex> imageLock(g_userImagesMutex);
     std::lock_guard<std::mutex> bgLock(g_backgroundTexturesMutex);
+    std::lock_guard<std::mutex> imageLock(g_userImagesMutex);
 
-    auto safeGLDelete = [](auto deleteFunc, auto handle) {
-        if (handle == 0) return;
-        try {
-            deleteFunc(handle);
-            while (glGetError() != GL_NO_ERROR) {}
-        } catch (...) { Log("Exception during GPU resource deletion"); }
+    std::string currentMirrorId;
+    std::string currentResource = "<none>";
+    uintptr_t currentHandle = 0;
+
+    auto trackCleanupResource = [&](const std::string& mirrorId, const std::string& resource, uintptr_t handle) {
+        currentMirrorId = mirrorId;
+        currentResource = resource;
+        currentHandle = handle;
+    };
+    auto clearTrackedCleanupResource = [&]() {
+        currentMirrorId.clear();
+        currentResource = "<none>";
+        currentHandle = 0;
+    };
+    auto formatCleanupDebugState = [&](const char* phase) {
+        size_t queuedTextureDeleteCount = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_texturesToDeleteMutex);
+            queuedTextureDeleteCount = g_texturesToDelete.size();
+        }
+
+        std::stringstream ss;
+        ss << "phase=" << phase << ", glContext=0x" << std::hex << reinterpret_cast<uintptr_t>(currentContext) << std::dec
+           << ", currentMirror=" << (currentMirrorId.empty() ? std::string("<none>") : currentMirrorId)
+           << ", currentResource=" << currentResource << ", currentHandle=0x" << std::hex << currentHandle << std::dec
+           << ", mirrorCount=" << g_mirrorInstances.size() << ", sceneFBO=" << g_sceneFBO << ", sceneTexture=" << g_sceneTexture
+           << ", obsComposeFBOs={" << g_sameThreadObsComposeFBOs[0] << "," << g_sameThreadObsComposeFBOs[1] << "}"
+           << ", obsComposeTextures={" << g_sameThreadObsComposeTextures[0] << "," << g_sameThreadObsComposeTextures[1] << "}"
+           << ", vcScaleFBO=" << g_sameThreadVirtualCameraScaleFBO << ", vcConvertFBO=" << g_sameThreadVirtualCameraConvertFBO
+           << ", vcReadFBO=" << g_sameThreadVirtualCameraReadFBO << ", vcScaleTexture=" << g_sameThreadVirtualCameraScaleTexture
+           << ", vcLumaTexture=" << g_sameThreadVirtualCameraLumaTexture << ", vcChromaTexture=" << g_sameThreadVirtualCameraChromaTexture
+           << ", queuedTextureDeletes=" << queuedTextureDeleteCount << ", vao=" << g_vao << ", vbo=" << g_vbo
+           << ", debugVao=" << g_debugVAO << ", debugVbo=" << g_debugVBO;
+        return ss.str();
+    };
+    auto logCleanupStdException = [&](const char* phase, const std::exception& e) {
+        LogException("CleanupGPUResources [" + formatCleanupDebugState(phase) + "]", e);
+    };
+    auto logCleanupUnknownException = [&](const char* phase) {
+        Log("CleanupGPUResources: Unknown exception [" + formatCleanupDebugState(phase) + "]");
     };
 
     // PBO system cleanup is handled by CleanupCapturePBOs() in mirror_thread.cpp
@@ -1881,109 +2036,144 @@ void CleanupGPUResources() {
     try {
         for (auto const& [k, v] : g_mirrorInstances) {
             if (v.fbo) {
+                trackCleanupResource(k, "mirror.fbo", static_cast<uintptr_t>(v.fbo));
                 glDeleteFramebuffers(1, &v.fbo);
                 while (glGetError() != GL_NO_ERROR) {}
             }
             // Clean up the back-buffer FBO used by mirror capture.
             if (v.fboBack) {
+                trackCleanupResource(k, "mirror.fboBack", static_cast<uintptr_t>(v.fboBack));
                 glDeleteFramebuffers(1, &v.fboBack);
                 while (glGetError() != GL_NO_ERROR) {}
             }
             if (v.finalFbo) {
+                trackCleanupResource(k, "mirror.finalFbo", static_cast<uintptr_t>(v.finalFbo));
                 glDeleteFramebuffers(1, &v.finalFbo);
                 while (glGetError() != GL_NO_ERROR) {}
             }
             if (v.finalFboBack) {
+                trackCleanupResource(k, "mirror.finalFboBack", static_cast<uintptr_t>(v.finalFboBack));
                 glDeleteFramebuffers(1, &v.finalFboBack);
                 while (glGetError() != GL_NO_ERROR) {}
             }
         }
         if (g_sceneFBO) {
+            trackCleanupResource("<global>", "g_sceneFBO", static_cast<uintptr_t>(g_sceneFBO));
             glDeleteFramebuffers(1, &g_sceneFBO);
             while (glGetError() != GL_NO_ERROR) {}
             g_sceneFBO = 0;
         }
         for (int i = 0; i < SAME_THREAD_OBS_BUFFER_COUNT; ++i) {
             if (g_sameThreadObsComposeFBOs[i]) {
+                trackCleanupResource("<global>", "g_sameThreadObsComposeFBOs[" + std::to_string(i) + "]",
+                                     static_cast<uintptr_t>(g_sameThreadObsComposeFBOs[i]));
                 glDeleteFramebuffers(1, &g_sameThreadObsComposeFBOs[i]);
                 while (glGetError() != GL_NO_ERROR) {}
                 g_sameThreadObsComposeFBOs[i] = 0;
             }
         }
-    } catch (...) { Log("CleanupGPUResources: Exception during FBO cleanup"); }
+        clearTrackedCleanupResource();
+    } catch (const std::exception& e) {
+        logCleanupStdException("fbo cleanup", e);
+    } catch (...) { logCleanupUnknownException("fbo cleanup"); }
 
     try {
         for (auto const& [k, v] : g_mirrorInstances) {
             if (v.fboTexture) {
+                trackCleanupResource(k, "mirror.fboTexture", static_cast<uintptr_t>(v.fboTexture));
                 glDeleteTextures(1, &v.fboTexture);
                 while (glGetError() != GL_NO_ERROR) {}
             }
             if (v.tempCaptureTexture) {
+                trackCleanupResource(k, "mirror.tempCaptureTexture", static_cast<uintptr_t>(v.tempCaptureTexture));
                 glDeleteTextures(1, &v.tempCaptureTexture);
                 while (glGetError() != GL_NO_ERROR) {}
             }
             // Clean up the back-buffer texture used by mirror capture.
             if (v.fboTextureBack) {
+                trackCleanupResource(k, "mirror.fboTextureBack", static_cast<uintptr_t>(v.fboTextureBack));
                 glDeleteTextures(1, &v.fboTextureBack);
                 while (glGetError() != GL_NO_ERROR) {}
             }
             if (v.finalTexture) {
+                trackCleanupResource(k, "mirror.finalTexture", static_cast<uintptr_t>(v.finalTexture));
                 glDeleteTextures(1, &v.finalTexture);
                 while (glGetError() != GL_NO_ERROR) {}
             }
             if (v.finalTextureBack) {
+                trackCleanupResource(k, "mirror.finalTextureBack", static_cast<uintptr_t>(v.finalTextureBack));
                 glDeleteTextures(1, &v.finalTextureBack);
                 while (glGetError() != GL_NO_ERROR) {}
             }
 
             // Clean up GPU sync fences
-            if (v.gpuFence && glIsSync(v.gpuFence)) { glDeleteSync(v.gpuFence); }
-            if (v.gpuFenceBack && glIsSync(v.gpuFenceBack)) { glDeleteSync(v.gpuFenceBack); }
+            if (v.gpuFence && glIsSync(v.gpuFence)) {
+                trackCleanupResource(k, "mirror.gpuFence", reinterpret_cast<uintptr_t>(v.gpuFence));
+                glDeleteSync(v.gpuFence);
+            }
+            if (v.gpuFenceBack && glIsSync(v.gpuFenceBack)) {
+                trackCleanupResource(k, "mirror.gpuFenceBack", reinterpret_cast<uintptr_t>(v.gpuFenceBack));
+                glDeleteSync(v.gpuFenceBack);
+            }
         }
         g_mirrorInstances.clear();
 
         if (g_sceneTexture) {
+            trackCleanupResource("<global>", "g_sceneTexture", static_cast<uintptr_t>(g_sceneTexture));
             glDeleteTextures(1, &g_sceneTexture);
             while (glGetError() != GL_NO_ERROR) {}
             g_sceneTexture = 0;
         }
         for (int i = 0; i < SAME_THREAD_OBS_BUFFER_COUNT; ++i) {
             if (g_sameThreadObsComposeTextures[i]) {
+                trackCleanupResource("<global>", "g_sameThreadObsComposeTextures[" + std::to_string(i) + "]",
+                                     static_cast<uintptr_t>(g_sameThreadObsComposeTextures[i]));
                 glDeleteTextures(1, &g_sameThreadObsComposeTextures[i]);
                 while (glGetError() != GL_NO_ERROR) {}
                 g_sameThreadObsComposeTextures[i] = 0;
             }
         }
         if (g_sameThreadVirtualCameraScaleTexture) {
+            trackCleanupResource("<global>", "g_sameThreadVirtualCameraScaleTexture",
+                                 static_cast<uintptr_t>(g_sameThreadVirtualCameraScaleTexture));
             glDeleteTextures(1, &g_sameThreadVirtualCameraScaleTexture);
             while (glGetError() != GL_NO_ERROR) {}
             g_sameThreadVirtualCameraScaleTexture = 0;
         }
         if (g_sameThreadVirtualCameraLumaTexture) {
+            trackCleanupResource("<global>", "g_sameThreadVirtualCameraLumaTexture",
+                                 static_cast<uintptr_t>(g_sameThreadVirtualCameraLumaTexture));
             glDeleteTextures(1, &g_sameThreadVirtualCameraLumaTexture);
             while (glGetError() != GL_NO_ERROR) {}
             g_sameThreadVirtualCameraLumaTexture = 0;
         }
         if (g_sameThreadVirtualCameraChromaTexture) {
+            trackCleanupResource("<global>", "g_sameThreadVirtualCameraChromaTexture",
+                                 static_cast<uintptr_t>(g_sameThreadVirtualCameraChromaTexture));
             glDeleteTextures(1, &g_sameThreadVirtualCameraChromaTexture);
             while (glGetError() != GL_NO_ERROR) {}
             g_sameThreadVirtualCameraChromaTexture = 0;
         }
         if (g_sameThreadVirtualCameraScaleFBO) {
+            trackCleanupResource("<global>", "g_sameThreadVirtualCameraScaleFBO", static_cast<uintptr_t>(g_sameThreadVirtualCameraScaleFBO));
             glDeleteFramebuffers(1, &g_sameThreadVirtualCameraScaleFBO);
             while (glGetError() != GL_NO_ERROR) {}
             g_sameThreadVirtualCameraScaleFBO = 0;
         }
         if (g_sameThreadVirtualCameraConvertFBO) {
+            trackCleanupResource("<global>", "g_sameThreadVirtualCameraConvertFBO",
+                                 static_cast<uintptr_t>(g_sameThreadVirtualCameraConvertFBO));
             glDeleteFramebuffers(1, &g_sameThreadVirtualCameraConvertFBO);
             while (glGetError() != GL_NO_ERROR) {}
             g_sameThreadVirtualCameraConvertFBO = 0;
         }
         if (g_sameThreadVirtualCameraReadFBO) {
+            trackCleanupResource("<global>", "g_sameThreadVirtualCameraReadFBO", static_cast<uintptr_t>(g_sameThreadVirtualCameraReadFBO));
             glDeleteFramebuffers(1, &g_sameThreadVirtualCameraReadFBO);
             while (glGetError() != GL_NO_ERROR) {}
             g_sameThreadVirtualCameraReadFBO = 0;
         }
+        trackCleanupResource("<global>", "ReleaseSameThreadVirtualCameraReadbacks", 0);
         ReleaseSameThreadVirtualCameraReadbacks();
         g_sameThreadVirtualCameraScaleW = 0;
         g_sameThreadVirtualCameraScaleH = 0;
@@ -1994,17 +2184,22 @@ void CleanupGPUResources() {
         g_sameThreadObsComposeW = 0;
         g_sameThreadObsComposeH = 0;
 
-        DiscardAllGPUImages();
+        trackCleanupResource("<global>", "DiscardAllGPUImagesLocked", 0);
+        DiscardAllGPUImagesLocked();
 
         {
             std::lock_guard<std::mutex> lock(g_texturesToDeleteMutex);
             if (!g_texturesToDelete.empty()) {
+                trackCleanupResource("<global>", "g_texturesToDelete batch", static_cast<uintptr_t>(g_texturesToDelete.size()));
                 glDeleteTextures((GLsizei)g_texturesToDelete.size(), g_texturesToDelete.data());
                 while (glGetError() != GL_NO_ERROR) {}
                 g_texturesToDelete.clear();
             }
         }
-    } catch (...) { Log("CleanupGPUResources: Exception during texture cleanup"); }
+        clearTrackedCleanupResource();
+    } catch (const std::exception& e) {
+        logCleanupStdException("texture cleanup", e);
+    } catch (...) { logCleanupUnknownException("texture cleanup"); }
 
     {
         std::lock_guard<std::mutex> lock(g_decodedImagesMutex);
@@ -2022,39 +2217,71 @@ void CleanupGPUResources() {
 
     try {
         if (g_vao) {
+            trackCleanupResource("<global>", "g_vao", static_cast<uintptr_t>(g_vao));
             glDeleteVertexArrays(1, &g_vao);
             while (glGetError() != GL_NO_ERROR) {}
             g_vao = 0;
         }
         if (g_vbo) {
+            trackCleanupResource("<global>", "g_vbo", static_cast<uintptr_t>(g_vbo));
             glDeleteBuffers(1, &g_vbo);
             while (glGetError() != GL_NO_ERROR) {}
             g_vbo = 0;
         }
         if (g_debugVAO) {
+            trackCleanupResource("<global>", "g_debugVAO", static_cast<uintptr_t>(g_debugVAO));
             glDeleteVertexArrays(1, &g_debugVAO);
             while (glGetError() != GL_NO_ERROR) {}
             g_debugVAO = 0;
         }
         if (g_debugVBO) {
+            trackCleanupResource("<global>", "g_debugVBO", static_cast<uintptr_t>(g_debugVBO));
             glDeleteBuffers(1, &g_debugVBO);
             while (glGetError() != GL_NO_ERROR) {}
             g_debugVBO = 0;
         }
-    } catch (...) { Log("CleanupGPUResources: Exception during VAO/VBO cleanup"); }
+        clearTrackedCleanupResource();
+    } catch (const std::exception& e) {
+        logCleanupStdException("vao/vbo cleanup", e);
+    } catch (...) { logCleanupUnknownException("vao/vbo cleanup"); }
 
     try {
+        trackCleanupResource("<global>", "CleanupShaders", 0);
         CleanupShaders();
         while (glGetError() != GL_NO_ERROR) {}
-    } catch (...) { Log("CleanupGPUResources: Exception during shader cleanup"); }
+        clearTrackedCleanupResource();
+    } catch (const std::exception& e) {
+        logCleanupStdException("shader cleanup", e);
+    } catch (...) { logCleanupUnknownException("shader cleanup"); }
 
     g_sceneW = g_sceneH = 0;
     g_glInitialized.store(false, std::memory_order_release);
     Log("CleanupGPUResources: Cleanup complete.");
 }
 void UploadDecodedImageToGPU(const DecodedImageData& imgData) {
-    PROFILE_SCOPE_CAT("GPU Image Upload", "GPU Operations");
     PixelStoreStateGuard pixelStoreGuard;
+    UploadDecodedImageToGPU_Internal(imgData);
+}
+
+void UploadDecodedImageToGPU_Internal(const DecodedImageData& imgData) {
+    PROFILE_SCOPE_CAT("GPU Image Upload", "GPU Operations");
+
+    size_t decodedBytes = 0;
+    std::string decodedReason;
+    if (!TryDescribeDecodedImageStorage(imgData, decodedBytes, decodedReason)) {
+        LogCategory("image_monitor", "Skipping GPU upload for image '" + imgData.id + "' due to invalid decoded image data: " + decodedReason + ".");
+        return;
+    }
+    if (decodedBytes > kMaxDecodedImageUploadBytes) {
+        LogCategory("image_monitor",
+                    "Skipping GPU upload for image '" + imgData.id + "' because decoded storage " + FormatByteCount(decodedBytes) +
+                        " exceeds guard limit of " + FormatByteCount(kMaxDecodedImageUploadBytes) + ".");
+        return;
+    }
+
+    LogCategory("image_monitor", "Uploading decoded image '" + imgData.id + "' to GPU: " + std::to_string(imgData.width) + "x" +
+                                   std::to_string(imgData.height) + ", frameCount=" + std::to_string(imgData.frameCount) +
+                                   ", bytes=" + FormatByteCount(decodedBytes) + ".");
 
     if (imgData.type == DecodedImageData::Type::Background) {
         std::lock_guard<std::mutex> bgLock(g_backgroundTexturesMutex);
@@ -2244,6 +2471,7 @@ void ProcessPendingDecodedImages() {
     }
 
     PROFILE_SCOPE_CAT("Process Decoded Images", "GPU Operations");
+    LogCategory("image_monitor", "Processing " + std::to_string(pendingImages.size()) + " decoded images on render thread.");
     for (auto& decodedImg : pendingImages) {
         if (!decodedImg.data) {
             continue;
@@ -2601,15 +2829,33 @@ static void RenderCachedEyeZoomTextLabels() {
 
     ImDrawList* drawList = ImGui::GetBackgroundDrawList();
     ImFont* font = g_overlayTextFont ? g_overlayTextFont : ImGui::GetFont();
-    const float fontSize = (std::max)(1.0f, g_overlayTextFontSize);
+    const float requestedFontSize = (std::max)(1.0f, g_overlayTextFontSize);
 
     for (const auto& label : labels) {
         const std::string text = std::to_string(label.number);
+        float fontSize = requestedFontSize;
+        if (label.autoFontSize) {
+            const float maxTextWidth = (std::max)(1.0f, label.boxWidth * 0.82f);
+            const float maxTextHeight = (std::max)(1.0f, label.boxHeight * 0.82f);
+            const ImVec2 requestedTextSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, text.c_str());
+            if (requestedTextSize.x > 0.0f && requestedTextSize.y > 0.0f) {
+                const float fitScale = (std::min)((std::min)(maxTextWidth / requestedTextSize.x, maxTextHeight / requestedTextSize.y), 1.0f);
+                fontSize = (std::max)(1.0f, fontSize * fitScale);
+            }
+        }
+
         ImVec2 textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, text.c_str());
         ImVec2 pos(label.centerX - textSize.x * 0.5f, label.centerY - textSize.y * 0.5f);
         ImU32 color = IM_COL32(static_cast<int>(label.color.r * 255.0f), static_cast<int>(label.color.g * 255.0f),
                                static_cast<int>(label.color.b * 255.0f), static_cast<int>(label.color.a * 255.0f));
+        const bool hasClipRect = label.clipMaxX > label.clipMinX && label.clipMaxY > label.clipMinY;
+        if (hasClipRect) {
+            drawList->PushClipRect(ImVec2(label.clipMinX, label.clipMinY), ImVec2(label.clipMaxX, label.clipMaxY), true);
+        }
         drawList->AddText(font, fontSize, pos, color, text.c_str());
+        if (hasClipRect) {
+            drawList->PopClipRect();
+        }
     }
 }
 
@@ -2639,6 +2885,76 @@ static bool SelectSameThreadGameTexture(GLuint preferredTexture, int preferredW,
     outW = 0;
     outH = 0;
     return false;
+}
+
+static bool SelectEyeZoomCaptureTexture(GLuint preferredTexture, int preferredW, int preferredH, GLuint& outTexture, int& outW,
+                                        int& outH, const char** outSourceName = nullptr) {
+    if (outSourceName) { *outSourceName = "none"; }
+
+    outTexture = GetReadyGameTexture();
+    outW = GetReadyGameWidth();
+    outH = GetReadyGameHeight();
+    if (outTexture != 0 && outW > 0 && outH > 0) {
+        if (outSourceName) { *outSourceName = "ready"; }
+        return true;
+    }
+
+    outTexture = GetSafeReadTexture();
+    if (outTexture != 0 && IsSampleableTexture2D(outTexture, &outW, &outH)) {
+        if (outSourceName) { *outSourceName = "safe_read"; }
+        return true;
+    }
+
+    outTexture = GetFallbackGameTexture();
+    outW = GetFallbackGameWidth();
+    outH = GetFallbackGameHeight();
+    if (outTexture != 0 && outW > 0 && outH > 0) {
+        if (outSourceName) { *outSourceName = "fallback"; }
+        return true;
+    }
+
+    if (preferredTexture != 0 && preferredTexture != UINT_MAX && IsSampleableTexture2D(preferredTexture, &outW, &outH)) {
+        outTexture = preferredTexture;
+        if (outSourceName) { *outSourceName = "preferred"; }
+        return true;
+    }
+
+    outTexture = 0;
+    outW = 0;
+    outH = 0;
+    return false;
+}
+
+static void LogEyeZoomDebugThrottled(const char* stage, const std::string& message) {
+    struct EyeZoomDebugLogState {
+        ULONGLONG lastLogMs = 0;
+        std::string lastMessage;
+    };
+
+    static std::unordered_map<std::string, EyeZoomDebugLogState> s_logStateByStage;
+    constexpr ULONGLONG kLogIntervalMs = 2000;
+
+    const ULONGLONG now = GetTickCount64();
+    EyeZoomDebugLogState& state = s_logStateByStage[stage];
+    if (state.lastMessage == message && (now - state.lastLogMs) < kLogIntervalMs) { return; }
+
+    state.lastLogMs = now;
+    state.lastMessage = message;
+    LogCategory("texture_ops", std::string("EyeZoom: ") + stage + " " + message);
+}
+
+static void LogEyeZoomFramebufferStatusThrottled(const char* stage, GLuint texture, GLenum status, int width, int height) {
+    static std::unordered_map<std::string, ULONGLONG> s_lastLogByStage;
+    constexpr ULONGLONG kLogIntervalMs = 2000;
+
+    const ULONGLONG now = GetTickCount64();
+    auto it = s_lastLogByStage.find(stage);
+    if (it != s_lastLogByStage.end() && (now - it->second) < kLogIntervalMs) { return; }
+    s_lastLogByStage[stage] = now;
+
+    LogCategory("texture_ops",
+                std::string("EyeZoom: framebuffer incomplete at ") + stage + " status=" + std::to_string(status) +
+                    " tex=" + std::to_string(texture) + " size=" + std::to_string(width) + "x" + std::to_string(height));
 }
 
 static void DrawPassthroughTextureRegion(GLuint textureId, const float sourceRect[4], int dstLeft, int dstBottom, int dstRight,
@@ -2708,11 +3024,10 @@ static void RenderMirrorsDirect(const std::vector<MirrorConfig>& activeMirrors, 
     std::unordered_map<std::string, const MirrorConfig*> sourceMirrorConfigs;
     if (!fromModeId.empty() && (isAnimating || fromSlideMirrorsIn || toSlideMirrorsIn || cfg.eyezoom.slideMirrorsIn)) {
         std::vector<ImageConfig> unusedImages;
-        std::vector<const WindowOverlayConfig*> unusedWindowOverlays;
-        std::vector<const BrowserOverlayConfig*> unusedBrowserOverlays;
-        const uint64_t cfgVersion = g_configSnapshotVersion.load(std::memory_order_acquire);
-        CollectActiveElementsForMode(cfg, fromModeId, false, cfgVersion, sourceMirrors, unusedImages, unusedWindowOverlays,
-                                     unusedBrowserOverlays);
+        std::vector<WindowOverlayConfig> unusedWindowOverlays;
+        std::vector<BrowserOverlayConfig> unusedBrowserOverlays;
+        CollectActiveElementsForMode(cfg, fromModeId, false, sourceMirrors, unusedImages, unusedWindowOverlays,
+                         unusedBrowserOverlays);
         sourceMirrorConfigs.reserve(sourceMirrors.size());
         for (const auto& sourceMirror : sourceMirrors) {
             sourceMirrorConfigs[sourceMirror.name] = &sourceMirror;
@@ -2776,7 +3091,7 @@ static void RenderMirrorsDirect(const std::vector<MirrorConfig>& activeMirrors, 
             const auto& cache = inst.cachedRenderState;
             const bool cacheMatchesCurrentGeo =
                 allowCachedMirrorVertices && cache.isValid && cache.finalX == geo.finalX && cache.finalY == geo.finalY &&
-                cache.finalW == geo.finalW &&
+                cache.finalW == geo.finalW && cache.gameW == geo.gameW && cache.gameH == geo.gameH &&
                 cache.finalH == geo.finalH && cache.screenW == fullW && cache.screenH == fullH && cache.outputX == conf.output.x &&
                 cache.outputY == conf.output.y && cache.outputScale == conf.output.scale &&
                 cache.outputSeparateScale == conf.output.separateScale && cache.outputScaleX == conf.output.scaleX &&
@@ -3311,7 +3626,7 @@ static void RenderImagesDirect(const std::vector<ImageConfig>& activeImages, int
     glDisable(GL_BLEND);
 }
 
-static void RenderWindowOverlaysDirect(const std::vector<const WindowOverlayConfig*>& overlays, int fullW, int fullH, int gameX,
+static void RenderWindowOverlaysDirect(const std::vector<WindowOverlayConfig>& overlays, int fullW, int fullH, int gameX,
                                        int gameY, int gameW, int gameH, int gameResW, int gameResH, bool relativeStretching,
                                        float transitionProgress, int fromX, int fromY, int fromW, int fromH, float modeOpacity,
                                        bool excludeOnlyOnMyScreen) {
@@ -3329,16 +3644,15 @@ static void RenderWindowOverlaysDirect(const std::vector<const WindowOverlayConf
     glUseProgram(g_imageRenderProgram);
     glUniform1i(g_imageRenderShaderLocs.enableColorKey, 0);
 
-    for (const WindowOverlayConfig* conf : overlays) {
-        if (!conf) continue;
-        if (excludeOnlyOnMyScreen && conf->onlyOnMyScreen) continue;
+    for (const auto& conf : overlays) {
+        if (excludeOnlyOnMyScreen && conf.onlyOnMyScreen) continue;
 
-        const float effectiveOpacity = conf->opacity * modeOpacity;
-        const bool hasBg = conf->background.enabled && conf->background.opacity > 0.0f;
-        const bool hasBorder = conf->border.enabled && conf->border.width > 0;
+        const float effectiveOpacity = conf.opacity * modeOpacity;
+        const bool hasBg = conf.background.enabled && conf.background.opacity > 0.0f;
+        const bool hasBorder = conf.border.enabled && conf.border.width > 0;
         if (effectiveOpacity <= 0.0f && !hasBg && !hasBorder) continue;
 
-        auto it = g_windowOverlayCache.find(conf->name);
+        auto it = g_windowOverlayCache.find(conf.name);
         if (it == g_windowOverlayCache.end() || !it->second) continue;
         WindowOverlayCacheEntry& entry = *it->second;
 
@@ -3380,14 +3694,14 @@ static void RenderWindowOverlaysDirect(const std::vector<const WindowOverlayConf
 
         if (entry.glTextureId == 0) continue;
 
-        int croppedW = entry.glTextureWidth - conf->crop_left - conf->crop_right;
-        int croppedH = entry.glTextureHeight - conf->crop_top - conf->crop_bottom;
+        int croppedW = entry.glTextureWidth - conf.crop_left - conf.crop_right;
+        int croppedH = entry.glTextureHeight - conf.crop_top - conf.crop_bottom;
         croppedW = (std::max)(1, croppedW);
         croppedH = (std::max)(1, croppedH);
-        int displayW = (std::max)(1, static_cast<int>(croppedW * conf->scale));
-        int displayH = (std::max)(1, static_cast<int>(croppedH * conf->scale));
+        int displayW = (std::max)(1, static_cast<int>(croppedW * conf.scale));
+        int displayH = (std::max)(1, static_cast<int>(croppedH * conf.scale));
 
-        bool isViewportRelative = conf->relativeTo.length() > 8 && conf->relativeTo.substr(conf->relativeTo.length() - 8) == "Viewport";
+        bool isViewportRelative = conf.relativeTo.length() > 8 && conf.relativeTo.substr(conf.relativeTo.length() - 8) == "Viewport";
         int screenX = 0;
         int screenY = 0;
         if (isViewportRelative) {
@@ -3401,11 +3715,11 @@ static void RenderWindowOverlaysDirect(const std::vector<const WindowOverlayConf
             int fromDisplayH = relativeStretching ? static_cast<int>(displayH * fromScaleY) : displayH;
             int toPosX = 0;
             int toPosY = 0;
-            GetRelativeCoordsForImageWithViewport(conf->relativeTo, conf->x, conf->y, toDisplayW, toDisplayH, gameX, gameY, gameW,
+            GetRelativeCoordsForImageWithViewport(conf.relativeTo, conf.x, conf.y, toDisplayW, toDisplayH, gameX, gameY, gameW,
                                                   gameH, fullW, fullH, toPosX, toPosY);
             int fromPosX = 0;
             int fromPosY = 0;
-            GetRelativeCoordsForImageWithViewport(conf->relativeTo, conf->x, conf->y, fromDisplayW, fromDisplayH, fromX, fromY, fromW,
+            GetRelativeCoordsForImageWithViewport(conf.relativeTo, conf.x, conf.y, fromDisplayW, fromDisplayH, fromX, fromY, fromW,
                                                   fromH, fullW, fullH, fromPosX, fromPosY);
             float t = transitionProgress;
             screenX = static_cast<int>(fromPosX + (toPosX - fromPosX) * t);
@@ -3415,7 +3729,7 @@ static void RenderWindowOverlaysDirect(const std::vector<const WindowOverlayConf
                 displayH = static_cast<int>(fromDisplayH + (toDisplayH - fromDisplayH) * t);
             }
         } else {
-            GetRelativeCoordsForImageWithViewport(conf->relativeTo, conf->x, conf->y, displayW, displayH, gameX, gameY, gameW, gameH,
+            GetRelativeCoordsForImageWithViewport(conf.relativeTo, conf.x, conf.y, displayW, displayH, gameX, gameY, gameW, gameH,
                                                   fullW, fullH, screenX, screenY);
         }
 
@@ -3427,8 +3741,8 @@ static void RenderWindowOverlaysDirect(const std::vector<const WindowOverlayConf
 
         if (hasBg) {
             glUseProgram(g_solidColorProgram);
-            glUniform4f(g_solidColorShaderLocs.color, conf->background.color.r, conf->background.color.g, conf->background.color.b,
-                        conf->background.opacity * modeOpacity);
+            glUniform4f(g_solidColorShaderLocs.color, conf.background.color.r, conf.background.color.g, conf.background.color.b,
+                        conf.background.opacity * modeOpacity);
             float bgVerts[] = { nx1, ny1, 0, 0, nx2, ny1, 0, 0, nx2, ny2, 0, 0, nx1, ny1, 0, 0, nx2, ny2, 0, 0, nx1, ny2, 0, 0 };
             glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(bgVerts), bgVerts);
             glDrawArrays(GL_TRIANGLES, 0, 6);
@@ -3436,30 +3750,30 @@ static void RenderWindowOverlaysDirect(const std::vector<const WindowOverlayConf
 
         glUseProgram(g_imageRenderProgram);
         BindTextureDirect(GL_TEXTURE_2D, entry.glTextureId);
-        if (!entry.filterInitialized || entry.lastPixelatedScaling != conf->pixelatedScaling) {
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, conf->pixelatedScaling ? GL_NEAREST : GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, conf->pixelatedScaling ? GL_NEAREST : GL_LINEAR);
-            entry.lastPixelatedScaling = conf->pixelatedScaling;
+        if (!entry.filterInitialized || entry.lastPixelatedScaling != conf.pixelatedScaling) {
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, conf.pixelatedScaling ? GL_NEAREST : GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, conf.pixelatedScaling ? GL_NEAREST : GL_LINEAR);
+            entry.lastPixelatedScaling = conf.pixelatedScaling;
             entry.filterInitialized = true;
         }
 
         glUniform1i(g_imageRenderShaderLocs.enableColorKey, 0);
         glUniform1f(g_imageRenderShaderLocs.opacity, effectiveOpacity);
-        float tu1 = static_cast<float>(conf->crop_left) / entry.glTextureWidth;
-        float tv1 = static_cast<float>(conf->crop_top) / entry.glTextureHeight;
-        float tu2 = static_cast<float>(entry.glTextureWidth - conf->crop_right) / entry.glTextureWidth;
-        float tv2 = static_cast<float>(entry.glTextureHeight - conf->crop_bottom) / entry.glTextureHeight;
+        float tu1 = static_cast<float>(conf.crop_left) / entry.glTextureWidth;
+        float tv1 = static_cast<float>(conf.crop_top) / entry.glTextureHeight;
+        float tu2 = static_cast<float>(entry.glTextureWidth - conf.crop_right) / entry.glTextureWidth;
+        float tv2 = static_cast<float>(entry.glTextureHeight - conf.crop_bottom) / entry.glTextureHeight;
         float verts[] = { nx1, ny1, tu1, tv2, nx2, ny1, tu2, tv2, nx2, ny2, tu2, tv1,
                           nx1, ny1, tu1, tv2, nx2, ny2, tu2, tv1, nx1, ny2, tu1, tv1 };
         glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
         glDrawArrays(GL_TRIANGLES, 0, 6);
 
         if (hasBorder) {
-            RenderGameBorder(screenX, screenY, displayW, displayH, conf->border.width, conf->border.radius, conf->border.color, fullW,
+            RenderGameBorder(screenX, screenY, displayW, displayH, conf.border.width, conf.border.radius, conf.border.color, fullW,
                              fullH);
         }
-        if (!focusedName.empty() && focusedName == conf->name) {
-            RenderGameBorder(screenX, screenY, displayW, displayH, 3, conf->border.enabled ? conf->border.radius : 0,
+        if (!focusedName.empty() && focusedName == conf.name) {
+            RenderGameBorder(screenX, screenY, displayW, displayH, 3, conf.border.enabled ? conf.border.radius : 0,
                              { 0.0f, 1.0f, 0.0f, 1.0f }, fullW, fullH);
         }
     }
@@ -3467,7 +3781,7 @@ static void RenderWindowOverlaysDirect(const std::vector<const WindowOverlayConf
     glDisable(GL_BLEND);
 }
 
-static void RenderBrowserOverlaysDirect(const std::vector<const BrowserOverlayConfig*>& overlays, int fullW, int fullH, int gameX,
+static void RenderBrowserOverlaysDirect(const std::vector<BrowserOverlayConfig>& overlays, int fullW, int fullH, int gameX,
                                         int gameY, int gameW, int gameH, int gameResW, int gameResH, bool relativeStretching,
                                         float transitionProgress, int fromX, int fromY, int fromW, int fromH, float modeOpacity,
                                         bool excludeOnlyOnMyScreen) {
@@ -3482,26 +3796,25 @@ static void RenderBrowserOverlaysDirect(const std::vector<const BrowserOverlayCo
     glUseProgram(g_imageRenderProgram);
     glUniform1i(g_imageRenderShaderLocs.enableColorKey, 0);
 
-    for (const BrowserOverlayConfig* conf : overlays) {
-        if (!conf) continue;
-        if (excludeOnlyOnMyScreen && conf->onlyOnMyScreen) continue;
+    for (const auto& conf : overlays) {
+        if (excludeOnlyOnMyScreen && conf.onlyOnMyScreen) continue;
 
-        const float effectiveOpacity = conf->opacity * modeOpacity;
-        const bool hasBg = conf->background.enabled && conf->background.opacity > 0.0f;
-        const bool hasBorder = conf->border.enabled && conf->border.width > 0;
+        const float effectiveOpacity = conf.opacity * modeOpacity;
+        const bool hasBg = conf.background.enabled && conf.background.opacity > 0.0f;
+        const bool hasBorder = conf.border.enabled && conf.border.width > 0;
         if (effectiveOpacity <= 0.0f && !hasBg && !hasBorder) continue;
 
         BrowserOverlayTextureFrame frame{};
-        if (!PrepareBrowserOverlayTexture(*conf, frame)) continue;
+        if (!PrepareBrowserOverlayTexture(conf, frame)) continue;
 
-        int croppedW = frame.textureWidth - conf->crop_left - conf->crop_right;
-        int croppedH = frame.textureHeight - conf->crop_top - conf->crop_bottom;
+        int croppedW = frame.textureWidth - conf.crop_left - conf.crop_right;
+        int croppedH = frame.textureHeight - conf.crop_top - conf.crop_bottom;
         croppedW = (std::max)(1, croppedW);
         croppedH = (std::max)(1, croppedH);
-        int displayW = (std::max)(1, static_cast<int>(croppedW * conf->scale));
-        int displayH = (std::max)(1, static_cast<int>(croppedH * conf->scale));
+        int displayW = (std::max)(1, static_cast<int>(croppedW * conf.scale));
+        int displayH = (std::max)(1, static_cast<int>(croppedH * conf.scale));
 
-        bool isViewportRelative = conf->relativeTo.length() > 8 && conf->relativeTo.substr(conf->relativeTo.length() - 8) == "Viewport";
+        bool isViewportRelative = conf.relativeTo.length() > 8 && conf.relativeTo.substr(conf.relativeTo.length() - 8) == "Viewport";
         int screenX = 0;
         int screenY = 0;
         if (isViewportRelative) {
@@ -3515,11 +3828,11 @@ static void RenderBrowserOverlaysDirect(const std::vector<const BrowserOverlayCo
             int fromDisplayH = relativeStretching ? static_cast<int>(displayH * fromScaleY) : displayH;
             int toPosX = 0;
             int toPosY = 0;
-            GetRelativeCoordsForImageWithViewport(conf->relativeTo, conf->x, conf->y, toDisplayW, toDisplayH, gameX, gameY, gameW,
+            GetRelativeCoordsForImageWithViewport(conf.relativeTo, conf.x, conf.y, toDisplayW, toDisplayH, gameX, gameY, gameW,
                                                   gameH, fullW, fullH, toPosX, toPosY);
             int fromPosX = 0;
             int fromPosY = 0;
-            GetRelativeCoordsForImageWithViewport(conf->relativeTo, conf->x, conf->y, fromDisplayW, fromDisplayH, fromX, fromY, fromW,
+            GetRelativeCoordsForImageWithViewport(conf.relativeTo, conf.x, conf.y, fromDisplayW, fromDisplayH, fromX, fromY, fromW,
                                                   fromH, fullW, fullH, fromPosX, fromPosY);
             float t = transitionProgress;
             screenX = static_cast<int>(fromPosX + (toPosX - fromPosX) * t);
@@ -3529,7 +3842,7 @@ static void RenderBrowserOverlaysDirect(const std::vector<const BrowserOverlayCo
                 displayH = static_cast<int>(fromDisplayH + (toDisplayH - fromDisplayH) * t);
             }
         } else {
-            GetRelativeCoordsForImageWithViewport(conf->relativeTo, conf->x, conf->y, displayW, displayH, gameX, gameY, gameW, gameH,
+            GetRelativeCoordsForImageWithViewport(conf.relativeTo, conf.x, conf.y, displayW, displayH, gameX, gameY, gameW, gameH,
                                                   fullW, fullH, screenX, screenY);
         }
 
@@ -3541,8 +3854,8 @@ static void RenderBrowserOverlaysDirect(const std::vector<const BrowserOverlayCo
 
         if (hasBg) {
             glUseProgram(g_solidColorProgram);
-            glUniform4f(g_solidColorShaderLocs.color, conf->background.color.r, conf->background.color.g, conf->background.color.b,
-                        conf->background.opacity * modeOpacity);
+            glUniform4f(g_solidColorShaderLocs.color, conf.background.color.r, conf.background.color.g, conf.background.color.b,
+                        conf.background.opacity * modeOpacity);
             float bgVerts[] = { nx1, ny1, 0, 0, nx2, ny1, 0, 0, nx2, ny2, 0, 0, nx1, ny1, 0, 0, nx2, ny2, 0, 0, nx1, ny2, 0, 0 };
             glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(bgVerts), bgVerts);
             glDrawArrays(GL_TRIANGLES, 0, 6);
@@ -3550,27 +3863,27 @@ static void RenderBrowserOverlaysDirect(const std::vector<const BrowserOverlayCo
 
         glUseProgram(g_imageRenderProgram);
         BindTextureDirect(GL_TEXTURE_2D, frame.textureId);
-        const bool hasColorKeys = conf->enableColorKey && !conf->colorKeys.empty();
+        const bool hasColorKeys = conf.enableColorKey && !conf.colorKeys.empty();
         glUniform1i(g_imageRenderShaderLocs.enableColorKey, hasColorKeys ? 1 : 0);
         if (hasColorKeys) {
-            int numKeys = (std::min)(static_cast<int>(conf->colorKeys.size()), ConfigDefaults::MAX_COLOR_KEYS);
+            int numKeys = (std::min)(static_cast<int>(conf.colorKeys.size()), ConfigDefaults::MAX_COLOR_KEYS);
             float colors[ConfigDefaults::MAX_COLOR_KEYS * 3] = {};
             float sensitivities[ConfigDefaults::MAX_COLOR_KEYS] = {};
             for (int i = 0; i < numKeys; ++i) {
-                colors[i * 3 + 0] = conf->colorKeys[i].color.r;
-                colors[i * 3 + 1] = conf->colorKeys[i].color.g;
-                colors[i * 3 + 2] = conf->colorKeys[i].color.b;
-                sensitivities[i] = conf->colorKeys[i].sensitivity;
+                colors[i * 3 + 0] = conf.colorKeys[i].color.r;
+                colors[i * 3 + 1] = conf.colorKeys[i].color.g;
+                colors[i * 3 + 2] = conf.colorKeys[i].color.b;
+                sensitivities[i] = conf.colorKeys[i].sensitivity;
             }
             glUniform1i(g_imageRenderShaderLocs.numColorKeys, numKeys);
             glUniform3fv(g_imageRenderShaderLocs.colorKeys, numKeys, colors);
             glUniform1fv(g_imageRenderShaderLocs.sensitivities, numKeys, sensitivities);
         }
         glUniform1f(g_imageRenderShaderLocs.opacity, effectiveOpacity);
-        float tu1 = static_cast<float>(conf->crop_left) / frame.textureWidth;
-        float tv1 = static_cast<float>(conf->crop_top) / frame.textureHeight;
-        float tu2 = static_cast<float>(frame.textureWidth - conf->crop_right) / frame.textureWidth;
-        float tv2 = static_cast<float>(frame.textureHeight - conf->crop_bottom) / frame.textureHeight;
+        float tu1 = static_cast<float>(conf.crop_left) / frame.textureWidth;
+        float tv1 = static_cast<float>(conf.crop_top) / frame.textureHeight;
+        float tu2 = static_cast<float>(frame.textureWidth - conf.crop_right) / frame.textureWidth;
+        float tv2 = static_cast<float>(frame.textureHeight - conf.crop_bottom) / frame.textureHeight;
         float verts[] = { nx1, ny1, tu1, tv2, nx2, ny1, tu2, tv2, nx2, ny2, tu2, tv1,
                           nx1, ny1, tu1, tv2, nx2, ny2, tu2, tv1, nx1, ny2, tu1, tv1 };
         glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
@@ -3579,7 +3892,7 @@ static void RenderBrowserOverlaysDirect(const std::vector<const BrowserOverlayCo
         glUniform1i(g_imageRenderShaderLocs.enableColorKey, 0);
 
         if (hasBorder) {
-            RenderGameBorder(screenX, screenY, displayW, displayH, conf->border.width, conf->border.radius, conf->border.color, fullW,
+            RenderGameBorder(screenX, screenY, displayW, displayH, conf.border.width, conf.border.radius, conf.border.color, fullW,
                              fullH);
         }
     }
@@ -3652,7 +3965,7 @@ struct SameThreadOverlayState {
 struct SameThreadMirrorCaptureReuseState {
     bool available = false;
     uint64_t frameTag = 0;
-    uint64_t configVersion = 0;
+    const Config* configIdentity = nullptr;
     std::string modeId;
     std::string fromModeId;
     bool hasEyeZoomSlideOut = false;
@@ -3692,12 +4005,12 @@ static uint64_t BeginSameThreadMirrorCaptureFrame() {
     return s_sameThreadMirrorCaptureFrameTag;
 }
 
-static bool CanReuseSameThreadMirrorCapture(uint64_t configVersion, const SameThreadOverlayState& request,
+static bool CanReuseSameThreadMirrorCapture(const Config& cfg, const SameThreadOverlayState& request,
                                             bool hasEyeZoomSlideOutMirrors, bool hasTransitionSlideOutMirrors,
                                             GLuint sourceTexture, int sourceW, int sourceH) {
     return request.allowMirrorCaptureReuse && request.mirrorCaptureFrameTag != 0 && s_sameThreadMirrorCaptureReuseState.available &&
            s_sameThreadMirrorCaptureReuseState.frameTag == request.mirrorCaptureFrameTag &&
-           s_sameThreadMirrorCaptureReuseState.configVersion == configVersion &&
+           s_sameThreadMirrorCaptureReuseState.configIdentity == &cfg &&
            s_sameThreadMirrorCaptureReuseState.modeId == request.modeId &&
            s_sameThreadMirrorCaptureReuseState.fromModeId == request.fromModeId &&
            s_sameThreadMirrorCaptureReuseState.hasEyeZoomSlideOut == hasEyeZoomSlideOutMirrors &&
@@ -3706,12 +4019,12 @@ static bool CanReuseSameThreadMirrorCapture(uint64_t configVersion, const SameTh
            s_sameThreadMirrorCaptureReuseState.sourceW == sourceW && s_sameThreadMirrorCaptureReuseState.sourceH == sourceH;
 }
 
-static void CacheSameThreadMirrorCapture(uint64_t configVersion, const SameThreadOverlayState& request,
+static void CacheSameThreadMirrorCapture(const Config& cfg, const SameThreadOverlayState& request,
                                          bool hasEyeZoomSlideOutMirrors, bool hasTransitionSlideOutMirrors, GLuint sourceTexture,
                                          int sourceW, int sourceH) {
     s_sameThreadMirrorCaptureReuseState.available = true;
     s_sameThreadMirrorCaptureReuseState.frameTag = request.mirrorCaptureFrameTag;
-    s_sameThreadMirrorCaptureReuseState.configVersion = configVersion;
+    s_sameThreadMirrorCaptureReuseState.configIdentity = &cfg;
     s_sameThreadMirrorCaptureReuseState.modeId = request.modeId;
     s_sameThreadMirrorCaptureReuseState.fromModeId = request.fromModeId;
     s_sameThreadMirrorCaptureReuseState.hasEyeZoomSlideOut = hasEyeZoomSlideOutMirrors;
@@ -3767,30 +4080,30 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
         PrepareSameThreadOverlayState(s, request.fullW, request.fullH);
     }
 
-    static uint64_t s_cachedActiveConfigVersion = 0;
+    static const Config* s_cachedActiveConfig = nullptr;
     static std::string s_cachedActiveModeId;
     static bool s_cachedActiveImagesVisible = false;
     static bool s_cachedActiveWindowOverlaysVisible = false;
     static bool s_cachedActiveBrowserOverlaysVisible = false;
     static std::vector<MirrorConfig> s_cachedActiveMirrors;
     static std::vector<ImageConfig> s_cachedActiveImages;
-    static std::vector<const WindowOverlayConfig*> s_cachedActiveWindowOverlays;
-    static std::vector<const BrowserOverlayConfig*> s_cachedActiveBrowserOverlays;
+    static std::vector<WindowOverlayConfig> s_cachedActiveWindowOverlays;
+    static std::vector<BrowserOverlayConfig> s_cachedActiveBrowserOverlays;
     static std::vector<ActiveModeSourceEntry> s_cachedActiveOrderedSources;
-    static uint64_t s_cachedEyeZoomSlideOutConfigVersion = 0;
+    static const Config* s_cachedEyeZoomSlideOutConfig = nullptr;
     static std::string s_cachedEyeZoomSlideOutTargetModeId;
     static std::vector<MirrorConfig> s_cachedEyeZoomSlideOutMirrors;
-    static uint64_t s_cachedTransitionSlideOutConfigVersion = 0;
+    static const Config* s_cachedTransitionSlideOutConfig = nullptr;
     static std::string s_cachedTransitionSlideOutFromModeId;
     static std::string s_cachedTransitionSlideOutTargetModeId;
     static std::vector<MirrorConfig> s_cachedTransitionSlideOutMirrors;
-    static uint64_t s_cachedSameThreadCaptureConfigVersion = 0;
+    static const Config* s_cachedSameThreadCaptureConfig = nullptr;
     static std::string s_cachedSameThreadCaptureModeId;
     static std::vector<ThreadedMirrorConfig> s_cachedSameThreadCaptureConfigs;
     static const std::vector<MirrorConfig> s_emptyMirrors;
     static const std::vector<ImageConfig> s_emptyImages;
-    static const std::vector<const WindowOverlayConfig*> s_emptyWindowOverlays;
-    static const std::vector<const BrowserOverlayConfig*> s_emptyBrowserOverlays;
+    static const std::vector<WindowOverlayConfig> s_emptyWindowOverlays;
+    static const std::vector<BrowserOverlayConfig> s_emptyBrowserOverlays;
     static const std::vector<ActiveModeSourceEntry> s_emptyActiveSources;
 
     GameViewportGeometry geo{};
@@ -3809,47 +4122,46 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
                                          request.mirrorSlideProgress < 1.0f && !request.skipAnimation));
     const bool needModeElements = request.modeHasMirrors || request.modeHasImages || request.modeHasWindowOverlays ||
                                   request.modeHasBrowserOverlays || hasMirrorSlideOutWork;
-    const uint64_t cfgVersion = g_configSnapshotVersion.load(std::memory_order_acquire);
     const bool imagesVisible = request.modeHasImages;
     const bool windowOverlaysVisible = request.modeHasWindowOverlays;
     const bool browserOverlaysVisible = request.modeHasBrowserOverlays;
     if (needModeElements) {
-        if (s_cachedActiveConfigVersion != cfgVersion || s_cachedActiveModeId != request.modeId ||
+        if (s_cachedActiveConfig != &cfg || s_cachedActiveModeId != request.modeId ||
             s_cachedActiveImagesVisible != imagesVisible || s_cachedActiveWindowOverlaysVisible != windowOverlaysVisible ||
             s_cachedActiveBrowserOverlaysVisible != browserOverlaysVisible) {
             PROFILE_SCOPE_CAT("Collect Active Mode Elements", "Rendering");
-            s_cachedActiveConfigVersion = cfgVersion;
+            s_cachedActiveConfig = &cfg;
             s_cachedActiveModeId = request.modeId;
             s_cachedActiveImagesVisible = imagesVisible;
             s_cachedActiveWindowOverlaysVisible = windowOverlaysVisible;
             s_cachedActiveBrowserOverlaysVisible = browserOverlaysVisible;
-            ResolveActiveElementsForMode(cfg, request.modeId, false, cfgVersion, s_cachedActiveMirrors, s_cachedActiveImages,
+            ResolveActiveElementsForMode(cfg, request.modeId, false, s_cachedActiveMirrors, s_cachedActiveImages,
                                          s_cachedActiveWindowOverlays, s_cachedActiveBrowserOverlays,
                                          &s_cachedActiveOrderedSources);
         }
     }
     const std::vector<MirrorConfig>& activeMirrors = needModeElements ? s_cachedActiveMirrors : s_emptyMirrors;
     const std::vector<ImageConfig>& activeImages = needModeElements ? s_cachedActiveImages : s_emptyImages;
-    const std::vector<const WindowOverlayConfig*>& activeWindowOverlays =
+    const std::vector<WindowOverlayConfig>& activeWindowOverlays =
         needModeElements ? s_cachedActiveWindowOverlays : s_emptyWindowOverlays;
-    const std::vector<const BrowserOverlayConfig*>& activeBrowserOverlays =
+    const std::vector<BrowserOverlayConfig>& activeBrowserOverlays =
         needModeElements ? s_cachedActiveBrowserOverlays : s_emptyBrowserOverlays;
     const std::vector<ActiveModeSourceEntry>& activeOrderedSources = needModeElements ? s_cachedActiveOrderedSources : s_emptyActiveSources;
 
     if (!request.isRawWindowedMode && request.isTransitioningFromEyeZoom && cfg.eyezoom.slideMirrorsIn && !request.skipAnimation) {
-        if (s_cachedEyeZoomSlideOutConfigVersion != cfgVersion || s_cachedEyeZoomSlideOutTargetModeId != request.modeId) {
+        if (s_cachedEyeZoomSlideOutConfig != &cfg || s_cachedEyeZoomSlideOutTargetModeId != request.modeId) {
             PROFILE_SCOPE_CAT("Resolve EyeZoom Slide-Out Mirrors", "Rendering");
             std::vector<MirrorConfig> eyeZoomMirrors;
             std::vector<ImageConfig> unusedImages;
-            std::vector<const WindowOverlayConfig*> unusedOverlays;
-            std::vector<const BrowserOverlayConfig*> unusedBrowserOverlays;
+            std::vector<WindowOverlayConfig> unusedOverlays;
+            std::vector<BrowserOverlayConfig> unusedBrowserOverlays;
             std::unordered_set<std::string> activeMirrorNames;
             activeMirrorNames.reserve(activeMirrors.size());
             for (const auto& targetMirror : activeMirrors) {
                 activeMirrorNames.insert(targetMirror.name);
             }
 
-            CollectActiveElementsForMode(cfg, "EyeZoom", false, cfgVersion, eyeZoomMirrors, unusedImages, unusedOverlays,
+            CollectActiveElementsForMode(cfg, "EyeZoom", false, eyeZoomMirrors, unusedImages, unusedOverlays,
                                          unusedBrowserOverlays);
 
             s_cachedEyeZoomSlideOutMirrors.clear();
@@ -3860,7 +4172,7 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
                 }
             }
 
-            s_cachedEyeZoomSlideOutConfigVersion = cfgVersion;
+            s_cachedEyeZoomSlideOutConfig = &cfg;
             s_cachedEyeZoomSlideOutTargetModeId = request.modeId;
         }
 
@@ -3869,20 +4181,20 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
 
     if (!request.isRawWindowedMode && !request.isTransitioningFromEyeZoom && request.fromSlideMirrorsIn && !request.fromModeId.empty() &&
         request.mirrorSlideProgress < 1.0f && !request.skipAnimation) {
-        if (s_cachedTransitionSlideOutConfigVersion != cfgVersion || s_cachedTransitionSlideOutFromModeId != request.fromModeId ||
+        if (s_cachedTransitionSlideOutConfig != &cfg || s_cachedTransitionSlideOutFromModeId != request.fromModeId ||
             s_cachedTransitionSlideOutTargetModeId != request.modeId) {
             PROFILE_SCOPE_CAT("Resolve Transition Slide-Out Mirrors", "Rendering");
             std::vector<MirrorConfig> fromModeMirrors;
             std::vector<ImageConfig> unusedImages;
-            std::vector<const WindowOverlayConfig*> unusedOverlays;
-            std::vector<const BrowserOverlayConfig*> unusedBrowserOverlays;
+            std::vector<WindowOverlayConfig> unusedOverlays;
+            std::vector<BrowserOverlayConfig> unusedBrowserOverlays;
             std::unordered_set<std::string> activeMirrorNames;
             activeMirrorNames.reserve(activeMirrors.size());
             for (const auto& targetMirror : activeMirrors) {
                 activeMirrorNames.insert(targetMirror.name);
             }
 
-            CollectActiveElementsForMode(cfg, request.fromModeId, false, cfgVersion, fromModeMirrors, unusedImages, unusedOverlays,
+            CollectActiveElementsForMode(cfg, request.fromModeId, false, fromModeMirrors, unusedImages, unusedOverlays,
                                          unusedBrowserOverlays);
 
             s_cachedTransitionSlideOutMirrors.clear();
@@ -3893,7 +4205,7 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
                 }
             }
 
-            s_cachedTransitionSlideOutConfigVersion = cfgVersion;
+            s_cachedTransitionSlideOutConfig = &cfg;
             s_cachedTransitionSlideOutFromModeId = request.fromModeId;
             s_cachedTransitionSlideOutTargetModeId = request.modeId;
         }
@@ -3928,8 +4240,8 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
 
         std::vector<MirrorConfig> singleMirror;
         std::vector<ImageConfig> singleImage;
-        std::vector<const WindowOverlayConfig*> singleWindowOverlay;
-        std::vector<const BrowserOverlayConfig*> singleBrowserOverlay;
+        std::vector<WindowOverlayConfig> singleWindowOverlay;
+        std::vector<BrowserOverlayConfig> singleBrowserOverlay;
         singleMirror.reserve(1);
         singleImage.reserve(1);
         singleWindowOverlay.reserve(1);
@@ -3952,9 +4264,9 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
                 break;
 
             case ActiveModeSourceType::Image:
-                if (request.isRawWindowedMode || !source.image) { break; }
+                if (request.isRawWindowedMode) { break; }
                 singleImage.clear();
-                singleImage.push_back(*source.image);
+                singleImage.push_back(source.image);
                 RenderImagesDirect(singleImage, request.fullW, request.fullH, request.toX, request.toY, request.toW,
                                    request.toH, request.gameW, request.gameH, request.relativeStretching,
                                    request.transitionProgress, request.fromX, request.fromY, request.fromW, request.fromH,
@@ -3962,7 +4274,6 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
                 break;
 
             case ActiveModeSourceType::WindowOverlay:
-                if (!source.windowOverlay) { break; }
                 singleWindowOverlay.clear();
                 singleWindowOverlay.push_back(source.windowOverlay);
                 RenderWindowOverlaysDirect(singleWindowOverlay, request.fullW, request.fullH, request.toX, request.toY,
@@ -3973,7 +4284,6 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
                 break;
 
             case ActiveModeSourceType::BrowserOverlay:
-                if (!source.browserOverlay) { break; }
                 singleBrowserOverlay.clear();
                 singleBrowserOverlay.push_back(source.browserOverlay);
                 RenderBrowserOverlaysDirect(singleBrowserOverlay, request.fullW, request.fullH, request.toX, request.toY,
@@ -4000,12 +4310,12 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
         int sourceH = 0;
         const bool hasEyeZoomSlideOutMirrors = !eyeZoomSlideOutMirrors->empty();
         const bool hasTransitionSlideOutMirrors = !transitionSlideOutMirrors->empty();
-        if (s_cachedSameThreadCaptureConfigVersion != cfgVersion || s_cachedSameThreadCaptureModeId != request.modeId) {
+        if (s_cachedSameThreadCaptureConfig != &cfg || s_cachedSameThreadCaptureModeId != request.modeId) {
             PROFILE_SCOPE_CAT("Build Same-Thread Capture Configs", "Rendering");
             std::vector<MirrorConfig> mirrorsForCapture = activeMirrors;
             BuildThreadedMirrorConfigs(mirrorsForCapture, s_cachedSameThreadCaptureConfigs);
 
-            s_cachedSameThreadCaptureConfigVersion = cfgVersion;
+            s_cachedSameThreadCaptureConfig = &cfg;
             s_cachedSameThreadCaptureModeId = request.modeId;
         }
 
@@ -4018,7 +4328,7 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
 
         if (!s_cachedSameThreadCaptureConfigs.empty() && hasCaptureSource) {
             const bool reuseMirrorCaptures =
-                CanReuseSameThreadMirrorCapture(cfgVersion, request, hasEyeZoomSlideOutMirrors, hasTransitionSlideOutMirrors,
+                CanReuseSameThreadMirrorCapture(cfg, request, hasEyeZoomSlideOutMirrors, hasTransitionSlideOutMirrors,
                                                 sourceTexture, sourceW, sourceH);
             if (!reuseMirrorCaptures) {
                 PROFILE_SCOPE_CAT("Capture Mirror Sources", "Rendering");
@@ -4028,7 +4338,7 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
                     PROFILE_SCOPE_CAT("Prepare Overlay GL State", "Rendering");
                     PrepareSameThreadOverlayState(s, request.fullW, request.fullH);
                 }
-                CacheSameThreadMirrorCapture(cfgVersion, request, hasEyeZoomSlideOutMirrors, hasTransitionSlideOutMirrors,
+                CacheSameThreadMirrorCapture(cfg, request, hasEyeZoomSlideOutMirrors, hasTransitionSlideOutMirrors,
                                              sourceTexture, sourceW, sourceH);
             }
         }
@@ -4668,7 +4978,7 @@ bool RenderSameThreadObsFrame(const ModeConfig* modeToRender, const GLState& s, 
             request.modeId = modeToRender->id;
             request.isAnimating = isAnimating;
             request.overlayOpacity = 1.0f;
-            request.excludeOnlyOnMyScreen = false;
+            request.excludeOnlyOnMyScreen = true;
             request.skipAnimation = skipAnimation;
             request.relativeStretching = modeToRender->relativeStretching;
 
@@ -4711,7 +5021,8 @@ bool RenderSameThreadObsFrame(const ModeConfig* modeToRender, const GLState& s, 
             request.shouldRenderGui = g_shouldRenderGui.load(std::memory_order_relaxed);
             request.showPerformanceOverlay = false;
             request.showProfiler = false;
-            request.showEyeZoom = g_showEyeZoom.load(std::memory_order_relaxed);
+            request.showEyeZoom = g_showEyeZoom.load(std::memory_order_relaxed) ||
+                                  (request.isTransitioningFromEyeZoom && !request.skipAnimation);
             request.eyeZoomFadeOpacity = g_eyeZoomFadeOpacity.load(std::memory_order_relaxed);
             request.eyeZoomAnimatedViewportX = skipAnimation ? -1 : g_eyeZoomAnimatedViewportX.load(std::memory_order_relaxed);
             request.eyeZoomSnapshotTexture = GetEyeZoomSnapshotTexture();
@@ -4762,15 +5073,51 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
     GLuint gameTextureToUse = 0;
     int gameTextureW = 0;
     int gameTextureH = 0;
+    const char* selectedCaptureSource = useSnapshot ? "snapshot" : "none";
 
     if (useSnapshot && !s_eyeZoomSnapshotValid) {
+        LogEyeZoomDebugThrottled("snapshot_state",
+                                 "snapshot requested but invalid tex=" + std::to_string(s_eyeZoomSnapshotTexture) + " size=" +
+                                     std::to_string(s_eyeZoomSnapshotWidth) + "x" + std::to_string(s_eyeZoomSnapshotHeight));
         return;
     }
 
     if (!useSnapshot &&
-        !SelectSameThreadGameTexture(preferredGameTexture, preferredGameW, preferredGameH, gameTextureToUse, gameTextureW,
-                                     gameTextureH)) {
+        !SelectEyeZoomCaptureTexture(preferredGameTexture, preferredGameW, preferredGameH, gameTextureToUse, gameTextureW,
+                                     gameTextureH, &selectedCaptureSource)) {
+        GLuint readyTexture = GetReadyGameTexture();
+        int readyW = GetReadyGameWidth();
+        int readyH = GetReadyGameHeight();
+        GLuint safeReadTexture = GetSafeReadTexture();
+        int safeReadW = 0;
+        int safeReadH = 0;
+        bool safeReadValid = (safeReadTexture != 0) && IsSampleableTexture2D(safeReadTexture, &safeReadW, &safeReadH);
+        GLuint fallbackTexture = GetFallbackGameTexture();
+        int fallbackW = GetFallbackGameWidth();
+        int fallbackH = GetFallbackGameHeight();
+        int preferredActualW = 0;
+        int preferredActualH = 0;
+        bool preferredValid =
+            (preferredGameTexture != 0 && preferredGameTexture != UINT_MAX) && IsSampleableTexture2D(preferredGameTexture, &preferredActualW, &preferredActualH);
+        LogEyeZoomDebugThrottled(
+            "source_failure",
+            "no usable source preferredTex=" + std::to_string(preferredGameTexture) + " expected=" +
+                std::to_string(preferredGameW) + "x" + std::to_string(preferredGameH) + " actual=" +
+                std::to_string(preferredActualW) + "x" + std::to_string(preferredActualH) + " preferredValid=" +
+                std::to_string(preferredValid ? 1 : 0) + " readyTex=" + std::to_string(readyTexture) + " readySize=" +
+                std::to_string(readyW) + "x" + std::to_string(readyH) + " safeTex=" + std::to_string(safeReadTexture) +
+                " safeSize=" + std::to_string(safeReadW) + "x" + std::to_string(safeReadH) + " safeValid=" +
+                std::to_string(safeReadValid ? 1 : 0) + " fallbackTex=" + std::to_string(fallbackTexture) +
+                " fallbackSize=" + std::to_string(fallbackW) + "x" + std::to_string(fallbackH));
         return;
+    }
+
+    if (!useSnapshot) {
+        LogEyeZoomDebugThrottled("source_select",
+                                 std::string("selected=") + selectedCaptureSource + " tex=" + std::to_string(gameTextureToUse) +
+                                     " size=" + std::to_string(gameTextureW) + "x" + std::to_string(gameTextureH) +
+                                     " preferredTex=" + std::to_string(preferredGameTexture) + " preferredExpected=" +
+                                     std::to_string(preferredGameW) + "x" + std::to_string(preferredGameH));
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, s.fb);
@@ -4800,37 +5147,85 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
     int zoomX = 0;
     int zoomY = 0;
 
+    int finalZoomOutputWidth = 0;
+    int finalZoomOutputHeight = 0;
+    int finalZoomX = 0;
+    int finalZoomY = 0;
+
     if (zoomConfig.useCustomSizePosition) {
-        zoomOutputWidth = zoomConfig.zoomAreaWidth;
-        zoomOutputHeight = zoomConfig.zoomAreaHeight;
-        zoomX = zoomConfig.positionX;
-        zoomY = zoomConfig.positionY;
+        finalZoomOutputWidth = zoomConfig.zoomAreaWidth;
+        finalZoomOutputHeight = zoomConfig.zoomAreaHeight;
+        finalZoomX = zoomConfig.positionX;
+        finalZoomY = zoomConfig.positionY;
+
+        zoomOutputWidth = finalZoomOutputWidth;
+        zoomOutputHeight = finalZoomOutputHeight;
+        zoomY = finalZoomY;
     } else {
         int autoHorizontalMargin = 0;
         if (targetViewportX > 0) autoHorizontalMargin = targetViewportX / 10;
-
-        zoomOutputWidth = viewportX - (2 * autoHorizontalMargin);
         int autoVerticalMargin = fullH / 8;
-        zoomOutputHeight = fullH - (2 * autoVerticalMargin);
+        finalZoomOutputWidth = targetViewportX - (2 * autoHorizontalMargin);
+        finalZoomOutputHeight = fullH - (2 * autoVerticalMargin);
+        finalZoomX = autoHorizontalMargin;
+        finalZoomY = (fullH - finalZoomOutputHeight) / 2;
 
-        zoomX = autoHorizontalMargin;
-        zoomY = (fullH - zoomOutputHeight) / 2;
+        zoomOutputWidth = finalZoomOutputWidth;
+        zoomOutputHeight = finalZoomOutputHeight;
+        zoomY = finalZoomY;
+
+        if (animatedViewportX >= 0 && targetViewportX > 0) {
+            const float slideProgress =
+                (std::max)(0.0f, (std::min)(1.0f, static_cast<float>(viewportX) / static_cast<float>(targetViewportX)));
+            zoomX = -zoomOutputWidth + static_cast<int>((finalZoomX + zoomOutputWidth) * slideProgress);
+        } else {
+            zoomX = finalZoomX;
+        }
     }
 
     if (zoomOutputWidth > fullW) zoomOutputWidth = fullW;
+    if (finalZoomOutputWidth > fullW) finalZoomOutputWidth = fullW;
 
     if (zoomOutputWidth <= 20) {
+        LogEyeZoomDebugThrottled("layout_skip",
+                                 "zoom output width too small width=" + std::to_string(zoomOutputWidth) + " full=" +
+                                     std::to_string(fullW) + "x" + std::to_string(fullH) + " viewportX=" +
+                                     std::to_string(viewportX));
         return;
     }
+    if (finalZoomOutputWidth < 1) { finalZoomOutputWidth = zoomOutputWidth; }
 
     if (zoomOutputHeight > fullH) zoomOutputHeight = fullH;
+    if (finalZoomOutputHeight > fullH) finalZoomOutputHeight = fullH;
 
     if (zoomOutputHeight < 1) { zoomOutputHeight = 1; }
+    if (finalZoomOutputHeight < 1) { finalZoomOutputHeight = zoomOutputHeight; }
 
     int maxZoomX = (std::max)(0, fullW - zoomOutputWidth);
     int maxZoomY = (std::max)(0, fullH - zoomOutputHeight);
-    zoomX = (std::max)(0, (std::min)(zoomX, maxZoomX));
+    const bool allowEyeZoomSlideOffscreenLeft = animatedViewportX >= 0 && targetViewportX > 0;
+    if (allowEyeZoomSlideOffscreenLeft) {
+        zoomX = (std::min)(zoomX, maxZoomX);
+    } else {
+        zoomX = (std::max)(0, (std::min)(zoomX, maxZoomX));
+    }
     zoomY = (std::max)(0, (std::min)(zoomY, maxZoomY));
+
+    int maxFinalZoomX = (std::max)(0, fullW - finalZoomOutputWidth);
+    int maxFinalZoomY = (std::max)(0, fullH - finalZoomOutputHeight);
+    finalZoomX = (std::max)(0, (std::min)(finalZoomX, maxFinalZoomX));
+    finalZoomY = (std::max)(0, (std::min)(finalZoomY, maxFinalZoomY));
+
+    if (zoomConfig.useCustomSizePosition) {
+        zoomY = finalZoomY;
+        if (animatedViewportX >= 0 && targetViewportX > 0) {
+            const float slideProgress =
+                (std::max)(0.0f, (std::min)(1.0f, static_cast<float>(viewportX) / static_cast<float>(targetViewportX)));
+            zoomX = -zoomOutputWidth + static_cast<int>((finalZoomX + zoomOutputWidth) * slideProgress);
+        } else {
+            zoomX = finalZoomX;
+        }
+    }
 
     int zoomY_gl = fullH - zoomY - zoomOutputHeight;
 
@@ -4849,37 +5244,71 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
     srcBottom = (std::max)(0, srcBottom);
     srcRight = (std::min)(texWidth, srcRight);
     srcTop = (std::min)(texHeight, srcTop);
-    if (srcRight <= srcLeft || srcTop <= srcBottom) { return; }
+    if (srcRight <= srcLeft || srcTop <= srcBottom) {
+        LogEyeZoomDebugThrottled("source_rect",
+                                 "invalid source rect tex=" + std::to_string(texWidth) + "x" + std::to_string(texHeight) +
+                                     " clone=" + std::to_string(zoomConfig.cloneWidth) + "x" +
+                                     std::to_string(zoomConfig.cloneHeight) + " rect=" + std::to_string(srcLeft) + "," +
+                                     std::to_string(srcBottom) + " -> " + std::to_string(srcRight) + "," +
+                                     std::to_string(srcTop));
+        return;
+    }
 
     int dstLeft = zoomX;
     int dstRight = zoomX + zoomOutputWidth;
     int dstBottom = zoomY_gl;
     int dstTop = zoomY_gl + zoomOutputHeight;
 
+    LogEyeZoomDebugThrottled("render_state",
+                             std::string("mode=") + (useSnapshot ? "snapshot" : "live") + " source=" + selectedCaptureSource +
+                                 " tex=" + std::to_string(useSnapshot ? s_eyeZoomSnapshotTexture : gameTextureToUse) +
+                                 " texSize=" + std::to_string(texWidth) + "x" + std::to_string(texHeight) + " srcRect=" +
+                                 std::to_string(srcLeft) + "," + std::to_string(srcBottom) + " -> " +
+                                 std::to_string(srcRight) + "," + std::to_string(srcTop) + " dstRect=" +
+                                 std::to_string(dstLeft) + "," + std::to_string(dstBottom) + " -> " +
+                                 std::to_string(dstRight) + "," + std::to_string(dstTop) + " opacity=" +
+                                 std::to_string(opacity));
 
-    auto EnsureEyeZoomSnapshotAllocated = [&]() {
+
+    auto EnsureEyeZoomSnapshotAllocated = [&]() -> bool {
         if (s_eyeZoomSnapshotTexture == 0 || s_eyeZoomSnapshotWidth != zoomOutputWidth || s_eyeZoomSnapshotHeight != zoomOutputHeight) {
             if (s_eyeZoomSnapshotTexture != 0) { glDeleteTextures(1, &s_eyeZoomSnapshotTexture); }
             if (s_eyeZoomSnapshotFBO != 0) { glDeleteFramebuffers(1, &s_eyeZoomSnapshotFBO); }
+            s_eyeZoomSnapshotTexture = 0;
+            s_eyeZoomSnapshotFBO = 0;
 
             glGenTextures(1, &s_eyeZoomSnapshotTexture);
             BindTextureDirect(GL_TEXTURE_2D, s_eyeZoomSnapshotTexture);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, zoomOutputWidth, zoomOutputHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, zoomOutputWidth, zoomOutputHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
             glGenFramebuffers(1, &s_eyeZoomSnapshotFBO);
             glBindFramebuffer(GL_FRAMEBUFFER, s_eyeZoomSnapshotFBO);
             glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_eyeZoomSnapshotTexture, 0);
 
+            const GLenum snapshotStatus = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+            if (snapshotStatus != GL_FRAMEBUFFER_COMPLETE) {
+                LogEyeZoomFramebufferStatusThrottled("snapshot_alloc", s_eyeZoomSnapshotTexture, snapshotStatus, zoomOutputWidth,
+                                                    zoomOutputHeight);
+                glDeleteTextures(1, &s_eyeZoomSnapshotTexture);
+                glDeleteFramebuffers(1, &s_eyeZoomSnapshotFBO);
+                s_eyeZoomSnapshotTexture = 0;
+                s_eyeZoomSnapshotFBO = 0;
+                s_eyeZoomSnapshotWidth = 0;
+                s_eyeZoomSnapshotHeight = 0;
+                s_eyeZoomSnapshotValid = false;
+                return false;
+            }
+
             s_eyeZoomSnapshotWidth = zoomOutputWidth;
             s_eyeZoomSnapshotHeight = zoomOutputHeight;
             s_eyeZoomSnapshotValid = false;
         }
-    };
 
-    auto EnsureEyeZoomBlitFramebuffer = [&]() {
-        if (s_eyeZoomBlitFBO == 0) { glGenFramebuffers(1, &s_eyeZoomBlitFBO); }
+        return s_eyeZoomSnapshotTexture != 0 && s_eyeZoomSnapshotFBO != 0;
     };
 
     auto ForceOpaqueAlphaInCurrentDrawFbo = [&](int x, int y, int w, int h) {
@@ -4907,55 +5336,58 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
     };
 
     if (useSnapshot) {
+        const float sourceRect[] = { 0.0f, 0.0f, 1.0f, 1.0f };
         if (opacity < 1.0f) {
-            const float sourceRect[] = { 0.0f, 0.0f, 1.0f, 1.0f };
             glEnable(GL_BLEND);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-            DrawPassthroughTextureRegion(s_eyeZoomSnapshotTexture, sourceRect, dstLeft, dstBottom, dstRight, dstTop, fullW,
-                                         fullH, opacity);
         } else {
-            EnsureEyeZoomBlitFramebuffer();
             glDisable(GL_BLEND);
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, s_eyeZoomBlitFBO);
-            glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_eyeZoomSnapshotTexture, 0);
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s.fb);
-            glBlitFramebuffer(0, 0, s_eyeZoomSnapshotWidth, s_eyeZoomSnapshotHeight, dstLeft, dstBottom, dstRight, dstTop,
-                              GL_COLOR_BUFFER_BIT, GL_NEAREST);
-            glBindFramebuffer(GL_FRAMEBUFFER, s.fb);
+        }
+        DrawPassthroughTextureRegion(s_eyeZoomSnapshotTexture, sourceRect, dstLeft, dstBottom, dstRight, dstTop, fullW, fullH,
+                                     opacity);
+        if (opacity >= 1.0f) {
             ForceOpaqueAlphaInCurrentDrawFbo(dstLeft, dstBottom, zoomOutputWidth, zoomOutputHeight);
         }
     } else {
-        EnsureEyeZoomBlitFramebuffer();
+        const float sourceRect[] = {
+            static_cast<float>(srcLeft) / gameTextureW,
+            static_cast<float>(srcBottom) / gameTextureH,
+            static_cast<float>(srcRight - srcLeft) / gameTextureW,
+            static_cast<float>(srcTop - srcBottom) / gameTextureH,
+        };
         if (opacity < 1.0f) {
-            const float sourceRect[] = {
-                static_cast<float>(srcLeft) / gameTextureW,
-                static_cast<float>(srcBottom) / gameTextureH,
-                static_cast<float>(srcRight - srcLeft) / gameTextureW,
-                static_cast<float>(srcTop - srcBottom) / gameTextureH,
-            };
             glEnable(GL_BLEND);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-            DrawPassthroughTextureRegion(gameTextureToUse, sourceRect, dstLeft, dstBottom, dstRight, dstTop, fullW, fullH,
-                                         opacity);
         } else {
             glDisable(GL_BLEND);
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, s_eyeZoomBlitFBO);
-            glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gameTextureToUse, 0);
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s.fb);
-            glBlitFramebuffer(srcLeft, srcBottom, srcRight, srcTop, dstLeft, dstBottom, dstRight, dstTop,
-                              GL_COLOR_BUFFER_BIT, GL_NEAREST);
-            glBindFramebuffer(GL_FRAMEBUFFER, s.fb);
+        }
+        DrawPassthroughTextureRegion(gameTextureToUse, sourceRect, dstLeft, dstBottom, dstRight, dstTop, fullW, fullH,
+                                     opacity);
+        if (opacity >= 1.0f) {
             ForceOpaqueAlphaInCurrentDrawFbo(dstLeft, dstBottom, zoomOutputWidth, zoomOutputHeight);
         }
 
-        EnsureEyeZoomSnapshotAllocated();
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, s_eyeZoomBlitFBO);
-        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, gameTextureToUse, 0);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_eyeZoomSnapshotFBO);
-        glBlitFramebuffer(srcLeft, srcBottom, srcRight, srcTop, 0, 0, s_eyeZoomSnapshotWidth, s_eyeZoomSnapshotHeight,
-                          GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        if (EnsureEyeZoomSnapshotAllocated()) {
+            glBindFramebuffer(GL_FRAMEBUFFER, s_eyeZoomSnapshotFBO);
+            glDisable(GL_BLEND);
+            DrawPassthroughTextureRegion(gameTextureToUse, sourceRect, 0, 0, s_eyeZoomSnapshotWidth, s_eyeZoomSnapshotHeight,
+                                         s_eyeZoomSnapshotWidth, s_eyeZoomSnapshotHeight, 1.0f);
+            s_eyeZoomSnapshotValid = true;
+        } else {
+            s_eyeZoomSnapshotValid = false;
+            LogEyeZoomDebugThrottled("snapshot_copy_state",
+                                     std::string("snapshot invalidated after copy source=") + selectedCaptureSource + " tex=" +
+                                         std::to_string(gameTextureToUse) + " size=" + std::to_string(gameTextureW) + "x" +
+                                         std::to_string(gameTextureH) + " snapshotTex=" +
+                                         std::to_string(s_eyeZoomSnapshotTexture) + " snapshotSize=" +
+                                         std::to_string(s_eyeZoomSnapshotWidth) + "x" +
+                                         std::to_string(s_eyeZoomSnapshotHeight));
+        }
         glBindFramebuffer(GL_FRAMEBUFFER, s.fb);
-        s_eyeZoomSnapshotValid = true;
+        if (oglViewport)
+            oglViewport(0, 0, fullW, fullH);
+        else
+            glViewport(0, 0, fullW, fullH);
     }
 
     const float overlayOpacityScale = (std::min)(1.0f, opacity);
@@ -4963,21 +5395,58 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
     Color textColor = zoomConfig.textColor;
     textColor.a = textAlpha;
 
+    int overlayLayoutX = zoomX;
+    int overlayLayoutY = zoomY;
+    int overlayLayoutWidth = zoomOutputWidth;
+    int overlayLayoutHeight = zoomOutputHeight;
+    if (!zoomConfig.useCustomSizePosition && animatedViewportX >= 0 && targetViewportX > 0) {
+        const float overlaySlideProgress =
+            (std::max)(0.0f, (std::min)(1.0f, static_cast<float>(viewportX) / static_cast<float>(targetViewportX)));
+        overlayLayoutWidth = finalZoomOutputWidth;
+        overlayLayoutHeight = finalZoomOutputHeight;
+        overlayLayoutX = -overlayLayoutWidth + static_cast<int>((finalZoomX + overlayLayoutWidth) * overlaySlideProgress);
+        overlayLayoutY = finalZoomY;
+    }
+
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glUseProgram(g_solidColorProgram);
     glBindVertexArray(g_vao);
     glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
 
-    const bool useDefaultOverlay = (zoomConfig.activeOverlayIndex < 0 ||
-                                    zoomConfig.activeOverlayIndex >= (int)zoomConfig.overlays.size());
+    GLboolean prevScissorEnabled = glIsEnabled(GL_SCISSOR_TEST);
+    GLint prevScissorBox[4] = { 0, 0, 0, 0 };
+    if (prevScissorEnabled) {
+        glGetIntegerv(GL_SCISSOR_BOX, prevScissorBox);
+    }
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(dstLeft, dstBottom, zoomOutputWidth, zoomOutputHeight);
+
+    const EyeZoomOverlayConfig* activeOverlay = nullptr;
+    GLuint activeOverlayTextureId = 0;
+    int activeOverlayTextureWidth = 0;
+    int activeOverlayTextureHeight = 0;
+    if (zoomConfig.activeOverlayIndex >= 0 && zoomConfig.activeOverlayIndex < (int)zoomConfig.overlays.size()) {
+        activeOverlay = &zoomConfig.overlays[zoomConfig.activeOverlayIndex];
+        std::lock_guard<std::mutex> lock(g_userImagesMutex);
+        auto it = g_userImages.find("ezoverlay_" + activeOverlay->name);
+        if (it != g_userImages.end() && it->second.textureId != 0) {
+            UserImageInstance& inst = it->second;
+            activeOverlayTextureId = ResolveAnimatedTextureId(inst);
+            activeOverlayTextureWidth = inst.width;
+            activeOverlayTextureHeight = inst.height;
+        }
+    }
+
+    const bool useDefaultOverlay = activeOverlay == nullptr || activeOverlayTextureId == 0 || activeOverlayTextureWidth <= 0 ||
+                                    activeOverlayTextureHeight <= 0;
     if (useDefaultOverlay) {
-        float pixelWidthOnScreen = zoomOutputWidth / (float)zoomConfig.cloneWidth;
+        float pixelWidthOnScreen = overlayLayoutWidth / (float)zoomConfig.cloneWidth;
         int labelsPerSide = zoomConfig.cloneWidth / 2;
         int overlayLabelsPerSide = zoomConfig.overlayWidth;
         if (overlayLabelsPerSide < 0) overlayLabelsPerSide = labelsPerSide;
         if (overlayLabelsPerSide > labelsPerSide) overlayLabelsPerSide = labelsPerSide;
-        float centerY = zoomY + zoomOutputHeight / 2.0f;
+        float centerY = overlayLayoutY + overlayLayoutHeight / 2.0f;
 
         float boxHeight;
         if (zoomConfig.linkRectToFont) {
@@ -4994,7 +5463,7 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
             if (xOffset == 0) continue;
 
             int boxIndex = xOffset + labelsPerSide - (xOffset > 0 ? 1 : 0);
-            float boxLeft = zoomX + (boxIndex * pixelWidthOnScreen);
+            float boxLeft = overlayLayoutX + (boxIndex * pixelWidthOnScreen);
             float boxRight = boxLeft + pixelWidthOnScreen;
             float boxBottom = centerY - boxHeight / 2.0f;
             float boxTop = centerY + boxHeight / 2.0f;
@@ -5014,7 +5483,9 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
             int displayNumber = abs(xOffset);
             float numberCenterX = boxLeft + pixelWidthOnScreen / 2.0f;
             float numberCenterY = centerY;
-            CacheEyeZoomTextLabel(displayNumber, numberCenterX, numberCenterY, textColor);
+            CacheEyeZoomTextLabel(displayNumber, numberCenterX, numberCenterY, pixelWidthOnScreen, boxHeight,
+                                  zoomConfig.autoFontSize, textColor, static_cast<float>(zoomX), static_cast<float>(zoomY),
+                                  static_cast<float>(zoomX + zoomOutputWidth), static_cast<float>(zoomY + zoomOutputHeight));
         }
 
         if (!evenVerts.empty()) {
@@ -5031,9 +5502,58 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
             glBufferSubData(GL_ARRAY_BUFFER, 0, oddVerts.size() * sizeof(float), oddVerts.data());
             glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(oddVerts.size() / 4));
         }
+    } else {
+        int overlayDisplayW = overlayLayoutWidth;
+        int overlayDisplayH = overlayLayoutHeight;
+        switch (activeOverlay->displayMode) {
+            case EyeZoomOverlayDisplayMode::Manual:
+                overlayDisplayW = (std::max)(1, activeOverlay->manualWidth);
+                overlayDisplayH = (std::max)(1, activeOverlay->manualHeight);
+                break;
+            case EyeZoomOverlayDisplayMode::Fit: {
+                const float fitScaleX = static_cast<float>(overlayLayoutWidth) / activeOverlayTextureWidth;
+                const float fitScaleY = static_cast<float>(overlayLayoutHeight) / activeOverlayTextureHeight;
+                const float fitScale = (std::min)(fitScaleX, fitScaleY);
+                overlayDisplayW = (std::max)(1, static_cast<int>(activeOverlayTextureWidth * fitScale));
+                overlayDisplayH = (std::max)(1, static_cast<int>(activeOverlayTextureHeight * fitScale));
+                break;
+            }
+            case EyeZoomOverlayDisplayMode::Stretch:
+            default:
+                overlayDisplayW = (std::max)(1, overlayLayoutWidth);
+                overlayDisplayH = (std::max)(1, overlayLayoutHeight);
+                break;
+        }
+
+        overlayDisplayW = (std::min)(overlayDisplayW, fullW);
+        overlayDisplayH = (std::min)(overlayDisplayH, fullH);
+
+        const int overlayX = overlayLayoutX + (overlayLayoutWidth - overlayDisplayW) / 2;
+        const int overlayY = overlayLayoutY + (overlayLayoutHeight - overlayDisplayH) / 2;
+        const int overlayY_gl = fullH - overlayY - overlayDisplayH;
+
+        const float nx1 = (static_cast<float>(overlayX) / fullW) * 2.0f - 1.0f;
+        const float ny1 = (static_cast<float>(overlayY_gl) / fullH) * 2.0f - 1.0f;
+        const float nx2 = (static_cast<float>(overlayX + overlayDisplayW) / fullW) * 2.0f - 1.0f;
+        const float ny2 = (static_cast<float>(overlayY_gl + overlayDisplayH) / fullH) * 2.0f - 1.0f;
+        const float effectiveOverlayOpacity = (std::max)(0.0f, (std::min)(1.0f, activeOverlay->opacity * overlayOpacityScale));
+
+        glUseProgram(g_imageRenderProgram);
+        BindTextureDirect(GL_TEXTURE_2D, activeOverlayTextureId);
+        glUniform1i(g_imageRenderShaderLocs.enableColorKey, 0);
+        glUniform1f(g_imageRenderShaderLocs.opacity, effectiveOverlayOpacity);
+
+        float overlayVerts[] = {
+            nx1, ny1, 0.0f, 0.0f, nx2, ny1, 1.0f, 0.0f, nx2, ny2, 1.0f, 1.0f,
+            nx1, ny1, 0.0f, 0.0f, nx2, ny2, 1.0f, 1.0f, nx1, ny2, 0.0f, 1.0f,
+        };
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(overlayVerts), overlayVerts);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+
+        glUseProgram(g_solidColorProgram);
     }
 
-    float centerX = zoomX + zoomOutputWidth / 2.0f;
+    float centerX = overlayLayoutX + overlayLayoutWidth / 2.0f;
     float centerLineWidth = 2.0f;
     float lineLeft = centerX - centerLineWidth / 2.0f;
     float lineRight = centerX + centerLineWidth / 2.0f;
@@ -5060,6 +5580,12 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
         borderColor.a *= overlayOpacityScale;
         RenderGameBorder(zoomX, zoomY, zoomOutputWidth, zoomOutputHeight, cloneBorder->width, cloneBorder->radius,
                          borderColor, fullW, fullH);
+    }
+
+    if (prevScissorEnabled) {
+        glScissor(prevScissorBox[0], prevScissorBox[1], prevScissorBox[2], prevScissorBox[3]);
+    } else {
+        glDisable(GL_SCISSOR_TEST);
     }
 
     glDisable(GL_BLEND);
@@ -5465,11 +5991,10 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
             // Collect active mirrors for fallback rendering (use snapshot for thread safety)
             std::vector<MirrorConfig> fallbackMirrors;
             std::vector<ImageConfig> unusedImages;
-            std::vector<const WindowOverlayConfig*> unusedOverlays;
-            std::vector<const BrowserOverlayConfig*> unusedBrowserOverlays;
+            std::vector<WindowOverlayConfig> unusedOverlays;
+            std::vector<BrowserOverlayConfig> unusedBrowserOverlays;
             const Config& fallbackConfig = configSnap ? *configSnap : g_config;
-            const uint64_t fallbackConfigVersion = configSnap ? g_configSnapshotVersion.load(std::memory_order_acquire) : 0;
-            CollectActiveElementsForMode(fallbackConfig, modeToRender->id, false, fallbackConfigVersion, fallbackMirrors,
+            CollectActiveElementsForMode(fallbackConfig, modeToRender->id, false, fallbackMirrors,
                                          unusedImages, unusedOverlays, unusedBrowserOverlays);
 
             std::vector<size_t> mirrorsNeedingUpdate;
@@ -5620,7 +6145,7 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
         glViewport(0, 0, fullW, fullH);
 
     if (g_showGui.load(std::memory_order_relaxed) || g_imageDragMode.load(std::memory_order_relaxed) ||
-        g_windowOverlayDragMode.load(std::memory_order_relaxed)) {
+        g_windowOverlayDragMode.load(std::memory_order_relaxed) || g_browserOverlayDragMode.load(std::memory_order_relaxed)) {
         HWND hwnd = g_minecraftHwnd.load();
         if (hwnd) { InitializeImGuiContext(hwnd); }
     }
@@ -5880,6 +6405,117 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
         }
     }
 
+    if (g_showGui.load(std::memory_order_relaxed) && g_browserOverlayDragMode.load(std::memory_order_relaxed) &&
+        g_browserOverlaysVisible.load(std::memory_order_acquire)) {
+        PROFILE_SCOPE_CAT("Browser Overlay Drag Mode", "Input Handling");
+
+        ImGuiIO& io = ImGui::GetIO();
+        if (io.WantCaptureMouse) {
+            s_hoveredBrowserOverlayName = "";
+        } else {
+            HWND hwnd = g_minecraftHwnd.load();
+            if (hwnd) {
+                POINT mousePos;
+                GetCursorPos(&mousePos);
+                ScreenToClient(hwnd, &mousePos);
+
+                bool leftButtonDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+                std::string hoveredOverlay = "";
+
+                if (configSnap) {
+                    std::unordered_map<std::string, const BrowserOverlayConfig*> overlayByName;
+                    overlayByName.reserve(configSnap->browserOverlays.size());
+                    for (const auto& overlay : configSnap->browserOverlays) {
+                        overlayByName.emplace(overlay.name, &overlay);
+                    }
+
+                    for (const auto& source : modeToRender->sources) {
+                        if (source.type != ModeSourceType::BrowserOverlay) {
+                            continue;
+                        }
+
+                        auto overlayIt = overlayByName.find(source.id);
+                        if (overlayIt == overlayByName.end() || !overlayIt->second) {
+                            continue;
+                        }
+
+                        const BrowserOverlayConfig& conf = *overlayIt->second;
+                        BrowserOverlayTextureFrame frame{};
+                        if (!PrepareBrowserOverlayTexture(conf, frame)) {
+                            continue;
+                        }
+
+                        int croppedW = frame.textureWidth - conf.crop_left - conf.crop_right;
+                        int croppedH = frame.textureHeight - conf.crop_top - conf.crop_bottom;
+                        croppedW = (std::max)(1, croppedW);
+                        croppedH = (std::max)(1, croppedH);
+                        int displayW = (std::max)(1, static_cast<int>(croppedW * conf.scale));
+                        int displayH = (std::max)(1, static_cast<int>(croppedH * conf.scale));
+
+                        const bool isViewportRelative =
+                            conf.relativeTo.length() > 8 && conf.relativeTo.substr(conf.relativeTo.length() - 8) == "Viewport";
+                        if (isViewportRelative) {
+                            const float viewportScaleX =
+                                (currentGeo.finalW > 0 && currentGeo.gameW > 0) ? static_cast<float>(currentGeo.finalW) / currentGeo.gameW : 1.0f;
+                            const float viewportScaleY =
+                                (currentGeo.finalH > 0 && currentGeo.gameH > 0) ? static_cast<float>(currentGeo.finalH) / currentGeo.gameH : 1.0f;
+                            ScaleViewportRelativeImageSize(displayW, displayH, modeToRender->relativeStretching, viewportScaleX,
+                                                           viewportScaleY, displayW, displayH);
+                        }
+
+                        int finalScreenX = 0;
+                        int finalScreenY = 0;
+                        GetRelativeCoordsForImageWithViewport(conf.relativeTo, conf.x, conf.y, displayW, displayH, currentGeo.finalX,
+                                                              currentGeo.finalY, currentGeo.finalW, currentGeo.finalH, fullW, fullH,
+                                                              finalScreenX, finalScreenY);
+
+                        if (mousePos.x >= finalScreenX && mousePos.x < finalScreenX + displayW && mousePos.y >= finalScreenY &&
+                            mousePos.y < finalScreenY + displayH) {
+                            hoveredOverlay = conf.name;
+                            break;
+                        }
+                    }
+                }
+
+                if (leftButtonDown && !s_isBrowserOverlayDragging && !hoveredOverlay.empty()) {
+                    s_isBrowserOverlayDragging = true;
+                    s_draggedBrowserOverlayName = hoveredOverlay;
+                    s_lastMousePos = mousePos;
+                }
+                else if (leftButtonDown && s_isBrowserOverlayDragging && !s_draggedBrowserOverlayName.empty()) {
+                    int deltaX = mousePos.x - s_lastMousePos.x;
+                    int deltaY = mousePos.y - s_lastMousePos.y;
+
+                    if (deltaX != 0 || deltaY != 0) {
+                        for (auto& overlay : g_config.browserOverlays) {
+                            if (overlay.name == s_draggedBrowserOverlayName) {
+                                overlay.x += deltaX;
+                                overlay.y += deltaY;
+                                g_configIsDirty = true;
+                                break;
+                            }
+                        }
+
+                        s_lastMousePos = mousePos;
+                    }
+                }
+                else if (!leftButtonDown && s_isBrowserOverlayDragging) {
+                    s_isBrowserOverlayDragging = false;
+                    s_draggedBrowserOverlayName = "";
+                    SaveConfigImmediate();
+                }
+
+                s_hoveredBrowserOverlayName = hoveredOverlay;
+            }
+        }
+    } else {
+        if (s_isBrowserOverlayDragging) {
+            s_isBrowserOverlayDragging = false;
+            s_draggedBrowserOverlayName = "";
+            s_hoveredBrowserOverlayName = "";
+        }
+    }
+
     float overlayOpacity = 1.0f;
 
     // If there's nothing to draw, avoid compositing a fullscreen overlay texture.
@@ -5968,7 +6604,8 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
         target.shouldRenderGui = g_shouldRenderGui.load(std::memory_order_relaxed);
         target.showPerformanceOverlay = g_showPerformanceOverlay.load(std::memory_order_relaxed);
         target.showProfiler = g_showProfiler.load(std::memory_order_relaxed);
-        target.showEyeZoom = g_showEyeZoom.load(std::memory_order_relaxed);
+        target.showEyeZoom = g_showEyeZoom.load(std::memory_order_relaxed) ||
+                     (target.isTransitioningFromEyeZoom && !target.skipAnimation);
         target.eyeZoomFadeOpacity = g_eyeZoomFadeOpacity.load(std::memory_order_relaxed);
         target.eyeZoomAnimatedViewportX = skipAnimation ? -1 : g_eyeZoomAnimatedViewportX.load(std::memory_order_relaxed);
         target.eyeZoomSnapshotTexture = GetEyeZoomSnapshotTexture();
@@ -6514,10 +7151,22 @@ void StartModeTransition(const std::string& fromModeId, const std::string& toMod
     g_modeTransition.active = true;
     g_modeTransition.startTime = std::chrono::steady_clock::now();
 
+    bool transitioningToEyeZoom = EqualsIgnoreCase(toModeId, "EyeZoom");
+    bool transitioningFromEyeZoom = EqualsIgnoreCase(fromModeId, "EyeZoom");
+    auto transitionSnap = GetConfigSnapshot();
+    const ModeConfig* sourceMode = transitionSnap ? GetModeFromSnapshot(*transitionSnap, fromModeId) : nullptr;
+    const bool preserveEyeZoomSlideOutDuration =
+        transitioningFromEyeZoom && !transitioningToEyeZoom && transitionSnap && transitionSnap->eyezoom.slideMirrorsIn;
+
     bool allCutToFullscreen = transitioningToFullscreen && toMode.gameTransition == GameTransitionType::Cut;
     bool allCutWithFirstFrameProtection = isAllCutTransition && !transitioningToFullscreen;
     if (allCutToFullscreen || allCutWithFirstFrameProtection) {
-        g_modeTransition.duration = 0.001f;
+        if (preserveEyeZoomSlideOutDuration) {
+            const int sourceDurationMs = sourceMode ? sourceMode->transitionDurationMs : toMode.transitionDurationMs;
+            g_modeTransition.duration = (std::max)(0.001f, sourceDurationMs / 1000.0f);
+        } else {
+            g_modeTransition.duration = 0.001f;
+        }
     } else {
         g_modeTransition.duration = toMode.transitionDurationMs / 1000.0f;
     }
@@ -6532,13 +7181,9 @@ void StartModeTransition(const std::string& fromModeId, const std::string& toMod
     g_modeTransition.bounceIntensity = toMode.bounceIntensity;
     g_modeTransition.bounceDurationMs = toMode.bounceDurationMs;
 
-    bool transitioningToEyeZoom = EqualsIgnoreCase(toModeId, "EyeZoom");
-    bool transitioningFromEyeZoom = EqualsIgnoreCase(fromModeId, "EyeZoom");
-
     if (transitioningFromEyeZoom && !transitioningToEyeZoom) {
         // Transitioning FROM EyeZoom - look up EyeZoom's skip settings (use snapshot for thread safety)
-        auto transSnap = GetConfigSnapshot();
-        const ModeConfig* eyeZoomMode = transSnap ? GetModeFromSnapshot(*transSnap, "EyeZoom") : nullptr;
+        const ModeConfig* eyeZoomMode = transitionSnap ? GetModeFromSnapshot(*transitionSnap, "EyeZoom") : nullptr;
         if (eyeZoomMode) {
             g_modeTransition.skipAnimateX = eyeZoomMode->skipAnimateX;
             g_modeTransition.skipAnimateY = eyeZoomMode->skipAnimateY;
@@ -6561,8 +7206,7 @@ void StartModeTransition(const std::string& fromModeId, const std::string& toMod
     g_modeTransition.toY = toY;
 
     // Use snapshot for thread-safe lookup of fromMode (called from multiple threads)
-    auto nativeSnap = GetConfigSnapshot();
-    const ModeConfig* fromModePtr = nativeSnap ? GetModeFromSnapshot(*nativeSnap, fromModeId) : nullptr;
+    const ModeConfig* fromModePtr = transitionSnap ? GetModeFromSnapshot(*transitionSnap, fromModeId) : nullptr;
     if (fromModePtr) {
         g_modeTransition.fromNativeWidth = fromModePtr->width;
         g_modeTransition.fromNativeHeight = fromModePtr->height;

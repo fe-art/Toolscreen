@@ -179,6 +179,44 @@ if (ImGui::BeginTabItem(trc("tabs.general"))) {
         CopiedFromEyeZoom,
     };
 
+    auto SyncPreemptiveFromEyeZoom = [&]() {
+        ModeConfig* eyezoomMode = GetModeConfig("EyeZoom");
+        ModeConfig* preemptiveMode = GetModeConfig("Preemptive");
+        if (!eyezoomMode || !preemptiveMode) { return false; }
+
+        bool changed = false;
+        if (preemptiveMode->relativeWidth >= 0.0f || preemptiveMode->relativeHeight >= 0.0f || preemptiveMode->useRelativeSize) {
+            preemptiveMode->relativeWidth = -1.0f;
+            preemptiveMode->relativeHeight = -1.0f;
+            preemptiveMode->useRelativeSize = false;
+            changed = true;
+        }
+
+        if (preemptiveMode->width != eyezoomMode->width) {
+            preemptiveMode->width = eyezoomMode->width;
+            changed = true;
+        }
+        const int syncedManualWidth = (eyezoomMode->manualWidth > 0) ? eyezoomMode->manualWidth : eyezoomMode->width;
+        if (preemptiveMode->manualWidth != syncedManualWidth) {
+            preemptiveMode->manualWidth = syncedManualWidth;
+            changed = true;
+        }
+
+        if (preemptiveMode->height != eyezoomMode->height) {
+            preemptiveMode->height = eyezoomMode->height;
+            changed = true;
+        }
+        const int syncedManualHeight = (eyezoomMode->manualHeight > 0) ? eyezoomMode->manualHeight : eyezoomMode->height;
+        if (preemptiveMode->manualHeight != syncedManualHeight) {
+            preemptiveMode->manualHeight = syncedManualHeight;
+            changed = true;
+        }
+
+        return changed;
+    };
+
+    if (SyncPreemptiveFromEyeZoom()) { g_configIsDirty = true; }
+
     auto RenderModeTableRow = [&](const std::string& modeId, const char* label, const char* hotkeyLabel, int defaultWidth,
                                   int defaultHeight, int maxWidth, int maxHeight,
                                   EyeZoomInlineKind eyezoomInline = EyeZoomInlineKind::None, bool readOnlyDimensions = false) {
@@ -238,6 +276,10 @@ if (ImGui::BeginTabItem(trc("tabs.general"))) {
             } else {
                 const float spinnerInputWidth = (std::max)(1.0f, widthColumnAvail - (ImGui::GetFrameHeight() * 2.0f) - 6.0f);
                 if (Spinner("##w", &modeConfig->width, 10, 1, maxWidth, spinnerInputWidth, 3)) {
+                    if (EqualsIgnoreCase(modeId, "EyeZoom")) {
+                        modeConfig->manualWidth = modeConfig->width;
+                        if (SyncPreemptiveFromEyeZoom()) { g_configIsDirty = true; }
+                    }
                     modeConfig->relativeWidth = -1.0f;
                     g_configIsDirty = true;
                 }
@@ -277,6 +319,10 @@ if (ImGui::BeginTabItem(trc("tabs.general"))) {
             } else {
                 const float spinnerInputWidth = (std::max)(1.0f, heightColumnAvail - (ImGui::GetFrameHeight() * 2.0f) - 6.0f);
                 if (Spinner("##h", &modeConfig->height, 10, 1, maxHeight, spinnerInputWidth, 3)) {
+                    if (EqualsIgnoreCase(modeId, "EyeZoom")) {
+                        modeConfig->manualHeight = modeConfig->height;
+                        if (SyncPreemptiveFromEyeZoom()) { g_configIsDirty = true; }
+                    }
                     modeConfig->relativeHeight = -1.0f;
                     g_configIsDirty = true;
                 }
@@ -292,6 +338,14 @@ if (ImGui::BeginTabItem(trc("tabs.general"))) {
         ImGui::TableNextColumn();
         if (eyezoomInline != EyeZoomInlineKind::None) {
             ImGui::PushID((std::string("eyezoom_inline_settings_") + modeId).c_str());
+
+            if (eyezoomInline == EyeZoomInlineKind::CopiedFromEyeZoom) {
+                ImGui::PushTextWrapPos(ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x);
+                ImGui::TextDisabled("%s", trc("modes.preemptive.copied_from_eyezoom"));
+                ImGui::PopTextWrapPos();
+                ImGui::PopID();
+                return;
+            }
 
             if (ImGui::BeginTable("##eyezoom_inline_tbl", 2, ImGuiTableFlags_SizingStretchSame)) {
                 ImGui::TableNextRow();
@@ -320,9 +374,6 @@ if (ImGui::BeginTabItem(trc("tabs.general"))) {
                         int maxOverlay = g_config.eyezoom.cloneWidth / 2;
                         if (SpinnerDeferredTextInput("##EyeZoomOverlayWidth", &g_config.eyezoom.overlayWidth, 1, 0, maxOverlay, 64, 3)) g_configIsDirty = true;
                     }
-                } else if (eyezoomInline == EyeZoomInlineKind::CopiedFromEyeZoom) {
-                    ImGui::TableSetColumnIndex(0);
-                    ImGui::TextDisabled(trc("modes.preemptive.copied_from_eyezoom"));
                 }
 
                 ImGui::EndTable();

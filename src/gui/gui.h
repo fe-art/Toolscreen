@@ -316,6 +316,8 @@ struct ModeConfig {
     bool useRelativeSize = false;
     float relativeWidth = 0.5f;
     float relativeHeight = 0.5f;
+    std::string widthExpr;
+    std::string heightExpr;
 
     BackgroundConfig background;
     std::vector<ModeSourceRef> sources;
@@ -519,6 +521,7 @@ struct Config {
     int keyRepeatDelay = ConfigDefaults::CONFIG_KEY_REPEAT_DELAY;
     bool keyRepeatResumePreviousHeldKey = ConfigDefaults::CONFIG_KEY_REPEAT_RESUME_PREVIOUS_HELD_KEY;
     bool basicModeEnabled = false;
+    bool restoreWindowedModeOnFullscreenExit = ConfigDefaults::CONFIG_RESTORE_WINDOWED_MODE_ON_FULLSCREEN_EXIT;
     bool disableFullscreenPrompt = false;
     bool disableConfigurePrompt = false;
 };
@@ -727,6 +730,7 @@ extern std::string g_draggedImageName;
 extern std::mutex g_imageDragMutex;
 
 extern std::atomic<bool> g_windowOverlayDragMode;
+extern std::atomic<bool> g_browserOverlayDragMode;
 
 extern std::string g_gameStateBuffers[2];
 extern std::atomic<int> g_currentGameStateIndex;

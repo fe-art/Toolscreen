@@ -21,6 +21,7 @@ extern std::atomic<GLuint> g_cachedGameTextureId;
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <shared_mutex>
 #include <sstream>
 #include <thread>
@@ -34,6 +35,35 @@ extern std::atomic<GLuint> g_cachedGameTextureId;
 static std::atomic<bool> g_symbolsInitialized{ false };
 static std::atomic<bool> g_symbolInitAttempted{ false };
 static std::mutex g_symbolMutex;
+
+namespace {
+constexpr size_t kMaxGifLoadBytes = 256ull * 1024ull * 1024ull;
+constexpr size_t kMaxDecodedImageBytes = 512ull * 1024ull * 1024ull;
+constexpr size_t kMaxScreenshotBytes = 512ull * 1024ull * 1024ull;
+
+bool TryMultiplySize(size_t left, size_t right, size_t& out) {
+    if (left == 0 || right == 0) {
+        out = 0;
+        return true;
+    }
+    if (left > (std::numeric_limits<size_t>::max)() / right) { return false; }
+    out = left * right;
+    return true;
+}
+
+bool TryComputeImageByteCount(int width, int height, int channels, size_t& outBytes) {
+    if (width <= 0 || height <= 0 || channels <= 0) { return false; }
+
+    size_t pixelCount = 0;
+    if (!TryMultiplySize(static_cast<size_t>(width), static_cast<size_t>(height), pixelCount)) { return false; }
+    return TryMultiplySize(pixelCount, static_cast<size_t>(channels), outBytes);
+}
+
+std::string FormatByteCount(size_t bytes) {
+    const size_t mib = 1024ull * 1024ull;
+    return std::to_string(bytes) + " bytes (" + std::to_string(bytes / mib) + " MiB)";
+}
+} // namespace
 
 void EnsureSymbolsInitialized();
 
@@ -1548,19 +1578,40 @@ void LoadImageAsync(DecodedImageData::Type type, std::string id, std::string pat
                         long fileSize = ftell(f);
                         fseek(f, 0, SEEK_SET);
 
-                        std::vector<unsigned char> fileData(fileSize);
-                        size_t bytesRead = fread(fileData.data(), 1, fileSize, f);
-                        fclose(f);
+                        if (fileSize <= 0) {
+                            LogCategory("image_monitor", "Skipping GIF load for '" + id + "' from '" + path + "' due to invalid file size " +
+                                                           std::to_string(fileSize) + ".");
+                        } else if (static_cast<unsigned long long>(fileSize) > kMaxGifLoadBytes) {
+                            LogCategory("image_monitor",
+                                        "Skipping GIF load for '" + id + "' from '" + path + "' because file size " +
+                                            FormatByteCount(static_cast<size_t>(fileSize)) + " exceeds guard limit of " +
+                                            FormatByteCount(kMaxGifLoadBytes) + ".");
+                        } else if (fileSize > (std::numeric_limits<int>::max)()) {
+                            LogCategory("image_monitor",
+                                        "Skipping GIF load for '" + id + "' from '" + path + "' because file size " +
+                                            FormatByteCount(static_cast<size_t>(fileSize)) + " exceeds stb_image int input range.");
+                        } else {
+                            std::vector<unsigned char> fileData(static_cast<size_t>(fileSize));
+                            size_t bytesRead = fread(fileData.data(), 1, static_cast<size_t>(fileSize), f);
+                            fclose(f);
+                            f = nullptr;
 
-                        if (bytesRead == static_cast<size_t>(fileSize)) {
-                            data = stbi_load_gif_from_memory(fileData.data(), (int)fileSize, &delays, &w, &h, &frameCount, &c, 4);
+                            if (bytesRead == static_cast<size_t>(fileSize)) {
+                                data = stbi_load_gif_from_memory(fileData.data(), static_cast<int>(fileSize), &delays, &w, &h, &frameCount, &c, 4);
 
-                            if (data && frameCount <= 1) {
-                                frameCount = 1;
-                                stbi_image_free(delays);
-                                delays = nullptr;
+                                if (data && frameCount <= 1) {
+                                    frameCount = 1;
+                                    stbi_image_free(delays);
+                                    delays = nullptr;
+                                }
+                            } else {
+                                LogCategory("image_monitor",
+                                            "Failed to read full GIF file for '" + id + "' from '" + path + "'. Expected " +
+                                                std::to_string(fileSize) + " bytes, read " + std::to_string(bytesRead) + ".");
                             }
                         }
+
+                        if (f) { fclose(f); }
                     }
 
                     if (!data) {
@@ -1578,6 +1629,41 @@ void LoadImageAsync(DecodedImageData::Type type, std::string id, std::string pat
                 }
 
                 if (data && w > 0 && h > 0) {
+                    int decodedHeight = h;
+                    if (frameCount > 1) {
+                        long long totalHeight = static_cast<long long>(h) * static_cast<long long>(frameCount);
+                        if (frameCount <= 0 || totalHeight <= 0 || totalHeight > (std::numeric_limits<int>::max)()) {
+                            LogCategory("image_monitor",
+                                        "Skipping decoded animated image '" + id + "' from '" + path +
+                                            "' because frame dimensions are invalid: frameCount=" + std::to_string(frameCount) +
+                                            ", frameHeight=" + std::to_string(h) + ".");
+                            stbi_image_free(data);
+                            if (delays) stbi_image_free(delays);
+                            return;
+                        }
+                        decodedHeight = static_cast<int>(totalHeight);
+                    }
+
+                    size_t decodedBytes = 0;
+                    if (!TryComputeImageByteCount(w, decodedHeight, 4, decodedBytes)) {
+                        LogCategory("image_monitor",
+                                    "Skipping decoded image '" + id + "' from '" + path +
+                                        "' because dimensions overflow byte-count calculation: " + std::to_string(w) + "x" +
+                                        std::to_string(decodedHeight) + "x4.");
+                        stbi_image_free(data);
+                        if (delays) stbi_image_free(delays);
+                        return;
+                    }
+                    if (decodedBytes > kMaxDecodedImageBytes) {
+                        LogCategory("image_monitor",
+                                    "Skipping decoded image '" + id + "' from '" + path + "' because estimated pixel storage " +
+                                        FormatByteCount(decodedBytes) + " exceeds guard limit of " +
+                                        FormatByteCount(kMaxDecodedImageBytes) + ".");
+                        stbi_image_free(data);
+                        if (delays) stbi_image_free(delays);
+                        return;
+                    }
+
                     DecodedImageData decoded;
                     decoded.type = type;
                     decoded.id = id;
@@ -1588,7 +1674,7 @@ void LoadImageAsync(DecodedImageData::Type type, std::string id, std::string pat
                     if (frameCount > 1) {
                         decoded.isAnimated = true;
                         decoded.frameCount = frameCount;
-                        decoded.height = h * frameCount;
+                        decoded.height = decodedHeight;
                         decoded.frameHeight = h;
                         for (int i = 0; i < frameCount; i++) {
                             int delayMs = (delays && delays[i] > 0) ? delays[i] : 100;
@@ -1607,7 +1693,12 @@ void LoadImageAsync(DecodedImageData::Type type, std::string id, std::string pat
 
                     std::lock_guard<std::mutex> lock(g_decodedImagesMutex);
                     g_decodedImagesQueue.push_back(decoded);
-                    LogCategory("image_monitor", "Successfully decoded image for '" + id + "' from '" + path + "' on background thread.");
+                    LogCategory("image_monitor", "Successfully decoded image for '" + id + "' from '" + path +
+                                                   "' on background thread: " + std::to_string(decoded.width) + "x" +
+                                                   std::to_string(decoded.height) + ", frameCount=" +
+                                                   std::to_string(decoded.frameCount) + ", queueSize=" +
+                                                   std::to_string(g_decodedImagesQueue.size()) + ", bytes=" +
+                                                   FormatByteCount(decodedBytes) + ".");
                 } else {
                     Log("ERROR: Failed to decode image '" + path + "' for ID '" + id +
                         "'. Reason: " + (stbi_failure_reason() ? stbi_failure_reason() : "unknown error"));
@@ -2190,6 +2281,9 @@ void GetRelativeCoordsForImageWithViewport(const std::string& type, int relX, in
 
 void CalculateFinalScreenPos(const MirrorConfig* conf, const MirrorInstance& inst, int gameW, int gameH, int finalX, int finalY, int finalW,
                              int finalH, int fullW, int fullH, int& outScreenX, int& outScreenY) {
+    (void)gameW;
+    (void)gameH;
+
     float scaleX = conf->output.separateScale ? conf->output.scaleX : conf->output.scale;
     float scaleY = conf->output.separateScale ? conf->output.scaleY : conf->output.scale;
     int outW = static_cast<int>(inst.fbo_w * scaleX);
@@ -2210,47 +2304,33 @@ void CalculateFinalScreenPos(const MirrorConfig* conf, const MirrorInstance& ins
 
     if (anchor.length() > 8 && anchor.substr(anchor.length() - 8) == "Viewport") { anchor = anchor.substr(0, anchor.length() - 8); }
 
-    float xScale = (gameW > 0) ? static_cast<float>(finalW) / gameW : 1.0f;
-    float yScale = (gameH > 0) ? static_cast<float>(finalH) / gameH : 1.0f;
-
-    int outW_game = static_cast<int>(outW / xScale);
-    int outH_game = static_cast<int>(outH / yScale);
-
-    int gamePosX, gamePosY;
-    char firstChar = anchor.empty() ? '\0' : anchor[0];
-
-    if (firstChar == 't') {
-        gamePosY = offsetY;
-        if (anchor == "topLeft") {
-            gamePosX = offsetX;
-        } else {
-            gamePosX = gameW - offsetX - outW_game;
-        }
-    } else if (firstChar == 'c') {
-        gamePosX = (gameW - outW_game) / 2 + offsetX;
-        gamePosY = (gameH - outH_game) / 2 + offsetY;
-    } else if (firstChar == 'p') {
-        const int PIE_Y_TOP = 220, PIE_X_LEFT = 92, PIE_X_RIGHT = 36;
-        int pieXOffset = (anchor == "pieLeft") ? PIE_X_LEFT : PIE_X_RIGHT;
-        gamePosX = gameW - pieXOffset + offsetX - outW_game;
-        gamePosY = gameH - PIE_Y_TOP + offsetY - outH_game;
-    } else {
-        gamePosY = gameH - offsetY - outH_game;
-        if (anchor == "bottomRight") {
-            gamePosX = gameW - offsetX - outW_game;
-        } else {
-            gamePosX = offsetX;
-        }
-    }
-
-    outScreenX = finalX + static_cast<int>(gamePosX * xScale);
-    outScreenY = finalY + static_cast<int>(gamePosY * yScale);
+    int relative_x = 0;
+    int relative_y = 0;
+    GetRelativeCoords(anchor, offsetX, offsetY, outW, outH, finalW, finalH, relative_x, relative_y);
+    outScreenX = finalX + relative_x;
+    outScreenY = finalY + relative_y;
 }
 
 void ScreenshotToClipboard(int width, int height) {
     PROFILE_SCOPE_CAT("Screenshot to Clipboard", "System");
-    Log("Taking screenshot...");
-    size_t bufferSize = static_cast<size_t>(width) * height * 4;
+    if (width <= 0 || height <= 0) {
+        Log("ERROR: Screenshot request rejected due to invalid dimensions " + std::to_string(width) + "x" + std::to_string(height) + ".");
+        return;
+    }
+
+    size_t bufferSize = 0;
+    if (!TryComputeImageByteCount(width, height, 4, bufferSize)) {
+        Log("ERROR: Screenshot request rejected because byte-count overflowed for dimensions " + std::to_string(width) + "x" +
+            std::to_string(height) + ".");
+        return;
+    }
+    if (bufferSize > kMaxScreenshotBytes) {
+        Log("ERROR: Screenshot request rejected because buffer size " + FormatByteCount(bufferSize) + " exceeds guard limit of " +
+            FormatByteCount(kMaxScreenshotBytes) + " for dimensions " + std::to_string(width) + "x" + std::to_string(height) + ".");
+        return;
+    }
+
+    Log("Taking screenshot at " + std::to_string(width) + "x" + std::to_string(height) + " (" + FormatByteCount(bufferSize) + ").");
     std::vector<BYTE> pixels(bufferSize);
 
     glReadBuffer(GL_BACK);
@@ -2266,6 +2346,13 @@ void ScreenshotToClipboard(int width, int height) {
     }
     if (!EmptyClipboard()) {
         Log("ERROR: Could not empty clipboard.");
+        CloseClipboard();
+        return;
+    }
+
+    if (pixels.size() > (std::numeric_limits<SIZE_T>::max)() - sizeof(BITMAPINFOHEADER)) {
+        Log("ERROR: Screenshot clipboard payload size overflowed for dimensions " + std::to_string(width) + "x" +
+            std::to_string(height) + ".");
         CloseClipboard();
         return;
     }

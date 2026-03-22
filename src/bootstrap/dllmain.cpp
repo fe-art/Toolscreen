@@ -170,6 +170,7 @@ std::string g_draggedImageName = "";
 std::mutex g_imageDragMutex;
 
 std::atomic<bool> g_windowOverlayDragMode{ false };
+std::atomic<bool> g_browserOverlayDragMode{ false };
 
 std::ofstream logFile;
 std::mutex g_logFileMutex;
@@ -1713,6 +1714,24 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
             const bool needCapture = needCaptureForMirrors || needCaptureForEyeZoom || needCaptureForObsOrVc;
             const bool needAsyncCaptureCopy = needCaptureForEyeZoom || needCaptureForObsOrVc;
             if (needAsyncCaptureCopy) {
+                auto logEyeZoomCaptureStateThrottled = [&](const char* stage, const std::string& message) {
+                    struct EyeZoomCaptureLogState {
+                        ULONGLONG lastLogMs = 0;
+                        std::string lastMessage;
+                    };
+
+                    static std::unordered_map<std::string, EyeZoomCaptureLogState> s_logStateByStage;
+                    constexpr ULONGLONG kLogIntervalMs = 2000;
+
+                    const ULONGLONG now = GetTickCount64();
+                    EyeZoomCaptureLogState& state = s_logStateByStage[stage];
+                    if (state.lastMessage == message && (now - state.lastLogMs) < kLogIntervalMs) { return; }
+
+                    state.lastLogMs = now;
+                    state.lastMessage = message;
+                    LogCategory("texture_ops", std::string("EyeZoom Capture: ") + stage + " " + message);
+                };
+
                 static auto s_lastMirrorOnlyCaptureSubmit = std::chrono::steady_clock::time_point{};
                 static int s_lastMirrorOnlyW = 0;
                 static int s_lastMirrorOnlyH = 0;
@@ -1722,6 +1741,15 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                 if (gameTexture != UINT_MAX) {
                     ModeViewportInfo viewport = GetCurrentModeViewport();
                     if (viewport.valid) {
+                        if (needCaptureForEyeZoom) {
+                            logEyeZoomCaptureStateThrottled(
+                                "request",
+                                "trackedTex=" + std::to_string(gameTexture) + " viewport=" +
+                                    std::to_string(viewport.width) + "x" + std::to_string(viewport.height) +
+                                    " mirrors=" + std::to_string(needCaptureForMirrors ? 1 : 0) + " obsOrVc=" +
+                                    std::to_string(needCaptureForObsOrVc ? 1 : 0));
+                        }
+
                         if (needCaptureForMirrors && !needCaptureForEyeZoom && !needCaptureForObsOrVc) {
                             const int maxMirrorFps = g_activeMirrorCaptureMaxFps.load(std::memory_order_acquire);
                             if (maxMirrorFps > 0 && !IsMirrorRealtimeFps(maxMirrorFps)) {
@@ -1749,9 +1777,22 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                         // SubmitFrameCapture already inserts its own fences and flushes after them;
                         // avoid an extra glFlush here (it can reduce FPS by forcing more driver work per frame).
                         if (allowCaptureThisFrame) {
+                            EnsureCaptureTextureInitialized(viewport.width, viewport.height);
+                            if (needCaptureForEyeZoom) {
+                                logEyeZoomCaptureStateThrottled("submit",
+                                                                "submitting trackedTex=" + std::to_string(gameTexture) +
+                                                                    " viewport=" + std::to_string(viewport.width) + "x" +
+                                                                    std::to_string(viewport.height));
+                            }
                             SubmitFrameCapture(gameTexture, viewport.width, viewport.height);
                         }
+                    } else if (needCaptureForEyeZoom) {
+                        logEyeZoomCaptureStateThrottled("viewport_invalid",
+                                                        "trackedTex=" + std::to_string(gameTexture) + " viewport invalid while EyeZoom requested");
                     }
+                } else if (needCaptureForEyeZoom) {
+                    logEyeZoomCaptureStateThrottled("missing_tracked_texture",
+                                                    "tracked game texture unavailable while EyeZoom requested");
                 }
             }
         }
@@ -1901,10 +1942,15 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
         if (IsModeTransitionActive()) {
             ModeTransitionState eyeZoomTransitionState = GetModeTransitionState();
             std::string fromModeId = eyeZoomTransitionState.fromModeId;
+            auto interpolateTransitionX = [&]() {
+                return static_cast<int>(eyeZoomTransitionState.fromX +
+                                        (eyeZoomTransitionState.targetX - eyeZoomTransitionState.fromX) *
+                                            eyeZoomTransitionState.moveProgress);
+            };
 
             if (!isEyeZoom && fromModeId == "EyeZoom") {
                 isTransitioningFromEyeZoom = true;
-                eyeZoomAnimatedViewportX = eyeZoomTransitionState.x;
+                eyeZoomAnimatedViewportX = interpolateTransitionX();
             } else if (isEyeZoom && fromModeId != "EyeZoom") {
                 eyeZoomAnimatedViewportX = eyeZoomTransitionState.x;
             }

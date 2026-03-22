@@ -942,7 +942,7 @@ static void SyncWindowMetricsFromMessage(HWND hWnd, UINT uMsg, WPARAM wParam, LP
                 const int monitorH = haveMonitorRect ? (monitorRect.bottom - monitorRect.top) : 0;
                 const bool previousSizeFilledMonitor = haveMonitorRect && prevW >= (monitorW - kFullscreenTolPx) && prevH >= (monitorH - kFullscreenTolPx);
                 const bool currentSizeIsWindowed = haveMonitorRect && (clientW < (monitorW - kFullscreenTolPx) || clientH < (monitorH - kFullscreenTolPx));
-                if (previousSizeFilledMonitor && currentSizeIsWindowed) {
+                if (g_config.restoreWindowedModeOnFullscreenExit && previousSizeFilledMonitor && currentSizeIsWindowed) {
                     if (CenterWindowedRestoreOnCurrentMonitor(hWnd, "input_hook:fullscreen_exit_restore")) { return; }
                 }
 
@@ -1260,6 +1260,7 @@ InputHandlerResult HandleGuiToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 
         g_imageDragMode.store(false);
         g_windowOverlayDragMode.store(false);
+        g_browserOverlayDragMode.store(false);
 
         extern std::string s_hoveredImageName;
         extern std::string s_draggedImageName;
@@ -1274,6 +1275,13 @@ InputHandlerResult HandleGuiToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         s_hoveredWindowOverlayName = "";
         s_draggedWindowOverlayName = "";
         s_isWindowOverlayDragging = false;
+
+        extern std::string s_hoveredBrowserOverlayName;
+        extern std::string s_draggedBrowserOverlayName;
+        extern bool s_isBrowserOverlayDragging;
+        s_hoveredBrowserOverlayName = "";
+        s_draggedBrowserOverlayName = "";
+        s_isBrowserOverlayDragging = false;
     } else if (!isEscape) {
         g_showGui = true;
         InvalidateImGuiCache();
@@ -2404,6 +2412,37 @@ static bool IsMouseButtonVk(DWORD vk) {
     return vk == VK_LBUTTON || vk == VK_RBUTTON || vk == VK_MBUTTON || vk == VK_XBUTTON1 || vk == VK_XBUTTON2;
 }
 
+static bool IsNonCharKeyVk(DWORD vk) {
+    if (IsModifierVk(vk)) return true;
+    if (IsMouseButtonVk(vk)) return true;
+    if (vk == VK_LWIN || vk == VK_RWIN) return true;
+    if (vk >= VK_F1 && vk <= VK_F24) return true;
+
+    switch (vk) {
+    case VK_INSERT:
+    case VK_DELETE:
+    case VK_HOME:
+    case VK_END:
+    case VK_PRIOR:
+    case VK_NEXT:
+    case VK_LEFT:
+    case VK_RIGHT:
+    case VK_UP:
+    case VK_DOWN:
+    case VK_CLEAR:
+    case VK_ESCAPE:
+    case VK_PAUSE:
+    case VK_SNAPSHOT:
+    case VK_CAPITAL:
+    case VK_NUMLOCK:
+    case VK_SCROLL:
+    case VK_APPS:
+        return true;
+    default:
+        return false;
+    }
+}
+
 static bool RebindCannotType(const KeyRebind& rebind) {
     DWORD triggerVk = rebind.toKey;
     if (triggerVk == 0) triggerVk = rebind.fromKey;
@@ -2879,49 +2918,25 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
 
         if (rebind.enabled && rebind.fromKey != 0 && rebind.toKey != 0 && MatchesRebindSourceKey(vkCode, rawVkCode, rebind.fromKey)) {
             const bool shiftLayerActive = IsShiftLayerActiveForRebind(rebind, vkCode, rawVkCode, isKeyDown);
-            auto isNonCharSourceVk = [&](DWORD vk) {
-                if (IsModifierVk(vk)) return true;
-                if (vk == VK_LWIN || vk == VK_RWIN) return true;
-                if (vk >= VK_F1 && vk <= VK_F24) return true;
-
-                switch (vk) {
-                case VK_INSERT:
-                case VK_DELETE:
-                case VK_HOME:
-                case VK_END:
-                case VK_PRIOR:
-                case VK_NEXT:
-                case VK_LEFT:
-                case VK_RIGHT:
-                case VK_UP:
-                case VK_DOWN:
-                case VK_CLEAR:
-                case VK_ESCAPE:
-                case VK_PAUSE:
-                case VK_SNAPSHOT:
-                case VK_CAPITAL:
-                case VK_NUMLOCK:
-                case VK_SCROLL:
-                case VK_APPS:
-                    return true;
-                default:
-                    return false;
-                }
-            };
-
-            const DWORD triggerVK =
-                NormalizeModifierVkFromConfig(rebind.toKey, (rebind.useCustomOutput ? rebind.customOutputScanCode : 0));
-
-            if (ShouldMaskMenuModifierForRebind(rebind, vkCode, rawVkCode, isKeyDown, isAutoRepeatKeyDown, triggerVK)) {
-                (void)SendMenuMaskKeyTap();
-            }
-
             const DWORD defaultTextVK = NormalizeModifierVkFromConfig(rebind.fromKey);
             const DWORD effectiveCustomOutputVk = ResolveEffectiveCustomOutputVk(rebind, shiftLayerActive);
+            const DWORD normalizedCustomOutputVk =
+                (effectiveCustomOutputVk != 0)
+                    ? NormalizeModifierVkFromConfig(effectiveCustomOutputVk, (rebind.useCustomOutput ? rebind.customOutputScanCode : 0))
+                    : 0;
             const DWORD textVK = NormalizeModifierVkFromConfig(
                 (effectiveCustomOutputVk != 0) ? effectiveCustomOutputVk : defaultTextVK);
             const bool preferShiftedText = ResolvePreferredOutputShiftState(
                 rebind, shiftLayerActive, IsShiftDownForIncomingEvent(vkCode, rawVkCode, isKeyDown));
+
+            DWORD triggerVK = NormalizeModifierVkFromConfig(rebind.toKey, (rebind.useCustomOutput ? rebind.customOutputScanCode : 0));
+            if (isMouseButton && normalizedCustomOutputVk != 0 && IsNonCharKeyVk(normalizedCustomOutputVk)) {
+                triggerVK = normalizedCustomOutputVk;
+            }
+
+            if (ShouldMaskMenuModifierForRebind(rebind, vkCode, rawVkCode, isKeyDown, isAutoRepeatKeyDown, triggerVK)) {
+                (void)SendMenuMaskKeyTap();
+            }
 
             UINT outputScanCode = GetScanCodeWithExtendedFlag(triggerVK);
             if (rebind.useCustomOutput && rebind.customOutputScanCode != 0) {
@@ -2985,7 +3000,7 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
 
                 const bool fromKeyIsNonCharMouse =
                     isMouseButton ||
-                    isNonCharSourceVk(rebind.fromKey);
+                    IsNonCharKeyVk(rebind.fromKey);
 
                 if (isKeyDown && fromKeyIsNonCharMouse) {
                     const uint32_t configuredUnicodeText =
@@ -3055,7 +3070,7 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
 
             const bool fromKeyIsNonChar =
                 isMouseButton ||
-                isNonCharSourceVk(rebind.fromKey);
+                IsNonCharKeyVk(rebind.fromKey);
 
             UINT repeatCount = 1;
             bool previousState = !isKeyDown;
@@ -3187,7 +3202,7 @@ InputHandlerResult HandleCustomCharNoRebind(HWND hWnd, UINT uMsg, WPARAM wParam,
     if (uMsg != WM_TOOLSCREEN_CHAR_NO_REBIND) { return { false, 0 }; }
     PROFILE_SCOPE("HandleCustomCharNoRebind");
 
-    HandleCharLogging(WM_CHAR, wParam, lParam);
+    //HandleCharLogging(WM_CHAR, wParam, lParam);
 
     if (g_showGui.load()) {
         ImGuiInputQueue_EnqueueWin32Message(hWnd, WM_CHAR, wParam, lParam);
@@ -3441,7 +3456,7 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     result = HandleKeyRebindsToggle(hWnd, uMsg, wParam, lParam);
     if (result.consumed) return result.result;
 
-    HandleCharLogging(uMsg, wParam, lParam);
+    //HandleCharLogging(uMsg, wParam, lParam);
 
     result = HandleAltF4(hWnd, uMsg, wParam, lParam);
     if (result.consumed) return result.result;

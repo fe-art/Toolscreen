@@ -194,14 +194,14 @@ if(CMAKE_SIZEOF_VOID_P EQUAL 8)
 else()
     set(TOOLSCREEN_WEBVIEW2_ARCH_DIR "x86")
 endif()
-set(TOOLSCREEN_WEBVIEW2_LOADER_DLL "${TOOLSCREEN_WEBVIEW2_NATIVE_DIR}/${TOOLSCREEN_WEBVIEW2_ARCH_DIR}/WebView2Loader.dll")
+set(TOOLSCREEN_WEBVIEW2_LOADER_STATIC_LIB "${TOOLSCREEN_WEBVIEW2_NATIVE_DIR}/${TOOLSCREEN_WEBVIEW2_ARCH_DIR}/WebView2LoaderStatic.lib")
 
 if(NOT EXISTS "${TOOLSCREEN_WEBVIEW2_INCLUDE_DIR}/WebView2.h")
     message(FATAL_ERROR "WebView2 SDK headers were not found at ${TOOLSCREEN_WEBVIEW2_INCLUDE_DIR}")
 endif()
 
-if(NOT EXISTS "${TOOLSCREEN_WEBVIEW2_LOADER_DLL}")
-    message(FATAL_ERROR "WebView2Loader.dll was not found at ${TOOLSCREEN_WEBVIEW2_LOADER_DLL}")
+if(NOT EXISTS "${TOOLSCREEN_WEBVIEW2_LOADER_STATIC_LIB}")
+    message(FATAL_ERROR "WebView2LoaderStatic.lib was not found at ${TOOLSCREEN_WEBVIEW2_LOADER_STATIC_LIB}")
 endif()
 
 set(TOOLSCREEN_IMGUI_DIR "${imgui_SOURCE_DIR}")
@@ -309,6 +309,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     Toolscreen::glew
     toolscreen_imgui
     OpenGL::GL
+    "${TOOLSCREEN_WEBVIEW2_LOADER_STATIC_LIB}"
     comdlg32
     dbghelp
     dwmapi
@@ -338,8 +339,8 @@ toolscreen_configure_target_outputs(${PROJECT_NAME})
 toolscreen_enable_release_symbols(${PROJECT_NAME})
 
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TOOLSCREEN_WEBVIEW2_LOADER_DLL}" "$<TARGET_FILE_DIR:${PROJECT_NAME}>/WebView2Loader.dll"
-    COMMENT "Copying WebView2Loader.dll next to Toolscreen.dll"
+    COMMAND ${CMAKE_COMMAND} -E rm -f "$<TARGET_FILE_DIR:${PROJECT_NAME}>/WebView2Loader.dll"
+    COMMENT "Removing stale copied WebView2Loader.dll"
 )
 
 enable_testing()
@@ -377,7 +378,7 @@ if(TOOLSCREEN_ENABLE_JAR_PACKAGING)
     FetchContent_Declare(
         easyinjectbundled
         GIT_REPOSITORY https://github.com/jojoe77777/EasyInjectBundled.git
-        GIT_TAG a8800d1565cf84079c1327bbf62b9904ffd114ab
+        GIT_TAG be353d11613b362028901717fce9904b70951405
         GIT_SHALLOW TRUE
     )
 
@@ -385,6 +386,8 @@ if(TOOLSCREEN_ENABLE_JAR_PACKAGING)
     if(NOT easyinjectbundled_POPULATED)
         FetchContent_Populate(easyinjectbundled)
     endif()
+
+    file(REMOVE "${easyinjectbundled_SOURCE_DIR}/custom-dlls/WebView2Loader.dll")
 
     set(TOOLSCREEN_EASYINJECT_BRANDING_PROPERTIES "${easyinjectbundled_SOURCE_DIR}/branding.properties")
     toolscreen_set_brand_version("${TOOLSCREEN_EASYINJECT_BRANDING_PROPERTIES}" "${PROJECT_VERSION}")
@@ -400,6 +403,8 @@ if(TOOLSCREEN_ENABLE_JAR_PACKAGING)
     if(NOT easyinjectbundled_exe_POPULATED)
         FetchContent_Populate(easyinjectbundled_exe)
     endif()
+
+    file(REMOVE "${easyinjectbundled_exe_SOURCE_DIR}/custom-dlls/WebView2Loader.dll")
 
     set(TOOLSCREEN_EASYINJECT_EXE_BRANDING_PROPERTIES "${easyinjectbundled_exe_SOURCE_DIR}/branding.properties")
     toolscreen_set_brand_version("${TOOLSCREEN_EASYINJECT_EXE_BRANDING_PROPERTIES}" "${PROJECT_VERSION}")
@@ -422,7 +427,7 @@ if(TOOLSCREEN_ENABLE_JAR_PACKAGING)
         COMMAND ${CMAKE_COMMAND} -E make_directory "${easyinjectbundled_SOURCE_DIR}/custom-dlls"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${TOOLSCREEN_ARTIFACT_ROOT}/$<CONFIG>"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:${PROJECT_NAME}>" "${easyinjectbundled_SOURCE_DIR}/custom-dlls/Toolscreen.dll"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TOOLSCREEN_WEBVIEW2_LOADER_DLL}" "${easyinjectbundled_SOURCE_DIR}/custom-dlls/WebView2Loader.dll"
+        COMMAND ${CMAKE_COMMAND} -E rm -f "${easyinjectbundled_SOURCE_DIR}/custom-dlls/WebView2Loader.dll"
         COMMAND "${TOOLSCREEN_MAVEN_EXECUTABLE}" -f "${easyinjectbundled_SOURCE_DIR}/pom.xml" clean package -q
                 -Dbrand.name=Toolscreen
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${easyinjectbundled_SOURCE_DIR}/target/${JAR_NAME}" "${JAR_OUTPUT}"
@@ -461,7 +466,7 @@ if(TOOLSCREEN_ENABLE_JAR_PACKAGING)
     add_custom_target(toolscreen_prepare_easyinject_exe_inputs
         COMMAND ${CMAKE_COMMAND} -E make_directory "${easyinjectbundled_exe_SOURCE_DIR}/custom-dlls"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:${PROJECT_NAME}>" "${easyinjectbundled_exe_SOURCE_DIR}/custom-dlls/Toolscreen.dll"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TOOLSCREEN_WEBVIEW2_LOADER_DLL}" "${easyinjectbundled_exe_SOURCE_DIR}/custom-dlls/WebView2Loader.dll"
+        COMMAND ${CMAKE_COMMAND} -E rm -f "${easyinjectbundled_exe_SOURCE_DIR}/custom-dlls/WebView2Loader.dll"
         DEPENDS ${PROJECT_NAME}
         COMMENT "Preparing EasyInject exe packaging inputs"
         VERBATIM

@@ -208,6 +208,7 @@ constexpr int CONFIG_KEY_REPEAT_START_DELAY = -1;
 constexpr int CONFIG_KEY_REPEAT_DELAY = -1;
 constexpr bool CONFIG_KEY_REPEAT_RESUME_PREVIOUS_HELD_KEY = false;
 constexpr bool CONFIG_BASIC_MODE_ENABLED = false;
+constexpr bool CONFIG_RESTORE_WINDOWED_MODE_ON_FULLSCREEN_EXIT = true;
 constexpr bool CONFIG_DISABLE_FULLSCREEN_PROMPT = false;
 constexpr bool CONFIG_DISABLE_CONFIGURE_PROMPT = false;
 inline const std::string CONFIG_MIRROR_MATCH_COLORSPACE = "Auto";

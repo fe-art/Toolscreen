@@ -1,13 +1,18 @@
 #include "config_toml.h"
 #include "config_defaults.h"
+#include "common/expression_parser.h"
 #include "gui/gui.h"
 #include "runtime/logic_thread.h"
 #include "common/utils.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <optional>
+
+static void ModeSourceRefFromToml(const toml::table& tbl, ModeSourceRef& cfg);
 
 template <typename T> T GetOr(const toml::table& tbl, const std::string& key, T defaultValue) {
     if (auto node = tbl.get(key)) {
@@ -31,6 +36,311 @@ const toml::table* GetTable(const toml::table& tbl, const std::string& key) {
 const toml::array* GetArray(const toml::table& tbl, const std::string& key) {
     if (auto node = tbl.get(key)) { return node->as_array(); }
     return nullptr;
+}
+
+std::optional<double> GetNumericValue(const toml::node* node) {
+    if (!node) {
+        return std::nullopt;
+    }
+
+    if (node->is_integer()) {
+        return static_cast<double>(node->as_integer()->get());
+    }
+
+    if (node->is_floating_point()) {
+        return node->as_floating_point()->get();
+    }
+
+    return std::nullopt;
+}
+
+std::optional<double> GetNumericValue(const toml::table& tbl, const std::string& key) {
+    return GetNumericValue(tbl.get(key));
+}
+
+bool IsZeroOrOneValue(double value) {
+    return value == 0.0 || value == 1.0;
+}
+
+bool IsLiteralZeroOrOneString(const std::string& value) {
+    const size_t start = value.find_first_not_of(" \t\r\n");
+    if (start == std::string::npos) {
+        return false;
+    }
+
+    const size_t end = value.find_last_not_of(" \t\r\n");
+    const std::string trimmed = value.substr(start, end - start + 1);
+
+    char* parseEnd = nullptr;
+    const double parsed = std::strtod(trimmed.c_str(), &parseEnd);
+    if (!parseEnd || *parseEnd != '\0') {
+        return false;
+    }
+
+    return IsZeroOrOneValue(parsed);
+}
+
+bool ShouldRestoreModeDimensionFromDefault(const toml::table& tbl, const char* key) {
+    const toml::node* node = tbl.get(key);
+    if (!node) {
+        return false;
+    }
+
+    if (auto numericValue = GetNumericValue(node)) {
+        return IsZeroOrOneValue(*numericValue);
+    }
+
+    if (auto stringValue = node->value<std::string>()) {
+        return IsLiteralZeroOrOneString(*stringValue);
+    }
+
+    return false;
+}
+
+const ModeConfig* FindDefaultModeById(const std::vector<ModeConfig>& defaultModes, const std::string& modeId) {
+    for (const auto& defaultMode : defaultModes) {
+        if (EqualsIgnoreCase(defaultMode.id, modeId)) {
+            return &defaultMode;
+        }
+    }
+
+    return nullptr;
+}
+
+void ApplyDefaultModeWidth(const ModeConfig& defaultMode, ModeConfig& mode) {
+    mode.width = defaultMode.width;
+    mode.manualWidth = defaultMode.manualWidth;
+    mode.relativeWidth = defaultMode.relativeWidth;
+    mode.widthExpr = defaultMode.widthExpr;
+}
+
+void ApplyDefaultModeHeight(const ModeConfig& defaultMode, ModeConfig& mode) {
+    mode.height = defaultMode.height;
+    mode.manualHeight = defaultMode.manualHeight;
+    mode.relativeHeight = defaultMode.relativeHeight;
+    mode.heightExpr = defaultMode.heightExpr;
+}
+
+void RestoreModeDimensionsFromDefaults(const toml::table& tbl, const std::vector<ModeConfig>* defaultModes, ModeConfig& mode) {
+    if (!defaultModes || defaultModes->empty() || mode.id.empty()) {
+        return;
+    }
+
+    const ModeConfig* defaultMode = FindDefaultModeById(*defaultModes, mode.id);
+    if (!defaultMode) {
+        return;
+    }
+
+    bool restoredWidth = false;
+    bool restoredHeight = false;
+
+    if (ShouldRestoreModeDimensionFromDefault(tbl, "width")) {
+        ApplyDefaultModeWidth(*defaultMode, mode);
+        restoredWidth = true;
+    }
+
+    if (ShouldRestoreModeDimensionFromDefault(tbl, "height")) {
+        ApplyDefaultModeHeight(*defaultMode, mode);
+        restoredHeight = true;
+    }
+
+    if (restoredWidth || restoredHeight) {
+        std::string repairedFields;
+        if (restoredWidth) {
+            repairedFields = "width";
+        }
+        if (restoredHeight) {
+            if (!repairedFields.empty()) {
+                repairedFields += ", ";
+            }
+            repairedFields += "height";
+        }
+
+        Log("[CONFIG] Restored mode '" + mode.id + "' " + repairedFields + " from embedded defaults because config.toml contained " +
+            (restoredWidth && restoredHeight ? "0/1 values for both dimensions." : "a 0/1 value."));
+    }
+}
+
+void ModeConfigFromTomlInternal(const toml::table& tbl, ModeConfig& cfg, const std::vector<ModeConfig>* defaultModes) {
+    cfg.id = GetStringOr(tbl, "id", "");
+
+    cfg.width = ConfigDefaults::MODE_WIDTH;
+    cfg.height = ConfigDefaults::MODE_HEIGHT;
+
+    cfg.useRelativeSize = false;
+    cfg.relativeWidth = -1.0f;
+    cfg.relativeHeight = -1.0f;
+    cfg.widthExpr.clear();
+    cfg.heightExpr.clear();
+
+    bool widthIsPercentage = false;
+    bool heightIsPercentage = false;
+
+    int cachedScreenWidth = GetCachedWindowWidth();
+    int cachedScreenHeight = GetCachedWindowHeight();
+
+    if (auto widthNode = tbl.get("width")) {
+        if (auto widthStr = widthNode->value<std::string>()) {
+            cfg.widthExpr = *widthStr;
+        } else if (auto widthVal = GetNumericValue(widthNode)) {
+            if (*widthVal >= 0.0 && *widthVal <= 1.0) {
+                cfg.relativeWidth = static_cast<float>(*widthVal);
+                widthIsPercentage = true;
+
+                if (cachedScreenWidth > 0) {
+                    cfg.width = (std::max)(1, static_cast<int>(std::lround(cfg.relativeWidth * static_cast<float>(cachedScreenWidth))));
+                }
+            } else {
+                cfg.width = static_cast<int>(*widthVal);
+            }
+        }
+    }
+
+    if (auto heightNode = tbl.get("height")) {
+        if (auto heightStr = heightNode->value<std::string>()) {
+            cfg.heightExpr = *heightStr;
+        } else if (auto heightVal = GetNumericValue(heightNode)) {
+            if (*heightVal >= 0.0 && *heightVal <= 1.0) {
+                cfg.relativeHeight = static_cast<float>(*heightVal);
+                heightIsPercentage = true;
+
+                if (cachedScreenHeight > 0) {
+                    cfg.height = (std::max)(1, static_cast<int>(std::lround(cfg.relativeHeight * static_cast<float>(cachedScreenHeight))));
+                }
+            } else {
+                cfg.height = static_cast<int>(*heightVal);
+            }
+        }
+    }
+
+    if (cfg.widthExpr.empty()) { cfg.widthExpr = GetStringOr(tbl, "widthExpr", ""); }
+    if (cfg.heightExpr.empty()) { cfg.heightExpr = GetStringOr(tbl, "heightExpr", ""); }
+
+    if (tbl.contains("useRelativeSize") || tbl.contains("relativeWidth") || tbl.contains("relativeHeight")) {
+        cfg.useRelativeSize = GetOr(tbl, "useRelativeSize", false);
+        if (auto relativeWidth = GetNumericValue(tbl, "relativeWidth")) {
+            cfg.relativeWidth = static_cast<float>(*relativeWidth);
+        }
+        if (auto relativeHeight = GetNumericValue(tbl, "relativeHeight")) {
+            cfg.relativeHeight = static_cast<float>(*relativeHeight);
+        }
+    } else if (widthIsPercentage || heightIsPercentage) {
+        cfg.useRelativeSize = true;
+    }
+
+    if (!cfg.widthExpr.empty()) { cfg.relativeWidth = -1.0f; }
+    if (!cfg.heightExpr.empty()) { cfg.relativeHeight = -1.0f; }
+
+    RestoreModeDimensionsFromDefaults(tbl, defaultModes, cfg);
+
+    const bool hasRelativeWidth = cfg.relativeWidth >= 0.0f && cfg.relativeWidth <= 1.0f;
+    const bool hasRelativeHeight = cfg.relativeHeight >= 0.0f && cfg.relativeHeight <= 1.0f;
+    if (hasRelativeWidth || hasRelativeHeight) {
+        cfg.useRelativeSize = true;
+    }
+
+    if (hasRelativeWidth && cfg.width < 1 && cachedScreenWidth > 0) {
+        cfg.width = (std::max)(1, static_cast<int>(std::lround(cfg.relativeWidth * static_cast<float>(cachedScreenWidth))));
+    }
+    if (hasRelativeHeight && cfg.height < 1 && cachedScreenHeight > 0) {
+        cfg.height = (std::max)(1, static_cast<int>(std::lround(cfg.relativeHeight * static_cast<float>(cachedScreenHeight))));
+    }
+
+    if (!cfg.widthExpr.empty() && cachedScreenWidth > 0 && cachedScreenHeight > 0) {
+        cfg.width = (std::max)(1, EvaluateExpression(cfg.widthExpr, cachedScreenWidth, cachedScreenHeight, cfg.width));
+    }
+    if (!cfg.heightExpr.empty() && cachedScreenWidth > 0 && cachedScreenHeight > 0) {
+        cfg.height = (std::max)(1, EvaluateExpression(cfg.heightExpr, cachedScreenWidth, cachedScreenHeight, cfg.height));
+    }
+
+    cfg.manualWidth = (cfg.width > 0) ? cfg.width : ConfigDefaults::MODE_WIDTH;
+    cfg.manualHeight = (cfg.height > 0) ? cfg.height : ConfigDefaults::MODE_HEIGHT;
+
+    // Note: Actual pixel conversion from percentages is done elsewhere (GUI/logic thread)
+
+    if (auto t = GetTable(tbl, "background")) { BackgroundConfigFromToml(*t, cfg.background); }
+
+    cfg.sources.clear();
+    if (auto arr = GetArray(tbl, "sources")) {
+        for (const auto& elem : *arr) {
+            if (auto t = elem.as_table()) {
+                ModeSourceRef source;
+                ModeSourceRefFromToml(*t, source);
+                if (!source.id.empty()) { cfg.sources.push_back(std::move(source)); }
+            }
+        }
+    }
+
+    std::vector<std::string> legacyMirrorIds;
+    if (auto arr = GetArray(tbl, "mirrorIds")) {
+        for (const auto& elem : *arr) {
+            if (auto val = elem.value<std::string>()) { legacyMirrorIds.push_back(*val); }
+        }
+    }
+
+    std::vector<std::string> legacyMirrorGroupIds;
+    if (auto arr = GetArray(tbl, "mirrorGroupIds")) {
+        for (const auto& elem : *arr) {
+            if (auto val = elem.value<std::string>()) { legacyMirrorGroupIds.push_back(*val); }
+        }
+    }
+
+    std::vector<std::string> legacyImageIds;
+    if (auto arr = GetArray(tbl, "imageIds")) {
+        for (const auto& elem : *arr) {
+            if (auto val = elem.value<std::string>()) { legacyImageIds.push_back(*val); }
+        }
+    }
+
+    std::vector<std::string> legacyWindowOverlayIds;
+    if (auto arr = GetArray(tbl, "windowOverlayIds")) {
+        for (const auto& elem : *arr) {
+            if (auto val = elem.value<std::string>()) { legacyWindowOverlayIds.push_back(*val); }
+        }
+    }
+
+    std::vector<std::string> legacyBrowserOverlayIds;
+    if (auto arr = GetArray(tbl, "browserOverlayIds")) {
+        for (const auto& elem : *arr) {
+            if (auto val = elem.value<std::string>()) { legacyBrowserOverlayIds.push_back(*val); }
+        }
+    }
+
+    if (cfg.sources.empty()) {
+        cfg.sources = BuildModeSourcesFromLegacyLists(legacyMirrorIds, legacyMirrorGroupIds, legacyImageIds,
+                                                     legacyWindowOverlayIds, legacyBrowserOverlayIds);
+    }
+
+    if (auto t = GetTable(tbl, "stretch")) { StretchConfigFromToml(*t, cfg.stretch); }
+
+    const toml::table* transitionTbl = GetTable(tbl, "transition");
+    const toml::table& transitionSrc = transitionTbl ? *transitionTbl : tbl;
+
+    cfg.gameTransition = StringToGameTransitionType(GetStringOr(transitionSrc, "gameTransition", ConfigDefaults::GAME_TRANSITION_BOUNCE));
+    cfg.overlayTransition =
+        StringToOverlayTransitionType(GetStringOr(transitionSrc, "overlayTransition", ConfigDefaults::OVERLAY_TRANSITION_CUT));
+    cfg.backgroundTransition =
+        StringToBackgroundTransitionType(GetStringOr(transitionSrc, "backgroundTransition", ConfigDefaults::BACKGROUND_TRANSITION_CUT));
+    cfg.transitionDurationMs = GetOr(transitionSrc, "transitionDurationMs", ConfigDefaults::MODE_TRANSITION_DURATION_MS);
+
+    cfg.easeInPower = GetOr(transitionSrc, "easeInPower", ConfigDefaults::MODE_EASE_IN_POWER);
+    cfg.easeOutPower = GetOr(transitionSrc, "easeOutPower", ConfigDefaults::MODE_EASE_OUT_POWER);
+    cfg.bounceCount = GetOr(transitionSrc, "bounceCount", ConfigDefaults::MODE_BOUNCE_COUNT);
+    cfg.bounceIntensity = GetOr(transitionSrc, "bounceIntensity", ConfigDefaults::MODE_BOUNCE_INTENSITY);
+    cfg.bounceDurationMs = GetOr(transitionSrc, "bounceDurationMs", ConfigDefaults::MODE_BOUNCE_DURATION_MS);
+    cfg.relativeStretching = GetOr(transitionSrc, "relativeStretching", ConfigDefaults::MODE_RELATIVE_STRETCHING);
+    cfg.skipAnimateX = GetOr(transitionSrc, "skipAnimateX", false);
+    cfg.skipAnimateY = GetOr(transitionSrc, "skipAnimateY", false);
+
+    if (auto t = GetTable(tbl, "border")) { BorderConfigFromToml(*t, cfg.border); }
+
+    cfg.sensitivityOverrideEnabled = GetOr(tbl, "sensitivityOverrideEnabled", ConfigDefaults::MODE_SENSITIVITY_OVERRIDE_ENABLED);
+    cfg.modeSensitivity = GetOr(tbl, "modeSensitivity", ConfigDefaults::MODE_SENSITIVITY);
+    cfg.separateXYSensitivity = GetOr(tbl, "separateXYSensitivity", ConfigDefaults::MODE_SEPARATE_XY_SENSITIVITY);
+    cfg.modeSensitivityX = GetOr(tbl, "modeSensitivityX", ConfigDefaults::MODE_SENSITIVITY_X);
+    cfg.modeSensitivityY = GetOr(tbl, "modeSensitivityY", ConfigDefaults::MODE_SENSITIVITY_Y);
+
+    cfg.slideMirrorsIn = GetOr(transitionSrc, "slideMirrorsIn", false);
 }
 
 static int ClampMirrorCaptureDimension(int value) {
@@ -893,8 +1203,12 @@ void ModeConfigToToml(const ModeConfig& cfg, toml::table& out) {
 
     const bool widthHasRelative = cfg.relativeWidth >= 0.0f && cfg.relativeWidth <= 1.0f;
     const bool heightHasRelative = cfg.relativeHeight >= 0.0f && cfg.relativeHeight <= 1.0f;
-    const bool widthIsDynamic = cfg.useRelativeSize && widthHasRelative;
-    const bool heightIsDynamic = cfg.useRelativeSize && heightHasRelative;
+    const bool widthUsesRelative = cfg.useRelativeSize && widthHasRelative;
+    const bool heightUsesRelative = cfg.useRelativeSize && heightHasRelative;
+    const bool widthUsesExpression = !widthUsesRelative && !cfg.widthExpr.empty();
+    const bool heightUsesExpression = !heightUsesRelative && !cfg.heightExpr.empty();
+    const bool widthIsDynamic = widthUsesExpression || widthUsesRelative;
+    const bool heightIsDynamic = heightUsesExpression || heightUsesRelative;
 
     int persistedWidth = cfg.width;
     int persistedHeight = cfg.height;
@@ -909,12 +1223,20 @@ void ModeConfigToToml(const ModeConfig& cfg, toml::table& out) {
     if (persistedWidth < 1) persistedWidth = ConfigDefaults::MODE_WIDTH;
     if (persistedHeight < 1) persistedHeight = ConfigDefaults::MODE_HEIGHT;
 
-    out.insert("width", persistedWidth);
-    out.insert("height", persistedHeight);
+    if (widthUsesExpression) {
+        out.insert("width", cfg.widthExpr);
+    } else {
+        out.insert("width", persistedWidth);
+    }
+    if (heightUsesExpression) {
+        out.insert("height", cfg.heightExpr);
+    } else {
+        out.insert("height", persistedHeight);
+    }
 
     out.insert("useRelativeSize", cfg.useRelativeSize);
-    if (widthHasRelative) { out.insert("relativeWidth", cfg.relativeWidth); }
-    if (heightHasRelative) { out.insert("relativeHeight", cfg.relativeHeight); }
+    if (widthUsesRelative) { out.insert("relativeWidth", cfg.relativeWidth); }
+    if (heightUsesRelative) { out.insert("relativeHeight", cfg.relativeHeight); }
 
     toml::table bgTbl;
     BackgroundConfigToToml(cfg.background, bgTbl);
@@ -963,153 +1285,7 @@ void ModeConfigToToml(const ModeConfig& cfg, toml::table& out) {
 }
 
 void ModeConfigFromToml(const toml::table& tbl, ModeConfig& cfg) {
-    cfg.id = GetStringOr(tbl, "id", "");
-
-    cfg.useRelativeSize = false;
-    cfg.relativeWidth = -1.0f;
-    cfg.relativeHeight = -1.0f;
-
-    bool widthIsPercentage = false;
-    bool heightIsPercentage = false;
-
-    if (auto widthNode = tbl.get("width")) {
-        if (widthNode->is_floating_point()) {
-            double widthVal = widthNode->as_floating_point()->get();
-            if (widthVal >= 0.0 && widthVal <= 1.0) {
-                cfg.relativeWidth = static_cast<float>(widthVal);
-                widthIsPercentage = true;
-            } else {
-                cfg.width = static_cast<int>(widthVal);
-            }
-        } else if (widthNode->is_integer()) {
-            cfg.width = static_cast<int>(widthNode->as_integer()->get());
-        } else {
-            cfg.width = ConfigDefaults::MODE_WIDTH;
-        }
-    } else {
-        cfg.width = ConfigDefaults::MODE_WIDTH;
-    }
-
-    if (auto heightNode = tbl.get("height")) {
-        if (heightNode->is_floating_point()) {
-            double heightVal = heightNode->as_floating_point()->get();
-            if (heightVal >= 0.0 && heightVal <= 1.0) {
-                cfg.relativeHeight = static_cast<float>(heightVal);
-                heightIsPercentage = true;
-            } else {
-                cfg.height = static_cast<int>(heightVal);
-            }
-        } else if (heightNode->is_integer()) {
-            cfg.height = static_cast<int>(heightNode->as_integer()->get());
-        } else {
-            cfg.height = ConfigDefaults::MODE_HEIGHT;
-        }
-    } else {
-        cfg.height = ConfigDefaults::MODE_HEIGHT;
-    }
-
-    if (tbl.contains("useRelativeSize") || tbl.contains("relativeWidth") || tbl.contains("relativeHeight")) {
-        cfg.useRelativeSize = GetOr(tbl, "useRelativeSize", false);
-        cfg.relativeWidth = GetOr(tbl, "relativeWidth", cfg.relativeWidth);
-        cfg.relativeHeight = GetOr(tbl, "relativeHeight", cfg.relativeHeight);
-    } else if (widthIsPercentage || heightIsPercentage) {
-        cfg.useRelativeSize = true;
-    }
-
-    const bool hasRelativeWidth = cfg.relativeWidth >= 0.0f && cfg.relativeWidth <= 1.0f;
-    const bool hasRelativeHeight = cfg.relativeHeight >= 0.0f && cfg.relativeHeight <= 1.0f;
-    if (hasRelativeWidth || hasRelativeHeight) {
-        cfg.useRelativeSize = true;
-    }
-
-    cfg.manualWidth = (cfg.width > 0) ? cfg.width : ConfigDefaults::MODE_WIDTH;
-    cfg.manualHeight = (cfg.height > 0) ? cfg.height : ConfigDefaults::MODE_HEIGHT;
-
-    // Note: Actual pixel conversion from percentages is done elsewhere (GUI/logic thread)
-
-    if (auto t = GetTable(tbl, "background")) { BackgroundConfigFromToml(*t, cfg.background); }
-
-    cfg.sources.clear();
-    if (auto arr = GetArray(tbl, "sources")) {
-        for (const auto& elem : *arr) {
-            if (auto t = elem.as_table()) {
-                ModeSourceRef source;
-                ModeSourceRefFromToml(*t, source);
-                if (!source.id.empty()) { cfg.sources.push_back(std::move(source)); }
-            }
-        }
-    }
-
-    std::vector<std::string> legacyMirrorIds;
-    if (auto arr = GetArray(tbl, "mirrorIds")) {
-        for (const auto& elem : *arr) {
-            if (auto val = elem.value<std::string>()) { legacyMirrorIds.push_back(*val); }
-        }
-    }
-
-    std::vector<std::string> legacyMirrorGroupIds;
-    if (auto arr = GetArray(tbl, "mirrorGroupIds")) {
-        for (const auto& elem : *arr) {
-            if (auto val = elem.value<std::string>()) { legacyMirrorGroupIds.push_back(*val); }
-        }
-    }
-
-    std::vector<std::string> legacyImageIds;
-    if (auto arr = GetArray(tbl, "imageIds")) {
-        for (const auto& elem : *arr) {
-            if (auto val = elem.value<std::string>()) { legacyImageIds.push_back(*val); }
-        }
-    }
-
-    std::vector<std::string> legacyWindowOverlayIds;
-    if (auto arr = GetArray(tbl, "windowOverlayIds")) {
-        for (const auto& elem : *arr) {
-            if (auto val = elem.value<std::string>()) { legacyWindowOverlayIds.push_back(*val); }
-        }
-    }
-
-    std::vector<std::string> legacyBrowserOverlayIds;
-    if (auto arr = GetArray(tbl, "browserOverlayIds")) {
-        for (const auto& elem : *arr) {
-            if (auto val = elem.value<std::string>()) { legacyBrowserOverlayIds.push_back(*val); }
-        }
-    }
-
-    if (cfg.sources.empty()) {
-        cfg.sources = BuildModeSourcesFromLegacyLists(legacyMirrorIds, legacyMirrorGroupIds, legacyImageIds,
-                                                     legacyWindowOverlayIds, legacyBrowserOverlayIds);
-    }
-
-    if (auto t = GetTable(tbl, "stretch")) { StretchConfigFromToml(*t, cfg.stretch); }
-
-    const toml::table* transitionTbl = GetTable(tbl, "transition");
-    const toml::table& transitionSrc = transitionTbl ? *transitionTbl : tbl;
-
-    cfg.gameTransition = StringToGameTransitionType(GetStringOr(transitionSrc, "gameTransition", ConfigDefaults::GAME_TRANSITION_BOUNCE));
-    cfg.overlayTransition =
-        StringToOverlayTransitionType(GetStringOr(transitionSrc, "overlayTransition", ConfigDefaults::OVERLAY_TRANSITION_CUT));
-    cfg.backgroundTransition =
-        StringToBackgroundTransitionType(GetStringOr(transitionSrc, "backgroundTransition", ConfigDefaults::BACKGROUND_TRANSITION_CUT));
-    cfg.transitionDurationMs = GetOr(transitionSrc, "transitionDurationMs", ConfigDefaults::MODE_TRANSITION_DURATION_MS);
-
-    cfg.easeInPower = GetOr(transitionSrc, "easeInPower", ConfigDefaults::MODE_EASE_IN_POWER);
-    cfg.easeOutPower = GetOr(transitionSrc, "easeOutPower", ConfigDefaults::MODE_EASE_OUT_POWER);
-    cfg.bounceCount = GetOr(transitionSrc, "bounceCount", ConfigDefaults::MODE_BOUNCE_COUNT);
-    cfg.bounceIntensity = GetOr(transitionSrc, "bounceIntensity", ConfigDefaults::MODE_BOUNCE_INTENSITY);
-    cfg.bounceDurationMs = GetOr(transitionSrc, "bounceDurationMs", ConfigDefaults::MODE_BOUNCE_DURATION_MS);
-    cfg.relativeStretching = GetOr(transitionSrc, "relativeStretching", ConfigDefaults::MODE_RELATIVE_STRETCHING);
-    cfg.skipAnimateX = GetOr(transitionSrc, "skipAnimateX", false);
-    cfg.skipAnimateY = GetOr(transitionSrc, "skipAnimateY", false);
-
-    if (auto t = GetTable(tbl, "border")) { BorderConfigFromToml(*t, cfg.border); }
-
-    cfg.sensitivityOverrideEnabled = GetOr(tbl, "sensitivityOverrideEnabled", ConfigDefaults::MODE_SENSITIVITY_OVERRIDE_ENABLED);
-    cfg.modeSensitivity = GetOr(tbl, "modeSensitivity", ConfigDefaults::MODE_SENSITIVITY);
-    cfg.separateXYSensitivity = GetOr(tbl, "separateXYSensitivity", ConfigDefaults::MODE_SEPARATE_XY_SENSITIVITY);
-    cfg.modeSensitivityX = GetOr(tbl, "modeSensitivityX", ConfigDefaults::MODE_SENSITIVITY_X);
-    cfg.modeSensitivityY = GetOr(tbl, "modeSensitivityY", ConfigDefaults::MODE_SENSITIVITY_Y);
-
-    cfg.slideMirrorsIn = GetOr(transitionSrc, "slideMirrorsIn", false);
+    ModeConfigFromTomlInternal(tbl, cfg, nullptr);
 }
 
 void HotkeyConditionsToToml(const HotkeyConditions& cfg, toml::table& out) {
@@ -1709,6 +1885,7 @@ void ConfigToToml(const Config& config, toml::table& out) {
     out.insert("keyRepeatDelay", config.keyRepeatDelay);
     out.insert("keyRepeatResumePreviousHeldKey", config.keyRepeatResumePreviousHeldKey);
     out.insert("basicModeEnabled", config.basicModeEnabled);
+    out.insert("restoreWindowedModeOnFullscreenExit", config.restoreWindowedModeOnFullscreenExit);
     out.insert("disableFullscreenPrompt", config.disableFullscreenPrompt);
     out.insert("disableConfigurePrompt", config.disableConfigurePrompt);
 
@@ -1851,6 +2028,8 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
     config.keyRepeatResumePreviousHeldKey =
         GetOr(tbl, "keyRepeatResumePreviousHeldKey", ConfigDefaults::CONFIG_KEY_REPEAT_RESUME_PREVIOUS_HELD_KEY);
     config.basicModeEnabled = GetOr(tbl, "basicModeEnabled", ConfigDefaults::CONFIG_BASIC_MODE_ENABLED);
+    config.restoreWindowedModeOnFullscreenExit =
+        GetOr(tbl, "restoreWindowedModeOnFullscreenExit", ConfigDefaults::CONFIG_RESTORE_WINDOWED_MODE_ON_FULLSCREEN_EXIT);
     config.disableFullscreenPrompt = GetOr(tbl, "disableFullscreenPrompt", ConfigDefaults::CONFIG_DISABLE_FULLSCREEN_PROMPT);
     config.disableConfigurePrompt = GetOr(tbl, "disableConfigurePrompt", ConfigDefaults::CONFIG_DISABLE_CONFIGURE_PROMPT);
 
@@ -1901,11 +2080,12 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
     if (auto t = GetTable(tbl, "appearance")) { AppearanceConfigFromToml(*t, config.appearance); }
 
     config.modes.clear();
+    const std::vector<ModeConfig> defaultModes = GetDefaultModesFromEmbedded();
     if (auto arr = GetArray(tbl, "mode")) {
         for (const auto& elem : *arr) {
             if (auto t = elem.as_table()) {
                 ModeConfig mode;
-                ModeConfigFromToml(*t, mode);
+                ModeConfigFromTomlInternal(*t, mode, &defaultModes);
                 config.modes.push_back(mode);
             }
         }
@@ -2021,6 +2201,7 @@ bool SaveConfigToTomlFile(const Config& config, const std::wstring& path) {
                                                  "keyRepeatDelay",
                                                  "keyRepeatResumePreviousHeldKey",
                                                  "basicModeEnabled",
+                                                 "restoreWindowedModeOnFullscreenExit",
                                                  "disableFullscreenPrompt",
                                                  "disableConfigurePrompt",
                                                  "guiHotkey",
@@ -2317,12 +2498,6 @@ std::vector<ModeConfig> GetDefaultModesFromEmbedded() {
                     mode.stretch.width = screenWidth;
                     mode.stretch.height = screenHeight;
                 }
-            }
-            else if (mode.id == "Thin") {
-                mode.height = screenHeight;
-            }
-            else if (mode.id == "Wide") {
-                mode.width = screenWidth;
             }
         }
 

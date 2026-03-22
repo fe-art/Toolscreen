@@ -9,6 +9,9 @@ if (ImGui::BeginTabItem(trc("tabs.mirrors"))) {
 
     static std::string selectedGroupName = "";
 
+    constexpr float kSettingsLabelColumnWidth = 186.0f;
+    constexpr float kInlineHelpMarkerSpacing = 4.0f;
+
     int mirror_to_remove = -1;
     for (size_t i = 0; i < g_config.mirrors.size(); ++i) {
         auto& mirror = g_config.mirrors[i];
@@ -134,7 +137,7 @@ if (ImGui::BeginTabItem(trc("tabs.mirrors"))) {
             const ImGuiTableFlags mirrorSettingsTableFlags = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoSavedSettings;
             auto beginMirrorSettingsTable = [&](const char* id) {
                 if (!ImGui::BeginTable(id, 2, mirrorSettingsTableFlags)) return false;
-                ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, 170.0f);
+                ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, kSettingsLabelColumnWidth);
                 ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
                 return true;
             };
@@ -144,7 +147,7 @@ if (ImGui::BeginTabItem(trc("tabs.mirrors"))) {
                 ImGui::AlignTextToFramePadding();
                 ImGui::TextUnformatted(label);
                 if (tooltip != nullptr && tooltip[0] != '\0') {
-                    ImGui::SameLine();
+                    ImGui::SameLine(0.0f, kInlineHelpMarkerSpacing);
                     HelpMarker(tooltip);
                 }
                 ImGui::TableSetColumnIndex(1);
@@ -810,7 +813,7 @@ if (ImGui::BeginTabItem(trc("tabs.mirrors"))) {
             const ImGuiTableFlags groupSettingsTableFlags = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoSavedSettings;
             auto beginGroupSettingsTable = [&](const char* id) {
                 if (!ImGui::BeginTable(id, 2, groupSettingsTableFlags)) return false;
-                ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, 170.0f);
+                ImGui::TableSetupColumn("##label", ImGuiTableColumnFlags_WidthFixed, kSettingsLabelColumnWidth);
                 ImGui::TableSetupColumn("##value", ImGuiTableColumnFlags_WidthStretch);
                 return true;
             };
@@ -820,7 +823,7 @@ if (ImGui::BeginTabItem(trc("tabs.mirrors"))) {
                 ImGui::AlignTextToFramePadding();
                 ImGui::TextUnformatted(label);
                 if (tooltip != nullptr && tooltip[0] != '\0') {
-                    ImGui::SameLine();
+                    ImGui::SameLine(0.0f, kInlineHelpMarkerSpacing);
                     HelpMarker(tooltip);
                 }
                 ImGui::TableSetColumnIndex(1);

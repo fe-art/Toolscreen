@@ -384,6 +384,8 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                 bool useManualPixelSize = !mode.useRelativeSize;
                 if (ImGui::Checkbox((tr("modes.label.manual_pixel_size") + "##Fullscreen").c_str(), &useManualPixelSize)) {
                     mode.useRelativeSize = !useManualPixelSize;
+                    mode.widthExpr.clear();
+                    mode.heightExpr.clear();
                     if (mode.useRelativeSize) {
                         mode.relativeWidth = (std::max)(0.01f, (std::min)(1.0f, static_cast<float>(mode.width) / static_cast<float>(modeScreenW)));
                         mode.relativeHeight =
@@ -424,7 +426,7 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                         g_pendingDimensionChange.modeId = mode.id;
                         g_pendingDimensionChange.newWidth = tempWidth;
                         g_pendingDimensionChange.newHeight = 0;
-                        g_pendingDimensionChange.sendWmSize = false;
+                        g_pendingDimensionChange.sendWmSize = (g_currentModeId == mode.id);
                     }
                 }
                 ImGui::NextColumn();
@@ -456,7 +458,7 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                         g_pendingDimensionChange.modeId = mode.id;
                         g_pendingDimensionChange.newWidth = 0;
                         g_pendingDimensionChange.newHeight = tempHeight;
-                        g_pendingDimensionChange.sendWmSize = false;
+                        g_pendingDimensionChange.sendWmSize = (g_currentModeId == mode.id);
                     }
                 }
                 ImGui::Columns(1);
@@ -717,6 +719,9 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                         if (ImGui::InputText("Name##ezov", &ov.name)) {
                             if (!HasDuplicateEyeZoomOverlayName(ov.name, ovi)) {
                                 g_configIsDirty = true;
+                                if (!ov.path.empty()) {
+                                    LoadImageAsync(DecodedImageData::UserImage, "ezoverlay_" + ov.name, ov.path, g_toolscreenPath);
+                                }
                             } else {
                                 ov.name = oldName;
                             }
@@ -835,8 +840,13 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
 
                 ImGui::Separator();
                 ImGui::Text(trc("modes.eyezoom.zoom_area_output"));
+                const float eyeZoomAreaLabelWidth =
+                    (std::max)(150.0f,
+                               (std::max)(ImGui::CalcTextSize(trc("modes.eyezoom.zoom_area_width")).x,
+                                          ImGui::CalcTextSize(trc("modes.eyezoom.zoom_area_height")).x) +
+                                   ImGui::GetStyle().ItemSpacing.x + 24.0f);
                 ImGui::Columns(2, "eyezoom_area_cols", false);
-                ImGui::SetColumnWidth(0, 150);
+                ImGui::SetColumnWidth(0, eyeZoomAreaLabelWidth);
                 ImGui::Text(trc("modes.eyezoom.zoom_area_width"));
                 ImGui::NextColumn();
                 constexpr int kEyeZoomMaxCustomDimension = 16384;
@@ -1505,6 +1515,8 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                 bool useManualPixelSizeThin = !mode.useRelativeSize;
                 if (ImGui::Checkbox((tr("modes.label.manual_pixel_size") + "##Thin").c_str(), &useManualPixelSizeThin)) {
                     mode.useRelativeSize = !useManualPixelSizeThin;
+                    mode.widthExpr.clear();
+                    mode.heightExpr.clear();
                     if (mode.useRelativeSize) {
                         mode.relativeWidth = (std::max)(0.01f, (std::min)(1.0f, static_cast<float>(mode.width) / static_cast<float>(screenWidth)));
                         mode.relativeHeight =
@@ -1823,6 +1835,8 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                 bool useManualPixelSizeWide = !mode.useRelativeSize;
                 if (ImGui::Checkbox((tr("modes.label.manual_pixel_size") + "##Wide").c_str(), &useManualPixelSizeWide)) {
                     mode.useRelativeSize = !useManualPixelSizeWide;
+                    mode.widthExpr.clear();
+                    mode.heightExpr.clear();
                     if (mode.useRelativeSize) {
                         mode.relativeWidth = (std::max)(0.01f, (std::min)(1.0f, static_cast<float>(mode.width) / static_cast<float>(screenWidth)));
                         mode.relativeHeight =
@@ -2195,6 +2209,8 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                 bool useManualPixelSize = !mode.useRelativeSize;
                 if (ImGui::Checkbox((tr("modes.label.manual_pixel_size") + "##CustomMode").c_str(), &useManualPixelSize)) {
                     mode.useRelativeSize = !useManualPixelSize;
+                    mode.widthExpr.clear();
+                    mode.heightExpr.clear();
 
                     if (mode.useRelativeSize) {
                         float computedRelativeWidth = static_cast<float>(mode.width) / static_cast<float>(modeScreenW);
@@ -2669,6 +2685,7 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
         if (ImGui::Button("Confirm Reset", ImVec2(120, 0))) {
             g_config.modes = GetDefaultModes();
             g_config.eyezoom = GetDefaultEyeZoomConfig();
+            SetOverlayTextFontSize(g_config.eyezoom.textFontSize);
 
             // (Example: Wide mode uses height = 0.25, which must be converted to pixels.)
             int screenW = GetCachedWindowWidth();

@@ -7,6 +7,7 @@ if (ImGui::BeginTabItem(trc("tabs.browser_overlays"))) {
     g_currentlyEditingMirror = "";
     g_imageDragMode.store(false);
     g_windowOverlayDragMode.store(false);
+    g_browserOverlayDragMode.store(true);
 
     SliderCtrlClickTip();
 

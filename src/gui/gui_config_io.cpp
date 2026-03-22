@@ -327,10 +327,6 @@ void WriteDefaultConfig(const std::wstring& path) {
                     mode.stretch.width = screenWidth;
                     mode.stretch.height = screenHeight;
                 }
-            } else if (mode.id == "Thin") {
-                mode.height = screenHeight;
-            } else if (mode.id == "Wide") {
-                mode.width = screenWidth;
             }
 
             mode.manualWidth = mode.width;
