@@ -535,3 +535,84 @@ if(TOOLSCREEN_ENABLE_JAR_PACKAGING)
     )
 endif()
 
+add_executable(toolscreen_gui_integration_tests
+    ${TOOLSCREEN_SOURCES}
+    ${TOOLSCREEN_GENERATED_VERSION_HEADER}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/resource.rc
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/gui_integration_tests.cpp
+)
+
+target_include_directories(toolscreen_gui_integration_tests PRIVATE
+    ${TOOLSCREEN_GENERATED_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${TOOLSCREEN_WEBVIEW2_INCLUDE_DIR}
+    ${nlohmann_json_SOURCE_DIR}/single_include
+)
+
+target_compile_definitions(toolscreen_gui_integration_tests PRIVATE
+    CMAKE_BUILD
+    GLEW_STATIC
+    NOMINMAX
+    UNICODE
+    _UNICODE
+)
+
+target_link_libraries(toolscreen_gui_integration_tests PRIVATE
+    Toolscreen::minhook
+    Toolscreen::glew
+    toolscreen_imgui
+    OpenGL::GL
+    "${TOOLSCREEN_WEBVIEW2_LOADER_STATIC_LIB}"
+    comdlg32
+    dbghelp
+    dwmapi
+    gdi32
+    imm32
+    msimg32
+    ntdll
+    opengl32
+    psapi
+    shell32
+    shlwapi
+    user32
+    version
+    winhttp
+)
+
+if(MSVC)
+    target_compile_options(toolscreen_gui_integration_tests PRIVATE
+        /W3
+        /MP
+        /EHa
+        /bigobj
+    )
+endif()
+
+toolscreen_configure_target_outputs(toolscreen_gui_integration_tests)
+toolscreen_enable_release_symbols(toolscreen_gui_integration_tests)
+
+add_test(
+    NAME toolscreen_integration_config_default_load
+    COMMAND $<TARGET_FILE:toolscreen_gui_integration_tests> config-default-load
+)
+
+add_test(
+    NAME toolscreen_integration_config_roundtrip
+    COMMAND $<TARGET_FILE:toolscreen_gui_integration_tests> config-roundtrip
+)
+
+add_test(
+    NAME toolscreen_integration_config_error_gui
+    COMMAND $<TARGET_FILE:toolscreen_gui_integration_tests> config-error-gui
+)
+
+add_test(
+    NAME toolscreen_integration_settings_gui_basic
+    COMMAND $<TARGET_FILE:toolscreen_gui_integration_tests> settings-gui-basic
+)
+
+add_test(
+    NAME toolscreen_integration_settings_gui_advanced
+    COMMAND $<TARGET_FILE:toolscreen_gui_integration_tests> settings-gui-advanced
+)
+

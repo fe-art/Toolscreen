@@ -1,5 +1,5 @@
 if (IsResolutionChangeSupported(g_gameVersion)) {
-    if (ImGui::BeginTabItem(trc("tabs.hotkeys"))) {
+    if (BeginSelectableSettingsTopTabItem(trc("tabs.hotkeys"))) {
         g_currentlyEditingMirror = "";
         g_imageDragMode.store(false);
         g_windowOverlayDragMode.store(false);

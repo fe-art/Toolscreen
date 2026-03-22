@@ -13,6 +13,8 @@
 !lang/langs.json
 !lang/en.json
 !lang/zh_CN.json
+!tests/
+!tests/**
 !.github
 !.github/ISSUE_TEMPLATE/
 !.github/ISSUE_TEMPLATE/*.yml

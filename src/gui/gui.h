@@ -743,6 +743,8 @@ void RenderSettingsGUI();
 void RenderConfigErrorGUI();
 void RenderPerformanceOverlay(bool showPerformanceOverlay);
 void RenderProfilerOverlay(bool showProfiler, bool showPerformanceOverlay);
+void SetGuiTabSelectionOverride(const char* topLevelTabLabel, const char* inputsSubTabLabel = nullptr);
+void ClearGuiTabSelectionOverride();
 
 extern std::atomic<bool> g_welcomeToastVisible;
 extern std::atomic<bool> g_configurePromptDismissedThisSession;

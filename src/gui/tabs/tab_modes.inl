@@ -1,4 +1,4 @@
-if (ImGui::BeginTabItem(trc("tabs.modes"))) {
+if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
     g_currentlyEditingMirror = "";
     int mode_to_remove = -1;
     static std::string pendingDefaultModeId;

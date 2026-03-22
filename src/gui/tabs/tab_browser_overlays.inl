@@ -1,4 +1,4 @@
-if (ImGui::BeginTabItem(trc("tabs.browser_overlays"))) {
+if (BeginSelectableSettingsTopTabItem(trc("tabs.browser_overlays"))) {
     static std::unordered_map<int, std::string> s_browserOverlayUrlDrafts;
     static std::unordered_map<int, bool> s_browserOverlayUrlEditing;
     static int s_browserOverlayCssEditorIndex = -1;

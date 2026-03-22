@@ -1,4 +1,4 @@
-if (ImGui::BeginTabItem(trc("tabs.other"))) {
+if (BeginSelectableSettingsTopTabItem(trc("tabs.other"))) {
     g_currentlyEditingMirror = "";
     g_imageDragMode.store(false);
     g_windowOverlayDragMode.store(false);

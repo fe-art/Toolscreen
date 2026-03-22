@@ -1,10 +1,10 @@
-if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
+if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
     g_currentlyEditingMirror = "";
     g_imageDragMode.store(false);
     g_windowOverlayDragMode.store(false);
 
     if (ImGui::BeginTabBar("InputsSubTabs")) {
-        if (ImGui::BeginTabItem(trc("inputs.mouse"))) {
+        if (BeginSelectableSettingsInputsSubTabItem(trc("inputs.mouse"))) {
             SliderCtrlClickTip();
 
             ImGui::SeparatorText(trc("inputs.mouse_settings"));
@@ -252,7 +252,7 @@ if (ImGui::BeginTabItem(trc("tabs.inputs"))) {
             ImGui::EndTabItem();
         }
 
-        if (ImGui::BeginTabItem(trc("inputs.keyboard"))) {
+        if (BeginSelectableSettingsInputsSubTabItem(trc("inputs.keyboard"))) {
             SliderCtrlClickTip();
 
             ImGui::SeparatorText(trc("inputs.key_repeat_rate"));

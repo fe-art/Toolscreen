@@ -33,6 +33,7 @@
 #include <chrono>
 #include <cmath>
 #include <commdlg.h>
+#include <cstring>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -69,6 +70,25 @@ ImFont* g_keyboardLayoutSecondaryFont = nullptr;
 EyeZoomConfig GetDefaultEyeZoomConfig() { return GetDefaultEyeZoomConfigFromEmbedded(); }
 
 namespace {
+
+const char* s_forcedSettingsTopTabLabel = nullptr;
+const char* s_forcedSettingsInputsSubTabLabel = nullptr;
+
+bool BeginSelectableSettingsTopTabItem(const char* label) {
+    ImGuiTabItemFlags flags = ImGuiTabItemFlags_None;
+    if (s_forcedSettingsTopTabLabel != nullptr && std::strcmp(s_forcedSettingsTopTabLabel, label) == 0) {
+        flags |= ImGuiTabItemFlags_SetSelected;
+    }
+    return ImGui::BeginTabItem(label, nullptr, flags);
+}
+
+bool BeginSelectableSettingsInputsSubTabItem(const char* label) {
+    ImGuiTabItemFlags flags = ImGuiTabItemFlags_None;
+    if (s_forcedSettingsInputsSubTabLabel != nullptr && std::strcmp(s_forcedSettingsInputsSubTabLabel, label) == 0) {
+        flags |= ImGuiTabItemFlags_SetSelected;
+    }
+    return ImGui::BeginTabItem(label, nullptr, flags);
+}
 
 void ResetGuiTransientInteractionState() {
     g_currentlyEditingMirror = "";
@@ -110,6 +130,16 @@ void CloseSettingsGuiWindow() {
     ResetGuiTransientInteractionState();
 }
 
+}
+
+void SetGuiTabSelectionOverride(const char* topLevelTabLabel, const char* inputsSubTabLabel) {
+    s_forcedSettingsTopTabLabel = topLevelTabLabel;
+    s_forcedSettingsInputsSubTabLabel = inputsSubTabLabel;
+}
+
+void ClearGuiTabSelectionOverride() {
+    s_forcedSettingsTopTabLabel = nullptr;
+    s_forcedSettingsInputsSubTabLabel = nullptr;
 }
 
 void RenderConfigErrorGUI() {
