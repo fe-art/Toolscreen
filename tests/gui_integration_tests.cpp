@@ -1123,6 +1123,7 @@ void PopulateRichConfigFixture() {
 
     g_config.keyRebinds.enabled = true;
     g_config.keyRebinds.resolveRebindTargetsForHotkeys = false;
+    g_config.keyRebinds.allowSystemAltTab = true;
     g_config.keyRebinds.toggleHotkey = { VK_F4 };
     KeyRebind rebind;
     rebind.fromKey = 'J';
@@ -1759,6 +1760,7 @@ void VerifyRichKeyRebindsAndAppearance() {
     Expect(g_config.keyRebinds.enabled, "Expected keyRebinds.enabled to roundtrip.");
     Expect(!g_config.keyRebinds.resolveRebindTargetsForHotkeys,
            "Expected keyRebinds.resolveRebindTargetsForHotkeys to roundtrip.");
+    Expect(g_config.keyRebinds.allowSystemAltTab, "Expected keyRebinds.allowSystemAltTab to roundtrip.");
     ExpectVectorEquals(g_config.keyRebinds.toggleHotkey, std::vector<DWORD>{ VK_F4 },
                        "Expected keyRebinds.toggleHotkey to roundtrip.");
     Expect(g_config.keyRebinds.rebinds.size() == 1, "Expected key rebind list to roundtrip.");

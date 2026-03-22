@@ -479,6 +479,7 @@ struct KeyRebind {
 struct KeyRebindsConfig {
     bool enabled = false;
     bool resolveRebindTargetsForHotkeys = ConfigDefaults::KEY_REBINDS_RESOLVE_REBIND_TARGETS_FOR_HOTKEYS;
+    bool allowSystemAltTab = ConfigDefaults::KEY_REBINDS_ALLOW_SYSTEM_ALT_TAB;
     std::vector<DWORD> toggleHotkey = {};
     std::vector<KeyRebind> rebinds;
 };

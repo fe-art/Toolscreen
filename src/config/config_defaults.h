@@ -186,6 +186,7 @@ constexpr bool KEY_REBIND_SHIFT_LAYER_OUTPUT_SHIFTED = false;
 
 constexpr bool KEY_REBINDS_ENABLED = false;
 constexpr bool KEY_REBINDS_RESOLVE_REBIND_TARGETS_FOR_HOTKEYS = true;
+constexpr bool KEY_REBINDS_ALLOW_SYSTEM_ALT_TAB = false;
 inline std::vector<DWORD> GetDefaultKeyRebindsToggleHotkey() { return {}; }
 
 constexpr int DEFAULT_CONFIG_VERSION = 4;
