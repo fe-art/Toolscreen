@@ -408,6 +408,12 @@ struct CursorsConfig {
 };
 enum class EyeZoomOverlayDisplayMode { Manual, Fit, Stretch };
 
+enum class EyeZoomFontSizeMode {
+    Auto,
+    PerSquareAuto,
+    Manual
+};
+
 struct EyeZoomOverlayConfig {
     std::string name;
     std::string path;
@@ -429,7 +435,7 @@ struct EyeZoomConfig {
     bool useCustomSizePosition = false;
     int positionX = 0;
     int positionY = 0;
-    bool autoFontSize = true;
+    EyeZoomFontSizeMode fontSizeMode = static_cast<EyeZoomFontSizeMode>(ConfigDefaults::EYEZOOM_FONT_SIZE_MODE);
     int textFontSize = 24;
     std::string textFontPath;
     int rectHeight = 24;

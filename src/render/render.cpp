@@ -475,7 +475,7 @@ struct EyeZoomTextLabel {
     float clipMinY;
     float clipMaxX;
     float clipMaxY;
-    bool autoFontSize;
+    EyeZoomFontSizeMode fontSizeMode;
     Color color;
 };
 static std::vector<EyeZoomTextLabel> s_eyezoomTextLabels;
@@ -809,11 +809,12 @@ static std::mutex s_textureGridMutex;
 static ImFont* g_overlayTextFont = nullptr;
 static float g_overlayTextFontSize = 24.0f;
 
-static void CacheEyeZoomTextLabel(int number, float centerX, float centerY, float boxWidth, float boxHeight, bool autoFontSize,
+static void CacheEyeZoomTextLabel(int number, float centerX, float centerY, float boxWidth, float boxHeight,
+                                                                    EyeZoomFontSizeMode fontSizeMode,
                                   const Color& color, float clipMinX, float clipMinY, float clipMaxX, float clipMaxY) {
     std::lock_guard<std::mutex> lock(s_eyezoomTextMutex);
     s_eyezoomTextLabels.push_back({ number, centerX, centerY, boxWidth, boxHeight, clipMinX, clipMinY, clipMaxX, clipMaxY,
-                                    autoFontSize, color });
+                                                                        fontSizeMode, color });
 }
 
 void DrawOverlayBorder(float nx1, float ny1, float nx2, float ny2, float borderWidth, float borderHeight, bool isDragging,
@@ -2741,11 +2742,29 @@ static void RenderCachedEyeZoomTextLabels() {
     ImDrawList* drawList = ImGui::GetBackgroundDrawList();
     ImFont* font = g_overlayTextFont ? g_overlayTextFont : ImGui::GetFont();
     const float requestedFontSize = (std::max)(1.0f, g_overlayTextFontSize);
+    float sharedAutoFontSize = requestedFontSize;
+    bool hasSharedAutoLabels = false;
+
+    for (const auto& label : labels) {
+        if (label.fontSizeMode != EyeZoomFontSizeMode::Auto) { continue; }
+
+        hasSharedAutoLabels = true;
+        const std::string text = std::to_string(label.number);
+        const float maxTextWidth = (std::max)(1.0f, label.boxWidth * 0.82f);
+        const float maxTextHeight = (std::max)(1.0f, label.boxHeight * 0.82f);
+        const ImVec2 requestedTextSize = font->CalcTextSizeA(requestedFontSize, FLT_MAX, 0.0f, text.c_str());
+        if (requestedTextSize.x <= 0.0f || requestedTextSize.y <= 0.0f) { continue; }
+
+        const float fitScale = (std::min)((std::min)(maxTextWidth / requestedTextSize.x, maxTextHeight / requestedTextSize.y), 1.0f);
+        sharedAutoFontSize = (std::max)(1.0f, (std::min)(sharedAutoFontSize, requestedFontSize * fitScale));
+    }
 
     for (const auto& label : labels) {
         const std::string text = std::to_string(label.number);
         float fontSize = requestedFontSize;
-        if (label.autoFontSize) {
+        if (label.fontSizeMode == EyeZoomFontSizeMode::Auto && hasSharedAutoLabels) {
+            fontSize = sharedAutoFontSize;
+        } else if (label.fontSizeMode == EyeZoomFontSizeMode::PerSquareAuto) {
             const float maxTextWidth = (std::max)(1.0f, label.boxWidth * 0.82f);
             const float maxTextHeight = (std::max)(1.0f, label.boxHeight * 0.82f);
             const ImVec2 requestedTextSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, text.c_str());
@@ -5337,7 +5356,7 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
             float numberCenterX = boxLeft + pixelWidthOnScreen / 2.0f;
             float numberCenterY = centerY;
             CacheEyeZoomTextLabel(displayNumber, numberCenterX, numberCenterY, pixelWidthOnScreen, boxHeight,
-                                  zoomConfig.autoFontSize, textColor, static_cast<float>(zoomX), static_cast<float>(zoomY),
+                                  zoomConfig.fontSizeMode, textColor, static_cast<float>(zoomX), static_cast<float>(zoomY),
                                   static_cast<float>(zoomX + zoomOutputWidth), static_cast<float>(zoomY + zoomOutputHeight));
         }
 

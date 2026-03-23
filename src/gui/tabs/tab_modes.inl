@@ -730,13 +730,47 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
 
                 ImGui::Separator();
                 ImGui::Text(trc("modes.eyezoom.text_settings"));
-                if (ImGui::Checkbox(trc("modes.eyezoom.auto_font_size"), &g_config.eyezoom.autoFontSize)) {
-                    g_configIsDirty = true;
+
+                const char* eyeZoomFontSizeModePreview = trc("modes.eyezoom.auto_font_size");
+                switch (g_config.eyezoom.fontSizeMode) {
+                    case EyeZoomFontSizeMode::PerSquareAuto:
+                        eyeZoomFontSizeModePreview = trc("modes.eyezoom.per_square_auto_font_size");
+                        break;
+                    case EyeZoomFontSizeMode::Manual:
+                        eyeZoomFontSizeModePreview = trc("modes.eyezoom.manual_font_size");
+                        break;
+                    case EyeZoomFontSizeMode::Auto:
+                    default:
+                        break;
+                }
+
+                if (ImGui::BeginCombo(trc("modes.eyezoom.auto_font_size"), eyeZoomFontSizeModePreview)) {
+                    const struct EyeZoomFontSizeModeOption {
+                        EyeZoomFontSizeMode mode;
+                        const char* labelKey;
+                    } options[] = {
+                        { EyeZoomFontSizeMode::Auto, "modes.eyezoom.auto_font_size" },
+                        { EyeZoomFontSizeMode::PerSquareAuto, "modes.eyezoom.per_square_auto_font_size" },
+                        { EyeZoomFontSizeMode::Manual, "modes.eyezoom.manual_font_size" },
+                    };
+
+                    for (const auto& option : options) {
+                        const bool isSelected = g_config.eyezoom.fontSizeMode == option.mode;
+                        if (ImGui::Selectable(trc(option.labelKey), isSelected)) {
+                            g_config.eyezoom.fontSizeMode = option.mode;
+                            g_configIsDirty = true;
+                        }
+                        if (isSelected) {
+                            ImGui::SetItemDefaultFocus();
+                        }
+                    }
+
+                    ImGui::EndCombo();
                 }
                 ImGui::SameLine();
                 HelpMarker(trc("modes.eyezoom.tooltip.auto_font_size"));
 
-                if (!g_config.eyezoom.autoFontSize) {
+                if (g_config.eyezoom.fontSizeMode == EyeZoomFontSizeMode::Manual) {
                     ImGui::SetNextItemWidth(250);
                     if (ImGui::SliderInt(trc("modes.eyezoom.text_font_size"), &g_config.eyezoom.textFontSize, 1, 96)) {
                         g_configIsDirty = true;

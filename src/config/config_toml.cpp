@@ -60,6 +60,39 @@ bool IsZeroOrOneValue(double value) {
     return value == 0.0 || value == 1.0;
 }
 
+const char* EyeZoomFontSizeModeToTomlString(EyeZoomFontSizeMode mode) {
+    switch (mode) {
+        case EyeZoomFontSizeMode::PerSquareAuto:
+            return "per_square_auto";
+        case EyeZoomFontSizeMode::Manual:
+            return "manual";
+        case EyeZoomFontSizeMode::Auto:
+        default:
+            return "auto";
+    }
+}
+
+EyeZoomFontSizeMode EyeZoomFontSizeModeFromLegacyBool(bool autoFontSize) {
+    return autoFontSize ? EyeZoomFontSizeMode::PerSquareAuto : EyeZoomFontSizeMode::Manual;
+}
+
+EyeZoomFontSizeMode ParseEyeZoomFontSizeMode(const toml::table& tbl) {
+    if (auto modeNode = tbl.get("fontSizeMode")) {
+        if (auto modeValue = modeNode->value<std::string>()) {
+            std::string lowered = *modeValue;
+            std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                           [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+            if (lowered == "auto") { return EyeZoomFontSizeMode::Auto; }
+            if (lowered == "per_square_auto" || lowered == "per-square-auto" || lowered == "persquareauto") {
+                return EyeZoomFontSizeMode::PerSquareAuto;
+            }
+            if (lowered == "manual") { return EyeZoomFontSizeMode::Manual; }
+        }
+    }
+
+    return EyeZoomFontSizeModeFromLegacyBool(GetOr(tbl, "autoFontSize", false));
+}
+
 bool IsLiteralZeroOrOneString(const std::string& value) {
     const size_t start = value.find_first_not_of(" \t\r\n");
     if (start == std::string::npos) {
@@ -1503,7 +1536,7 @@ void EyeZoomConfigToToml(const EyeZoomConfig& cfg, toml::table& out) {
     out.insert("useCustomSizePosition", cfg.useCustomSizePosition);
     out.insert("positionX", cfg.positionX);
     out.insert("positionY", cfg.positionY);
-    out.insert("autoFontSize", cfg.autoFontSize);
+    out.insert("fontSizeMode", EyeZoomFontSizeModeToTomlString(cfg.fontSizeMode));
     out.insert("textFontSize", cfg.textFontSize);
     out.insert("textFontPath", cfg.textFontPath);
     out.insert("rectHeight", cfg.rectHeight);
@@ -1608,7 +1641,7 @@ void EyeZoomConfigFromToml(const toml::table& tbl, EyeZoomConfig& cfg) {
 
     cfg.positionX = GetOr(tbl, "positionX", ConfigDefaults::EYEZOOM_POSITION_X);
     cfg.positionY = GetOr(tbl, "positionY", ConfigDefaults::EYEZOOM_POSITION_Y);
-    cfg.autoFontSize = GetOr(tbl, "autoFontSize", ConfigDefaults::EYEZOOM_AUTO_FONT_SIZE);
+    cfg.fontSizeMode = ParseEyeZoomFontSizeMode(tbl);
     cfg.textFontSize = GetOr(tbl, "textFontSize", ConfigDefaults::EYEZOOM_TEXT_FONT_SIZE);
     cfg.textFontPath = GetStringOr(tbl, "textFontPath", ConfigDefaults::EYEZOOM_TEXT_FONT_PATH);
     cfg.rectHeight = GetOr(tbl, "rectHeight", ConfigDefaults::EYEZOOM_RECT_HEIGHT);
