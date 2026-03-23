@@ -5377,6 +5377,8 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
     } else {
         int overlayDisplayW = overlayLayoutWidth;
         int overlayDisplayH = overlayLayoutHeight;
+        const bool isManualOverlay = activeOverlay->displayMode == EyeZoomOverlayDisplayMode::Manual;
+        const bool clipManualOverlayToZoomArea = isManualOverlay && activeOverlay->clipToZoomArea;
         switch (activeOverlay->displayMode) {
             case EyeZoomOverlayDisplayMode::Manual:
                 overlayDisplayW = (std::max)(1, activeOverlay->manualWidth);
@@ -5397,8 +5399,10 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
                 break;
         }
 
-        overlayDisplayW = (std::min)(overlayDisplayW, fullW);
-        overlayDisplayH = (std::min)(overlayDisplayH, fullH);
+        if (!isManualOverlay) {
+            overlayDisplayW = (std::min)(overlayDisplayW, fullW);
+            overlayDisplayH = (std::min)(overlayDisplayH, fullH);
+        }
 
         const int overlayX = overlayLayoutX + (overlayLayoutWidth - overlayDisplayW) / 2;
         const int overlayY = overlayLayoutY + (overlayLayoutHeight - overlayDisplayH) / 2;
@@ -5409,6 +5413,14 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
         const float nx2 = (static_cast<float>(overlayX + overlayDisplayW) / fullW) * 2.0f - 1.0f;
         const float ny2 = (static_cast<float>(overlayY_gl + overlayDisplayH) / fullH) * 2.0f - 1.0f;
         const float effectiveOverlayOpacity = (std::max)(0.0f, (std::min)(1.0f, activeOverlay->opacity * overlayOpacityScale));
+
+        if (!clipManualOverlayToZoomArea) {
+            if (prevScissorEnabled) {
+                glScissor(prevScissorBox[0], prevScissorBox[1], prevScissorBox[2], prevScissorBox[3]);
+            } else {
+                glDisable(GL_SCISSOR_TEST);
+            }
+        }
 
         glUseProgram(g_imageRenderProgram);
         BindTextureDirect(GL_TEXTURE_2D, activeOverlayTextureId);
@@ -5421,6 +5433,11 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
         };
         glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(overlayVerts), overlayVerts);
         glDrawArrays(GL_TRIANGLES, 0, 6);
+
+        if (!clipManualOverlayToZoomArea) {
+            glEnable(GL_SCISSOR_TEST);
+            glScissor(dstLeft, dstBottom, zoomOutputWidth, zoomOutputHeight);
+        }
 
         glUseProgram(g_solidColorProgram);
     }

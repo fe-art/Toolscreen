@@ -420,6 +420,7 @@ struct EyeZoomOverlayConfig {
     EyeZoomOverlayDisplayMode displayMode = EyeZoomOverlayDisplayMode::Fit;
     int manualWidth = 100;
     int manualHeight = 100;
+    bool clipToZoomArea = false;
     float opacity = 1.0f;
 };
 

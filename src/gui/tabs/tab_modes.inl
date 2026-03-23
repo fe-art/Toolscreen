@@ -590,6 +590,9 @@ if (ImGui::BeginTabItem(trc("tabs.modes"))) {
                         if (ov.displayMode == EyeZoomOverlayDisplayMode::Manual) {
                             if (ImGui::SliderInt((tr("label.width") + "##ezov_mw").c_str(), &ov.manualWidth, 1, 4096)) g_configIsDirty = true;
                             if (ImGui::SliderInt((tr("label.height") + "##ezov_mh").c_str(), &ov.manualHeight, 1, 4096)) g_configIsDirty = true;
+                            if (ImGui::Checkbox(trc("modes.eyezoom.clip_to_zoom_area"), &ov.clipToZoomArea)) { g_configIsDirty = true; }
+                            ImGui::SameLine();
+                            HelpMarker(trc("modes.eyezoom.tooltip.clip_to_zoom_area"));
                         }
 
                         if (ImGui::SliderFloat((tr("label.opacity") + "##ezov").c_str(), &ov.opacity, 0.0f, 1.0f)) g_configIsDirty = true;

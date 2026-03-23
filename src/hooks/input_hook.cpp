@@ -51,9 +51,6 @@ extern std::unordered_map<std::string, std::chrono::steady_clock::time_point> g_
 extern std::mutex g_hotkeyTimestampsMutex;
 extern std::unordered_set<DWORD> g_hotkeyMainKeys;
 extern std::mutex g_hotkeyMainKeysMutex;
-extern std::atomic<bool> g_tempSensitivityActiveAtomic;
-extern std::atomic<float> g_tempSensitivityXAtomic;
-extern std::atomic<float> g_tempSensitivityYAtomic;
 extern std::set<std::string> g_triggerOnReleasePending;
 extern std::set<std::string> g_triggerOnReleaseInvalidated;
 extern std::mutex g_triggerOnReleaseMutex;
@@ -62,8 +59,6 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT uMs
 static bool s_forcedShowCursor = false;
 static size_t s_bestMatchKeyCount = 0;
 static std::unordered_map<DWORD, size_t> s_bestMatchKeyCountByMainVk;
-static std::atomic<int> s_cachedSystemCursorVisible{ -1 };
-static std::atomic<ULONGLONG> s_cachedSystemCursorVisibilityTick{ 0 };
 static HHOOK s_lowLevelKeyboardHook = NULL;
 static std::mutex s_lowLevelKeyboardHookMutex;
 static std::atomic<bool> s_deferredFocusRegainWmSizePending{ false };
@@ -98,43 +93,20 @@ static UINT GetScanCodeWithExtendedFlagFromLParam(LPARAM lParam) {
     return scanCodeWithFlags;
 }
 
-static bool QuerySystemCursorVisibleCached() {
-    constexpr ULONGLONG kCursorVisibilityRefreshMs = 50;
-
-    const ULONGLONG now = GetTickCount64();
-    const ULONGLONG lastTick = s_cachedSystemCursorVisibilityTick.load(std::memory_order_relaxed);
-    const int cachedVisible = s_cachedSystemCursorVisible.load(std::memory_order_relaxed);
-    if (cachedVisible != -1 && (now - lastTick) < kCursorVisibilityRefreshMs) {
-        return cachedVisible != 0;
-    }
-
-    CURSORINFO ci{ sizeof(CURSORINFO) };
-    if (!GetCursorInfo(&ci)) {
-        return cachedVisible > 0;
-    }
-
-    const bool isVisible = (ci.flags & CURSOR_SHOWING) != 0;
-    s_cachedSystemCursorVisible.store(isVisible ? 1 : 0, std::memory_order_relaxed);
-    s_cachedSystemCursorVisibilityTick.store(now, std::memory_order_relaxed);
-    return isVisible;
-}
-
 static void EnsureSystemCursorVisible() {
     if (g_gameVersion < GameVersion(1, 13, 0)) { return; }
 
-    if (QuerySystemCursorVisibleCached()) { return; }
+    CURSORINFO ci{ sizeof(CURSORINFO) };
+    if (GetCursorInfo(&ci) && (ci.flags & CURSOR_SHOWING)) { return; }
     ShowCursor(TRUE);
-    s_cachedSystemCursorVisible.store(1, std::memory_order_relaxed);
-    s_cachedSystemCursorVisibilityTick.store(GetTickCount64(), std::memory_order_relaxed);
 }
 
 static void EnsureSystemCursorHidden() {
     if (g_gameVersion < GameVersion(1, 13, 0)) { return; }
 
-    if (!QuerySystemCursorVisibleCached()) { return; }
+    CURSORINFO ci{ sizeof(CURSORINFO) };
+    if (GetCursorInfo(&ci) && !(ci.flags & CURSOR_SHOWING)) { return; }
     ShowCursor(FALSE);
-    s_cachedSystemCursorVisible.store(0, std::memory_order_relaxed);
-    s_cachedSystemCursorVisibilityTick.store(GetTickCount64(), std::memory_order_relaxed);
 }
 
 static DWORD NormalizeModifierVkFromKeyMessage(DWORD rawVk, LPARAM lParam) {
@@ -1689,9 +1661,6 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                         g_tempSensitivityOverride.sensitivityX = 1.0f;
                         g_tempSensitivityOverride.sensitivityY = 1.0f;
                         g_tempSensitivityOverride.activeSensHotkeyIndex = -1;
-                        g_tempSensitivityXAtomic.store(1.0f, std::memory_order_release);
-                        g_tempSensitivityYAtomic.store(1.0f, std::memory_order_release);
-                        g_tempSensitivityActiveAtomic.store(false, std::memory_order_release);
 
                         if (s_enableHotkeyDebug) { Log("[Hotkey] ✓✓✓ SENSITIVITY HOTKEY TOGGLED OFF: " + hotkeyId); }
 
@@ -1708,9 +1677,6 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                         g_tempSensitivityOverride.sensitivityY = sensHotkey.sensitivity;
                     }
                     g_tempSensitivityOverride.activeSensHotkeyIndex = static_cast<int>(sensIdx);
-                    g_tempSensitivityXAtomic.store(g_tempSensitivityOverride.sensitivityX, std::memory_order_release);
-                    g_tempSensitivityYAtomic.store(g_tempSensitivityOverride.sensitivityY, std::memory_order_release);
-                    g_tempSensitivityActiveAtomic.store(true, std::memory_order_release);
 
                     if (s_enableHotkeyDebug) {
                         Log("[Hotkey] ✓✓✓ SENSITIVITY HOTKEY TOGGLED ON: " + hotkeyId + " -> sens=" + std::to_string(sensHotkey.sensitivity));
@@ -1729,9 +1695,6 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                             g_tempSensitivityOverride.sensitivityY = sensHotkey.sensitivity;
                         }
                         g_tempSensitivityOverride.activeSensHotkeyIndex = -1;
-                        g_tempSensitivityXAtomic.store(g_tempSensitivityOverride.sensitivityX, std::memory_order_release);
-                        g_tempSensitivityYAtomic.store(g_tempSensitivityOverride.sensitivityY, std::memory_order_release);
-                        g_tempSensitivityActiveAtomic.store(true, std::memory_order_release);
                     }
 
                     if (s_enableHotkeyDebug) {
@@ -2990,6 +2953,16 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     const HWND expectedHwnd = g_subclassedHwnd.load();
     if (expectedHwnd != NULL && hWnd != expectedHwnd) {
         return DefWindowProc(hWnd, uMsg, wParam, lParam);
+    }
+
+    if (g_showGui.load() && s_forcedShowCursor && g_gameVersion >= GameVersion(1, 13, 0)) {
+        EnsureSystemCursorVisible();
+        static HCURSOR s_arrowCursor = LoadCursorW(NULL, IDC_ARROW);
+        SetCursor(s_arrowCursor);
+    }
+    if (!g_showGui.load() && s_forcedShowCursor) {
+        EnsureSystemCursorHidden();
+        s_forcedShowCursor = false;
     }
 
     EnsureLowLevelKeyboardHookInstalled();

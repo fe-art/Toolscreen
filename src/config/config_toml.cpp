@@ -1566,6 +1566,7 @@ void EyeZoomConfigToToml(const EyeZoomConfig& cfg, toml::table& out) {
             }
             ovTbl.insert("manualWidth", ov.manualWidth);
             ovTbl.insert("manualHeight", ov.manualHeight);
+            ovTbl.insert("clipToZoomArea", ov.clipToZoomArea);
             ovTbl.insert("opacity", ov.opacity);
             overlayArr.push_back(std::move(ovTbl));
         }
@@ -1671,6 +1672,7 @@ void EyeZoomConfigFromToml(const toml::table& tbl, EyeZoomConfig& cfg) {
                 else                           ov.displayMode = EyeZoomOverlayDisplayMode::Fit;
                 ov.manualWidth = GetOr(*t, "manualWidth", 100);
                 ov.manualHeight = GetOr(*t, "manualHeight", 100);
+                ov.clipToZoomArea = GetOr(*t, "clipToZoomArea", false);
                 ov.opacity = GetOr(*t, "opacity", 1.0f);
                 cfg.overlays.push_back(std::move(ov));
             }
