@@ -3879,7 +3879,6 @@ struct SameThreadOverlayState {
 
     bool showWelcomeToast = false;
     bool welcomeToastIsFullscreen = false;
-
     bool modeHasMirrors = false;
     bool modeHasImages = false;
     bool modeHasWindowOverlays = false;
@@ -4253,7 +4252,6 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
         PROFILE_SCOPE_CAT("Render Welcome Toast", "Rendering");
         RenderWelcomeToast(request.welcomeToastIsFullscreen);
     }
-
     return !activeMirrors.empty() || !eyeZoomSlideOutMirrors->empty() || !transitionSlideOutMirrors->empty() || !activeImages.empty() ||
             !activeWindowOverlays.empty() || !activeBrowserOverlays.empty() || request.shouldRenderGui || request.showPerformanceOverlay || request.showProfiler ||
            request.showTextureGrid || request.showEyeZoom || request.showWelcomeToast;
@@ -6616,6 +6614,8 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
             RenderDebugBordersForMirror(conf, { 1.0f, 0.0f, 0.0f }, { 0.0f, 1.0f, 0.0f }, s.va);
         }
     }
+
+    if (IsRebindIndicatorVisible()) { RenderRebindIndicator(); }
 }
 void RenderDebugBordersForMirror(const MirrorConfig* conf, Color captureColor, Color outputColor, GLint originalVAO) {
     if (!conf || !g_glInitialized.load(std::memory_order_acquire)) return;

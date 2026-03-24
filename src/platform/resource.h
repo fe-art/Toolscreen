@@ -10,3 +10,6 @@
 #define IDR_LANG_LANGS         106
 #define IDR_LANG_EN            107
 #define IDR_LANG_ZH_CN         108
+
+#define IDR_REBIND_ON_PNG      109
+#define IDR_REBIND_OFF_PNG     110
