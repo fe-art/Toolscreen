@@ -732,7 +732,8 @@ static __forceinline bool IsDisallowedThirdPartySwapCaller(void* caller_address)
         return true;
     }
 
-    return !HookChain::IsAllowedThirdPartyHookAddress(baseOfImage) && !HookChain::IsAllowedThirdPartyHookAddress(caller_address);
+    return !HookChain::IsAllowedSwapBuffersThirdPartyHookAddress(baseOfImage) &&
+           !HookChain::IsAllowedSwapBuffersThirdPartyHookAddress(caller_address);
 }
 
 void APIENTRY BindTextureDirect(GLenum target, GLuint texture) {
@@ -1655,15 +1656,6 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
             }
         }
         if (g_isShuttingDown.load()) { return next(hDc); }
-
-        {
-            static std::chrono::steady_clock::time_point s_lastViewportCompatCheck = std::chrono::steady_clock::now();
-            auto now = std::chrono::steady_clock::now();
-            if (now - s_lastViewportCompatCheck > std::chrono::milliseconds(2000)) {
-                HookChain::RefreshAllThirdPartyHookChains();
-                s_lastViewportCompatCheck = now;
-            }
-        }
 
         // Start logic thread if not already running (handles OBS detection, hotkey resets, etc.)
         if (!g_logicThreadRunning.load() && g_configLoaded.load()) { StartLogicThread(); }

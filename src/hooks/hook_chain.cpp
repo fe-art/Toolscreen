@@ -3,13 +3,13 @@
 #include "MinHook.h"
 #include "common/utils.h"
 
-#include <DbgHelp.h>
 #include <Psapi.h>
 #include <winver.h>
 
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -26,53 +26,6 @@ extern std::atomic<void*> g_wglSwapBuffersThirdPartyHookTarget;
 extern BOOL WINAPI hkwglSwapBuffers(HDC hDc);
 extern BOOL WINAPI hkwglSwapBuffers_ThirdParty(HDC hDc);
 
-// glViewport (export + driver + third-party)
-typedef void(WINAPI* GLVIEWPORTPROC)(GLint x, GLint y, GLsizei width, GLsizei height);
-extern GLVIEWPORTPROC oglViewport;
-extern GLVIEWPORTPROC g_oglViewportDriver;
-extern GLVIEWPORTPROC g_oglViewportThirdParty;
-extern std::atomic<void*> g_glViewportDriverHookTarget;
-extern std::atomic<void*> g_glViewportThirdPartyHookTarget;
-extern std::atomic<int> g_glViewportHookCount;
-extern void WINAPI hkglViewport(GLint x, GLint y, GLsizei width, GLsizei height);
-extern void WINAPI hkglViewport_Driver(GLint x, GLint y, GLsizei width, GLsizei height);
-extern void WINAPI hkglViewport_ThirdParty(GLint x, GLint y, GLsizei width, GLsizei height);
-
-typedef BOOL(WINAPI* SETCURSORPOSPROC)(int, int);
-extern SETCURSORPOSPROC oSetCursorPos;
-extern SETCURSORPOSPROC g_oSetCursorPosThirdParty;
-extern std::atomic<void*> g_setCursorPosThirdPartyHookTarget;
-extern BOOL WINAPI hkSetCursorPos(int X, int Y);
-extern BOOL WINAPI hkSetCursorPos_ThirdParty(int X, int Y);
-
-typedef BOOL(WINAPI* CLIPCURSORPROC)(const RECT*);
-extern CLIPCURSORPROC oClipCursor;
-extern CLIPCURSORPROC g_oClipCursorThirdParty;
-extern std::atomic<void*> g_clipCursorThirdPartyHookTarget;
-extern BOOL WINAPI hkClipCursor(const RECT* lpRect);
-extern BOOL WINAPI hkClipCursor_ThirdParty(const RECT* lpRect);
-
-typedef HCURSOR(WINAPI* SETCURSORPROC)(HCURSOR);
-extern SETCURSORPROC oSetCursor;
-extern SETCURSORPROC g_oSetCursorThirdParty;
-extern std::atomic<void*> g_setCursorThirdPartyHookTarget;
-extern HCURSOR WINAPI hkSetCursor(HCURSOR hCursor);
-extern HCURSOR WINAPI hkSetCursor_ThirdParty(HCURSOR hCursor);
-
-typedef UINT(WINAPI* GETRAWINPUTDATAPROC)(HRAWINPUT hRawInput, UINT uiCommand, LPVOID pData, PUINT pcbSize, UINT cbSizeHeader);
-extern GETRAWINPUTDATAPROC oGetRawInputData;
-extern GETRAWINPUTDATAPROC g_oGetRawInputDataThirdParty;
-extern std::atomic<void*> g_getRawInputDataThirdPartyHookTarget;
-extern UINT WINAPI hkGetRawInputData(HRAWINPUT hRawInput, UINT uiCommand, LPVOID pData, PUINT pcbSize, UINT cbSizeHeader);
-extern UINT WINAPI hkGetRawInputData_ThirdParty(HRAWINPUT hRawInput, UINT uiCommand, LPVOID pData, PUINT pcbSize, UINT cbSizeHeader);
-
-typedef void (*GLFWSETINPUTMODE)(void* window, int mode, int value);
-extern GLFWSETINPUTMODE oglfwSetInputMode;
-extern GLFWSETINPUTMODE g_oglfwSetInputModeThirdParty;
-extern std::atomic<void*> g_glfwSetInputModeThirdPartyHookTarget;
-extern void hkglfwSetInputMode(void* window, int mode, int value);
-extern void hkglfwSetInputMode_ThirdParty(void* window, int mode, int value);
-
 
 namespace {
 
@@ -85,6 +38,10 @@ struct HookChainOwnerInfo {
     uintptr_t base = 0;
     size_t size = 0;
 };
+
+std::mutex g_wglSwapBuffersThirdPartyHookMutex;
+std::atomic<void*> g_lastSkippedWglSwapBuffersStart{ nullptr };
+std::atomic<void*> g_lastSkippedWglSwapBuffersTarget{ nullptr };
 
 static std::string PtrToHex(const void* p) {
     std::ostringstream ss;
@@ -197,28 +154,11 @@ static bool GetOwnerInfoForAddress(const void* addr, HookChainOwnerInfo& out) {
     return true;
 }
 
-static bool IsExplicitlyAllowedThirdPartyHookOwner(const HookChainOwnerInfo& ownerInfo) {
+static bool IsToolscreenHookOwner(const HookChainOwnerInfo& ownerInfo) {
     const std::wstring ownerNameLower = ToLowerWide(ownerInfo.name);
-    const std::wstring ownerCompanyLower = ToLowerWide(ownerInfo.company);
-    const std::wstring ownerProductLower = ToLowerWide(ownerInfo.product);
-    const std::wstring ownerDescriptionLower = ToLowerWide(ownerInfo.description);
     const std::wstring ownerPathLower = ToLowerWide(ownerInfo.path);
 
-    const bool isToolscreen = ownerNameLower == L"toolscreen.dll" || ContainsAnySubstring(ownerPathLower, { L"\\toolscreen.dll" });
-
-    const bool isObs = ContainsAnySubstring(ownerPathLower, { L"graphics-hook", L"obs-studio" }) ||
-                       ContainsAnySubstring(ownerCompanyLower, { L"obs project", L"open broadcaster software" }) ||
-                       ContainsAnySubstring(ownerProductLower, { L"obs studio", L"obs-studio", L"open broadcaster software" }) ||
-                       ContainsAnySubstring(ownerDescriptionLower,
-                                            { L"graphics hook", L"graphics-hook", L"obs studio", L"obs-studio", L"open broadcaster software" });
-
-    const bool isDiscord = ContainsAnySubstring(ownerNameLower, { L"discord" }) ||
-                           ContainsAnySubstring(ownerPathLower, { L"discord" }) ||
-                           ContainsAnySubstring(ownerCompanyLower, { L"discord" }) ||
-                           ContainsAnySubstring(ownerProductLower, { L"discord" }) ||
-                           ContainsAnySubstring(ownerDescriptionLower, { L"discord" });
-
-    return isToolscreen || isObs || isDiscord;
+    return ownerNameLower == L"toolscreen.dll" || ContainsAnySubstring(ownerPathLower, { L"\\toolscreen.dll" });
 }
 
 static bool IsAddressInSet(const void* addr, std::initializer_list<const void*> addrs) {
@@ -257,7 +197,7 @@ static bool TryResolveJumpTarget(void* cur, void*& next) {
     return next != nullptr;
 }
 
-static void* ResolveFirstAllowedThirdPartyHookTarget(void* start, bool allowDirectStart, std::initializer_list<const void*> excludedTargets) {
+static void* ResolveFirstAllowedSwapBuffersHookTarget(void* start, bool allowDirectStart, std::initializer_list<const void*> excludedTargets) {
     if (!start) return nullptr;
 
     void* cur = start;
@@ -265,7 +205,7 @@ static void* ResolveFirstAllowedThirdPartyHookTarget(void* start, bool allowDire
         if (!cur) return nullptr;
 
         if (allowDirectStart || depth > 0) {
-            if (!IsAddressInSet(cur, excludedTargets) && HookChain::IsAllowedThirdPartyHookAddress(cur)) {
+            if (!IsAddressInSet(cur, excludedTargets) && HookChain::IsAllowedSwapBuffersThirdPartyHookAddress(cur)) {
                 return cur;
             }
         }
@@ -289,12 +229,25 @@ static void* ResolveFirstAllowedThirdPartyHookTarget(void* start, bool allowDire
 static void LogSkippedDisallowedHookTarget(const char* apiName, void* startAddress, void* skippedTarget) {
     if (!apiName || !startAddress || !skippedTarget) return;
 
+    if (HookChain::IsAllowedSwapBuffersThirdPartyHookAddress(skippedTarget)) return;
+
+    void* lastStart = g_lastSkippedWglSwapBuffersStart.load(std::memory_order_acquire);
+    void* lastTarget = g_lastSkippedWglSwapBuffersTarget.load(std::memory_order_acquire);
+    if (lastStart == startAddress && lastTarget == skippedTarget) {
+        return;
+    }
+
+    g_lastSkippedWglSwapBuffersStart.store(startAddress, std::memory_order_release);
+    g_lastSkippedWglSwapBuffersTarget.store(skippedTarget, std::memory_order_release);
+
+    const char* action = "skipping unchainable hook target";
     HookChainOwnerInfo ownerInfo{};
-    if (!GetOwnerInfoForAddress(skippedTarget, ownerInfo)) return;
-    if (IsExplicitlyAllowedThirdPartyHookOwner(ownerInfo)) return;
+    if (GetOwnerInfoForAddress(skippedTarget, ownerInfo) && IsToolscreenHookOwner(ownerInfo)) {
+        action = "Skipping chaining our own hook";
+    }
 
     LogCategory("hookchain",
-                std::string("[") + apiName + "] ignoring non-allowlisted hook target start=" +
+                std::string("[") + apiName + "] " + action + " start=" +
                     HookChain::DescribeAddressWithOwner(startAddress) + " target=" + HookChain::DescribeAddressWithOwner(skippedTarget));
 }
 
@@ -398,6 +351,49 @@ static void LogIatHookChainDetails(const char* apiName, HMODULE importingModule,
                     HookChain::DescribeAddressWithOwner(thunkTarget) + " expectedExport=" + HookChain::DescribeAddressWithOwner(expectedExport));
 }
 
+static void ResetThirdPartyWglSwapBuffersHookChain() {
+    void* currentTarget = g_wglSwapBuffersThirdPartyHookTarget.exchange(nullptr, std::memory_order_acq_rel);
+    g_owglSwapBuffersThirdParty = NULL;
+    g_lastSkippedWglSwapBuffersStart.store(nullptr, std::memory_order_release);
+    g_lastSkippedWglSwapBuffersTarget.store(nullptr, std::memory_order_release);
+    if (!currentTarget) {
+        return;
+    }
+
+    MH_STATUS st = MH_DisableHook(currentTarget);
+    if (st != MH_OK && st != MH_ERROR_DISABLED && st != MH_ERROR_NOT_CREATED) {
+        LogCategory("hookchain", std::string("[wglSwapBuffers] failed to disable previous third-party hook target ") +
+                                     HookChain::DescribeAddressWithOwner(currentTarget) + " status=" + std::to_string((int)st));
+    }
+
+    st = MH_RemoveHook(currentTarget);
+    if (st != MH_OK && st != MH_ERROR_NOT_CREATED) {
+        LogCategory("hookchain", std::string("[wglSwapBuffers] failed to remove previous third-party hook target ") +
+                                     HookChain::DescribeAddressWithOwner(currentTarget) + " status=" + std::to_string((int)st));
+    }
+}
+
+static bool TryInstallThirdPartyWglSwapBuffersHook(void* jumpTarget, const char* what) {
+    void* currentTarget = g_wglSwapBuffersThirdPartyHookTarget.load(std::memory_order_acquire);
+    if (jumpTarget == currentTarget) {
+        return true;
+    }
+
+    if (currentTarget) {
+        ResetThirdPartyWglSwapBuffersHookChain();
+    }
+
+    if (!HookChain::TryCreateAndEnableHook(jumpTarget, reinterpret_cast<void*>(&hkwglSwapBuffers_ThirdParty),
+                                           reinterpret_cast<void**>(&g_owglSwapBuffersThirdParty), what)) {
+        return false;
+    }
+
+    g_wglSwapBuffersThirdPartyHookTarget.store(jumpTarget, std::memory_order_release);
+    g_lastSkippedWglSwapBuffersStart.store(nullptr, std::memory_order_release);
+    g_lastSkippedWglSwapBuffersTarget.store(nullptr, std::memory_order_release);
+    return true;
+}
+
 static void* FindIatImportedFunctionTarget(HMODULE importingModule, const char* importedDllNameLower, const char* funcName) {
     if (!importingModule || !importedDllNameLower || !funcName) return nullptr;
 
@@ -437,84 +433,6 @@ static void* FindIatImportedFunctionTarget(HMODULE importingModule, const char* 
     return nullptr;
 }
 
-static void RefreshThirdPartyViewportHookChain() {
-    if (g_config.disableHookChaining) return;
-
-    HMODULE hOpenGL32 = GetModuleHandle(L"opengl32.dll");
-    if (!hOpenGL32) return;
-
-    void* exportViewport = reinterpret_cast<void*>(GetProcAddress(hOpenGL32, "glViewport"));
-    if (!exportViewport) return;
-
-    void* observedTarget = ResolveAbsoluteJumpTarget(exportViewport);
-    if (observedTarget && !HookChain::IsAllowedThirdPartyHookAddress(observedTarget)) {
-        LogSkippedDisallowedHookTarget("glViewport", exportViewport, observedTarget);
-    }
-
-    void* jumpTarget = ResolveFirstAllowedThirdPartyHookTarget(
-        exportViewport,
-        false,
-        { reinterpret_cast<void*>(&hkglViewport), reinterpret_cast<void*>(&hkglViewport_Driver), reinterpret_cast<void*>(&hkglViewport_ThirdParty) });
-    if (!jumpTarget) return;
-
-    if (jumpTarget == reinterpret_cast<void*>(&hkglViewport) || jumpTarget == reinterpret_cast<void*>(&hkglViewport_Driver) ||
-        jumpTarget == reinterpret_cast<void*>(&hkglViewport_ThirdParty)) {
-        return;
-    }
-
-    if (jumpTarget == g_glViewportDriverHookTarget.load(std::memory_order_acquire) ||
-        jumpTarget == g_glViewportThirdPartyHookTarget.load(std::memory_order_acquire)) {
-        return;
-    }
-
-    if (jumpTarget == g_glViewportThirdPartyHookTarget.load(std::memory_order_acquire)) return;
-
-    if (HookChain::TryCreateAndEnableHook(jumpTarget, reinterpret_cast<void*>(&hkglViewport_ThirdParty),
-                                          reinterpret_cast<void**>(&g_oglViewportThirdParty), "glViewport (third-party chain)")) {
-        g_glViewportThirdPartyHookTarget.store(jumpTarget, std::memory_order_release);
-        g_glViewportHookCount.fetch_add(1);
-        LogHookChainDetails("glViewport", exportViewport, jumpTarget, "export detour (prolog)");
-        Log("Chained glViewport through third-party detour target at " + HookChain::DescribeAddressWithOwner(jumpTarget));
-        Log("Total glViewport hook count: " + std::to_string(g_glViewportHookCount.load()));
-    }
-}
-
-static void RefreshThirdPartyViewportHookChainFromDriverTarget() {
-    if (g_config.disableHookChaining) return;
-
-    void* driverTarget = g_glViewportDriverHookTarget.load(std::memory_order_acquire);
-    if (!driverTarget) return;
-
-    void* observedTarget = ResolveAbsoluteJumpTarget(driverTarget);
-    if (observedTarget && !HookChain::IsAllowedThirdPartyHookAddress(observedTarget)) {
-        LogSkippedDisallowedHookTarget("glViewport", driverTarget, observedTarget);
-    }
-
-    void* jumpTarget = ResolveFirstAllowedThirdPartyHookTarget(
-        driverTarget,
-        false,
-        { reinterpret_cast<void*>(&hkglViewport), reinterpret_cast<void*>(&hkglViewport_Driver), reinterpret_cast<void*>(&hkglViewport_ThirdParty) });
-    if (!jumpTarget) return;
-
-    if (jumpTarget == reinterpret_cast<void*>(&hkglViewport) || jumpTarget == reinterpret_cast<void*>(&hkglViewport_Driver) ||
-        jumpTarget == reinterpret_cast<void*>(&hkglViewport_ThirdParty)) {
-        return;
-    }
-
-    if (jumpTarget == g_glViewportThirdPartyHookTarget.load(std::memory_order_acquire)) {
-        return;
-    }
-
-    if (HookChain::TryCreateAndEnableHook(jumpTarget, reinterpret_cast<void*>(&hkglViewport_ThirdParty),
-                                          reinterpret_cast<void**>(&g_oglViewportThirdParty), "glViewport (driver third-party chain)")) {
-        g_glViewportThirdPartyHookTarget.store(jumpTarget, std::memory_order_release);
-        g_glViewportHookCount.fetch_add(1);
-        LogHookChainDetails("glViewport", driverTarget, jumpTarget, "driver detour (after driver hook)");
-        Log("Chained glViewport (driver target) through third-party detour at " + HookChain::DescribeAddressWithOwner(jumpTarget));
-        Log("Total glViewport hook count: " + std::to_string(g_glViewportHookCount.load()));
-    }
-}
-
 static void RefreshThirdPartyWglSwapBuffersHookChain() {
     if (g_config.disableHookChaining) return;
 
@@ -525,16 +443,37 @@ static void RefreshThirdPartyWglSwapBuffersHookChain() {
     if (!exportSwap) return;
 
     void* observedTarget = ResolveAbsoluteJumpTarget(exportSwap);
-    const bool sawDisallowedOuterHook = observedTarget && !HookChain::IsAllowedThirdPartyHookAddress(observedTarget);
+    const bool sawDisallowedOuterHook = observedTarget && !HookChain::IsAllowedSwapBuffersThirdPartyHookAddress(observedTarget);
     if (sawDisallowedOuterHook) {
         LogSkippedDisallowedHookTarget("wglSwapBuffers", exportSwap, observedTarget);
     }
 
-    void* jumpTarget = ResolveFirstAllowedThirdPartyHookTarget(
+    void* jumpTarget = ResolveFirstAllowedSwapBuffersHookTarget(
         exportSwap,
         false,
         { reinterpret_cast<void*>(&hkwglSwapBuffers_ThirdParty) });
     if (!jumpTarget) {
+        void* cur = exportSwap;
+        for (int depth = 0; depth < 16 && cur; depth++) {
+            if (depth > 0 && cur != reinterpret_cast<void*>(&hkwglSwapBuffers_ThirdParty) &&
+                HookChain::IsAllowedSwapBuffersThirdPartyHookAddress(cur)) {
+                jumpTarget = cur;
+                break;
+            }
+
+            if (!IsReadableCodePtr(cur) || !IsAbsoluteJumpStub(reinterpret_cast<const uint8_t*>(cur))) {
+                break;
+            }
+
+            void* next = nullptr;
+            if (!TryResolveJumpTarget(cur, next) || next == reinterpret_cast<void*>(&hkwglSwapBuffers_ThirdParty)) {
+                break;
+            }
+
+            cur = next;
+        }
+    }
+    if (!jumpTarget && observedTarget && HookChain::IsAllowedSwapBuffersThirdPartyHookAddress(observedTarget)) {
         jumpTarget = observedTarget;
     }
     if (!jumpTarget) return;
@@ -551,193 +490,11 @@ static void RefreshThirdPartyWglSwapBuffersHookChain() {
         return;
     }
 
-    if (HookChain::TryCreateAndEnableHook(jumpTarget, reinterpret_cast<void*>(&hkwglSwapBuffers_ThirdParty),
-                                          reinterpret_cast<void**>(&g_owglSwapBuffersThirdParty), "wglSwapBuffers (third-party chain)")) {
-        g_wglSwapBuffersThirdPartyHookTarget.store(jumpTarget, std::memory_order_release);
+    if (TryInstallThirdPartyWglSwapBuffersHook(jumpTarget, "wglSwapBuffers (third-party chain)")) {
         LogHookChainDetails("wglSwapBuffers", exportSwap, jumpTarget,
                             sawDisallowedOuterHook && jumpTarget == observedTarget ? "export detour (transport fallback)"
                                                                                    : "export detour (prolog)");
         Log("Chained wglSwapBuffers through third-party detour target at " + HookChain::DescribeAddressWithOwner(jumpTarget));
-    }
-}
-
-static void RefreshThirdPartySetCursorPosHookChain() {
-    if (g_config.disableHookChaining) return;
-
-    HMODULE hUser32 = GetModuleHandle(L"user32.dll");
-    if (!hUser32) return;
-
-    void* exportFunc = reinterpret_cast<void*>(GetProcAddress(hUser32, "SetCursorPos"));
-    if (!exportFunc) return;
-
-    void* observedTarget = ResolveAbsoluteJumpTarget(exportFunc);
-    if (observedTarget && !HookChain::IsAllowedThirdPartyHookAddress(observedTarget)) {
-        LogSkippedDisallowedHookTarget("SetCursorPos", exportFunc, observedTarget);
-    }
-
-    void* jumpTarget = ResolveFirstAllowedThirdPartyHookTarget(
-        exportFunc,
-        false,
-        { reinterpret_cast<void*>(&hkSetCursorPos), reinterpret_cast<void*>(&hkSetCursorPos_ThirdParty) });
-    if (!jumpTarget) return;
-
-    if (jumpTarget == reinterpret_cast<void*>(&hkSetCursorPos) || jumpTarget == reinterpret_cast<void*>(&hkSetCursorPos_ThirdParty)) {
-        return;
-    }
-
-    if (jumpTarget == g_setCursorPosThirdPartyHookTarget.load(std::memory_order_acquire)) {
-        return;
-    }
-
-    if (HookChain::TryCreateAndEnableHook(jumpTarget, reinterpret_cast<void*>(&hkSetCursorPos_ThirdParty),
-                                          reinterpret_cast<void**>(&g_oSetCursorPosThirdParty), "SetCursorPos (third-party chain)")) {
-        g_setCursorPosThirdPartyHookTarget.store(jumpTarget, std::memory_order_release);
-        LogHookChainDetails("SetCursorPos", exportFunc, jumpTarget, "export detour (prolog)");
-        Log("Chained SetCursorPos through third-party detour target at " + HookChain::DescribeAddressWithOwner(jumpTarget));
-    }
-}
-
-static void RefreshThirdPartyClipCursorHookChain() {
-    if (g_config.disableHookChaining) return;
-
-    HMODULE hUser32 = GetModuleHandle(L"user32.dll");
-    if (!hUser32) return;
-
-    void* exportFunc = reinterpret_cast<void*>(GetProcAddress(hUser32, "ClipCursor"));
-    if (!exportFunc) return;
-
-    void* observedTarget = ResolveAbsoluteJumpTarget(exportFunc);
-    if (observedTarget && !HookChain::IsAllowedThirdPartyHookAddress(observedTarget)) {
-        LogSkippedDisallowedHookTarget("ClipCursor", exportFunc, observedTarget);
-    }
-
-    void* jumpTarget = ResolveFirstAllowedThirdPartyHookTarget(
-        exportFunc,
-        false,
-        { reinterpret_cast<void*>(&hkClipCursor), reinterpret_cast<void*>(&hkClipCursor_ThirdParty) });
-    if (!jumpTarget) return;
-
-    if (jumpTarget == reinterpret_cast<void*>(&hkClipCursor) || jumpTarget == reinterpret_cast<void*>(&hkClipCursor_ThirdParty)) {
-        return;
-    }
-
-    if (jumpTarget == g_clipCursorThirdPartyHookTarget.load(std::memory_order_acquire)) {
-        return;
-    }
-
-    if (HookChain::TryCreateAndEnableHook(jumpTarget, reinterpret_cast<void*>(&hkClipCursor_ThirdParty),
-                                          reinterpret_cast<void**>(&g_oClipCursorThirdParty), "ClipCursor (third-party chain)")) {
-        g_clipCursorThirdPartyHookTarget.store(jumpTarget, std::memory_order_release);
-        LogHookChainDetails("ClipCursor", exportFunc, jumpTarget, "export detour (prolog)");
-        Log("Chained ClipCursor through third-party detour target at " + HookChain::DescribeAddressWithOwner(jumpTarget));
-    }
-}
-
-static void RefreshThirdPartySetCursorHookChain() {
-    if (g_config.disableHookChaining) return;
-
-    HMODULE hUser32 = GetModuleHandle(L"user32.dll");
-    if (!hUser32) return;
-
-    void* exportFunc = reinterpret_cast<void*>(GetProcAddress(hUser32, "SetCursor"));
-    if (!exportFunc) return;
-
-    void* observedTarget = ResolveAbsoluteJumpTarget(exportFunc);
-    if (observedTarget && !HookChain::IsAllowedThirdPartyHookAddress(observedTarget)) {
-        LogSkippedDisallowedHookTarget("SetCursor", exportFunc, observedTarget);
-    }
-
-    void* jumpTarget = ResolveFirstAllowedThirdPartyHookTarget(
-        exportFunc,
-        false,
-        { reinterpret_cast<void*>(&hkSetCursor), reinterpret_cast<void*>(&hkSetCursor_ThirdParty) });
-    if (!jumpTarget) return;
-
-    if (jumpTarget == reinterpret_cast<void*>(&hkSetCursor) || jumpTarget == reinterpret_cast<void*>(&hkSetCursor_ThirdParty)) {
-        return;
-    }
-
-    if (jumpTarget == g_setCursorThirdPartyHookTarget.load(std::memory_order_acquire)) {
-        return;
-    }
-
-    if (HookChain::TryCreateAndEnableHook(jumpTarget, reinterpret_cast<void*>(&hkSetCursor_ThirdParty),
-                                          reinterpret_cast<void**>(&g_oSetCursorThirdParty), "SetCursor (third-party chain)")) {
-        g_setCursorThirdPartyHookTarget.store(jumpTarget, std::memory_order_release);
-        LogHookChainDetails("SetCursor", exportFunc, jumpTarget, "export detour (prolog)");
-        Log("Chained SetCursor through third-party detour target at " + HookChain::DescribeAddressWithOwner(jumpTarget));
-    }
-}
-
-static void RefreshThirdPartyGetRawInputDataHookChain() {
-    if (g_config.disableHookChaining) return;
-
-    HMODULE hUser32 = GetModuleHandle(L"user32.dll");
-    if (!hUser32) return;
-
-    void* exportFunc = reinterpret_cast<void*>(GetProcAddress(hUser32, "GetRawInputData"));
-    if (!exportFunc) return;
-
-    void* observedTarget = ResolveAbsoluteJumpTarget(exportFunc);
-    if (observedTarget && !HookChain::IsAllowedThirdPartyHookAddress(observedTarget)) {
-        LogSkippedDisallowedHookTarget("GetRawInputData", exportFunc, observedTarget);
-    }
-
-    void* jumpTarget = ResolveFirstAllowedThirdPartyHookTarget(
-        exportFunc,
-        false,
-        { reinterpret_cast<void*>(&hkGetRawInputData), reinterpret_cast<void*>(&hkGetRawInputData_ThirdParty) });
-    if (!jumpTarget) return;
-
-    if (jumpTarget == reinterpret_cast<void*>(&hkGetRawInputData) || jumpTarget == reinterpret_cast<void*>(&hkGetRawInputData_ThirdParty)) {
-        return;
-    }
-
-    if (jumpTarget == g_getRawInputDataThirdPartyHookTarget.load(std::memory_order_acquire)) {
-        return;
-    }
-
-    if (HookChain::TryCreateAndEnableHook(jumpTarget, reinterpret_cast<void*>(&hkGetRawInputData_ThirdParty),
-                                          reinterpret_cast<void**>(&g_oGetRawInputDataThirdParty), "GetRawInputData (third-party chain)")) {
-        g_getRawInputDataThirdPartyHookTarget.store(jumpTarget, std::memory_order_release);
-        LogHookChainDetails("GetRawInputData", exportFunc, jumpTarget, "export detour (prolog)");
-        Log("Chained GetRawInputData through third-party detour target at " + HookChain::DescribeAddressWithOwner(jumpTarget));
-    }
-}
-
-static void RefreshThirdPartyGlfwSetInputModeHookChain() {
-    if (g_config.disableHookChaining) return;
-
-    HMODULE hGlfw = GetModuleHandle(L"glfw.dll");
-    if (!hGlfw) return;
-
-    void* exportFunc = reinterpret_cast<void*>(GetProcAddress(hGlfw, "glfwSetInputMode"));
-    if (!exportFunc) return;
-
-    void* observedTarget = ResolveAbsoluteJumpTarget(exportFunc);
-    if (observedTarget && !HookChain::IsAllowedThirdPartyHookAddress(observedTarget)) {
-        LogSkippedDisallowedHookTarget("glfwSetInputMode", exportFunc, observedTarget);
-    }
-
-    void* jumpTarget = ResolveFirstAllowedThirdPartyHookTarget(
-        exportFunc,
-        false,
-        { reinterpret_cast<void*>(&hkglfwSetInputMode), reinterpret_cast<void*>(&hkglfwSetInputMode_ThirdParty) });
-    if (!jumpTarget) return;
-
-    if (jumpTarget == reinterpret_cast<void*>(&hkglfwSetInputMode) || jumpTarget == reinterpret_cast<void*>(&hkglfwSetInputMode_ThirdParty)) {
-        return;
-    }
-
-    if (jumpTarget == g_glfwSetInputModeThirdPartyHookTarget.load(std::memory_order_acquire)) {
-        return;
-    }
-
-    if (HookChain::TryCreateAndEnableHook(jumpTarget, reinterpret_cast<void*>(&hkglfwSetInputMode_ThirdParty),
-                                          reinterpret_cast<void**>(&g_oglfwSetInputModeThirdParty), "glfwSetInputMode (third-party chain)")) {
-        g_glfwSetInputModeThirdPartyHookTarget.store(jumpTarget, std::memory_order_release);
-        LogHookChainDetails("glfwSetInputMode", exportFunc, jumpTarget, "export detour (prolog)");
-        Log("Chained glfwSetInputMode through third-party detour target at " + HookChain::DescribeAddressWithOwner(jumpTarget));
     }
 }
 
@@ -764,26 +521,29 @@ static void RefreshThirdPartyWglSwapBuffersIatHookChain() {
         void* thunkTarget = FindIatImportedFunctionTarget(m, "opengl32.dll", "wglSwapBuffers");
         if (!thunkTarget) continue;
 
-        if (!HookChain::IsAllowedThirdPartyHookAddress(thunkTarget)) {
+        if (!HookChain::IsAllowedSwapBuffersThirdPartyHookAddress(thunkTarget)) {
             void* observedTarget = ResolveAbsoluteJumpTarget(thunkTarget);
-            if (observedTarget && !HookChain::IsAllowedThirdPartyHookAddress(observedTarget)) {
+            if (observedTarget && !HookChain::IsAllowedSwapBuffersThirdPartyHookAddress(observedTarget)) {
                 LogSkippedDisallowedHookTarget("wglSwapBuffers", thunkTarget, observedTarget);
             } else {
                 LogSkippedDisallowedHookTarget("wglSwapBuffers", thunkTarget, thunkTarget);
             }
         }
 
-        void* allowedTarget = ResolveFirstAllowedThirdPartyHookTarget(
+        void* allowedTarget = ResolveFirstAllowedSwapBuffersHookTarget(
             thunkTarget,
             true,
             { reinterpret_cast<void*>(&hkwglSwapBuffers_ThirdParty) });
+        if (!allowedTarget && HookChain::IsAllowedSwapBuffersThirdPartyHookAddress(thunkTarget)) {
+            allowedTarget = thunkTarget;
+        }
         if (allowedTarget) {
             thunkTarget = allowedTarget;
         } else {
             void* observedTarget = ResolveAbsoluteJumpTarget(thunkTarget);
-            if (observedTarget) {
+            if (observedTarget && HookChain::IsAllowedSwapBuffersThirdPartyHookAddress(observedTarget)) {
                 thunkTarget = observedTarget;
-            } else if (!HookChain::IsAllowedThirdPartyHookAddress(thunkTarget)) {
+            } else if (!HookChain::IsAllowedSwapBuffersThirdPartyHookAddress(thunkTarget)) {
                 continue;
             }
         }
@@ -796,10 +556,7 @@ static void RefreshThirdPartyWglSwapBuffersIatHookChain() {
             return;
         }
 
-        if (HookChain::TryCreateAndEnableHook(thunkTarget, reinterpret_cast<void*>(&hkwglSwapBuffers_ThirdParty),
-                                              reinterpret_cast<void**>(&g_owglSwapBuffersThirdParty),
-                                              "wglSwapBuffers (IAT third-party chain)")) {
-            g_wglSwapBuffersThirdPartyHookTarget.store(thunkTarget, std::memory_order_release);
+        if (TryInstallThirdPartyWglSwapBuffersHook(thunkTarget, "wglSwapBuffers (IAT third-party chain)")) {
             LogIatHookChainDetails("wglSwapBuffers", m, thunkTarget, exportSwap);
             Log("Chained wglSwapBuffers via IAT target at " + HookChain::DescribeAddressWithOwner(thunkTarget));
             return;
@@ -811,22 +568,11 @@ static void RefreshThirdPartyWglSwapBuffersIatHookChain() {
 
 namespace HookChain {
 
-bool IsAllowedThirdPartyHookAddress(const void* addr) {
+bool IsAllowedSwapBuffersThirdPartyHookAddress(const void* addr) {
     HookChainOwnerInfo ownerInfo{};
     if (!GetOwnerInfoForAddress(addr, ownerInfo)) return false;
-    return IsExplicitlyAllowedThirdPartyHookOwner(ownerInfo);
+    return !IsToolscreenHookOwner(ownerInfo);
 }
-
-    bool HasAllowedThirdPartyHookOnStack(unsigned skipFrames) {
-        void* stack[32] = {};
-        const USHORT frames = CaptureStackBackTrace(1 + skipFrames, static_cast<DWORD>(std::size(stack)), stack, NULL);
-        for (USHORT i = 0; i < frames; ++i) {
-            if (IsAllowedThirdPartyHookAddress(stack[i])) {
-                return true;
-            }
-        }
-        return false;
-    }
 
 bool TryCreateAndEnableHook(void* target, void* detour, void** outOriginal, const char* what) {
     if (!target) return false;
@@ -876,15 +622,11 @@ std::string DescribeAddressWithOwner(const void* addr) {
 }
 
 void RefreshAllThirdPartyHookChains() {
-    RefreshThirdPartyViewportHookChain();
-    RefreshThirdPartyViewportHookChainFromDriverTarget();
+    std::lock_guard<std::mutex> lock(g_wglSwapBuffersThirdPartyHookMutex);
     RefreshThirdPartyWglSwapBuffersHookChain();
-    RefreshThirdPartyWglSwapBuffersIatHookChain();
-    RefreshThirdPartySetCursorPosHookChain();
-    RefreshThirdPartyClipCursorHookChain();
-    RefreshThirdPartySetCursorHookChain();
-    RefreshThirdPartyGetRawInputDataHookChain();
-    RefreshThirdPartyGlfwSetInputModeHookChain();
+    if (!g_wglSwapBuffersThirdPartyHookTarget.load(std::memory_order_acquire)) {
+        RefreshThirdPartyWglSwapBuffersIatHookChain();
+    }
 }
 
 }

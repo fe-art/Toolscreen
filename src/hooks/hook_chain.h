@@ -7,9 +7,7 @@ namespace HookChain {
 
 bool TryCreateAndEnableHook(void* target, void* detour, void** outOriginal, const char* what);
 
-bool IsAllowedThirdPartyHookAddress(const void* addr);
-
-bool HasAllowedThirdPartyHookOnStack(unsigned skipFrames = 0);
+bool IsAllowedSwapBuffersThirdPartyHookAddress(const void* addr);
 
 void RefreshAllThirdPartyHookChains();
 
