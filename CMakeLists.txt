@@ -613,9 +613,9 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     config-load-legacy-version-upgrade
     config-load-clamp-global-values
     config-load-mode-default-dimensions-restored
-    config-load-mode-legacy-source-lists-migrated
+    config-load-mode-source-lists-loaded
     config-load-mode-percentage-dimensions-detected
-    config-load-mode-empty-source-ids-dropped
+    config-load-mode-typed-sources-ignored
     config-load-empty-main-hotkey-fallback
     config-load-missing-gui-hotkey-defaulted
     config-load-empty-gui-hotkey-defaulted

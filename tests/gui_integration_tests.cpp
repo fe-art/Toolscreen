@@ -1040,14 +1040,12 @@ void PopulateRichConfigFixture() {
     g_config.disableHookChaining = true;
     g_config.allowCursorEscape = true;
     g_config.mouseSensitivity = 1.75f;
-    g_config.mouseMovementPollingRate = 1150;
     g_config.windowsMouseSpeed = 13;
     g_config.hideAnimationsInGame = true;
     g_config.limitCaptureFramerate = false;
     g_config.obsFramerate = 73;
     g_config.keyRepeatStartDelay = 275;
     g_config.keyRepeatDelay = 42;
-    g_config.keyRepeatResumePreviousHeldKey = false;
     g_config.basicModeEnabled = false;
     g_config.restoreWindowedModeOnFullscreenExit = false;
     g_config.disableFullscreenPrompt = true;
@@ -1098,7 +1096,7 @@ void PopulateRichConfigFixture() {
     g_config.eyezoom.useCustomSizePosition = true;
     g_config.eyezoom.positionX = 33;
     g_config.eyezoom.positionY = 44;
-    g_config.eyezoom.autoFontSize = false;
+    g_config.eyezoom.fontSizeMode = EyeZoomFontSizeMode::Manual;
     g_config.eyezoom.textFontSize = 31;
     g_config.eyezoom.textFontPath = "C:\\Windows\\Fonts\\verdana.ttf";
     g_config.eyezoom.rectHeight = 35;
@@ -1114,8 +1112,8 @@ void PopulateRichConfigFixture() {
     g_config.eyezoom.slideZoomIn = true;
     g_config.eyezoom.slideMirrorsIn = true;
     g_config.eyezoom.overlays = {
-        { "Overlay One", "C:\\temp\\overlay-one.png", EyeZoomOverlayDisplayMode::Fit, 100, 100, 0.5f },
-        { "Overlay Two", "C:\\temp\\overlay-two.png", EyeZoomOverlayDisplayMode::Manual, 240, 140, 0.85f },
+        { "Overlay One", "C:\\temp\\overlay-one.png", EyeZoomOverlayDisplayMode::Fit, 100, 100, false, 0.5f },
+        { "Overlay Two", "C:\\temp\\overlay-two.png", EyeZoomOverlayDisplayMode::Manual, 240, 140, false, 0.85f },
     };
     g_config.eyezoom.activeOverlayIndex = 1;
 
@@ -1339,13 +1337,11 @@ void PopulateRichConfigFixture() {
     verifierMode.background.gradientAnimation = GradientAnimationType::Slide;
     verifierMode.background.gradientAnimationSpeed = 1.3f;
     verifierMode.background.gradientColorFade = true;
-    verifierMode.sources = {
-        { ModeSourceType::Mirror, kVerifierMirrorName },
-        { ModeSourceType::MirrorGroup, kVerifierGroupName },
-        { ModeSourceType::Image, kVerifierImageName },
-        { ModeSourceType::WindowOverlay, kVerifierWindowOverlayName },
-        { ModeSourceType::BrowserOverlay, kVerifierBrowserOverlayName },
-    };
+    verifierMode.mirrorIds = { kVerifierMirrorName };
+    verifierMode.mirrorGroupIds = { kVerifierGroupName };
+    verifierMode.imageIds = { kVerifierImageName };
+    verifierMode.windowOverlayIds = { kVerifierWindowOverlayName };
+    verifierMode.browserOverlayIds = { kVerifierBrowserOverlayName };
     verifierMode.stretch.enabled = true;
     verifierMode.stretch.width = 1400;
     verifierMode.stretch.height = 800;
@@ -1383,7 +1379,7 @@ void PopulateRichConfigFixture() {
     precisionMode.manualHeight = 540;
     precisionMode.background.selectedMode = "color";
     precisionMode.background.color = { 0.02f, 0.03f, 0.04f, 1.0f };
-    precisionMode.sources = { { ModeSourceType::Mirror, kAuxMirrorName } };
+    precisionMode.mirrorIds = { kAuxMirrorName };
     g_config.modes.push_back(precisionMode);
 
     g_config.defaultMode = kVerifierModeId;
@@ -1434,14 +1430,12 @@ void VerifyRichGlobalSettings() {
     Expect(g_config.disableHookChaining, "Expected disableHookChaining to roundtrip.");
     Expect(g_config.allowCursorEscape, "Expected allowCursorEscape to roundtrip.");
     ExpectFloatNear(g_config.mouseSensitivity, 1.75f, "Expected mouse sensitivity to roundtrip.");
-    Expect(g_config.mouseMovementPollingRate == 1150, "Expected polling rate to roundtrip.");
     Expect(g_config.windowsMouseSpeed == 13, "Expected Windows mouse speed to roundtrip.");
     Expect(g_config.hideAnimationsInGame, "Expected hideAnimationsInGame to roundtrip.");
     Expect(!g_config.limitCaptureFramerate, "Expected limitCaptureFramerate to roundtrip.");
     Expect(g_config.obsFramerate == 73, "Expected obsFramerate to roundtrip.");
     Expect(g_config.keyRepeatStartDelay == 275, "Expected keyRepeatStartDelay to roundtrip.");
     Expect(g_config.keyRepeatDelay == 42, "Expected keyRepeatDelay to roundtrip.");
-    Expect(!g_config.keyRepeatResumePreviousHeldKey, "Expected keyRepeatResumePreviousHeldKey to roundtrip.");
     Expect(!g_config.basicModeEnabled, "Expected basicModeEnabled to roundtrip.");
     Expect(!g_config.restoreWindowedModeOnFullscreenExit, "Expected restoreWindowedModeOnFullscreenExit to roundtrip.");
     Expect(g_config.disableFullscreenPrompt, "Expected disableFullscreenPrompt to roundtrip.");
@@ -1499,17 +1493,16 @@ void VerifyRichModes() {
     ExpectFloatNear(verifierMode.background.gradientAnimationSpeed, 1.3f,
                     "Expected verifier mode gradient animation speed to roundtrip.");
     Expect(verifierMode.background.gradientColorFade, "Expected verifier mode gradient color fade to roundtrip.");
-    Expect(verifierMode.sources.size() == 5, "Expected verifier mode source list to roundtrip.");
-    Expect(verifierMode.sources[0].type == ModeSourceType::Mirror && verifierMode.sources[0].id == kVerifierMirrorName,
-           "Expected first verifier mode source to be the custom mirror.");
-    Expect(verifierMode.sources[1].type == ModeSourceType::MirrorGroup && verifierMode.sources[1].id == kVerifierGroupName,
-           "Expected second verifier mode source to be the custom mirror group.");
-    Expect(verifierMode.sources[2].type == ModeSourceType::Image && verifierMode.sources[2].id == kVerifierImageName,
-           "Expected third verifier mode source to be the custom image.");
-    Expect(verifierMode.sources[3].type == ModeSourceType::WindowOverlay && verifierMode.sources[3].id == kVerifierWindowOverlayName,
-           "Expected fourth verifier mode source to be the custom window overlay.");
-    Expect(verifierMode.sources[4].type == ModeSourceType::BrowserOverlay && verifierMode.sources[4].id == kVerifierBrowserOverlayName,
-           "Expected fifth verifier mode source to be the custom browser overlay.");
+        ExpectVectorEquals(verifierMode.mirrorIds, std::vector<std::string>{ kVerifierMirrorName },
+                  "Expected verifier mode mirrorIds to roundtrip.");
+        ExpectVectorEquals(verifierMode.mirrorGroupIds, std::vector<std::string>{ kVerifierGroupName },
+                  "Expected verifier mode mirrorGroupIds to roundtrip.");
+        ExpectVectorEquals(verifierMode.imageIds, std::vector<std::string>{ kVerifierImageName },
+                  "Expected verifier mode imageIds to roundtrip.");
+        ExpectVectorEquals(verifierMode.windowOverlayIds, std::vector<std::string>{ kVerifierWindowOverlayName },
+                  "Expected verifier mode windowOverlayIds to roundtrip.");
+        ExpectVectorEquals(verifierMode.browserOverlayIds, std::vector<std::string>{ kVerifierBrowserOverlayName },
+                  "Expected verifier mode browserOverlayIds to roundtrip.");
     Expect(verifierMode.stretch.enabled, "Expected verifier mode stretch.enabled to roundtrip.");
     Expect(verifierMode.stretch.width == 1400 && verifierMode.stretch.height == 800,
            "Expected verifier mode stretch size to roundtrip.");
@@ -1538,8 +1531,8 @@ void VerifyRichModes() {
 
     const ModeConfig& precisionMode = FindModeOrThrow(kPrecisionModeId);
     Expect(precisionMode.width == 960 && precisionMode.height == 540, "Expected precision mode dimensions to roundtrip.");
-    Expect(precisionMode.sources.size() == 1 && precisionMode.sources[0].id == kAuxMirrorName,
-           "Expected precision mode to keep its mirror source.");
+    ExpectVectorEquals(precisionMode.mirrorIds, std::vector<std::string>{ kAuxMirrorName },
+                       "Expected precision mode to keep its mirror source.");
 }
 
 void VerifyRichMirrors() {
@@ -1731,7 +1724,8 @@ void VerifyRichCursorsAndEyeZoom() {
     Expect(g_config.eyezoom.useCustomSizePosition, "Expected eyezoom useCustomSizePosition to roundtrip.");
     Expect(g_config.eyezoom.positionX == 33 && g_config.eyezoom.positionY == 44,
            "Expected eyezoom position to roundtrip.");
-    Expect(!g_config.eyezoom.autoFontSize, "Expected eyezoom autoFontSize to roundtrip.");
+        Expect(g_config.eyezoom.fontSizeMode == EyeZoomFontSizeMode::Manual,
+            "Expected eyezoom fontSizeMode to roundtrip.");
     Expect(g_config.eyezoom.textFontSize == 31, "Expected eyezoom textFontSize to roundtrip.");
     Expect(g_config.eyezoom.textFontPath == "C:\\Windows\\Fonts\\verdana.ttf", "Expected eyezoom font path to roundtrip.");
     Expect(g_config.eyezoom.rectHeight == 35, "Expected eyezoom rectHeight to roundtrip.");
@@ -2153,7 +2147,8 @@ void RunConfigLoadLegacyVersionUpgradeTest(TestRunMode runMode = TestRunMode::Au
                       []() {
                           ExpectConfigLoadSucceeded("config-load-legacy-version-upgrade");
                           Expect(g_config.configVersion == GetConfigVersion(), "Expected legacy config version to upgrade to the current version.");
-                          Expect(!g_config.disableHookChaining, "Expected legacy v1 migration to force disableHookChaining=false.");
+                         Expect(g_config.disableHookChaining,
+                             "Expected legacy disableHookChaining to remain preserved on the 1.2.1 branch.");
                           Expect(g_config.keyRepeatStartDelay == 50, "Expected legacy keyRepeatStartDelay to be normalized to the v3 minimum.");
                           Expect(g_config.keyRepeatDelay == ConfigDefaults::CONFIG_KEY_REPEAT_DELAY,
                                  "Expected legacy zero keyRepeatDelay to normalize to the default value.");
@@ -2166,7 +2161,6 @@ void RunConfigLoadClampGlobalValuesTest(TestRunMode runMode = TestRunMode::Autom
                       []() {
                           Config config;
                           config.defaultMode = "Fullscreen";
-                          config.mouseMovementPollingRate = 123;
                           config.obsFramerate = 999;
                           config.cursors.enabled = true;
                           config.cursors.title.cursorSize = 9999;
@@ -2176,8 +2170,6 @@ void RunConfigLoadClampGlobalValuesTest(TestRunMode runMode = TestRunMode::Autom
                       },
                       []() {
                           ExpectConfigLoadSucceeded("config-load-clamp-global-values");
-                          Expect(g_config.mouseMovementPollingRate == 100,
-                                 "Expected mouse polling rate to clamp and snap to the nearest configured interval.");
                           Expect(g_config.obsFramerate == 120, "Expected obsFramerate to clamp to the configured maximum.");
                           Expect(g_config.cursors.title.cursorSize == ConfigDefaults::CURSOR_MAX_SIZE,
                                  "Expected title cursor size to clamp to CURSOR_MAX_SIZE.");
@@ -2214,14 +2206,14 @@ height = 0
                       runMode);
 }
 
-void RunConfigLoadModeLegacySourceListsMigratedTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunConfigLoadCase("config_load_mode_legacy_source_lists_migrated",
+void RunConfigLoadModeSourceListsLoadedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_mode_source_lists_loaded",
                       []() {
                           WriteRawConfigTomlToDisk(R"(configVersion = 4
-defaultMode = "Legacy Sources"
+defaultMode = "Source Lists"
 
 [[mode]]
-id = "Legacy Sources"
+id = "Source Lists"
 width = 800
 height = 600
 mirrorIds = ["Mirror One"]
@@ -2232,19 +2224,18 @@ browserOverlayIds = ["Browser One"]
 )");
                       },
                       []() {
-                          ExpectConfigLoadSucceeded("config-load-mode-legacy-source-lists-migrated");
-                          const ModeConfig& mode = FindModeOrThrow("Legacy Sources");
-                          Expect(mode.sources.size() == 5, "Expected legacy source lists to migrate into typed mode sources.");
-                          Expect(mode.sources[0].type == ModeSourceType::Mirror && mode.sources[0].id == "Mirror One",
-                                 "Expected legacy mirrorIds to migrate first.");
-                          Expect(mode.sources[1].type == ModeSourceType::MirrorGroup && mode.sources[1].id == "Group One",
-                                 "Expected legacy mirrorGroupIds to migrate second.");
-                          Expect(mode.sources[2].type == ModeSourceType::Image && mode.sources[2].id == "Image One",
-                                 "Expected legacy imageIds to migrate third.");
-                          Expect(mode.sources[3].type == ModeSourceType::WindowOverlay && mode.sources[3].id == "Window One",
-                                 "Expected legacy windowOverlayIds to migrate fourth.");
-                          Expect(mode.sources[4].type == ModeSourceType::BrowserOverlay && mode.sources[4].id == "Browser One",
-                                 "Expected legacy browserOverlayIds to migrate fifth.");
+                 ExpectConfigLoadSucceeded("config-load-mode-source-lists-loaded");
+                 const ModeConfig& mode = FindModeOrThrow("Source Lists");
+                 ExpectVectorEquals(mode.mirrorIds, std::vector<std::string>{ "Mirror One" },
+                           "Expected mirrorIds to load on the 1.2.1 branch.");
+                 ExpectVectorEquals(mode.mirrorGroupIds, std::vector<std::string>{ "Group One" },
+                           "Expected mirrorGroupIds to load on the 1.2.1 branch.");
+                 ExpectVectorEquals(mode.imageIds, std::vector<std::string>{ "Image One" },
+                           "Expected imageIds to load on the 1.2.1 branch.");
+                 ExpectVectorEquals(mode.windowOverlayIds, std::vector<std::string>{ "Window One" },
+                           "Expected windowOverlayIds to load on the 1.2.1 branch.");
+                 ExpectVectorEquals(mode.browserOverlayIds, std::vector<std::string>{ "Browser One" },
+                           "Expected browserOverlayIds to load on the 1.2.1 branch.");
                       },
                       runMode);
 }
@@ -2281,14 +2272,14 @@ height = 0.25
                       runMode);
 }
 
-void RunConfigLoadModeEmptySourceIdsDroppedTest(TestRunMode runMode = TestRunMode::Automated) {
-    RunConfigLoadCase("config_load_mode_empty_source_ids_dropped",
+void RunConfigLoadModeTypedSourcesIgnoredTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_mode_typed_sources_ignored",
                       []() {
                           WriteRawConfigTomlToDisk(R"(configVersion = 4
-defaultMode = "Source Filter"
+defaultMode = "Typed Sources"
 
 [[mode]]
-id = "Source Filter"
+id = "Typed Sources"
 width = 800
 height = 600
 sources = [
@@ -2299,11 +2290,13 @@ sources = [
 )");
                       },
                       []() {
-                          ExpectConfigLoadSucceeded("config-load-mode-empty-source-ids-dropped");
-                          const ModeConfig& mode = FindModeOrThrow("Source Filter");
-                          Expect(mode.sources.size() == 1, "Expected empty mode source ids to be filtered out during load.");
-                          Expect(mode.sources.front().type == ModeSourceType::Mirror && mode.sources.front().id == "Valid Mirror",
-                                 "Expected only the valid mode source to remain after load.");
+                          ExpectConfigLoadSucceeded("config-load-mode-typed-sources-ignored");
+                          const ModeConfig& mode = FindModeOrThrow("Typed Sources");
+                          Expect(mode.mirrorIds.empty(), "Expected typed mode sources to be ignored on the 1.2.1 branch.");
+                          Expect(mode.mirrorGroupIds.empty(), "Expected typed mode sources to leave mirrorGroupIds empty.");
+                          Expect(mode.imageIds.empty(), "Expected typed mode sources to leave imageIds empty.");
+                          Expect(mode.windowOverlayIds.empty(), "Expected typed mode sources to leave windowOverlayIds empty.");
+                          Expect(mode.browserOverlayIds.empty(), "Expected typed mode sources to leave browserOverlayIds empty.");
                       },
                       runMode);
 }
@@ -2525,7 +2518,7 @@ void RunConfigLoadEyeZoomInvalidActiveOverlayResetTest(TestRunMode runMode = Tes
                           config.defaultMode = "Fullscreen";
                           config.eyezoom.activeOverlayIndex = 4;
                           config.eyezoom.overlays = {
-                              { "Only Overlay", "C:\\temp\\overlay.png", EyeZoomOverlayDisplayMode::Fit, 120, 80, 0.75f },
+                              { "Only Overlay", "C:\\temp\\overlay.png", EyeZoomOverlayDisplayMode::Fit, 120, 80, false, 0.75f },
                           };
                           WriteConfigFixtureToDisk(config);
                       },
@@ -3066,12 +3059,7 @@ void RunModeMirrorRenderScreenAnchorsTest(TestRunMode runMode = TestRunMode::Aut
     mode.height = kWindowHeight;
     mode.manualWidth = kWindowWidth;
     mode.manualHeight = kWindowHeight;
-    mode.sources = {
-        { ModeSourceType::Mirror, topLeftMirror.name },
-        { ModeSourceType::Mirror, topRightMirror.name },
-        { ModeSourceType::Mirror, bottomLeftMirror.name },
-        { ModeSourceType::Mirror, bottomRightMirror.name },
-    };
+    mode.mirrorIds = { topLeftMirror.name, topRightMirror.name, bottomLeftMirror.name, bottomRightMirror.name };
 
     g_config.defaultMode = kModeId;
     g_config.mirrors = { topLeftMirror, topRightMirror, bottomLeftMirror, bottomRightMirror };
@@ -3167,10 +3155,7 @@ void RunModeMirrorRenderViewportAnchorsTest(TestRunMode runMode = TestRunMode::A
     mode.height = kWindowHeight;
     mode.manualWidth = kWindowWidth;
     mode.manualHeight = kWindowHeight;
-    mode.sources = {
-        { ModeSourceType::Mirror, centerMirror.name },
-        { ModeSourceType::Mirror, topRightMirror.name },
-    };
+    mode.mirrorIds = { centerMirror.name, topRightMirror.name };
 
     g_config.defaultMode = kModeId;
     g_config.mirrors = { centerMirror, topRightMirror };
@@ -3286,12 +3271,12 @@ void RunModeMirrorRenderScreenAnchorSizeMatrixTest(TestRunMode runMode = TestRun
         g_config.defaultMode = kModeId;
         g_config.mirrors.clear();
         g_config.mirrors.reserve(scenario.mirrors.size());
-        mode.sources.reserve(scenario.mirrors.size());
+        mode.mirrorIds.reserve(scenario.mirrors.size());
         for (const MirrorAnchorCaseDefinition& mirrorCase : scenario.mirrors) {
             g_config.mirrors.push_back(MakeMirrorRenderTestConfig(mirrorCase.name, mirrorCase.captureWidth,
                                                                   mirrorCase.captureHeight, mirrorCase.relativeTo,
                                                                   mirrorCase.outputX, mirrorCase.outputY, mirrorCase.scale));
-            mode.sources.push_back({ ModeSourceType::Mirror, mirrorCase.name });
+            mode.mirrorIds.push_back(mirrorCase.name);
         }
 
         g_config.modes = { mode };
@@ -3407,12 +3392,12 @@ void RunModeMirrorRenderViewportAnchorSizeMatrixTest(TestRunMode runMode = TestR
         g_config.defaultMode = kModeId;
         g_config.mirrors.clear();
         g_config.mirrors.reserve(scenario.mirrors.size());
-        mode.sources.reserve(scenario.mirrors.size());
+        mode.mirrorIds.reserve(scenario.mirrors.size());
         for (const MirrorAnchorCaseDefinition& mirrorCase : scenario.mirrors) {
             g_config.mirrors.push_back(MakeMirrorRenderTestConfig(mirrorCase.name, mirrorCase.captureWidth,
                                                                   mirrorCase.captureHeight, mirrorCase.relativeTo,
                                                                   mirrorCase.outputX, mirrorCase.outputY, mirrorCase.scale));
-            mode.sources.push_back({ ModeSourceType::Mirror, mirrorCase.name });
+            mode.mirrorIds.push_back(mirrorCase.name);
         }
 
         g_config.modes = { mode };
@@ -3500,7 +3485,7 @@ void RunModeMirrorGroupRenderTest(TestRunMode runMode = TestRunMode::Automated) 
     mode.height = kWindowHeight;
     mode.manualWidth = kWindowWidth;
     mode.manualHeight = kWindowHeight;
-    mode.sources = { { ModeSourceType::MirrorGroup, kGroupName } };
+    mode.mirrorGroupIds = { kGroupName };
 
     g_config.defaultMode = kModeId;
     g_config.mirrors = { leftMirror, disabledMirror };
@@ -3588,7 +3573,7 @@ void RunModeWindowOverlayRenderTest(TestRunMode runMode = TestRunMode::Automated
     mode.height = kWindowHeight;
     mode.manualWidth = kWindowWidth;
     mode.manualHeight = kWindowHeight;
-    mode.sources = { { ModeSourceType::WindowOverlay, kOverlayName } };
+    mode.windowOverlayIds = { kOverlayName };
 
     g_config.defaultMode = kModeId;
     g_config.windowOverlays = { overlay };
@@ -3652,7 +3637,7 @@ void RunModeBrowserOverlayRenderTest(TestRunMode runMode = TestRunMode::Automate
     mode.height = kWindowHeight;
     mode.manualWidth = kWindowWidth;
     mode.manualHeight = kWindowHeight;
-    mode.sources = { { ModeSourceType::BrowserOverlay, kOverlayName } };
+    mode.browserOverlayIds = { kOverlayName };
 
     g_config.defaultMode = kModeId;
     g_config.browserOverlays = { overlay };
@@ -3870,9 +3855,9 @@ const auto& GetTestCaseDefinitions() {
         {"config-load-legacy-version-upgrade", &RunConfigLoadLegacyVersionUpgradeTest},
         {"config-load-clamp-global-values", &RunConfigLoadClampGlobalValuesTest},
         {"config-load-mode-default-dimensions-restored", &RunConfigLoadModeDefaultDimensionsRestoredTest},
-        {"config-load-mode-legacy-source-lists-migrated", &RunConfigLoadModeLegacySourceListsMigratedTest},
+        {"config-load-mode-source-lists-loaded", &RunConfigLoadModeSourceListsLoadedTest},
         {"config-load-mode-percentage-dimensions-detected", &RunConfigLoadModePercentageDimensionsDetectedTest},
-        {"config-load-mode-empty-source-ids-dropped", &RunConfigLoadModeEmptySourceIdsDroppedTest},
+        {"config-load-mode-typed-sources-ignored", &RunConfigLoadModeTypedSourcesIgnoredTest},
         {"config-load-empty-main-hotkey-fallback", &RunConfigLoadEmptyMainHotkeyFallbackTest},
         {"config-load-missing-gui-hotkey-defaulted", &RunConfigLoadMissingGuiHotkeyDefaultedTest},
         {"config-load-empty-gui-hotkey-defaulted", &RunConfigLoadEmptyGuiHotkeyDefaultedTest},

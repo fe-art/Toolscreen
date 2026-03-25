@@ -4286,12 +4286,12 @@ bool RenderModeOverlaysForIntegrationTest(const Config& config, const ModeConfig
     request.toY = gameY;
     request.toW = gameW;
     request.toH = gameH;
-    request.modeHasMirrors = gameTextureId != 0 && ModeHasAnyMirrorSources(modeToRender);
-    request.modeHasImages = false;
+    request.modeHasMirrors = gameTextureId != 0 && (!modeToRender.mirrorIds.empty() || !modeToRender.mirrorGroupIds.empty());
+    request.modeHasImages = !modeToRender.imageIds.empty();
     request.modeHasWindowOverlays = g_windowOverlaysVisible.load(std::memory_order_acquire) &&
-                                    ModeHasSourceType(modeToRender, ModeSourceType::WindowOverlay);
+                                    !modeToRender.windowOverlayIds.empty();
     request.modeHasBrowserOverlays = g_browserOverlaysVisible.load(std::memory_order_acquire) &&
-                                     ModeHasSourceType(modeToRender, ModeSourceType::BrowserOverlay);
+                                     !modeToRender.browserOverlayIds.empty();
     request.isRawWindowedMode = !request.modeHasMirrors;
     request.toSlideMirrorsIn = modeToRender.slideMirrorsIn;
     request.mirrorSlideProgress = 1.0f;
