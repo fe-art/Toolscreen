@@ -1,4 +1,7 @@
-if (ImGui::BeginTabItem("Mirrors")) {
+{
+ImGuiTabItemFlags undoTabFlags_Mirrors = 0;
+if (s_undoSelectTab && s_undoScrollTarget.tabName == "Mirrors") { undoTabFlags_Mirrors = ImGuiTabItemFlags_SetSelected; s_undoSelectTab = false; }
+if (ImGui::BeginTabItem("Mirrors", nullptr, undoTabFlags_Mirrors)) {
     g_currentlyEditingMirror = "";
     g_imageDragMode.store(false);
     g_windowOverlayDragMode.store(false);
@@ -44,7 +47,10 @@ if (ImGui::BeginTabItem("Mirrors")) {
 
         std::string oldMirrorName = mirror.name;
 
+        bool undoForceOpenMirror = s_undoScrollTargetActive && s_undoScrollTarget.tabName == "Mirrors" && s_undoScrollTarget.sectionId == "mirror" && s_undoScrollTarget.vectorIndex == (int)i;
+        if (undoForceOpenMirror) ImGui::SetNextItemOpen(true, ImGuiCond_Always);
         bool node_open = ImGui::TreeNodeEx("##mirror_node", node_flags, "%s", mirror.name.c_str());
+        if (undoForceOpenMirror && node_open) { ImGui::SetScrollHereY(0.5f); drawUndoHighlight(); s_undoScrollTargetActive = false; }
         if (ImGui::IsItemClicked(0)) { selectedMirrorName = mirror.name; }
 
         if (node_open) {
@@ -785,7 +791,10 @@ if (ImGui::BeginTabItem("Mirrors")) {
         }
 
         ImGui::SameLine();
+        bool undoForceOpenGroup = s_undoScrollTargetActive && s_undoScrollTarget.tabName == "Mirrors" && s_undoScrollTarget.sectionId == "mirrorGroup" && s_undoScrollTarget.vectorIndex == (int)i;
+        if (undoForceOpenGroup) ImGui::SetNextItemOpen(true, ImGuiCond_Always);
         bool node_open = ImGui::TreeNodeEx("##mirror_group_node", node_flags, "%s", group.name.c_str());
+        if (undoForceOpenGroup && node_open) { ImGui::SetScrollHereY(0.5f); drawUndoHighlight(); s_undoScrollTargetActive = false; }
         if (ImGui::IsItemClicked(0)) { selectedGroupName = group.name; }
 
         if (node_open) {
@@ -1016,5 +1025,4 @@ if (ImGui::BeginTabItem("Mirrors")) {
 
     ImGui::EndTabItem();
 }
-
-
+}

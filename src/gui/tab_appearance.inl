@@ -1,4 +1,7 @@
-            if (ImGui::BeginTabItem("Appearance")) {
+            {
+            ImGuiTabItemFlags undoTabFlags_Appearance = 0;
+            if (s_undoSelectTab && s_undoScrollTarget.tabName == "Appearance") { undoTabFlags_Appearance = ImGuiTabItemFlags_SetSelected; s_undoSelectTab = false; }
+            if (ImGui::BeginTabItem("Appearance", nullptr, undoTabFlags_Appearance)) {
                 g_currentlyEditingMirror = "";
                 g_imageDragMode.store(false);
                 g_windowOverlayDragMode.store(false);
@@ -740,6 +743,7 @@
                 HelpMarker("Reset all colors to the default dark theme.");
 
                 ImGui::EndTabItem();
+            }
             }
 
 

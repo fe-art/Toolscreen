@@ -15,6 +15,7 @@
 #include "stb_image.h"
 #include "utils.h"
 #include "virtual_camera.h"
+#include "undo_history.h"
 #include "window_overlay.h"
 
 #include <GL/glew.h>
@@ -2534,6 +2535,111 @@ void RenderSettingsGUI() {
         return gameState.c_str();
     };
 
+    // ── Undo/Redo state ────────────────────────────────────────────────────
+    static UndoHistory s_undoHistory;
+    static Config s_undoPendingSnapshot;
+    static bool s_undoChangeInProgress = false;
+    static bool s_undoInitialized = false; // skip first frame to avoid LoadConfig() pollution
+
+    // Navigation state — read by tab .inl files for scroll-to / highlight
+    // Two-phase: s_undoSelectTab fires once to switch tabs, s_undoScrollTargetActive
+    // fires once to open TreeNode + scroll. Both are consumed independently.
+    static UndoLocationInfo s_undoScrollTarget;
+    static bool s_undoSelectTab = false;         // consumed by the matching tab's BeginTabItem
+    static bool s_undoScrollTargetActive = false; // consumed by the matching TreeNode
+    static int s_undoScrollTargetFrames = 0;      // fallback: clear after 2 frames if not consumed
+    static float s_undoHighlightTimer = 0.0f;
+    static constexpr float UNDO_HIGHLIGHT_DURATION = 1.0f;
+
+    // Decay highlight timer
+    if (s_undoHighlightTimer > 0.0f) {
+        s_undoHighlightTimer -= ImGui::GetIO().DeltaTime;
+        if (s_undoHighlightTimer < 0.0f) s_undoHighlightTimer = 0.0f;
+    }
+
+    // Fallback: clear stuck scroll target after 2 frames
+    if (s_undoScrollTargetActive) {
+        s_undoScrollTargetFrames++;
+        if (s_undoScrollTargetFrames > 2) {
+            s_undoScrollTargetActive = false;
+            s_undoSelectTab = false;
+            s_undoScrollTargetFrames = 0;
+        }
+    }
+
+    // Skip undo logic on first frame (avoids LoadConfig() polluting history)
+    if (!s_undoInitialized) {
+        s_undoInitialized = true;
+        s_undoPendingSnapshot = g_config;
+    }
+
+    // Frame-start: snapshot config before widgets run (only if no drag in progress)
+    if (!s_undoChangeInProgress) {
+        s_undoPendingSnapshot = g_config;
+    }
+
+    // Helper lambda: apply side effects after undo/redo restores a config
+    auto applyConfigSideEffects = [&]() {
+        g_configIsDirty = true;
+        PublishConfigSnapshot();
+        SetGlobalMirrorGammaMode(g_config.mirrorGammaMode);
+        {
+            std::unique_lock<std::shared_mutex> lock(g_mirrorInstancesMutex);
+            for (auto& [name, instance] : g_mirrorInstances) {
+                instance.forceUpdateFrames = 3;
+                instance.cachedRenderState.isValid = false;
+                instance.hasValidContent = false;
+            }
+        }
+        g_allImagesLoaded = false;
+        g_pendingImageLoad = true;
+        g_cursorsNeedReload = true;
+        RebuildHotkeyMainKeys();
+        ResizeHotkeySecondaryModes(g_config.hotkeys.size());
+        ResetAllHotkeySecondaryModes();
+    };
+
+    // Helper: draw a fading highlight rect behind the last rendered item
+    auto drawUndoHighlight = [&]() {
+        if (s_undoHighlightTimer <= 0.0f) return;
+        float alpha = (s_undoHighlightTimer / UNDO_HIGHLIGHT_DURATION) * 0.3f;
+        ImVec2 rmin = ImGui::GetItemRectMin();
+        ImVec2 rmax = ImGui::GetItemRectMax();
+        rmin.x -= 4.0f; rmin.y -= 2.0f;
+        rmax.x += 4.0f; rmax.y += 2.0f;
+        ImGui::GetWindowDrawList()->AddRectFilled(
+            rmin, rmax, IM_COL32(100, 149, 237, (int)(alpha * 255)), 4.0f);
+    };
+
+    // Handle Ctrl+Z / Ctrl+Y (only when no widget is active and no hotkey binding in progress)
+    if (g_showGui.load() && !ImGui::IsAnyItemActive()) {
+        ImGuiIO& undoIo = ImGui::GetIO();
+        if (undoIo.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z, false) && !IsHotkeyBindingActive_UiState()) {
+            UndoLocationInfo loc;
+            if (s_undoHistory.Undo(g_config, loc)) {
+                applyConfigSideEffects();
+                s_undoScrollTarget = loc;
+                s_undoSelectTab = !loc.empty();
+                s_undoScrollTargetActive = !loc.empty() && loc.vectorIndex >= 0;
+                s_undoScrollTargetFrames = 0;
+                s_undoHighlightTimer = UNDO_HIGHLIGHT_DURATION;
+                s_undoChangeInProgress = false;
+            }
+        }
+        if (undoIo.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y, false) && !IsHotkeyBindingActive_UiState()) {
+            UndoLocationInfo loc;
+            if (s_undoHistory.Redo(g_config, loc)) {
+                applyConfigSideEffects();
+                s_undoScrollTarget = loc;
+                s_undoSelectTab = !loc.empty();
+                s_undoScrollTargetActive = !loc.empty() && loc.vectorIndex >= 0;
+                s_undoScrollTargetFrames = 0;
+                s_undoHighlightTimer = UNDO_HIGHLIGHT_DURATION;
+                s_undoChangeInProgress = false;
+            }
+        }
+    }
+
     bool is_binding = IsHotkeyBindingActive_UiState();
     if (is_binding) { MarkHotkeyBindingActive(); }
 
@@ -2853,6 +2959,74 @@ void RenderSettingsGUI() {
 
                 ImGui::EndTabBar();
             }
+        }
+
+        // ── Undo/Redo: frame-end commit logic ─────────────────────────────
+        if (!ConfigEqual(g_config, s_undoPendingSnapshot)) {
+            s_undoChangeInProgress = true;
+        }
+        if (s_undoChangeInProgress && !ImGui::IsAnyItemActive()) {
+            UndoLocationInfo loc = ConfigDiffLocation(s_undoPendingSnapshot, g_config);
+            s_undoHistory.Push(std::move(s_undoPendingSnapshot), loc);
+            s_undoChangeInProgress = false;
+        }
+
+        // ── Undo/Redo: status bar ────────────────────────────────────────
+        ImGui::Separator();
+        {
+            bool canUndo = s_undoHistory.CanUndo();
+            bool canRedo = s_undoHistory.CanRedo();
+
+            if (!canUndo) ImGui::BeginDisabled();
+            if (ImGui::ArrowButton("##undo", ImGuiDir_Left)) {
+                UndoLocationInfo loc;
+                if (s_undoHistory.Undo(g_config, loc)) {
+                    applyConfigSideEffects();
+                    s_undoScrollTarget = loc;
+                    s_undoSelectTab = !loc.empty();
+                    s_undoScrollTargetActive = !loc.empty() && loc.vectorIndex >= 0;
+                    s_undoScrollTargetFrames = 0;
+                    s_undoHighlightTimer = UNDO_HIGHLIGHT_DURATION;
+                    s_undoChangeInProgress = false;
+                }
+            }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                ImGui::SetTooltip("Undo (Ctrl+Z)\nReverts the last setting change.\n%zu step(s) available.",
+                                  s_undoHistory.UndoCount());
+            }
+            if (!canUndo) ImGui::EndDisabled();
+
+            ImGui::SameLine();
+            ImGui::Text("%zu", s_undoHistory.UndoCount());
+            ImGui::SameLine();
+            ImGui::Dummy(ImVec2(8.0f, 0.0f));
+            ImGui::SameLine();
+
+            if (!canRedo) ImGui::BeginDisabled();
+            if (ImGui::ArrowButton("##redo", ImGuiDir_Right)) {
+                UndoLocationInfo loc;
+                if (s_undoHistory.Redo(g_config, loc)) {
+                    applyConfigSideEffects();
+                    s_undoScrollTarget = loc;
+                    s_undoSelectTab = !loc.empty();
+                    s_undoScrollTargetActive = !loc.empty() && loc.vectorIndex >= 0;
+                    s_undoScrollTargetFrames = 0;
+                    s_undoHighlightTimer = UNDO_HIGHLIGHT_DURATION;
+                    s_undoChangeInProgress = false;
+                }
+            }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                ImGui::SetTooltip("Redo (Ctrl+Y)\nRe-applies a previously undone change.\n%zu step(s) available.",
+                                  s_undoHistory.RedoCount());
+            }
+            if (!canRedo) ImGui::EndDisabled();
+
+            ImGui::SameLine();
+            ImGui::Text("%zu", s_undoHistory.RedoCount());
+            ImGui::SameLine();
+            ImGui::Dummy(ImVec2(16.0f, 0.0f));
+            ImGui::SameLine();
+            ImGui::TextDisabled("Ctrl+Z / Ctrl+Y");
         }
 
     } else {

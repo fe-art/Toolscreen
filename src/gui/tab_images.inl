@@ -1,4 +1,7 @@
-if (ImGui::BeginTabItem("Images")) {
+{
+ImGuiTabItemFlags undoTabFlags_Images = 0;
+if (s_undoSelectTab && s_undoScrollTarget.tabName == "Images") { undoTabFlags_Images = ImGuiTabItemFlags_SetSelected; s_undoSelectTab = false; }
+if (ImGui::BeginTabItem("Images", nullptr, undoTabFlags_Images)) {
     g_currentlyEditingMirror = "";
 
     g_imageDragMode.store(true);
@@ -40,7 +43,10 @@ if (ImGui::BeginTabItem("Images")) {
 
         std::string oldImageName = img.name;
 
+        bool undoForceOpenImage = s_undoScrollTargetActive && s_undoScrollTarget.tabName == "Images" && s_undoScrollTarget.sectionId == "image" && s_undoScrollTarget.vectorIndex == (int)i;
+        if (undoForceOpenImage) ImGui::SetNextItemOpen(true, ImGuiCond_Always);
         bool node_open = ImGui::TreeNodeEx("##image_node", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", img.name.c_str());
+        if (undoForceOpenImage && node_open) { ImGui::SetScrollHereY(0.5f); drawUndoHighlight(); s_undoScrollTargetActive = false; }
 
         if (node_open) {
 
@@ -300,5 +306,4 @@ if (ImGui::BeginTabItem("Images")) {
 
     ImGui::EndTabItem();
 }
-
-
+}

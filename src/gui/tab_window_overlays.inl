@@ -1,4 +1,7 @@
-if (ImGui::BeginTabItem("Window Overlays")) {
+{
+ImGuiTabItemFlags undoTabFlags_WinOverlay = 0;
+if (s_undoSelectTab && s_undoScrollTarget.tabName == "Window Overlays") { undoTabFlags_WinOverlay = ImGuiTabItemFlags_SetSelected; s_undoSelectTab = false; }
+if (ImGui::BeginTabItem("Window Overlays", nullptr, undoTabFlags_WinOverlay)) {
     g_currentlyEditingMirror = "";
     g_imageDragMode.store(false);
 
@@ -36,7 +39,10 @@ if (ImGui::BeginTabItem("Window Overlays")) {
 
         std::string oldOverlayName = overlay.name;
 
+        bool undoForceOpenOverlay = s_undoScrollTargetActive && s_undoScrollTarget.tabName == "Window Overlays" && s_undoScrollTarget.sectionId == "windowOverlay" && s_undoScrollTarget.vectorIndex == (int)i;
+        if (undoForceOpenOverlay) ImGui::SetNextItemOpen(true, ImGuiCond_Always);
         bool node_open = ImGui::TreeNodeEx("##overlay_node", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", overlay.name.c_str());
+        if (undoForceOpenOverlay && node_open) { ImGui::SetScrollHereY(0.5f); drawUndoHighlight(); s_undoScrollTargetActive = false; }
 
         if (node_open) {
 
@@ -408,5 +414,4 @@ if (ImGui::BeginTabItem("Window Overlays")) {
 } else {
     g_windowOverlayDragMode.store(false);
 }
-
-
+}

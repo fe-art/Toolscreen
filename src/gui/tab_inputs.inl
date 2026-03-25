@@ -1,4 +1,7 @@
-if (ImGui::BeginTabItem("Inputs")) {
+{
+ImGuiTabItemFlags undoTabFlags_Inputs = 0;
+if (s_undoSelectTab && s_undoScrollTarget.tabName == "Inputs") { undoTabFlags_Inputs = ImGuiTabItemFlags_SetSelected; s_undoSelectTab = false; }
+if (ImGui::BeginTabItem("Inputs", nullptr, undoTabFlags_Inputs)) {
     g_currentlyEditingMirror = "";
     g_imageDragMode.store(false);
     g_windowOverlayDragMode.store(false);
@@ -1728,6 +1731,7 @@ if (ImGui::BeginTabItem("Inputs")) {
     }
 
     ImGui::EndTabItem();
+}
 }
 
 

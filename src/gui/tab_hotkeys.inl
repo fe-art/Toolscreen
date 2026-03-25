@@ -1,5 +1,8 @@
 if (IsResolutionChangeSupported(g_gameVersion)) {
-    if (ImGui::BeginTabItem("Hotkeys")) {
+    {
+    ImGuiTabItemFlags undoTabFlags_Hotkeys = 0;
+    if (s_undoSelectTab && s_undoScrollTarget.tabName == "Hotkeys") { undoTabFlags_Hotkeys = ImGuiTabItemFlags_SetSelected; s_undoSelectTab = false; }
+    if (ImGui::BeginTabItem("Hotkeys", nullptr, undoTabFlags_Hotkeys)) {
         g_currentlyEditingMirror = "";
         g_imageDragMode.store(false);
         g_windowOverlayDragMode.store(false);
@@ -156,7 +159,10 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
             }
 
             ImGui::SameLine();
+            bool undoForceOpenHotkey = s_undoScrollTargetActive && s_undoScrollTarget.tabName == "Hotkeys" && s_undoScrollTarget.sectionId == "hotkey" && s_undoScrollTarget.vectorIndex == (int)i;
+            if (undoForceOpenHotkey) ImGui::SetNextItemOpen(true, ImGuiCond_Always);
             bool node_open = ImGui::TreeNodeEx("##hotkey_node", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", node_label.c_str());
+            if (undoForceOpenHotkey && node_open) { ImGui::SetScrollHereY(0.5f); drawUndoHighlight(); s_undoScrollTargetActive = false; }
 
             if (node_open) {
                 const char* button_label = (s_mainHotkeyToBind == i) ? "[Press Keys...]" : (keyStr.empty() ? "[None]" : keyStr.c_str());
@@ -467,7 +473,10 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
             }
 
             ImGui::SameLine();
+            bool undoForceOpenSensHotkey = s_undoScrollTargetActive && s_undoScrollTarget.tabName == "Hotkeys" && s_undoScrollTarget.sectionId == "sensitivityHotkey" && s_undoScrollTarget.vectorIndex == (int)i;
+            if (undoForceOpenSensHotkey) ImGui::SetNextItemOpen(true, ImGuiCond_Always);
             bool sensNodeOpen = ImGui::TreeNodeEx("##sens_hotkey_node", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", sensNodeLabel.c_str());
+            if (undoForceOpenSensHotkey && sensNodeOpen) { ImGui::SetScrollHereY(0.5f); drawUndoHighlight(); s_undoScrollTargetActive = false; }
 
             if (sensNodeOpen) {
                 const char* sensButtonLabel =
@@ -617,6 +626,5 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
 
         ImGui::EndTabItem();
     }
+    }
 }
-
-

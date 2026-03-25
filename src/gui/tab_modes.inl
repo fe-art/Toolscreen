@@ -1,4 +1,7 @@
-if (ImGui::BeginTabItem("Modes")) {
+{
+ImGuiTabItemFlags undoTabFlags_Modes = 0;
+if (s_undoSelectTab && s_undoScrollTarget.tabName == "Modes") { undoTabFlags_Modes = ImGuiTabItemFlags_SetSelected; s_undoSelectTab = false; }
+if (ImGui::BeginTabItem("Modes", nullptr, undoTabFlags_Modes)) {
     g_currentlyEditingMirror = "";
     int mode_to_remove = -1;
 
@@ -34,7 +37,10 @@ if (ImGui::BeginTabItem("Modes")) {
         if (EqualsIgnoreCase(mode.id, "Fullscreen")) {
             ImGui::PushID((int)i);
 
+            { bool undoForceOpenMode = s_undoScrollTargetActive && s_undoScrollTarget.tabName == "Modes" && s_undoScrollTarget.sectionId == "mode" && s_undoScrollTarget.vectorIndex == (int)i;
+            if (undoForceOpenMode) ImGui::SetNextItemOpen(true, ImGuiCond_Always); }
             bool node_open = ImGui::TreeNodeEx("##mode_node", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", mode.id.c_str());
+            if (s_undoScrollTargetActive && s_undoScrollTarget.tabName == "Modes" && s_undoScrollTarget.sectionId == "mode" && s_undoScrollTarget.vectorIndex == (int)i && node_open) { ImGui::SetScrollHereY(0.5f); drawUndoHighlight(); s_undoScrollTargetActive = false; }
             ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - ImGui::GetFrameHeight());
 
             ImGui::Dummy(ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()));
@@ -294,7 +300,10 @@ if (ImGui::BeginTabItem("Modes")) {
         if (EqualsIgnoreCase(mode.id, "EyeZoom")) {
             ImGui::PushID((int)i + 10000);
 
+            { bool undoForceOpenMode = s_undoScrollTargetActive && s_undoScrollTarget.tabName == "Modes" && s_undoScrollTarget.sectionId == "mode" && s_undoScrollTarget.vectorIndex == (int)i;
+            if (undoForceOpenMode) ImGui::SetNextItemOpen(true, ImGuiCond_Always); }
             bool node_open = ImGui::TreeNodeEx("##mode_node", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", mode.id.c_str());
+            if (s_undoScrollTargetActive && s_undoScrollTarget.tabName == "Modes" && s_undoScrollTarget.sectionId == "mode" && s_undoScrollTarget.vectorIndex == (int)i && node_open) { ImGui::SetScrollHereY(0.5f); drawUndoHighlight(); s_undoScrollTargetActive = false; }
             ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - ImGui::GetFrameHeight());
 
             ImGui::Dummy(ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()));
@@ -903,7 +912,10 @@ if (ImGui::BeginTabItem("Modes")) {
         if (EqualsIgnoreCase(mode.id, "Preemptive")) {
             ImGui::PushID((int)i + 15000);
 
+            { bool undoForceOpenMode = s_undoScrollTargetActive && s_undoScrollTarget.tabName == "Modes" && s_undoScrollTarget.sectionId == "mode" && s_undoScrollTarget.vectorIndex == (int)i;
+            if (undoForceOpenMode) ImGui::SetNextItemOpen(true, ImGuiCond_Always); }
             bool node_open = ImGui::TreeNodeEx("##mode_node", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", mode.id.c_str());
+            if (s_undoScrollTargetActive && s_undoScrollTarget.tabName == "Modes" && s_undoScrollTarget.sectionId == "mode" && s_undoScrollTarget.vectorIndex == (int)i && node_open) { ImGui::SetScrollHereY(0.5f); drawUndoHighlight(); s_undoScrollTargetActive = false; }
             ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - ImGui::GetFrameHeight());
 
             ImGui::Dummy(ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()));
@@ -1303,7 +1315,10 @@ if (ImGui::BeginTabItem("Modes")) {
         if (EqualsIgnoreCase(mode.id, "Thin")) {
             ImGui::PushID((int)i + 20000);
 
+            { bool undoForceOpenMode = s_undoScrollTargetActive && s_undoScrollTarget.tabName == "Modes" && s_undoScrollTarget.sectionId == "mode" && s_undoScrollTarget.vectorIndex == (int)i;
+            if (undoForceOpenMode) ImGui::SetNextItemOpen(true, ImGuiCond_Always); }
             bool node_open = ImGui::TreeNodeEx("##mode_node", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", mode.id.c_str());
+            if (s_undoScrollTargetActive && s_undoScrollTarget.tabName == "Modes" && s_undoScrollTarget.sectionId == "mode" && s_undoScrollTarget.vectorIndex == (int)i && node_open) { ImGui::SetScrollHereY(0.5f); drawUndoHighlight(); s_undoScrollTargetActive = false; }
             ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - ImGui::GetFrameHeight());
             ImGui::Dummy(ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()));
 
@@ -1667,7 +1682,10 @@ if (ImGui::BeginTabItem("Modes")) {
         if (EqualsIgnoreCase(mode.id, "Wide")) {
             ImGui::PushID((int)i + 30000);
 
+            { bool undoForceOpenMode = s_undoScrollTargetActive && s_undoScrollTarget.tabName == "Modes" && s_undoScrollTarget.sectionId == "mode" && s_undoScrollTarget.vectorIndex == (int)i;
+            if (undoForceOpenMode) ImGui::SetNextItemOpen(true, ImGuiCond_Always); }
             bool node_open = ImGui::TreeNodeEx("##mode_node", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", mode.id.c_str());
+            if (s_undoScrollTargetActive && s_undoScrollTarget.tabName == "Modes" && s_undoScrollTarget.sectionId == "mode" && s_undoScrollTarget.vectorIndex == (int)i && node_open) { ImGui::SetScrollHereY(0.5f); drawUndoHighlight(); s_undoScrollTargetActive = false; }
             ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - ImGui::GetFrameHeight());
             ImGui::Dummy(ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()));
 
@@ -2059,7 +2077,10 @@ if (ImGui::BeginTabItem("Modes")) {
             }
 
             ImGui::SameLine();
+            { bool undoForceOpenMode = s_undoScrollTargetActive && s_undoScrollTarget.tabName == "Modes" && s_undoScrollTarget.sectionId == "mode" && s_undoScrollTarget.vectorIndex == (int)i;
+            if (undoForceOpenMode) ImGui::SetNextItemOpen(true, ImGuiCond_Always); }
             bool node_open = ImGui::TreeNodeEx("##mode_node", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", mode.id.c_str());
+            if (s_undoScrollTargetActive && s_undoScrollTarget.tabName == "Modes" && s_undoScrollTarget.sectionId == "mode" && s_undoScrollTarget.vectorIndex == (int)i && node_open) { ImGui::SetScrollHereY(0.5f); drawUndoHighlight(); s_undoScrollTargetActive = false; }
 
             if (node_open) {
                 ImGui::Text("Name");
@@ -2731,5 +2752,4 @@ if (ImGui::BeginTabItem("Modes")) {
 
     ImGui::EndTabItem();
 }
-
-
+}

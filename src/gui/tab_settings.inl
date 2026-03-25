@@ -1,4 +1,7 @@
-if (ImGui::BeginTabItem("Settings")) {
+{
+ImGuiTabItemFlags undoTabFlags_Settings = 0;
+if (s_undoSelectTab && s_undoScrollTarget.tabName == "Settings") { undoTabFlags_Settings = ImGuiTabItemFlags_SetSelected; s_undoSelectTab = false; }
+if (ImGui::BeginTabItem("Settings", nullptr, undoTabFlags_Settings)) {
     g_currentlyEditingMirror = "";
     g_imageDragMode.store(false);
     g_windowOverlayDragMode.store(false);
@@ -182,5 +185,4 @@ if (ImGui::BeginTabItem("Settings")) {
     }
     ImGui::EndTabItem();
 }
-
-
+}
