@@ -399,7 +399,7 @@ void RenderInteractiveConfigErrorFrame(DummyWindow& window) {
 template <typename RenderFrameFn>
 void RunVisualLoop(DummyWindow& window, std::string_view testCaseName, RenderFrameFn&& renderFrame);
 
-constexpr char kVerifierModeId[] = "Verifier Mode";
+constexpr char kPrimaryModeId[] = "Primary Mode";
 constexpr char kPrecisionModeId[] = "Precision Mode";
 constexpr char kRelativeModeId[] = "Relative Mode";
 constexpr char kExpressionModeId[] = "Expression Mode";
@@ -1322,54 +1322,54 @@ void PopulateRichConfigFixture() {
     browserOverlay.border.radius = 10;
     g_config.browserOverlays.push_back(browserOverlay);
 
-    ModeConfig verifierMode;
-    verifierMode.id = kVerifierModeId;
-    verifierMode.width = 1280;
-    verifierMode.height = 720;
-    verifierMode.manualWidth = 1280;
-    verifierMode.manualHeight = 720;
-    verifierMode.background.selectedMode = "gradient";
-    verifierMode.background.gradientStops = {
+    ModeConfig primaryMode;
+    primaryMode.id = kPrimaryModeId;
+    primaryMode.width = 1280;
+    primaryMode.height = 720;
+    primaryMode.manualWidth = 1280;
+    primaryMode.manualHeight = 720;
+    primaryMode.background.selectedMode = "gradient";
+    primaryMode.background.gradientStops = {
         { { 0.15f, 0.2f, 0.35f, 1.0f }, 0.0f },
         { { 0.7f, 0.4f, 0.2f, 1.0f }, 1.0f },
     };
-    verifierMode.background.gradientAngle = 55.0f;
-    verifierMode.background.gradientAnimation = GradientAnimationType::Slide;
-    verifierMode.background.gradientAnimationSpeed = 1.3f;
-    verifierMode.background.gradientColorFade = true;
-    verifierMode.mirrorIds = { kVerifierMirrorName };
-    verifierMode.mirrorGroupIds = { kVerifierGroupName };
-    verifierMode.imageIds = { kVerifierImageName };
-    verifierMode.windowOverlayIds = { kVerifierWindowOverlayName };
-    verifierMode.browserOverlayIds = { kVerifierBrowserOverlayName };
-    verifierMode.stretch.enabled = true;
-    verifierMode.stretch.width = 1400;
-    verifierMode.stretch.height = 800;
-    verifierMode.stretch.x = 15;
-    verifierMode.stretch.y = 25;
-    verifierMode.gameTransition = GameTransitionType::Bounce;
-    verifierMode.overlayTransition = OverlayTransitionType::Cut;
-    verifierMode.backgroundTransition = BackgroundTransitionType::Cut;
-    verifierMode.transitionDurationMs = 777;
-    verifierMode.easeInPower = 2.5f;
-    verifierMode.easeOutPower = 4.25f;
-    verifierMode.bounceCount = 3;
-    verifierMode.bounceIntensity = 0.42f;
-    verifierMode.bounceDurationMs = 333;
-    verifierMode.relativeStretching = true;
-    verifierMode.skipAnimateX = true;
-    verifierMode.skipAnimateY = false;
-    verifierMode.border.enabled = true;
-    verifierMode.border.color = { 0.3f, 0.4f, 0.5f, 1.0f };
-    verifierMode.border.width = 9;
-    verifierMode.border.radius = 14;
-    verifierMode.sensitivityOverrideEnabled = true;
-    verifierMode.modeSensitivity = 0.88f;
-    verifierMode.separateXYSensitivity = true;
-    verifierMode.modeSensitivityX = 0.91f;
-    verifierMode.modeSensitivityY = 0.72f;
-    verifierMode.slideMirrorsIn = true;
-    g_config.modes.push_back(verifierMode);
+    primaryMode.background.gradientAngle = 55.0f;
+    primaryMode.background.gradientAnimation = GradientAnimationType::Slide;
+    primaryMode.background.gradientAnimationSpeed = 1.3f;
+    primaryMode.background.gradientColorFade = true;
+    primaryMode.mirrorIds = { kVerifierMirrorName };
+    primaryMode.mirrorGroupIds = { kVerifierGroupName };
+    primaryMode.imageIds = { kVerifierImageName };
+    primaryMode.windowOverlayIds = { kVerifierWindowOverlayName };
+    primaryMode.browserOverlayIds = { kVerifierBrowserOverlayName };
+    primaryMode.stretch.enabled = true;
+    primaryMode.stretch.width = 1400;
+    primaryMode.stretch.height = 800;
+    primaryMode.stretch.x = 15;
+    primaryMode.stretch.y = 25;
+    primaryMode.gameTransition = GameTransitionType::Bounce;
+    primaryMode.overlayTransition = OverlayTransitionType::Cut;
+    primaryMode.backgroundTransition = BackgroundTransitionType::Cut;
+    primaryMode.transitionDurationMs = 777;
+    primaryMode.easeInPower = 2.5f;
+    primaryMode.easeOutPower = 4.25f;
+    primaryMode.bounceCount = 3;
+    primaryMode.bounceIntensity = 0.42f;
+    primaryMode.bounceDurationMs = 333;
+    primaryMode.relativeStretching = true;
+    primaryMode.skipAnimateX = true;
+    primaryMode.skipAnimateY = false;
+    primaryMode.border.enabled = true;
+    primaryMode.border.color = { 0.3f, 0.4f, 0.5f, 1.0f };
+    primaryMode.border.width = 9;
+    primaryMode.border.radius = 14;
+    primaryMode.sensitivityOverrideEnabled = true;
+    primaryMode.modeSensitivity = 0.88f;
+    primaryMode.separateXYSensitivity = true;
+    primaryMode.modeSensitivityX = 0.91f;
+    primaryMode.modeSensitivityY = 0.72f;
+    primaryMode.slideMirrorsIn = true;
+    g_config.modes.push_back(primaryMode);
 
     ModeConfig precisionMode;
     precisionMode.id = kPrecisionModeId;
@@ -1382,12 +1382,12 @@ void PopulateRichConfigFixture() {
     precisionMode.mirrorIds = { kAuxMirrorName };
     g_config.modes.push_back(precisionMode);
 
-    g_config.defaultMode = kVerifierModeId;
+    g_config.defaultMode = kPrimaryModeId;
 
     HotkeyConfig hotkey;
     hotkey.keys = { VK_F6, 'Q' };
     hotkey.mainMode = "Fullscreen";
-    hotkey.secondaryMode = kVerifierModeId;
+    hotkey.secondaryMode = kPrimaryModeId;
     hotkey.altSecondaryModes = { { { 'E', 'R' }, kPrecisionModeId } };
     hotkey.conditions.gameState = { "ingame", "wall" };
     hotkey.conditions.exclusions = { VK_LSHIFT, VK_RBUTTON };
@@ -1423,7 +1423,7 @@ void PopulateRichConfigFixture() {
 void VerifyRichGlobalSettings() {
     Expect(g_config.lang == "zh_CN", "Expected language to roundtrip.");
     Expect(g_config.fontPath == "C:\\Windows\\Fonts\\consola.ttf", "Expected font path to roundtrip.");
-    Expect(g_config.defaultMode == kVerifierModeId, "Expected default mode to roundtrip.");
+    Expect(g_config.defaultMode == kPrimaryModeId, "Expected default mode to roundtrip.");
     Expect(g_config.fpsLimit == 144, "Expected fps limit to roundtrip.");
     Expect(g_config.fpsLimitSleepThreshold == 7, "Expected fps sleep threshold to roundtrip.");
     Expect(g_config.mirrorGammaMode == MirrorGammaMode::AssumeLinear, "Expected mirror gamma mode to roundtrip.");
@@ -1451,7 +1451,7 @@ void VerifyRichGlobalSettings() {
         std::lock_guard<std::mutex> lock(g_modeIdMutex);
         currentModeId = g_currentModeId;
     }
-    Expect(EqualsIgnoreCase(currentModeId, kVerifierModeId), "Expected LoadConfig to apply the saved default mode as current mode.");
+    Expect(EqualsIgnoreCase(currentModeId, kPrimaryModeId), "Expected LoadConfig to apply the saved default mode as current mode.");
 }
 
 void VerifyRichDebugSettings() {
@@ -1478,56 +1478,56 @@ void VerifyRichDebugSettings() {
 }
 
 void VerifyRichModes() {
-    const ModeConfig& verifierMode = FindModeOrThrow(kVerifierModeId);
-    Expect(verifierMode.width == 1280, "Expected verifier mode width to roundtrip.");
-    Expect(verifierMode.height == 720, "Expected verifier mode height to roundtrip.");
-    Expect(verifierMode.manualWidth == 1280, "Expected verifier mode manualWidth to roundtrip.");
-    Expect(verifierMode.manualHeight == 720, "Expected verifier mode manualHeight to roundtrip.");
-    Expect(verifierMode.background.selectedMode == "gradient", "Expected verifier mode background mode to roundtrip.");
-    Expect(verifierMode.background.gradientStops.size() == 2, "Expected verifier mode gradient stops to roundtrip.");
-    ExpectColorNear(verifierMode.background.gradientStops[0].color, { 0.15f, 0.2f, 0.35f, 1.0f },
-                    "Expected verifier mode first gradient color to roundtrip.");
-    ExpectFloatNear(verifierMode.background.gradientAngle, 55.0f, "Expected verifier mode gradient angle to roundtrip.");
-    Expect(verifierMode.background.gradientAnimation == GradientAnimationType::Slide,
-           "Expected verifier mode gradient animation to roundtrip.");
-    ExpectFloatNear(verifierMode.background.gradientAnimationSpeed, 1.3f,
-                    "Expected verifier mode gradient animation speed to roundtrip.");
-    Expect(verifierMode.background.gradientColorFade, "Expected verifier mode gradient color fade to roundtrip.");
-        ExpectVectorEquals(verifierMode.mirrorIds, std::vector<std::string>{ kVerifierMirrorName },
-                  "Expected verifier mode mirrorIds to roundtrip.");
-        ExpectVectorEquals(verifierMode.mirrorGroupIds, std::vector<std::string>{ kVerifierGroupName },
-                  "Expected verifier mode mirrorGroupIds to roundtrip.");
-        ExpectVectorEquals(verifierMode.imageIds, std::vector<std::string>{ kVerifierImageName },
-                  "Expected verifier mode imageIds to roundtrip.");
-        ExpectVectorEquals(verifierMode.windowOverlayIds, std::vector<std::string>{ kVerifierWindowOverlayName },
-                  "Expected verifier mode windowOverlayIds to roundtrip.");
-        ExpectVectorEquals(verifierMode.browserOverlayIds, std::vector<std::string>{ kVerifierBrowserOverlayName },
-                  "Expected verifier mode browserOverlayIds to roundtrip.");
-    Expect(verifierMode.stretch.enabled, "Expected verifier mode stretch.enabled to roundtrip.");
-    Expect(verifierMode.stretch.width == 1400 && verifierMode.stretch.height == 800,
-           "Expected verifier mode stretch size to roundtrip.");
-    Expect(verifierMode.stretch.x == 15 && verifierMode.stretch.y == 25,
-           "Expected verifier mode stretch position to roundtrip.");
-    Expect(verifierMode.gameTransition == GameTransitionType::Bounce, "Expected verifier mode game transition to roundtrip.");
-    Expect(verifierMode.transitionDurationMs == 777, "Expected verifier mode transitionDurationMs to roundtrip.");
-    ExpectFloatNear(verifierMode.easeInPower, 2.5f, "Expected verifier mode easeInPower to roundtrip.");
-    ExpectFloatNear(verifierMode.easeOutPower, 4.25f, "Expected verifier mode easeOutPower to roundtrip.");
-    Expect(verifierMode.bounceCount == 3, "Expected verifier mode bounceCount to roundtrip.");
-    ExpectFloatNear(verifierMode.bounceIntensity, 0.42f, "Expected verifier mode bounceIntensity to roundtrip.");
-    Expect(verifierMode.bounceDurationMs == 333, "Expected verifier mode bounceDurationMs to roundtrip.");
-    Expect(verifierMode.relativeStretching, "Expected verifier mode relativeStretching to roundtrip.");
-    Expect(verifierMode.skipAnimateX, "Expected verifier mode skipAnimateX to roundtrip.");
-    Expect(!verifierMode.skipAnimateY, "Expected verifier mode skipAnimateY to roundtrip.");
-    Expect(verifierMode.border.enabled, "Expected verifier mode border.enabled to roundtrip.");
-    ExpectColorNear(verifierMode.border.color, { 0.3f, 0.4f, 0.5f, 1.0f }, "Expected verifier mode border color to roundtrip.");
-    Expect(verifierMode.border.width == 9 && verifierMode.border.radius == 14,
-           "Expected verifier mode border settings to roundtrip.");
-    Expect(verifierMode.sensitivityOverrideEnabled, "Expected verifier mode sensitivityOverrideEnabled to roundtrip.");
-    ExpectFloatNear(verifierMode.modeSensitivity, 0.88f, "Expected verifier mode modeSensitivity to roundtrip.");
-    Expect(verifierMode.separateXYSensitivity, "Expected verifier mode separateXYSensitivity to roundtrip.");
-    ExpectFloatNear(verifierMode.modeSensitivityX, 0.91f, "Expected verifier mode modeSensitivityX to roundtrip.");
-    ExpectFloatNear(verifierMode.modeSensitivityY, 0.72f, "Expected verifier mode modeSensitivityY to roundtrip.");
-    Expect(verifierMode.slideMirrorsIn, "Expected verifier mode slideMirrorsIn to roundtrip.");
+        const ModeConfig& primaryMode = FindModeOrThrow(kPrimaryModeId);
+        Expect(primaryMode.width == 1280, "Expected primary mode width to roundtrip.");
+        Expect(primaryMode.height == 720, "Expected primary mode height to roundtrip.");
+        Expect(primaryMode.manualWidth == 1280, "Expected primary mode manualWidth to roundtrip.");
+        Expect(primaryMode.manualHeight == 720, "Expected primary mode manualHeight to roundtrip.");
+        Expect(primaryMode.background.selectedMode == "gradient", "Expected primary mode background mode to roundtrip.");
+        Expect(primaryMode.background.gradientStops.size() == 2, "Expected primary mode gradient stops to roundtrip.");
+        ExpectColorNear(primaryMode.background.gradientStops[0].color, { 0.15f, 0.2f, 0.35f, 1.0f },
+                  "Expected primary mode first gradient color to roundtrip.");
+        ExpectFloatNear(primaryMode.background.gradientAngle, 55.0f, "Expected primary mode gradient angle to roundtrip.");
+        Expect(primaryMode.background.gradientAnimation == GradientAnimationType::Slide,
+            "Expected primary mode gradient animation to roundtrip.");
+        ExpectFloatNear(primaryMode.background.gradientAnimationSpeed, 1.3f,
+                  "Expected primary mode gradient animation speed to roundtrip.");
+        Expect(primaryMode.background.gradientColorFade, "Expected primary mode gradient color fade to roundtrip.");
+        ExpectVectorEquals(primaryMode.mirrorIds, std::vector<std::string>{ kVerifierMirrorName },
+                  "Expected primary mode mirrorIds to roundtrip.");
+        ExpectVectorEquals(primaryMode.mirrorGroupIds, std::vector<std::string>{ kVerifierGroupName },
+                  "Expected primary mode mirrorGroupIds to roundtrip.");
+        ExpectVectorEquals(primaryMode.imageIds, std::vector<std::string>{ kVerifierImageName },
+                  "Expected primary mode imageIds to roundtrip.");
+        ExpectVectorEquals(primaryMode.windowOverlayIds, std::vector<std::string>{ kVerifierWindowOverlayName },
+                  "Expected primary mode windowOverlayIds to roundtrip.");
+        ExpectVectorEquals(primaryMode.browserOverlayIds, std::vector<std::string>{ kVerifierBrowserOverlayName },
+                  "Expected primary mode browserOverlayIds to roundtrip.");
+        Expect(primaryMode.stretch.enabled, "Expected primary mode stretch.enabled to roundtrip.");
+        Expect(primaryMode.stretch.width == 1400 && primaryMode.stretch.height == 800,
+            "Expected primary mode stretch size to roundtrip.");
+        Expect(primaryMode.stretch.x == 15 && primaryMode.stretch.y == 25,
+            "Expected primary mode stretch position to roundtrip.");
+        Expect(primaryMode.gameTransition == GameTransitionType::Bounce, "Expected primary mode game transition to roundtrip.");
+        Expect(primaryMode.transitionDurationMs == 777, "Expected primary mode transitionDurationMs to roundtrip.");
+        ExpectFloatNear(primaryMode.easeInPower, 2.5f, "Expected primary mode easeInPower to roundtrip.");
+        ExpectFloatNear(primaryMode.easeOutPower, 4.25f, "Expected primary mode easeOutPower to roundtrip.");
+        Expect(primaryMode.bounceCount == 3, "Expected primary mode bounceCount to roundtrip.");
+        ExpectFloatNear(primaryMode.bounceIntensity, 0.42f, "Expected primary mode bounceIntensity to roundtrip.");
+        Expect(primaryMode.bounceDurationMs == 333, "Expected primary mode bounceDurationMs to roundtrip.");
+        Expect(primaryMode.relativeStretching, "Expected primary mode relativeStretching to roundtrip.");
+        Expect(primaryMode.skipAnimateX, "Expected primary mode skipAnimateX to roundtrip.");
+        Expect(!primaryMode.skipAnimateY, "Expected primary mode skipAnimateY to roundtrip.");
+        Expect(primaryMode.border.enabled, "Expected primary mode border.enabled to roundtrip.");
+        ExpectColorNear(primaryMode.border.color, { 0.3f, 0.4f, 0.5f, 1.0f }, "Expected primary mode border color to roundtrip.");
+        Expect(primaryMode.border.width == 9 && primaryMode.border.radius == 14,
+            "Expected primary mode border settings to roundtrip.");
+        Expect(primaryMode.sensitivityOverrideEnabled, "Expected primary mode sensitivityOverrideEnabled to roundtrip.");
+        ExpectFloatNear(primaryMode.modeSensitivity, 0.88f, "Expected primary mode modeSensitivity to roundtrip.");
+        Expect(primaryMode.separateXYSensitivity, "Expected primary mode separateXYSensitivity to roundtrip.");
+        ExpectFloatNear(primaryMode.modeSensitivityX, 0.91f, "Expected primary mode modeSensitivityX to roundtrip.");
+        ExpectFloatNear(primaryMode.modeSensitivityY, 0.72f, "Expected primary mode modeSensitivityY to roundtrip.");
+        Expect(primaryMode.slideMirrorsIn, "Expected primary mode slideMirrorsIn to roundtrip.");
 
     const ModeConfig& precisionMode = FindModeOrThrow(kPrecisionModeId);
     Expect(precisionMode.width == 960 && precisionMode.height == 540, "Expected precision mode dimensions to roundtrip.");
@@ -1670,10 +1670,10 @@ void VerifyRichBrowserOverlays() {
 }
 
 void VerifyRichHotkeys() {
-    const HotkeyConfig& hotkey = FindHotkeyBySecondaryModeOrThrow(kVerifierModeId);
+    const HotkeyConfig& hotkey = FindHotkeyBySecondaryModeOrThrow(kPrimaryModeId);
     ExpectVectorEquals(hotkey.keys, std::vector<DWORD>{ VK_F6, 'Q' }, "Expected hotkey keys to roundtrip.");
     Expect(hotkey.mainMode == "Fullscreen", "Expected hotkey main mode to roundtrip.");
-    Expect(hotkey.secondaryMode == kVerifierModeId, "Expected hotkey secondary mode to roundtrip.");
+    Expect(hotkey.secondaryMode == kPrimaryModeId, "Expected hotkey secondary mode to roundtrip.");
     Expect(hotkey.altSecondaryModes.size() == 1, "Expected alt secondary modes to roundtrip.");
     ExpectVectorEquals(hotkey.altSecondaryModes[0].keys, std::vector<DWORD>{ 'E', 'R' },
                        "Expected alt secondary mode keys to roundtrip.");
@@ -1968,16 +1968,16 @@ void RunConfigLoadMissingRequiredModesTest(TestRunMode runMode = TestRunMode::Au
     RunConfigLoadCase("config_load_missing_required_modes",
                       []() {
                           Config config;
-                          config.defaultMode = kVerifierModeId;
+                          config.defaultMode = kPrimaryModeId;
                           config.modes.clear();
 
-                          ModeConfig verifierMode;
-                          verifierMode.id = kVerifierModeId;
-                          verifierMode.width = 1111;
-                          verifierMode.height = 666;
-                          verifierMode.manualWidth = 1111;
-                          verifierMode.manualHeight = 666;
-                          config.modes.push_back(verifierMode);
+                          ModeConfig primaryMode;
+                          primaryMode.id = kPrimaryModeId;
+                          primaryMode.width = 1111;
+                          primaryMode.height = 666;
+                          primaryMode.manualWidth = 1111;
+                          primaryMode.manualHeight = 666;
+                          config.modes.push_back(primaryMode);
 
                           WriteConfigFixtureToDisk(config);
                       },
@@ -2149,7 +2149,8 @@ void RunConfigLoadLegacyVersionUpgradeTest(TestRunMode runMode = TestRunMode::Au
                           Expect(g_config.configVersion == GetConfigVersion(), "Expected legacy config version to upgrade to the current version.");
                          Expect(g_config.disableHookChaining,
                              "Expected legacy disableHookChaining to remain preserved on the 1.2.1 branch.");
-                          Expect(g_config.keyRepeatStartDelay == 50, "Expected legacy keyRepeatStartDelay to be normalized to the v3 minimum.");
+                         Expect(g_config.keyRepeatStartDelay == 10,
+                             "Expected legacy non-zero keyRepeatStartDelay to remain preserved after upgrade.");
                           Expect(g_config.keyRepeatDelay == ConfigDefaults::CONFIG_KEY_REPEAT_DELAY,
                                  "Expected legacy zero keyRepeatDelay to normalize to the default value.");
                       },

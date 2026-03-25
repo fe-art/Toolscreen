@@ -8,6 +8,7 @@ set "RUN_TESTS=0"
 set "FAILURE_STEP="
 set "FAILURE_CODE=1"
 set "ARTIFACT_CONFIG_DIR=Release"
+set "CLI_TEST_RUNNER="
 
 for %%A in (%*) do (
     if /I "%%~A"=="release" (
@@ -26,6 +27,7 @@ for %%A in (%*) do (
 )
 
 set "ARTIFACT_DIR=%SCRIPT_DIR%out\build\bin\%ARTIFACT_CONFIG_DIR%"
+set "CLI_TEST_RUNNER=%ARTIFACT_DIR%\toolscreen_gui_integration_tests.exe"
 
 pushd "%SCRIPT_DIR%" >nul || exit /b 1
 
@@ -43,6 +45,30 @@ if errorlevel 1 (
     set "FAILURE_STEP=Build Toolscreen DLL"
     set "FAILURE_CODE=20"
     goto :fail
+)
+
+if "%RUN_TESTS%"=="1" (
+    echo Building CLI integration test runner with preset %BUILD_PRESET%...
+    cmake --build --preset %BUILD_PRESET% --target toolscreen_gui_integration_tests
+    if errorlevel 1 (
+        set "FAILURE_STEP=Build CLI integration test runner"
+        set "FAILURE_CODE=25"
+        goto :fail
+    )
+
+    if not exist "%CLI_TEST_RUNNER%" (
+        set "FAILURE_STEP=Locate CLI integration test runner"
+        set "FAILURE_CODE=26"
+        goto :fail
+    )
+
+    echo Running CLI integration test runner...
+    "%CLI_TEST_RUNNER%" --run-all
+    if errorlevel 1 (
+        set "FAILURE_STEP=Run CLI integration test runner"
+        set "FAILURE_CODE=27"
+        goto :fail
+    )
 )
 
 echo Copying DLL into EXE packaging inputs...
@@ -93,10 +119,10 @@ if errorlevel 1 (
 )
 
 if "%RUN_TESTS%"=="1" (
-    echo Running tests with preset %TEST_PRESET%...
-    ctest --preset %TEST_PRESET%
+    echo Running CTest packaging smoke tests with preset %TEST_PRESET%...
+    ctest --preset %TEST_PRESET% --exclude-regex "^toolscreen_integration_"
     if errorlevel 1 (
-        set "FAILURE_STEP=Run CTest preset %TEST_PRESET%"
+        set "FAILURE_STEP=Run CTest packaging smoke tests with preset %TEST_PRESET%"
         set "FAILURE_CODE=70"
         goto :fail
     )
