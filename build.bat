@@ -119,6 +119,14 @@ if errorlevel 1 (
 )
 
 if "%RUN_TESTS%"=="1" (
+    echo Building test executable with preset %BUILD_PRESET%...
+    cmake --build --preset %BUILD_PRESET% --target toolscreen_gui_integration_tests
+    if errorlevel 1 (
+        set "FAILURE_STEP=Build test executable"
+        set "FAILURE_CODE=65"
+        goto :fail
+    )
+
     echo Running CTest packaging smoke tests with preset %TEST_PRESET%...
     ctest --preset %TEST_PRESET% --exclude-regex "^toolscreen_integration_"
     if errorlevel 1 (
