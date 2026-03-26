@@ -1235,6 +1235,15 @@ const char* render_frag_shader = R"(#version 330 core
     uniform vec4 u_outputColor;
     uniform vec4 u_borderColor;
     uniform vec2 u_screenPixel;
+    uniform float u_cornerRadius;
+    uniform vec2 u_viewportSize;
+
+    float sdRoundedBox(vec2 p, vec2 b, float r) {
+        float maxR = min(b.x, b.y);
+        r = clamp(r, 0.0, maxR);
+        vec2 q = abs(p) - b + r;
+        return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+    }
 
     bool hasBorderSample(vec2 coord, vec2 pixel) {
         return texture(filterTexture, coord + vec2(-pixel.x, -pixel.y)).a > 0.5 ||
@@ -1248,6 +1257,13 @@ const char* render_frag_shader = R"(#version 330 core
     }
 
     void main() {
+        if (u_cornerRadius > 0.0) {
+            vec2 pixelPos = TexCoord * u_viewportSize;
+            vec2 center = u_viewportSize * 0.5;
+            float dist = sdRoundedBox(pixelPos - center, center, u_cornerRadius);
+            if (dist > 0.0) discard;
+        }
+
         float centerAlpha = texture(filterTexture, TexCoord).a;
 
         if (centerAlpha > 0.5) {
@@ -1291,6 +1307,15 @@ const char* render_passthrough_frag_shader = R"(#version 330 core
     uniform vec4 u_borderColor;
     uniform vec2 u_screenPixel;
     uniform float u_opacity;
+    uniform float u_cornerRadius;
+    uniform vec2 u_viewportSize;
+
+    float sdRoundedBox(vec2 p, vec2 b, float r) {
+        float maxR = min(b.x, b.y);
+        r = clamp(r, 0.0, maxR);
+        vec2 q = abs(p) - b + r;
+        return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+    }
 
     bool hasBorderSample(vec2 coord, vec2 pixel) {
         return texture(filterTexture, coord + vec2(-pixel.x, -pixel.y)).a > 0.5 ||
@@ -1304,6 +1329,13 @@ const char* render_passthrough_frag_shader = R"(#version 330 core
     }
 
     void main() {
+        if (u_cornerRadius > 0.0) {
+            vec2 pixelPos = TexCoord * u_viewportSize;
+            vec2 center = u_viewportSize * 0.5;
+            float dist = sdRoundedBox(pixelPos - center, center, u_cornerRadius);
+            if (dist > 0.0) discard;
+        }
+
         vec4 centerColor = texture(filterTexture, TexCoord);
 
         if (centerColor.a > 0.5) {
@@ -1365,8 +1397,26 @@ uniform int u_numColorKeys;
 uniform vec3 u_colorKeys[MAX_COLOR_KEYS];
 uniform float u_sensitivities[MAX_COLOR_KEYS];
 uniform float u_opacity;
+uniform float u_cornerRadius;
+uniform vec2 u_viewportSize;
+
+float sdRoundedBox(vec2 p, vec2 b, float r) {
+    float maxR = min(b.x, b.y);
+    r = clamp(r, 0.0, maxR);
+    vec2 q = abs(p) - b + r;
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+}
 
 void main() {
+    float cornerAlpha = 1.0;
+    if (u_cornerRadius > 0.0) {
+        vec2 pixelPos = TexCoord * u_viewportSize;
+        vec2 center = u_viewportSize * 0.5;
+        float dist = sdRoundedBox(pixelPos - center, center, u_cornerRadius);
+        if (dist > 0.0) discard;
+        cornerAlpha = 1.0 - smoothstep(-0.5, 0.5, dist);
+    }
+
     vec4 texColor = texture(imageTexture, TexCoord);
 
     if (u_enableColorKey) {
@@ -1379,8 +1429,8 @@ void main() {
             }
         }
     }
-    
-    FragColor = vec4(texColor.rgb, texColor.a * u_opacity);
+
+    FragColor = vec4(texColor.rgb, texColor.a * u_opacity * cornerAlpha);
 })";
 
 const char* static_border_frag_shader = R"(#version 330 core
@@ -1476,8 +1526,26 @@ out vec4 FragColor;
 in vec2 TexCoord;
 uniform sampler2D screenTexture;
 uniform float u_opacity;
+uniform float u_cornerRadius;
+uniform vec2 u_viewportSize;
+
+float sdRoundedBox(vec2 p, vec2 b, float r) {
+    float maxR = min(b.x, b.y);
+    r = clamp(r, 0.0, maxR);
+    vec2 q = abs(p) - b + r;
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+}
 
 void main() {
+    if (u_cornerRadius > 0.0) {
+        vec2 pixelPos = TexCoord * u_viewportSize;
+        vec2 center = u_viewportSize * 0.5;
+        float dist = sdRoundedBox(pixelPos - center, center, u_cornerRadius);
+        if (dist > 0.0) discard;
+        float alpha = 1.0 - smoothstep(-0.5, 0.5, dist);
+        FragColor = vec4(texture(screenTexture, TexCoord).rgb, u_opacity * alpha);
+        return;
+    }
     FragColor = vec4(texture(screenTexture, TexCoord).rgb, u_opacity);
 })";
 
@@ -1656,12 +1724,16 @@ void InitializeShaders() {
     g_renderShaderLocs.outputColor = glGetUniformLocation(g_renderProgram, "u_outputColor");
     g_renderShaderLocs.borderColor = glGetUniformLocation(g_renderProgram, "u_borderColor");
     g_renderShaderLocs.screenPixel = glGetUniformLocation(g_renderProgram, "u_screenPixel");
+    g_renderShaderLocs.cornerRadius = glGetUniformLocation(g_renderProgram, "u_cornerRadius");
+    g_renderShaderLocs.viewportSize = glGetUniformLocation(g_renderProgram, "u_viewportSize");
 
     g_renderPassthroughShaderLocs.filterTexture = glGetUniformLocation(g_renderPassthroughProgram, "filterTexture");
     g_renderPassthroughShaderLocs.borderWidth = glGetUniformLocation(g_renderPassthroughProgram, "u_borderWidth");
     g_renderPassthroughShaderLocs.borderColor = glGetUniformLocation(g_renderPassthroughProgram, "u_borderColor");
     g_renderPassthroughShaderLocs.screenPixel = glGetUniformLocation(g_renderPassthroughProgram, "u_screenPixel");
     g_renderPassthroughShaderLocs.opacity = glGetUniformLocation(g_renderPassthroughProgram, "u_opacity");
+    g_renderPassthroughShaderLocs.cornerRadius = glGetUniformLocation(g_renderPassthroughProgram, "u_cornerRadius");
+    g_renderPassthroughShaderLocs.viewportSize = glGetUniformLocation(g_renderPassthroughProgram, "u_viewportSize");
 
     g_backgroundShaderLocs.backgroundTexture = glGetUniformLocation(g_backgroundProgram, "backgroundTexture");
     g_backgroundShaderLocs.opacity = glGetUniformLocation(g_backgroundProgram, "u_opacity");
@@ -1674,6 +1746,8 @@ void InitializeShaders() {
     g_imageRenderShaderLocs.colorKeys = glGetUniformLocation(g_imageRenderProgram, "u_colorKeys");
     g_imageRenderShaderLocs.sensitivities = glGetUniformLocation(g_imageRenderProgram, "u_sensitivities");
     g_imageRenderShaderLocs.opacity = glGetUniformLocation(g_imageRenderProgram, "u_opacity");
+    g_imageRenderShaderLocs.cornerRadius = glGetUniformLocation(g_imageRenderProgram, "u_cornerRadius");
+    g_imageRenderShaderLocs.viewportSize = glGetUniformLocation(g_imageRenderProgram, "u_viewportSize");
 
     g_staticBorderShaderLocs.shape = glGetUniformLocation(g_staticBorderProgram, "u_shape");
     g_staticBorderShaderLocs.borderColor = glGetUniformLocation(g_staticBorderProgram, "u_borderColor");
@@ -1685,6 +1759,8 @@ void InitializeShaders() {
     g_passthroughShaderLocs.screenTexture = glGetUniformLocation(g_passthroughProgram, "screenTexture");
     g_passthroughShaderLocs.sourceRect = glGetUniformLocation(g_passthroughProgram, "u_sourceRect");
     g_passthroughShaderLocs.opacity = glGetUniformLocation(g_passthroughProgram, "u_opacity");
+    g_passthroughShaderLocs.cornerRadius = glGetUniformLocation(g_passthroughProgram, "u_cornerRadius");
+    g_passthroughShaderLocs.viewportSize = glGetUniformLocation(g_passthroughProgram, "u_viewportSize");
 
     g_gradientShaderLocs.numStops = glGetUniformLocation(g_gradientProgram, "u_numStops");
     g_gradientShaderLocs.stopColors = glGetUniformLocation(g_gradientProgram, "u_stopColors");
@@ -1701,16 +1777,19 @@ void InitializeShaders() {
 
     glUseProgram(g_renderProgram);
     glUniform1i(g_renderShaderLocs.filterTexture, 0);
+    glUniform1f(g_renderShaderLocs.cornerRadius, 0.0f);
 
     glUseProgram(g_renderPassthroughProgram);
     glUniform1i(g_renderPassthroughShaderLocs.filterTexture, 0);
     glUniform1f(g_renderPassthroughShaderLocs.opacity, 1.0f);
+    glUniform1f(g_renderPassthroughShaderLocs.cornerRadius, 0.0f);
 
     glUseProgram(g_backgroundProgram);
     glUniform1i(g_backgroundShaderLocs.backgroundTexture, 0);
 
     glUseProgram(g_imageRenderProgram);
     glUniform1i(g_imageRenderShaderLocs.imageTexture, 0);
+    glUniform1f(g_imageRenderShaderLocs.cornerRadius, 0.0f);
 
     glUseProgram(g_staticBorderProgram);
 
@@ -1720,6 +1799,7 @@ void InitializeShaders() {
     glUseProgram(g_passthroughProgram);
     glUniform1i(g_passthroughShaderLocs.screenTexture, 0);
     glUniform1f(g_passthroughShaderLocs.opacity, 1.0f);
+    glUniform1f(g_passthroughShaderLocs.cornerRadius, 0.0f);
 
     glUseProgram(g_virtualCameraNv12Program);
     glUniform1i(g_virtualCameraNv12ShaderLocs.screenTexture, 0);
@@ -2993,17 +3073,20 @@ static void LogEyeZoomFramebufferStatusThrottled(const char* stage, GLuint textu
 }
 
 static void DrawPassthroughTextureRegion(GLuint textureId, const float sourceRect[4], int dstLeft, int dstBottom, int dstRight,
-                                         int dstTop, int fullW, int fullH, float opacity) {
+                                         int dstTop, int fullW, int fullH, float opacity, float cornerRadius = 0.0f) {
     if (textureId == 0 || dstRight <= dstLeft || dstTop <= dstBottom || fullW <= 0 || fullH <= 0) { return; }
 
     glUseProgram(g_passthroughProgram);
     BindTextureDirect(GL_TEXTURE_2D, textureId);
     glUniform4f(g_passthroughShaderLocs.sourceRect, sourceRect[0], sourceRect[1], sourceRect[2], sourceRect[3]);
     glUniform1f(g_passthroughShaderLocs.opacity, opacity);
+    glUniform1f(g_passthroughShaderLocs.cornerRadius, cornerRadius);
 
-    glBindVertexArray(g_fullscreenQuadVAO);
     const int regionW = dstRight - dstLeft;
     const int regionH = dstTop - dstBottom;
+    glUniform2f(g_passthroughShaderLocs.viewportSize, static_cast<float>(regionW), static_cast<float>(regionH));
+
+    glBindVertexArray(g_fullscreenQuadVAO);
     if (oglViewport) {
         oglViewport(dstLeft, dstBottom, regionW, regionH);
     } else {
@@ -3214,6 +3297,12 @@ static void RenderMirrorsDirect(const std::vector<MirrorConfig>& activeMirrors, 
                         glUniform1f(g_renderPassthroughShaderLocs.opacity, effectiveOpacity);
                         lastRenderPassthroughOpacity = effectiveOpacity;
                     }
+                    {
+                        const float mirrorRadius = static_cast<float>(conf.border.staticRadius);
+                        glUniform1f(g_renderPassthroughShaderLocs.cornerRadius, mirrorRadius);
+                        glUniform2f(g_renderPassthroughShaderLocs.viewportSize,
+                                    static_cast<float>(renderData.outW), static_cast<float>(renderData.outH));
+                    }
                     renderPassthroughUniformsValid = true;
                 } else {
                     bindMirrorProgram(g_renderProgram);
@@ -3241,6 +3330,12 @@ static void RenderMirrorsDirect(const std::vector<MirrorConfig>& activeMirrors, 
                         glUniform2f(g_renderShaderLocs.screenPixel, screenPixelX, screenPixelY);
                         lastRenderScreenPixelX = screenPixelX;
                         lastRenderScreenPixelY = screenPixelY;
+                    }
+                    {
+                        const float mirrorRadius = static_cast<float>(conf.border.staticRadius);
+                        glUniform1f(g_renderShaderLocs.cornerRadius, mirrorRadius);
+                        glUniform2f(g_renderShaderLocs.viewportSize,
+                                    static_cast<float>(renderData.outW), static_cast<float>(renderData.outH));
                     }
                     renderUniformsValid = true;
                 }
@@ -5685,17 +5780,19 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
         }
     };
 
+    const float eyeZoomCornerRadius = (cloneBorder && cloneBorder->radius > 0) ? static_cast<float>(cloneBorder->radius) : 0.0f;
+
     if (useSnapshot) {
         const float sourceRect[] = { 0.0f, 0.0f, 1.0f, 1.0f };
-        if (opacity < 1.0f) {
+        if (opacity < 1.0f || eyeZoomCornerRadius > 0.0f) {
             glEnable(GL_BLEND);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         } else {
             glDisable(GL_BLEND);
         }
         DrawPassthroughTextureRegion(s_eyeZoomSnapshotTexture, sourceRect, dstLeft, dstBottom, dstRight, dstTop, fullW, fullH,
-                                     opacity);
-        if (opacity >= 1.0f) {
+                                     opacity, eyeZoomCornerRadius);
+        if (opacity >= 1.0f && eyeZoomCornerRadius <= 0.0f) {
             ForceOpaqueAlphaInCurrentDrawFbo(dstLeft, dstBottom, zoomOutputWidth, zoomOutputHeight);
         }
     } else {
@@ -5705,14 +5802,14 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
             static_cast<float>(srcRight - srcLeft) / gameTextureW,
             static_cast<float>(srcTop - srcBottom) / gameTextureH,
         };
-        if (opacity < 1.0f) {
+        if (opacity < 1.0f || eyeZoomCornerRadius > 0.0f) {
             glEnable(GL_BLEND);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         } else {
             glDisable(GL_BLEND);
         }
         DrawPassthroughTextureRegion(gameTextureToUse, sourceRect, dstLeft, dstBottom, dstRight, dstTop, fullW, fullH,
-                                     opacity);
+                                     opacity, eyeZoomCornerRadius);
         if (opacity >= 1.0f) {
             ForceOpaqueAlphaInCurrentDrawFbo(dstLeft, dstBottom, zoomOutputWidth, zoomOutputHeight);
         }
@@ -6294,6 +6391,26 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
         glDisable(GL_SCISSOR_TEST);
         glBindFramebuffer(GL_READ_FRAMEBUFFER, g_sceneFBO);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s.fb);
+
+        {
+            int activeRadius = 0;
+            if (transitioningToFullscreen && fromBorder.radius > 0) {
+                activeRadius = fromBorder.radius;
+            } else if (modeToRender->border.radius > 0) {
+                activeRadius = modeToRender->border.radius;
+            }
+
+            if (activeRadius > 0 && g_sceneTexture != 0) {
+                PROFILE_SCOPE_CAT("Render Rounded Game Content", "Rendering");
+                glBindFramebuffer(GL_FRAMEBUFFER, s.fb);
+                glEnable(GL_BLEND);
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                const float sourceRect[] = { 0.0f, 0.0f, 1.0f, 1.0f };
+                DrawPassthroughTextureRegion(g_sceneTexture, sourceRect, finalX, finalY_gl, finalX + finalW, finalY_gl + finalH,
+                                             fullW, fullH, 1.0f, static_cast<float>(activeRadius));
+                glDisable(GL_BLEND);
+            }
+        }
 
         {
             PROFILE_SCOPE_CAT("Render Game Border", "Rendering");

@@ -59,10 +59,12 @@ struct FilterShaderLocs {
 
 struct RenderShaderLocs {
     GLint filterTexture, borderWidth, outputColor, borderColor, screenPixel;
+    GLint cornerRadius, viewportSize;
 };
 
 struct RenderPassthroughShaderLocs {
     GLint filterTexture, borderWidth, borderColor, screenPixel, opacity;
+    GLint cornerRadius, viewportSize;
 };
 
 struct BackgroundShaderLocs {
@@ -81,10 +83,12 @@ struct ImageRenderShaderLocs {
     GLint colorKeys;
     GLint sensitivities;
     GLint opacity;
+    GLint cornerRadius, viewportSize;
 };
 
 struct PassthroughShaderLocs {
     GLint screenTexture, sourceRect, opacity;
+    GLint cornerRadius, viewportSize;
 };
 
 #define MAX_GRADIENT_STOPS 8
