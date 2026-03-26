@@ -1611,6 +1611,16 @@ static void AttemptHookGlBindTextureViaWgl() {
 static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
     if (!next) return FALSE;
 
+    thread_local int s_swapBuffersHookDepth = 0;
+    struct SwapBuffersHookDepthScope {
+        int& depth;
+        explicit SwapBuffersHookDepthScope(int& value) : depth(value) { ++depth; }
+        ~SwapBuffersHookDepthScope() { --depth; }
+    } depthScope(s_swapBuffersHookDepth);
+    if (s_swapBuffersHookDepth > 1) {
+        return next(hDc);
+    }
+
     auto startTime = std::chrono::high_resolution_clock::now();
     _set_se_translator(SEHTranslator);
 
