@@ -471,11 +471,32 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                     g_pendingModeSwitch.source = "GUI mode list";
                     Log("[GUI] Deferred mode switch to: " + mode.id);
                 }
-                mode.stretch.enabled = true;
-                mode.stretch.x = 0;
-                mode.stretch.y = 0;
-                mode.stretch.width = GetCachedWindowWidth();
-                mode.stretch.height = GetCachedWindowHeight();
+
+                if (ImGui::TreeNode("Stretch Properties")) {
+                    ImGui::TextDisabled("Fullscreen stretch is always enabled and fills the game window.");
+                    ImGui::BeginDisabled();
+                    ImGui::Checkbox("Enable Stretch", &mode.stretch.enabled);
+                    ImGui::Columns(2, "stretch_cols_fs", false);
+                    ImGui::SetColumnWidth(0, 150);
+                    ImGui::Text("X Position");
+                    ImGui::NextColumn();
+                    Spinner("##StretchX", &mode.stretch.x);
+                    ImGui::NextColumn();
+                    ImGui::Text("Width");
+                    ImGui::NextColumn();
+                    Spinner("##StretchW", &mode.stretch.width, 1, 1);
+                    ImGui::NextColumn();
+                    ImGui::Text("Y Position");
+                    ImGui::NextColumn();
+                    Spinner("##StretchY", &mode.stretch.y);
+                    ImGui::NextColumn();
+                    ImGui::Text("Height");
+                    ImGui::NextColumn();
+                    Spinner("##StretchH", &mode.stretch.height, 1, 1);
+                    ImGui::Columns(1);
+                    ImGui::EndDisabled();
+                    ImGui::TreePop();
+                }
 
                 ImGui::Separator();
                 if (ImGui::TreeNode(trc("modes.transition_settings"))) {
@@ -2495,8 +2516,6 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                 renderModeSourceAssignments(mode, mode.id);
 
                 if (ImGui::TreeNode("Stretch Properties")) {
-                    ImGui::TextDisabled("Fullscreen stretch is always enabled and fills the game window.");
-                    ImGui::BeginDisabled();
                     if (ImGui::Checkbox("Enable Stretch", &mode.stretch.enabled)) g_configIsDirty = true;
                     ImGui::Columns(2, "stretch_cols", false);
                     ImGui::SetColumnWidth(0, 150);
@@ -2526,7 +2545,6 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                     ImGui::NextColumn();
                     if (Spinner("##StretchH", &mode.stretch.height, 1, 1)) g_configIsDirty = true;
                     ImGui::Columns(1);
-                    ImGui::EndDisabled();
                     ImGui::TreePop();
                 }
 
