@@ -771,6 +771,7 @@ void RenderPerformanceOverlay(bool showPerformanceOverlay) {
     ImGui::SetNextWindowBgAlpha(0.35f);
     ImGui::Begin("DebugOverlay", nullptr,
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoInputs |
+                     ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoFocusOnAppearing |
                      ImGuiWindowFlags_AlwaysAutoResize);
     ImGui::Text("Render Hook Overhead: %.2f ms", cachedFrameTime);
     ImGui::Text("Original Frame Time: %.2f ms", cachedOriginalFrameTime);
@@ -787,6 +788,7 @@ void RenderProfilerOverlay(bool showProfiler, bool showPerformanceOverlay) {
     ImGui::SetNextWindowBgAlpha(0.35f);
     ImGui::Begin("ProfilerOverlay", nullptr,
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoInputs |
+                     ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoFocusOnAppearing |
                      ImGuiWindowFlags_AlwaysAutoResize);
 
     ImGui::SetWindowFontScale(g_config.debug.profilerScale);

@@ -4171,11 +4171,13 @@ static void RenderSameThreadImGui(const SameThreadOverlayState& request) {
     RenderCachedTextureGridLabels();
     RenderCachedEyeZoomTextLabels();
 
-    if (request.shouldRenderGui) { RenderSettingsGUI(); }
     RenderPerformanceOverlay(request.showPerformanceOverlay);
     RenderProfilerOverlay(request.showProfiler, request.showPerformanceOverlay);
+    if (request.shouldRenderGui) {
+        RenderSettingsGUI();
+        ImGuiInputQueue_PublishCaptureState();
+    }
 
-    ImGuiInputQueue_PublishCaptureState();
     ImGui::Render();
     RenderImGuiWithStateProtection(true);
 }
