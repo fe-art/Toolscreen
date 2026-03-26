@@ -407,9 +407,15 @@ struct KeyRebind {
     DWORD customOutputUnicode = 0;
     DWORD customOutputScanCode = 0;
 };
+struct KeyRebindPreset {
+    std::string name;
+    std::vector<KeyRebind> rebinds;
+};
 struct KeyRebindsConfig {
     bool enabled = false;
     std::vector<KeyRebind> rebinds;
+    std::vector<KeyRebindPreset> presets;
+    std::string activePresetName;
 };
 struct Config {
     int configVersion = 1;

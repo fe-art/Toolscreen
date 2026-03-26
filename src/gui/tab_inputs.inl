@@ -1499,8 +1499,7 @@ if (ImGui::BeginTabItem("Inputs")) {
 
                     {
                         ImGui::Spacing();
-                        ImGui::SeparatorText("Rebinds");
-                        bool anyShown = false;
+
                         auto isNoOp = [&](const KeyRebind& r) -> bool {
                             if (r.fromKey == 0 || r.toKey == 0) return true;
                             if (r.toKey != r.fromKey) return false;
@@ -1509,30 +1508,253 @@ if (ImGui::BeginTabItem("Inputs")) {
                             if (r.customOutputScanCode != 0) return false;
                             return true;
                         };
-                        for (const auto& r : g_config.keyRebinds.rebinds) {
-                            if (r.fromKey == 0 || r.toKey == 0) continue;
-                            if (isNoOp(r)) continue;
 
-                            std::string fromStr = VkToString(r.fromKey);
-                            std::string typesStr;
-                            if (r.useCustomOutput && r.customOutputUnicode != 0) {
-                                typesStr = codepointToDisplay((uint32_t)r.customOutputUnicode);
-                            } else {
-                                DWORD textVk = (r.useCustomOutput && r.customOutputVK != 0) ? r.customOutputVK : r.toKey;
-                                if (textVk == 0) textVk = r.fromKey;
-                                typesStr = VkToString(textVk);
+                        // Two-column layout: Rebinds on left, Presets on right
+                        const float availW = ImGui::GetContentRegionAvail().x;
+                        const float columnGap = 16.0f;
+                        const float rebindsW = availW * 0.45f;
+                        const float presetsW = availW - rebindsW - columnGap;
+
+                        // --- Left column: Rebinds ---
+                        ImGui::BeginGroup();
+                        ImGui::SeparatorText("Rebinds");
+                        {
+                            bool anyShown = false;
+                            for (const auto& r : g_config.keyRebinds.rebinds) {
+                                if (r.fromKey == 0 || r.toKey == 0) continue;
+                                if (isNoOp(r)) continue;
+
+                                std::string fromStr = VkToString(r.fromKey);
+                                std::string typesStr;
+                                if (r.useCustomOutput && r.customOutputUnicode != 0) {
+                                    typesStr = codepointToDisplay((uint32_t)r.customOutputUnicode);
+                                } else {
+                                    DWORD textVk = (r.useCustomOutput && r.customOutputVK != 0) ? r.customOutputVK : r.toKey;
+                                    if (textVk == 0) textVk = r.fromKey;
+                                    typesStr = VkToString(textVk);
+                                }
+
+                                DWORD triggerVk = (r.toKey != 0) ? r.toKey : r.fromKey;
+                                DWORD displayScan = (r.useCustomOutput && r.customOutputScanCode != 0) ? r.customOutputScanCode
+                                                                                                       : getScanCodeWithExtendedFlag(triggerVk);
+                                std::string triggersStr = scanCodeToDisplayName(displayScan, triggerVk);
+                                ImGui::Text("%s -> %s & %s", fromStr.c_str(), typesStr.c_str(), triggersStr.c_str());
+                                anyShown = true;
+                            }
+                            if (!anyShown) {
+                                ImGui::TextDisabled("(No active rebinds)");
+                            }
+                        }
+                        ImGui::EndGroup();
+
+                        // --- Right column: Presets ---
+                        ImGui::SameLine(rebindsW + columnGap);
+                        ImGui::BeginGroup();
+                        ImGui::SeparatorText("Presets");
+                        {
+                            static int s_presetRenameIndex = -1;
+                            static char s_presetRenameBuffer[128] = "";
+                            static char s_presetSaveAsBuffer[128] = "";
+
+                            // Check if active rebinds differ from the active preset (dirty check)
+                            auto isPresetDirty = [&]() -> bool {
+                                if (g_config.keyRebinds.activePresetName.empty()) return false;
+                                for (const auto& p : g_config.keyRebinds.presets) {
+                                    if (p.name == g_config.keyRebinds.activePresetName) {
+                                        if (p.rebinds.size() != g_config.keyRebinds.rebinds.size()) return true;
+                                        for (size_t i = 0; i < p.rebinds.size(); ++i) {
+                                            const auto& a = p.rebinds[i];
+                                            const auto& b = g_config.keyRebinds.rebinds[i];
+                                            if (a.fromKey != b.fromKey || a.toKey != b.toKey || a.enabled != b.enabled ||
+                                                a.useCustomOutput != b.useCustomOutput || a.customOutputVK != b.customOutputVK ||
+                                                a.customOutputUnicode != b.customOutputUnicode || a.customOutputScanCode != b.customOutputScanCode)
+                                                return true;
+                                        }
+                                        return false;
+                                    }
+                                }
+                                return false;
+                            };
+                            bool dirty = isPresetDirty();
+
+                            // Save button (overwrites active preset)
+                            bool hasActivePreset = !g_config.keyRebinds.activePresetName.empty();
+                            ImGui::BeginDisabled(!hasActivePreset || !dirty);
+                            if (ImGui::SmallButton("Save")) {
+                                for (auto& p : g_config.keyRebinds.presets) {
+                                    if (p.name == g_config.keyRebinds.activePresetName) {
+                                        p.rebinds = g_config.keyRebinds.rebinds;
+                                        g_configIsDirty = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            ImGui::EndDisabled();
+
+                            ImGui::SameLine();
+
+                            // Save As button
+                            if (ImGui::SmallButton("Save As...")) {
+                                memset(s_presetSaveAsBuffer, 0, sizeof(s_presetSaveAsBuffer));
+                                ImGui::OpenPopup("Save Preset As##presets");
                             }
 
-                            DWORD triggerVk = (r.toKey != 0) ? r.toKey : r.fromKey;
-                            DWORD displayScan = (r.useCustomOutput && r.customOutputScanCode != 0) ? r.customOutputScanCode
-                                                                                                   : getScanCodeWithExtendedFlag(triggerVk);
-                            std::string triggersStr = scanCodeToDisplayName(displayScan, triggerVk);
-                            ImGui::Text("%s -> %s & %s", fromStr.c_str(), typesStr.c_str(), triggersStr.c_str());
-                            anyShown = true;
+                            // Save As modal
+                            if (ImGui::BeginPopupModal("Save Preset As##presets", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+                                ImGui::Text("Preset name:");
+                                ImGui::SetNextItemWidth(250.0f);
+                                bool enterPressed = ImGui::InputText("##presetSaveAsName", s_presetSaveAsBuffer, sizeof(s_presetSaveAsBuffer),
+                                                                     ImGuiInputTextFlags_EnterReturnsTrue);
+                                if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere(0);
+
+                                bool nameEmpty = strlen(s_presetSaveAsBuffer) == 0;
+                                // Check for duplicate name
+                                bool nameDuplicate = false;
+                                for (const auto& p : g_config.keyRebinds.presets) {
+                                    if (p.name == s_presetSaveAsBuffer) { nameDuplicate = true; break; }
+                                }
+                                if (nameDuplicate) {
+                                    ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "A preset with this name already exists.");
+                                }
+
+                                ImGui::BeginDisabled(nameEmpty || nameDuplicate);
+                                if (ImGui::Button("Save", ImVec2(80, 0)) || (enterPressed && !nameEmpty && !nameDuplicate)) {
+                                    KeyRebindPreset newPreset;
+                                    newPreset.name = s_presetSaveAsBuffer;
+                                    newPreset.rebinds = g_config.keyRebinds.rebinds;
+                                    g_config.keyRebinds.presets.push_back(newPreset);
+                                    g_config.keyRebinds.activePresetName = newPreset.name;
+                                    g_configIsDirty = true;
+                                    ImGui::CloseCurrentPopup();
+                                }
+                                ImGui::EndDisabled();
+
+                                ImGui::SameLine();
+                                if (ImGui::Button("Cancel", ImVec2(80, 0))) {
+                                    ImGui::CloseCurrentPopup();
+                                }
+                                ImGui::EndPopup();
+                            }
+
+                            ImGui::Spacing();
+
+                            // Preset list
+                            if (g_config.keyRebinds.presets.empty()) {
+                                ImGui::TextDisabled("(No presets)");
+                            }
+
+                            int deleteIdx = -1;
+                            int duplicateIdx = -1;
+
+                            for (int pi = 0; pi < (int)g_config.keyRebinds.presets.size(); ++pi) {
+                                auto& preset = g_config.keyRebinds.presets[pi];
+                                bool isActive = (preset.name == g_config.keyRebinds.activePresetName);
+                                ImGui::PushID(pi);
+
+                                // Preset name (with rename support)
+                                if (s_presetRenameIndex == pi) {
+                                    // Check for duplicate name while typing
+                                    bool renameDup = false;
+                                    bool renameEmpty = strlen(s_presetRenameBuffer) == 0;
+                                    if (!renameEmpty) {
+                                        for (int j = 0; j < (int)g_config.keyRebinds.presets.size(); ++j) {
+                                            if (j != pi && g_config.keyRebinds.presets[j].name == s_presetRenameBuffer) { renameDup = true; break; }
+                                        }
+                                    }
+
+                                    ImGui::SetNextItemWidth(200.0f);
+                                    if (ImGui::InputText("##rename", s_presetRenameBuffer, sizeof(s_presetRenameBuffer),
+                                                         ImGuiInputTextFlags_EnterReturnsTrue)) {
+                                        if (!renameEmpty && !renameDup) {
+                                            if (isActive) g_config.keyRebinds.activePresetName = s_presetRenameBuffer;
+                                            preset.name = s_presetRenameBuffer;
+                                            g_configIsDirty = true;
+                                            s_presetRenameIndex = -1;
+                                        }
+                                    }
+                                    if (renameDup) {
+                                        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Name already exists.");
+                                    }
+                                    // Cancel on Escape or loss of focus
+                                    if (ImGui::IsKeyPressed(ImGuiKey_Escape) || (!ImGui::IsItemActive() && !ImGui::IsWindowAppearing())) {
+                                        s_presetRenameIndex = -1;
+                                    }
+                                } else {
+                                    if (isActive) {
+                                        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "%s", preset.name.c_str());
+                                        ImGui::SameLine();
+                                        if (dirty) {
+                                            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "(modified)");
+                                        } else {
+                                            ImGui::TextDisabled("(active)");
+                                        }
+                                    } else {
+                                        ImGui::TextUnformatted(preset.name.c_str());
+                                    }
+                                }
+
+                                // Action buttons row
+                                if (s_presetRenameIndex != pi) {
+                                    if (!isActive) {
+                                        if (ImGui::SmallButton("Load")) {
+                                            g_config.keyRebinds.rebinds = preset.rebinds;
+                                            g_config.keyRebinds.activePresetName = preset.name;
+                                            g_configIsDirty = true;
+                                            syncUnicodeEditBuffers();
+                                            std::lock_guard<std::mutex> hotkeyLock(g_hotkeyMainKeysMutex);
+                                            RebuildHotkeyMainKeys_Internal();
+                                        }
+                                        ImGui::SameLine();
+                                    }
+                                    if (ImGui::SmallButton("Rename")) {
+                                        s_presetRenameIndex = pi;
+                                        snprintf(s_presetRenameBuffer, sizeof(s_presetRenameBuffer), "%s", preset.name.c_str());
+                                    }
+                                    ImGui::SameLine();
+                                    if (ImGui::SmallButton("Duplicate")) {
+                                        duplicateIdx = pi;
+                                    }
+                                    ImGui::SameLine();
+                                    if (ImGui::SmallButton("Delete")) {
+                                        deleteIdx = pi;
+                                    }
+                                }
+
+                                ImGui::Spacing();
+                                ImGui::PopID();
+                            }
+
+                            // Process deferred actions (avoid modifying vector during iteration)
+                            if (duplicateIdx >= 0 && duplicateIdx < (int)g_config.keyRebinds.presets.size()) {
+                                KeyRebindPreset dup;
+                                dup.name = g_config.keyRebinds.presets[duplicateIdx].name + " (copy)";
+                                // Ensure unique name
+                                int suffix = 2;
+                                while (true) {
+                                    bool found = false;
+                                    for (const auto& p : g_config.keyRebinds.presets) {
+                                        if (p.name == dup.name) { found = true; break; }
+                                    }
+                                    if (!found) break;
+                                    dup.name = g_config.keyRebinds.presets[duplicateIdx].name + " (copy " + std::to_string(suffix) + ")";
+                                    ++suffix;
+                                }
+                                dup.rebinds = g_config.keyRebinds.presets[duplicateIdx].rebinds;
+                                g_config.keyRebinds.presets.insert(g_config.keyRebinds.presets.begin() + duplicateIdx + 1, dup);
+                                if (s_presetRenameIndex > duplicateIdx) ++s_presetRenameIndex;
+                                g_configIsDirty = true;
+                            }
+                            if (deleteIdx >= 0 && deleteIdx < (int)g_config.keyRebinds.presets.size()) {
+                                if (g_config.keyRebinds.presets[deleteIdx].name == g_config.keyRebinds.activePresetName) {
+                                    g_config.keyRebinds.activePresetName.clear();
+                                }
+                                if (s_presetRenameIndex == deleteIdx) s_presetRenameIndex = -1;
+                                else if (s_presetRenameIndex > deleteIdx) --s_presetRenameIndex;
+                                g_config.keyRebinds.presets.erase(g_config.keyRebinds.presets.begin() + deleteIdx);
+                                g_configIsDirty = true;
+                            }
                         }
-                        if (!anyShown) {
-                            ImGui::TextDisabled("(No active rebinds)");
-                        }
+                        ImGui::EndGroup();
                     }
 
                     ImGui::EndChild();

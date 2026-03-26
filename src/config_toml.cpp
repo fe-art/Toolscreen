@@ -1369,8 +1369,34 @@ void KeyRebindFromToml(const toml::table& tbl, KeyRebind& cfg) {
         static_cast<DWORD>(GetOr<int64_t>(tbl, "customOutputScanCode", ConfigDefaults::KEY_REBIND_CUSTOM_OUTPUT_SCANCODE));
 }
 
+void KeyRebindPresetToToml(const KeyRebindPreset& preset, toml::table& out) {
+    out.insert("name", preset.name);
+    toml::array rebindsArr;
+    for (const auto& rebind : preset.rebinds) {
+        toml::table rebindTbl;
+        KeyRebindToToml(rebind, rebindTbl);
+        rebindsArr.push_back(rebindTbl);
+    }
+    out.insert("rebinds", rebindsArr);
+}
+
+void KeyRebindPresetFromToml(const toml::table& tbl, KeyRebindPreset& preset) {
+    preset.name = GetOr<std::string>(tbl, "name", "");
+    preset.rebinds.clear();
+    if (auto arr = GetArray(tbl, "rebinds")) {
+        for (const auto& elem : *arr) {
+            if (auto t = elem.as_table()) {
+                KeyRebind rebind;
+                KeyRebindFromToml(*t, rebind);
+                preset.rebinds.push_back(rebind);
+            }
+        }
+    }
+}
+
 void KeyRebindsConfigToToml(const KeyRebindsConfig& cfg, toml::table& out) {
     out.insert("enabled", cfg.enabled);
+    out.insert("activePresetName", cfg.activePresetName);
 
     toml::array rebindsArr;
     for (const auto& rebind : cfg.rebinds) {
@@ -1379,10 +1405,19 @@ void KeyRebindsConfigToToml(const KeyRebindsConfig& cfg, toml::table& out) {
         rebindsArr.push_back(rebindTbl);
     }
     out.insert("rebinds", rebindsArr);
+
+    toml::array presetsArr;
+    for (const auto& preset : cfg.presets) {
+        toml::table presetTbl;
+        KeyRebindPresetToToml(preset, presetTbl);
+        presetsArr.push_back(presetTbl);
+    }
+    out.insert("presets", presetsArr);
 }
 
 void KeyRebindsConfigFromToml(const toml::table& tbl, KeyRebindsConfig& cfg) {
     cfg.enabled = GetOr(tbl, "enabled", ConfigDefaults::KEY_REBINDS_ENABLED);
+    cfg.activePresetName = GetOr<std::string>(tbl, "activePresetName", "");
 
     cfg.rebinds.clear();
     if (auto arr = GetArray(tbl, "rebinds")) {
@@ -1391,6 +1426,17 @@ void KeyRebindsConfigFromToml(const toml::table& tbl, KeyRebindsConfig& cfg) {
                 KeyRebind rebind;
                 KeyRebindFromToml(*t, rebind);
                 cfg.rebinds.push_back(rebind);
+            }
+        }
+    }
+
+    cfg.presets.clear();
+    if (auto arr = GetArray(tbl, "presets")) {
+        for (const auto& elem : *arr) {
+            if (auto t = elem.as_table()) {
+                KeyRebindPreset preset;
+                KeyRebindPresetFromToml(*t, preset);
+                cfg.presets.push_back(preset);
             }
         }
     }
