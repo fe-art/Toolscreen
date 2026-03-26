@@ -34,22 +34,19 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.settings"))) {
     ImGui::Spacing();
     ImGui::SeparatorText(trc("hotkeys.window_hotkeys"));
 
-    ImGui::PushID("settings_borderless_hotkey");
+    ImGui::PushID("settings_borderless_toggle");
     {
-        std::string borderlessKeyStr = GetKeyComboString(g_config.borderlessHotkey);
+        HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
+        const bool canToggleBorderless = (hwnd != NULL && IsWindow(hwnd));
 
         ImGui::Text(trc("label.toggle_borderless"));
         ImGui::SameLine();
 
-        const bool isBindingBorderless = (s_mainHotkeyToBind == -998);
-        const char* borderlessButtonLabel =
-            isBindingBorderless ? trc("hotkeys.press_keys") : (borderlessKeyStr.empty() ? trc("hotkeys.click_to_bind") : borderlessKeyStr.c_str());
-        if (ImGui::Button(borderlessButtonLabel, ImVec2(150, 0))) {
-            s_mainHotkeyToBind = -998;
-            s_altHotkeyToBind = { -1, -1 };
-            s_exclusionToBind = { -1, -1 };
-            MarkHotkeyBindingActive();
+        if (!canToggleBorderless) { ImGui::BeginDisabled(); }
+        if (ImGui::Button(trc("general.go_borderless"), ImVec2(150, 0))) {
+            ToggleBorderlessWindowedFullscreen(hwnd);
         }
+        if (!canToggleBorderless) { ImGui::EndDisabled(); }
         ImGui::SameLine();
         HelpMarker(trc("tooltip.toggle_borderless"));
     }
