@@ -18,12 +18,31 @@ jobs:
       SIGNPATH_PROJECT_SLUG: 'Toolscreen'
       SIGNPATH_SIGNING_POLICY_SLUG: 'test-signing'
       SIGNPATH_DLL_ARTIFACT_CONFIGURATION_SLUG: 'dll'
+      SIGNPATH_JAR_ARTIFACT_CONFIGURATION_SLUG: 'jar'
       SIGNPATH_INSTALLER_ARTIFACT_CONFIGURATION_SLUG: 'installer'
       SIGNPATH_DOWNLOADER_ARTIFACT_CONFIGURATION_SLUG: 'downloader'
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Resolve SignPath artifact version
+        id: signpath_version
+        shell: pwsh
+        run: |
+          $versionFile = Join-Path $env:GITHUB_WORKSPACE 'ToolscreenVersion.cmake'
+          $versionContent = Get-Content $versionFile -Raw
+
+          $majorMatch = [regex]::Match($versionContent, 'set\(TOOLSCREEN_VERSION_MAJOR\s+(\d+)\)')
+          $minorMatch = [regex]::Match($versionContent, 'set\(TOOLSCREEN_VERSION_MINOR\s+(\d+)\)')
+          $patchMatch = [regex]::Match($versionContent, 'set\(TOOLSCREEN_VERSION_PATCH\s+(\d+)\)')
+
+          if (-not $majorMatch.Success -or -not $minorMatch.Success -or -not $patchMatch.Success) {
+            throw "Failed to parse version from $versionFile"
+          }
+
+          $version = '{0}.{1}.{2}' -f $majorMatch.Groups[1].Value, $minorMatch.Groups[1].Value, $patchMatch.Groups[1].Value
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -75,6 +94,8 @@ jobs:
           github-artifact-id: ${{ steps.signpath_dll_upload.outputs.artifact-id }}
           wait-for-completion: true
           output-artifact-directory: out/signpath-dll-output
+          parameters: |
+            version: ${{ toJSON(steps.signpath_version.outputs.version) }}
 
       - name: Preserve signed DLL for packaging
         if: ${{ github.event_name != 'pull_request' && env.SIGNPATH_API_TOKEN != '' }}
@@ -151,6 +172,48 @@ jobs:
         shell: cmd
         run: ctest --preset release --exclude-regex "^toolscreen_integration_"
 
+      - name: Upload main installer JAR for SignPath
+        id: signpath_jar_upload
+        if: ${{ github.event_name != 'pull_request' && env.SIGNPATH_API_TOKEN != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: toolscreen-signpath-main-installer-jar-input
+          if-no-files-found: error
+          retention-days: 1
+          path: out/build/bin/Release/Toolscreen-*-double-click-me.jar
+
+      - name: Submit main installer JAR to SignPath with origin verification
+        if: ${{ github.event_name != 'pull_request' && env.SIGNPATH_API_TOKEN != '' }}
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ env.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ env.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ env.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ env.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ env.SIGNPATH_JAR_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.signpath_jar_upload.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: out/signpath-jar-output
+          parameters: |
+            version: ${{ toJSON(steps.signpath_version.outputs.version) }}
+
+      - name: Replace main installer JAR with origin-verified signed output
+        if: ${{ github.event_name != 'pull_request' && env.SIGNPATH_API_TOKEN != '' }}
+        shell: pwsh
+        run: |
+          $jarMatches = Get-ChildItem 'out/build/bin/Release' -File -Filter 'Toolscreen-*-double-click-me.jar'
+          $signedJarMatches = Get-ChildItem 'out/signpath-jar-output' -File -Filter 'Toolscreen-*-double-click-me.jar'
+
+          if ($jarMatches.Count -ne 1) {
+            throw "Expected exactly one unsigned main installer JAR, found $($jarMatches.Count)"
+          }
+
+          if ($signedJarMatches.Count -ne 1) {
+            throw "Expected exactly one signed main installer JAR, found $($signedJarMatches.Count)"
+          }
+
+          Copy-Item -Path $signedJarMatches[0].FullName -Destination $jarMatches[0].FullName -Force
+
       - name: Upload installer EXE for SignPath
         id: signpath_installer_upload
         if: ${{ github.event_name != 'pull_request' && env.SIGNPATH_API_TOKEN != '' }}
@@ -173,6 +236,8 @@ jobs:
           github-artifact-id: ${{ steps.signpath_installer_upload.outputs.artifact-id }}
           wait-for-completion: true
           output-artifact-directory: out/signpath-installer-exe-output
+          parameters: |
+            version: ${{ toJSON(steps.signpath_version.outputs.version) }}
 
       - name: Replace installer EXE with origin-verified signed output
         if: ${{ github.event_name != 'pull_request' && env.SIGNPATH_API_TOKEN != '' }}
@@ -213,6 +278,8 @@ jobs:
           github-artifact-id: ${{ steps.signpath_downloader_upload.outputs.artifact-id }}
           wait-for-completion: true
           output-artifact-directory: out/signpath-downloader-exe-output
+          parameters: |
+            version: ${{ toJSON(steps.signpath_version.outputs.version) }}
 
       - name: Replace downloader EXE with origin-verified signed output
         if: ${{ github.event_name != 'pull_request' && env.SIGNPATH_API_TOKEN != '' }}
