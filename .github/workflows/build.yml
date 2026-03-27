@@ -14,6 +14,12 @@ jobs:
     runs-on: windows-latest
     env:
       SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+      SIGNPATH_ORGANIZATION_ID: '0126c615-e5f1-4fed-a438-6b8de149c8f4'
+      SIGNPATH_PROJECT_SLUG: 'Toolscreen'
+      SIGNPATH_SIGNING_POLICY_SLUG: 'test-signing'
+      SIGNPATH_DLL_ARTIFACT_CONFIGURATION_SLUG: 'dll'
+      SIGNPATH_INSTALLER_ARTIFACT_CONFIGURATION_SLUG: 'installer'
+      SIGNPATH_DOWNLOADER_ARTIFACT_CONFIGURATION_SLUG: 'downloader'
 
     steps:
       - name: Check out repository
@@ -47,7 +53,7 @@ jobs:
         shell: cmd
         run: out\build\bin\Release\toolscreen_gui_integration_tests.exe --run-all
 
-      - name: Sign DLL with SignPath test certificate
+      - name: Upload DLL for SignPath
         id: signpath_dll_upload
         if: ${{ github.event_name != 'pull_request' && env.SIGNPATH_API_TOKEN != '' }}
         uses: actions/upload-artifact@v4
@@ -62,10 +68,10 @@ jobs:
         uses: signpath/github-action-submit-signing-request@v2
         with:
           api-token: ${{ env.SIGNPATH_API_TOKEN }}
-          organization-id: '0126c615-e5f1-4fed-a438-6b8de149c8f4'
-          project-slug: 'Toolscreen'
-          signing-policy-slug: 'test-signing'
-          artifact-configuration-slug: 'dll'
+          organization-id: ${{ env.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ env.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ env.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ env.SIGNPATH_DLL_ARTIFACT_CONFIGURATION_SLUG }}
           github-artifact-id: ${{ steps.signpath_dll_upload.outputs.artifact-id }}
           wait-for-completion: true
           output-artifact-directory: out/signpath-dll-output
@@ -134,11 +140,15 @@ jobs:
         shell: cmd
         run: cmake --build --preset release --target jar
 
+      - name: Validate PE metadata for SignPath
+        shell: pwsh
+        run: ./scripts/verify_pe_metadata.ps1 -ArtifactDirectory 'out/build/bin/Release'
+
       - name: Run CTest packaging smoke tests
         shell: cmd
         run: ctest --preset release --exclude-regex "^toolscreen_integration_"
 
-      - name: Sign installer EXE with SignPath test certificate
+      - name: Upload installer EXE for SignPath
         id: signpath_installer_upload
         if: ${{ github.event_name != 'pull_request' && env.SIGNPATH_API_TOKEN != '' }}
         uses: actions/upload-artifact@v4
@@ -153,10 +163,10 @@ jobs:
         uses: signpath/github-action-submit-signing-request@v2
         with:
           api-token: ${{ env.SIGNPATH_API_TOKEN }}
-          organization-id: '0126c615-e5f1-4fed-a438-6b8de149c8f4'
-          project-slug: 'Toolscreen'
-          signing-policy-slug: 'test-signing'
-          artifact-configuration-slug: 'installer'
+          organization-id: ${{ env.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ env.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ env.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ env.SIGNPATH_INSTALLER_ARTIFACT_CONFIGURATION_SLUG }}
           github-artifact-id: ${{ steps.signpath_installer_upload.outputs.artifact-id }}
           wait-for-completion: true
           output-artifact-directory: out/signpath-installer-exe-output
@@ -178,7 +188,7 @@ jobs:
 
           Copy-Item -Path $signedInstallerMatches[0].FullName -Destination $installerMatches[0].FullName -Force
 
-      - name: Sign downloader EXE with SignPath test certificate
+      - name: Upload downloader EXE for SignPath
         id: signpath_downloader_upload
         if: ${{ github.event_name != 'pull_request' && env.SIGNPATH_API_TOKEN != '' }}
         uses: actions/upload-artifact@v4
@@ -193,10 +203,10 @@ jobs:
         uses: signpath/github-action-submit-signing-request@v2
         with:
           api-token: ${{ env.SIGNPATH_API_TOKEN }}
-          organization-id: '0126c615-e5f1-4fed-a438-6b8de149c8f4'
-          project-slug: 'Toolscreen'
-          signing-policy-slug: 'test-signing'
-          artifact-configuration-slug: 'downloader'
+          organization-id: ${{ env.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ env.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ env.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ env.SIGNPATH_DOWNLOADER_ARTIFACT_CONFIGURATION_SLUG }}
           github-artifact-id: ${{ steps.signpath_downloader_upload.outputs.artifact-id }}
           wait-for-completion: true
           output-artifact-directory: out/signpath-downloader-exe-output

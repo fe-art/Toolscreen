@@ -61,6 +61,20 @@ Hover over the `(?)` icons for tooltips explaining each setting.
 
 Double-click the Toolscreen installer (`.jar` or `.exe`) and select **Uninstall**.
 
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+
+- Repository owner: [jojoe77777](https://github.com/jojoe77777)
+- Authors: [jojoe77777](https://github.com/jojoe77777)
+- Committers: [jojoe77777](https://github.com/jojoe77777)
+- Reviewers: [jojoe77777](https://github.com/jojoe77777)
+- Approvers: [jojoe77777](https://github.com/jojoe77777)
+
+This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
+
+When you use the optional downloader or release-update functionality, Toolscreen connects to GitHub release endpoints for this repository. That traffic is governed by the [GitHub General Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
+
 ## Community
 
 Need help or want to share your setup? Join the [Discord server](https://discord.gg/A2v6bCJg6K).

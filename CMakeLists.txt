@@ -15,6 +15,13 @@ endif()
 include("${CMAKE_CURRENT_SOURCE_DIR}/ToolscreenVersion.cmake")
 set(TOOLSCREEN_VERSION "${TOOLSCREEN_VERSION_MAJOR}.${TOOLSCREEN_VERSION_MINOR}.${TOOLSCREEN_VERSION_PATCH}")
 
+set(TOOLSCREEN_PROJECT_NAME "Toolscreen")
+set(TOOLSCREEN_COMPANY_NAME "jojoe77777")
+set(TOOLSCREEN_COPYRIGHT "Copyright (c) 2026 jojoe77777")
+set(TOOLSCREEN_DLL_FILE_DESCRIPTION "Toolscreen hook DLL")
+set(TOOLSCREEN_INSTALLER_FILE_DESCRIPTION "Toolscreen installer")
+set(TOOLSCREEN_DOWNLOADER_FILE_DESCRIPTION "Toolscreen downloader")
+
 project(Toolscreen VERSION ${TOOLSCREEN_VERSION} LANGUAGES C CXX RC)
 
 set(TOOLSCREEN_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
@@ -81,6 +88,21 @@ function(toolscreen_set_brand_version branding_file version_string)
     endif()
 
     file(WRITE "${branding_file}" "${toolscreen_branding_contents}")
+endfunction()
+
+function(toolscreen_write_text_file_if_different file_path content)
+    set(toolscreen_should_write TRUE)
+
+    if(EXISTS "${file_path}")
+        file(READ "${file_path}" toolscreen_existing_content)
+        if(toolscreen_existing_content STREQUAL content)
+            set(toolscreen_should_write FALSE)
+        endif()
+    endif()
+
+    if(toolscreen_should_write)
+        file(WRITE "${file_path}" "${content}")
+    endif()
 endfunction()
 
 if(MSVC)
@@ -409,6 +431,50 @@ if(TOOLSCREEN_ENABLE_JAR_PACKAGING)
 
     set(TOOLSCREEN_EASYINJECT_EXE_BRANDING_PROPERTIES "${easyinjectbundled_exe_SOURCE_DIR}/branding.properties")
     toolscreen_set_brand_version("${TOOLSCREEN_EASYINJECT_EXE_BRANDING_PROPERTIES}" "${PROJECT_VERSION}")
+    toolscreen_write_text_file_if_different(
+        "${easyinjectbundled_exe_SOURCE_DIR}/exe/src/embedded_resources.rc.in"
+        [=[#include <winres.h>
+
+1 ICON "@APP_ICON_FILE_RC@"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION @TOOLSCREEN_VERSION_MAJOR@,@TOOLSCREEN_VERSION_MINOR@,@TOOLSCREEN_VERSION_PATCH@,0
+ PRODUCTVERSION @TOOLSCREEN_VERSION_MAJOR@,@TOOLSCREEN_VERSION_MINOR@,@TOOLSCREEN_VERSION_PATCH@,0
+ FILEFLAGSMASK 0x3fL
+#ifdef _DEBUG
+ FILEFLAGS 0x1L
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "@TOOLSCREEN_COMPANY_NAME@\0"
+            VALUE "FileDescription", "@TOOLSCREEN_INSTALLER_FILE_DESCRIPTION@\0"
+            VALUE "FileVersion", "@TOOLSCREEN_VERSION@\0"
+            VALUE "InternalName", "Toolscreen\0"
+            VALUE "LegalCopyright", "@TOOLSCREEN_COPYRIGHT@\0"
+            VALUE "OriginalFilename", "Toolscreen-@BRAND_VERSION@-double-click-me.exe\0"
+            VALUE "ProductName", "@TOOLSCREEN_PROJECT_NAME@\0"
+            VALUE "ProductVersion", "@TOOLSCREEN_VERSION@\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
+
+@BRANDING_RESOURCE_ID@ RCDATA "@BRANDING_FILE_RC@"
+@DLL_INDEX_RESOURCE_ID@ RCDATA "@EMBED_DLL_INDEX_FILE_RC@"
+@EMBED_DLL_RESOURCE_LINES@
+]=]
+    )
 
     set(JAR_NAME "Toolscreen-${PROJECT_VERSION}-double-click-me.jar")
     set(JAR_OUTPUT "${TOOLSCREEN_ARTIFACT_ROOT}/$<CONFIG>/${JAR_NAME}")
@@ -453,6 +519,47 @@ if(TOOLSCREEN_ENABLE_JAR_PACKAGING)
     elseif(EXISTS "${easyinjectbundled_SOURCE_DIR}/tioolscrteen-downloader-exe/CMakeLists.txt")
         set(TOOLSCREEN_DOWNLOADER_SOURCE_DIR "${easyinjectbundled_SOURCE_DIR}/tioolscrteen-downloader-exe")
     endif()
+
+    toolscreen_write_text_file_if_different(
+        "${TOOLSCREEN_DOWNLOADER_SOURCE_DIR}/src/app.rc.in"
+        [=[#include <winres.h>
+
+1 ICON "@APP_ICON_FILE_RC@"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION @TOOLSCREEN_VERSION_MAJOR@,@TOOLSCREEN_VERSION_MINOR@,@TOOLSCREEN_VERSION_PATCH@,0
+ PRODUCTVERSION @TOOLSCREEN_VERSION_MAJOR@,@TOOLSCREEN_VERSION_MINOR@,@TOOLSCREEN_VERSION_PATCH@,0
+ FILEFLAGSMASK 0x3fL
+#ifdef _DEBUG
+ FILEFLAGS 0x1L
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "@TOOLSCREEN_COMPANY_NAME@\0"
+            VALUE "FileDescription", "@TOOLSCREEN_DOWNLOADER_FILE_DESCRIPTION@\0"
+            VALUE "FileVersion", "@TOOLSCREEN_VERSION@\0"
+            VALUE "InternalName", "toolscreen-downloader\0"
+            VALUE "LegalCopyright", "@TOOLSCREEN_COPYRIGHT@\0"
+            VALUE "OriginalFilename", "toolscreen-downloader.exe\0"
+            VALUE "ProductName", "@TOOLSCREEN_PROJECT_NAME@\0"
+            VALUE "ProductVersion", "@TOOLSCREEN_VERSION@\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
+]=]
+    )
 
     add_subdirectory("${TOOLSCREEN_DOWNLOADER_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/easyinjectbundled-toolscreen-downloader-exe")
 
