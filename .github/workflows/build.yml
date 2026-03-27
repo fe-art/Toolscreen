@@ -12,6 +12,8 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
 
     steps:
       - name: Check out repository
@@ -68,7 +70,7 @@ jobs:
           }
 
       - name: Stage SignPath input artifacts
-        if: ${{ github.event_name != 'pull_request' && secrets.SIGNPATH_API_TOKEN != '' }}
+        if: ${{ github.event_name != 'pull_request' && env.SIGNPATH_API_TOKEN != '' }}
         shell: pwsh
         run: |
           $outputDir = 'out/build/bin/Release'
@@ -111,7 +113,7 @@ jobs:
 
       - name: Upload SignPath input bundle
         id: upload-signpath-input
-        if: ${{ github.event_name != 'pull_request' && secrets.SIGNPATH_API_TOKEN != '' }}
+        if: ${{ github.event_name != 'pull_request' && env.SIGNPATH_API_TOKEN != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: toolscreen-signpath-input
@@ -121,10 +123,10 @@ jobs:
 
       - name: Sign Windows artifacts with SignPath test certificate
         id: signpath
-        if: ${{ github.event_name != 'pull_request' && secrets.SIGNPATH_API_TOKEN != '' }}
+        if: ${{ github.event_name != 'pull_request' && env.SIGNPATH_API_TOKEN != '' }}
         uses: signpath/github-action-submit-signing-request@v2
         with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          api-token: ${{ env.SIGNPATH_API_TOKEN }}
           organization-id: '0126c615-e5f1-4fed-a438-6b8de149c8f4'
           project-slug: 'Toolscreen'
           signing-policy-slug: 'test-signing'
@@ -133,7 +135,7 @@ jobs:
           output-artifact-directory: out/signpath-output
 
       - name: Replace unsigned artifacts with signed outputs
-        if: ${{ github.event_name != 'pull_request' && secrets.SIGNPATH_API_TOKEN != '' }}
+        if: ${{ github.event_name != 'pull_request' && env.SIGNPATH_API_TOKEN != '' }}
         shell: pwsh
         run: |
           $outputDir = 'out/build/bin/Release'
