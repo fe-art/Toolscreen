@@ -248,7 +248,6 @@ static std::unordered_map<uint64_t, LocalKeyRepeatState> s_localKeyRepeatStates;
 static std::optional<uint64_t> s_localKeyRepeatActiveId;
 static uint64_t s_localKeyRepeatPressSequence = 0;
 static std::unordered_map<DWORD, DeferredAltTabRebindState> s_deferredAltTabRebindStates;
-static bool s_systemAltTabPassthroughActive = false;
 
 static UINT GetScanCodeWithExtendedFlagFromLParam(LPARAM lParam) {
     UINT scanCodeWithFlags = static_cast<UINT>((lParam >> 16) & 0xFF);
@@ -2461,6 +2460,37 @@ static UINT ResolveOutputScanCode(DWORD outputVk, UINT configuredScanCodeWithFla
 
 static bool IsMouseButtonVk(DWORD vk) {
     return vk == VK_LBUTTON || vk == VK_RBUTTON || vk == VK_MBUTTON || vk == VK_XBUTTON1 || vk == VK_XBUTTON2;
+}
+
+static bool IsNonCharKeyVk(DWORD vk) {
+    if (IsModifierVk(vk)) return true;
+    if (IsMouseButtonVk(vk)) return true;
+    if (vk == VK_LWIN || vk == VK_RWIN) return true;
+    if (vk >= VK_F1 && vk <= VK_F24) return true;
+
+    switch (vk) {
+    case VK_INSERT:
+    case VK_DELETE:
+    case VK_HOME:
+    case VK_END:
+    case VK_PRIOR:
+    case VK_NEXT:
+    case VK_LEFT:
+    case VK_RIGHT:
+    case VK_UP:
+    case VK_DOWN:
+    case VK_CLEAR:
+    case VK_ESCAPE:
+    case VK_PAUSE:
+    case VK_SNAPSHOT:
+    case VK_CAPITAL:
+    case VK_NUMLOCK:
+    case VK_SCROLL:
+    case VK_APPS:
+        return true;
+    default:
+        return false;
+    }
 }
 
 static bool RebindCannotType(const KeyRebind& rebind) {

@@ -523,6 +523,8 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
 
                 static bool s_keyboardLayoutOpen = false;
                 static float s_keyboardLayoutScale = 1.45f;
+                static int s_physicalLayout = 0;
+                static int s_keyLabelLayout = 0;
                 static bool s_layoutEscapeRequiresRelease = false;
                 static bool s_layoutContextSplitMode = false;
                 static bool s_layoutContextPopupWasOpenLastFrame = false;
@@ -627,6 +629,22 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                         ImGui::SameLine();
                         HelpMarker(trc("inputs.tooltip.keyboard_layout_scale"));
 
+                        ImGui::SameLine();
+                        ImGui::TextUnformatted(trc("inputs.physical_layout"));
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(100.0f);
+                        ImGui::Combo("##physicalLayout", &s_physicalLayout, "Auto\0ANSI\0ISO\0");
+                        ImGui::SameLine();
+                        HelpMarker(trc("inputs.tooltip.physical_layout"));
+
+                        ImGui::SameLine();
+                        ImGui::TextUnformatted(trc("inputs.key_labels"));
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(120.0f);
+                        ImGui::Combo("##keyLabelLayout", &s_keyLabelLayout, "System\0QWERTY\0");
+                        ImGui::SameLine();
+                        HelpMarker(trc("inputs.tooltip.key_labels"));
+
                         ImGui::TextDisabled(trc("inputs.keyboard_layout_tip"));
                         ImGui::TextDisabled(trc("label.not_all_rebinds_supported"));
 
@@ -651,6 +669,82 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                         return KeyCell{ vk, overrideLabel, wUnits };
                     };
 
+                    static HKL s_cachedHkl = nullptr;
+                    static bool s_cachedUseISO = false;
+                    static std::unordered_map<DWORD, DWORD> s_cachedVkSwap;
+                    static int s_cachedPhysicalLayout = -1;
+                    static int s_cachedKeyLabelLayout = -1;
+
+                    HKL currentHkl = GetKeyboardLayout(0);
+                    const bool layoutChanged = currentHkl != s_cachedHkl ||
+                                               s_physicalLayout != s_cachedPhysicalLayout ||
+                                               s_keyLabelLayout != s_cachedKeyLabelLayout;
+                    if (layoutChanged) {
+                        s_cachedHkl = currentHkl;
+                        s_cachedPhysicalLayout = s_physicalLayout;
+                        s_cachedKeyLabelLayout = s_keyLabelLayout;
+
+                        if (s_physicalLayout == 1) s_cachedUseISO = false;
+                        else if (s_physicalLayout == 2) s_cachedUseISO = true;
+                        else {
+                            WORD langId = LOWORD((DWORD_PTR)currentHkl) & 0xFF;
+                            s_cachedUseISO = langId != LANG_ENGLISH;
+                        }
+
+                        s_cachedVkSwap.clear();
+                        if (s_keyLabelLayout != 1) {
+                            static const UINT remappableScans[] = {
+                                0x10,0x11,0x12,0x13,0x14,0x15,0x16,0x17,0x18,0x19,
+                                0x1E,0x1F,0x20,0x21,0x22,0x23,0x24,0x25,0x26,
+                                0x2C,0x2D,0x2E,0x2F,0x30,0x31,0x32,
+                                0x29,0x0C,0x0D,0x1A,0x1B,0x2B,0x27,0x28,
+                                0x33,0x34,0x35,0x56,
+                            };
+                            static const DWORD qwertyVks[] = {
+                                'Q','W','E','R','T','Y','U','I','O','P',
+                                'A','S','D','F','G','H','J','K','L',
+                                'Z','X','C','V','B','N','M',
+                                VK_OEM_3,VK_OEM_MINUS,VK_OEM_PLUS,VK_OEM_4,VK_OEM_6,VK_OEM_5,VK_OEM_1,VK_OEM_7,
+                                VK_OEM_COMMA,VK_OEM_PERIOD,VK_OEM_2,VK_OEM_102,
+                            };
+                            for (int i = 0; i < sizeof(remappableScans)/sizeof(remappableScans[0]); ++i) {
+                                DWORD mapped = (DWORD)MapVirtualKeyW(remappableScans[i], MAPVK_VSC_TO_VK);
+                                if (mapped != 0 && mapped != qwertyVks[i]) {
+                                    s_cachedVkSwap[qwertyVks[i]] = mapped;
+                                }
+                            }
+                        }
+                    }
+
+                    static std::unordered_map<DWORD, std::string> s_cachedOemLabels;
+                    if (layoutChanged) {
+                        s_cachedOemLabels.clear();
+                        if (s_keyLabelLayout != 1) {
+                            static const DWORD oemVks[] = {
+                                VK_OEM_1, VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5, VK_OEM_6, VK_OEM_7,
+                                VK_OEM_PLUS, VK_OEM_MINUS, VK_OEM_COMMA, VK_OEM_PERIOD, VK_OEM_102,
+                            };
+                            for (DWORD vk : oemVks) {
+                                DWORD resolvedVk = vk;
+                                if (auto it = s_cachedVkSwap.find(vk); it != s_cachedVkSwap.end()) resolvedVk = it->second;
+                                BYTE ks[256] = {};
+                                wchar_t wbuf[4] = {};
+                                UINT sc = MapVirtualKeyW(resolvedVk, MAPVK_VK_TO_VSC);
+                                int ret = ToUnicodeEx(resolvedVk, sc, ks, wbuf, 4, 0, currentHkl);
+                                if (ret < 0) { ToUnicodeEx(resolvedVk, sc, ks, wbuf, 4, 0, currentHkl); ret = 1; }
+                                if (ret >= 1 && wbuf[0] >= 32) {
+                                    char buf[8] = {};
+                                    int len = WideCharToMultiByte(CP_UTF8, 0, wbuf, 1, buf, sizeof(buf) - 1, nullptr, nullptr);
+                                    if (len > 0) s_cachedOemLabels[vk] = std::string(buf, len);
+                                }
+                            }
+                        }
+                    }
+
+                    const bool useISO = s_cachedUseISO;
+                    const auto& vkSwap = s_cachedVkSwap;
+                    const auto& oemLabels = s_cachedOemLabels;
+
                     const std::vector<std::vector<KeyCell>> rows = {
                                                 { Key(VK_ESCAPE), Spacer(1.0f), Key(VK_F1), Key(VK_F2), Key(VK_F3), Key(VK_F4), Spacer(0.5f), Key(VK_F5),
                           Key(VK_F6), Key(VK_F7), Key(VK_F8), Spacer(0.5f), Key(VK_F9), Key(VK_F10), Key(VK_F11), Key(VK_F12),
@@ -672,7 +766,12 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                                                                                         Key(VK_NUMPAD4, 1.25f, "NUM4"), Key(VK_NUMPAD5, 1.25f, "NUM5"), Key(VK_NUMPAD6, 1.25f, "NUM6"),
                                                     Spacer(1.25f) },
 
-                        { Key(VK_LSHIFT, 2.25f, "LSHIFT"), Key('Z'), Key('X'), Key('C'), Key('V'), Key('B'), Key('N'), Key('M'),
+                        useISO
+                        ? std::vector<KeyCell>{ Key(VK_LSHIFT, 1.25f, "LSHIFT"), Key(VK_OEM_102, 1.0f), Key('Z'), Key('X'), Key('C'), Key('V'), Key('B'), Key('N'), Key('M'),
+                          Key(VK_OEM_COMMA, 1.0f, ","), Key(VK_OEM_PERIOD, 1.0f, "."), Key(VK_OEM_2, 1.0f, "/"), Key(VK_RSHIFT, 2.75f, "RSHIFT"),
+                                                    Spacer(0.5f), Spacer(1.25f), Key(VK_UP, 1.25f, "UP"), Spacer(1.25f), Spacer(0.5f),
+                                                    Key(VK_NUMPAD1, 1.25f, "NUM1"), Key(VK_NUMPAD2, 1.25f, "NUM2"), Key(VK_NUMPAD3, 1.25f, "NUM3"), Key(VK_RETURN, 1.25f, "ENTER") }
+                        : std::vector<KeyCell>{ Key(VK_LSHIFT, 2.25f, "LSHIFT"), Key('Z'), Key('X'), Key('C'), Key('V'), Key('B'), Key('N'), Key('M'),
                           Key(VK_OEM_COMMA, 1.0f, ","), Key(VK_OEM_PERIOD, 1.0f, "."), Key(VK_OEM_2, 1.0f, "/"), Key(VK_RSHIFT, 2.75f, "RSHIFT"),
                                                     Spacer(0.5f), Spacer(1.25f), Key(VK_UP, 1.25f, "UP"), Spacer(1.25f), Spacer(0.5f),
                                                     Key(VK_NUMPAD1, 1.25f, "NUM1"), Key(VK_NUMPAD2, 1.25f, "NUM2"), Key(VK_NUMPAD3, 1.25f, "NUM3"), Key(VK_RETURN, 1.25f, "ENTER") },
@@ -1349,31 +1448,39 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                             const ImVec2 pMin = ImGui::GetItemRectMin();
                             const ImVec2 pMax = ImGui::GetItemRectMax();
 
-                            const KeyRebind* rb = findRebindForKey(kc.vk);
+                            DWORD displayVk = kc.vk;
+                            if (auto it = vkSwap.find(kc.vk); it != vkSwap.end()) {
+                                displayVk = it->second;
+                            }
+                            const char* displayLabel = (displayVk != kc.vk) ? nullptr : kc.labelOverride;
 
-                            std::string keyName = kc.labelOverride ? std::string(kc.labelOverride) : VkToString(kc.vk);
+                            const KeyRebind* rb = findRebindForKey(displayVk);
+                            auto oemIt = oemLabels.find(kc.vk);
+                            const char* oemLabel = oemIt != oemLabels.end() ? oemIt->second.c_str() : nullptr;
+                            std::string keyName = oemLabel ? std::string(oemLabel) :
+                                                  (displayLabel ? std::string(displayLabel) : VkToString(displayVk));
                             ImVec2 capMin = ImVec2(pMin.x + keyPadX, pMin.y + keyPadY);
                             ImVec2 capMax = ImVec2(pMax.x - keyPadX, pMax.y - keyPadY);
                             if (capMax.x <= capMin.x + 2.0f) { capMin.x = pMin.x; capMax.x = pMax.x; }
                             if (capMax.y <= capMin.y + 2.0f) { capMin.y = pMin.y; capMax.y = pMax.y; }
-                            drawKeyCell(kc.vk, keyName.c_str(), capMin, capMax, rb);
+                            drawKeyCell(displayVk, keyName.c_str(), capMin, capMax, rb);
 
                             if (ImGui::IsItemHovered()) {
                                 ImGui::BeginTooltip();
                                 if (rb && rb->fromKey != 0 && rb->toKey != 0) {
-                                    DWORD triggerVkTip = resolveTriggerVkFor(rb, kc.vk);
-                                    DWORD triggerScanTip = resolveTriggerScanFor(rb, kc.vk);
-                                    const std::string typesTip = typesValueForDisplay(rb, kc.vk);
+                                    DWORD triggerVkTip = resolveTriggerVkFor(rb, displayVk);
+                                    DWORD triggerScanTip = resolveTriggerScanFor(rb, displayVk);
+                                    const std::string typesTip = typesValueForDisplay(rb, displayVk);
                                     const std::string triggersTip =
                                         normalizeMouseButtonLabel(scanCodeToDisplayName(triggerScanTip, triggerVkTip));
                                     ImGui::Text(tr("inputs.types_format", typesTip.c_str()).c_str());
-                                    if (hasShiftLayerOverride(rb, kc.vk)) {
-                                        const std::string typesShiftTip = typesShiftValueForDisplay(rb, kc.vk);
+                                    if (hasShiftLayerOverride(rb, displayVk)) {
+                                        const std::string typesShiftTip = typesShiftValueForDisplay(rb, displayVk);
                                         ImGui::Text(tr("inputs.types_shift_format", typesShiftTip.c_str()).c_str());
                                     }
                                     ImGui::Text(tr("inputs.triggers_format", triggersTip.c_str()).c_str());
                                 } else {
-                                    ImGui::Text("%s (%u)", VkToString(kc.vk).c_str(), (unsigned)kc.vk);
+                                    ImGui::Text("%s (%u)", (oemLabel ? oemLabel : VkToString(displayVk).c_str()), (unsigned)displayVk);
                                     ImGui::TextUnformatted(trc("inputs.tooltip.right_click_to_configure"));
                                 }
                                 ImGui::EndTooltip();

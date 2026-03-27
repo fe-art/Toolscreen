@@ -252,10 +252,10 @@ void RenderMirrors(const std::vector<MirrorConfig>& activeMirrors, const GameVie
                    float modeOpacity = 1.0f, bool excludeOnlyOnMyScreen = false);
 void RenderImages(const std::vector<ImageConfig>& activeImages, int fullW, int fullH, float modeOpacity = 1.0f,
                   bool excludeOnlyOnMyScreen = false);
-void CollectActiveElementsForMode(const Config& config, const std::string& modeId, bool onlyOnMyScreenPass,
+void CollectActiveElementsForMode(const Config& config, const std::string& modeId, bool onlyOnMyScreenPass, uint64_t configVersion,
                                   std::vector<MirrorConfig>& outMirrors, std::vector<ImageConfig>& outImages,
-                                  std::vector<WindowOverlayConfig>& outWindowOverlays,
-                                  std::vector<BrowserOverlayConfig>& outBrowserOverlays);
+                                  std::vector<const WindowOverlayConfig*>& outWindowOverlays,
+                                  std::vector<const BrowserOverlayConfig*>& outBrowserOverlays);
 bool RenderModeOverlaysForIntegrationTest(const Config& config, const ModeConfig& modeToRender, const GLState& s, int fullW,
                                           int fullH, int gameX, int gameY, int gameW, int gameH,
                                           bool excludeOnlyOnMyScreen = false, GLuint gameTextureId = 0);

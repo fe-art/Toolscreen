@@ -1186,8 +1186,6 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
 
                 renderModeSourceAssignments(mode, mode.id);
 
-                renderModeBrowserOverlayAssignments(mode, mode.id);
-
                 ImGui::Separator();
                 if (ImGui::TreeNode((tr("modes.transition_settings") + "##EyeZoom").c_str())) {
                     RenderTransitionSettingsHorizontal(mode, "EyeZoom");

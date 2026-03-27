@@ -314,28 +314,28 @@ static void ResolveActiveElementsForMode(const Config& config, const std::string
     };
 
     auto appendMirrorByName = [&](const std::string& mirrorName) {
-        auto it = s_mirrorByName.find(mirrorName);
-        if (it == s_mirrorByName.end() || !it->second) return;
+        auto it = mirrorByName.find(mirrorName);
+        if (it == mirrorByName.end() || !it->second) return;
         appendMirror(*it->second);
     };
 
     auto appendMirrorGroup = [&](const std::string& groupName) {
-        auto git = s_groupByName.find(groupName);
-        if (git == s_groupByName.end() || !git->second) return;
+        auto git = groupByName.find(groupName);
+        if (git == groupByName.end() || !git->second) return;
         const auto& group = *git->second;
 
         for (const auto& item : group.mirrors) {
             if (!item.enabled) continue;
-            auto mit = s_mirrorByName.find(item.mirrorId);
-            if (mit == s_mirrorByName.end() || !mit->second) continue;
+            auto mit = mirrorByName.find(item.mirrorId);
+            if (mit == mirrorByName.end() || !mit->second) continue;
             appendMirror(BuildGroupedMirrorConfig(*mit->second, group, item));
         }
     };
 
     auto appendImage = [&](const std::string& imageName) {
         if (!imagesVisible) return;
-        auto it = s_imageByName.find(imageName);
-        if (it == s_imageByName.end() || !it->second) return;
+        auto it = imageByName.find(imageName);
+        if (it == imageByName.end() || !it->second) return;
         const ImageConfig* image = it->second;
         if (onlyOnMyScreenPass && !image->onlyOnMyScreen) { return; }
         outImages.push_back(*image);
@@ -349,8 +349,8 @@ static void ResolveActiveElementsForMode(const Config& config, const std::string
 
     auto appendWindowOverlay = [&](const std::string& overlayId) {
         if (!windowOverlaysVisible) return;
-        auto it = s_windowOverlayByName.find(overlayId);
-        if (it == s_windowOverlayByName.end() || !it->second) return;
+        auto it = windowOverlayByName.find(overlayId);
+        if (it == windowOverlayByName.end() || !it->second) return;
         const WindowOverlayConfig* overlay = it->second;
         if (onlyOnMyScreenPass && !overlay->onlyOnMyScreen) { return; }
         outWindowOverlays.push_back(overlay);
@@ -364,8 +364,8 @@ static void ResolveActiveElementsForMode(const Config& config, const std::string
 
     auto appendBrowserOverlay = [&](const std::string& overlayId) {
         if (!browserOverlaysVisible) return;
-        auto it = s_browserOverlayByName.find(overlayId);
-        if (it == s_browserOverlayByName.end() || !it->second) return;
+        auto it = browserOverlayByName.find(overlayId);
+        if (it == browserOverlayByName.end() || !it->second) return;
         const BrowserOverlayConfig* overlay = it->second;
         if (onlyOnMyScreenPass && !overlay->onlyOnMyScreen) { return; }
         outBrowserOverlays.push_back(overlay);
@@ -3252,10 +3252,10 @@ static void RenderMirrorsDirect(const std::vector<MirrorConfig>& activeMirrors, 
     std::unordered_map<std::string, const MirrorConfig*> sourceMirrorConfigs;
     if (!fromModeId.empty() && (isAnimating || fromSlideMirrorsIn || toSlideMirrorsIn || cfg.eyezoom.slideMirrorsIn)) {
         std::vector<ImageConfig> unusedImages;
-        std::vector<WindowOverlayConfig> unusedWindowOverlays;
-        std::vector<BrowserOverlayConfig> unusedBrowserOverlays;
-        CollectActiveElementsForMode(cfg, fromModeId, false, sourceMirrors, unusedImages, unusedWindowOverlays,
-                         unusedBrowserOverlays);
+        std::vector<const WindowOverlayConfig*> unusedWindowOverlays;
+        std::vector<const BrowserOverlayConfig*> unusedBrowserOverlays;
+        CollectActiveElementsForMode(cfg, fromModeId, false, g_configSnapshotVersion.load(std::memory_order_acquire),
+                         sourceMirrors, unusedImages, unusedWindowOverlays, unusedBrowserOverlays);
         sourceMirrorConfigs.reserve(sourceMirrors.size());
         for (const auto& sourceMirror : sourceMirrors) {
             sourceMirrorConfigs[sourceMirror.name] = &sourceMirror;
@@ -3857,7 +3857,7 @@ static void RenderImagesDirect(const std::vector<ImageConfig>& activeImages, int
     glDisable(GL_BLEND);
 }
 
-static void RenderWindowOverlaysDirect(const std::vector<WindowOverlayConfig>& overlays, int fullW, int fullH, int gameX,
+static void RenderWindowOverlaysDirect(const std::vector<const WindowOverlayConfig*>& overlays, int fullW, int fullH, int gameX,
                                        int gameY, int gameW, int gameH, int gameResW, int gameResH, bool relativeStretching,
                                        float transitionProgress, int fromX, int fromY, int fromW, int fromH, float modeOpacity,
                                        bool excludeOnlyOnMyScreen) {
@@ -3875,7 +3875,9 @@ static void RenderWindowOverlaysDirect(const std::vector<WindowOverlayConfig>& o
     glUseProgram(g_imageRenderProgram);
     glUniform1i(g_imageRenderShaderLocs.enableColorKey, 0);
 
-    for (const auto& conf : overlays) {
+    for (const auto* confPtr : overlays) {
+        if (!confPtr) continue;
+        const auto& conf = *confPtr;
         if (excludeOnlyOnMyScreen && conf.onlyOnMyScreen) continue;
 
         const float effectiveOpacity = conf.opacity * modeOpacity;
@@ -4012,7 +4014,7 @@ static void RenderWindowOverlaysDirect(const std::vector<WindowOverlayConfig>& o
     glDisable(GL_BLEND);
 }
 
-static void RenderBrowserOverlaysDirect(const std::vector<BrowserOverlayConfig>& overlays, int fullW, int fullH, int gameX,
+static void RenderBrowserOverlaysDirect(const std::vector<const BrowserOverlayConfig*>& overlays, int fullW, int fullH, int gameX,
                                         int gameY, int gameW, int gameH, int gameResW, int gameResH, bool relativeStretching,
                                         float transitionProgress, int fromX, int fromY, int fromW, int fromH, float modeOpacity,
                                         bool excludeOnlyOnMyScreen) {
@@ -4027,7 +4029,9 @@ static void RenderBrowserOverlaysDirect(const std::vector<BrowserOverlayConfig>&
     glUseProgram(g_imageRenderProgram);
     glUniform1i(g_imageRenderShaderLocs.enableColorKey, 0);
 
-    for (const auto& conf : overlays) {
+    for (const auto* confPtr : overlays) {
+        if (!confPtr) continue;
+        const auto& conf = *confPtr;
         if (excludeOnlyOnMyScreen && conf.onlyOnMyScreen) continue;
 
         const float effectiveOpacity = conf.opacity * modeOpacity;
@@ -4368,34 +4372,35 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
             s_cachedActiveImagesVisible = imagesVisible;
             s_cachedActiveWindowOverlaysVisible = windowOverlaysVisible;
             s_cachedActiveBrowserOverlaysVisible = browserOverlaysVisible;
-            ResolveActiveElementsForMode(cfg, request.modeId, false, cfgVersion, s_cachedActiveMirrors, s_cachedActiveImages,
+            ResolveActiveElementsForMode(cfg, request.modeId, false, g_configSnapshotVersion.load(std::memory_order_acquire), s_cachedActiveMirrors, s_cachedActiveImages,
                                          s_cachedActiveWindowOverlays, s_cachedActiveBrowserOverlays,
                                          &s_cachedActiveOrderedSources);
         }
     }
     const std::vector<MirrorConfig>& activeMirrors = needModeElements ? s_cachedActiveMirrors : s_emptyMirrors;
     const std::vector<ImageConfig>& activeImages = needModeElements ? s_cachedActiveImages : s_emptyImages;
-    const std::vector<WindowOverlayConfig>& activeWindowOverlays =
+    const std::vector<const WindowOverlayConfig*>& activeWindowOverlays =
         needModeElements ? s_cachedActiveWindowOverlays : s_emptyWindowOverlays;
-    const std::vector<BrowserOverlayConfig>& activeBrowserOverlays =
+    const std::vector<const BrowserOverlayConfig*>& activeBrowserOverlays =
         needModeElements ? s_cachedActiveBrowserOverlays : s_emptyBrowserOverlays;
     const std::vector<ActiveModeSourceEntry>& activeOrderedSources = needModeElements ? s_cachedActiveOrderedSources : s_emptyActiveSources;
 
     if (!request.isRawWindowedMode && request.isTransitioningFromEyeZoom && cfg.eyezoom.slideMirrorsIn && !request.skipAnimation) {
-        if (s_cachedEyeZoomSlideOutConfig != &cfg || s_cachedEyeZoomSlideOutTargetModeId != request.modeId) {
+        const uint64_t currentEyeZoomVersion = g_configSnapshotVersion.load(std::memory_order_acquire);
+        if (s_cachedEyeZoomSlideOutConfigVersion != currentEyeZoomVersion || s_cachedEyeZoomSlideOutTargetModeId != request.modeId) {
             PROFILE_SCOPE_CAT("Resolve EyeZoom Slide-Out Mirrors", "Rendering");
             std::vector<MirrorConfig> eyeZoomMirrors;
             std::vector<ImageConfig> unusedImages;
-            std::vector<WindowOverlayConfig> unusedOverlays;
-            std::vector<BrowserOverlayConfig> unusedBrowserOverlays;
+            std::vector<const WindowOverlayConfig*> unusedOverlays;
+            std::vector<const BrowserOverlayConfig*> unusedBrowserOverlays;
             std::unordered_set<std::string> activeMirrorNames;
             activeMirrorNames.reserve(activeMirrors.size());
             for (const auto& targetMirror : activeMirrors) {
                 activeMirrorNames.insert(targetMirror.name);
             }
 
-            CollectActiveElementsForMode(cfg, "EyeZoom", false, eyeZoomMirrors, unusedImages, unusedOverlays,
-                                         unusedBrowserOverlays);
+            CollectActiveElementsForMode(cfg, "EyeZoom", false, g_configSnapshotVersion.load(std::memory_order_acquire),
+                                         eyeZoomMirrors, unusedImages, unusedOverlays, unusedBrowserOverlays);
 
             s_cachedEyeZoomSlideOutMirrors.clear();
             s_cachedEyeZoomSlideOutMirrors.reserve(eyeZoomMirrors.size());
@@ -4405,7 +4410,7 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
                 }
             }
 
-            s_cachedEyeZoomSlideOutConfig = &cfg;
+            s_cachedEyeZoomSlideOutConfigVersion = currentEyeZoomVersion;
             s_cachedEyeZoomSlideOutTargetModeId = request.modeId;
         }
 
@@ -4419,16 +4424,16 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
             PROFILE_SCOPE_CAT("Resolve Transition Slide-Out Mirrors", "Rendering");
             std::vector<MirrorConfig> fromModeMirrors;
             std::vector<ImageConfig> unusedImages;
-            std::vector<WindowOverlayConfig> unusedOverlays;
-            std::vector<BrowserOverlayConfig> unusedBrowserOverlays;
+            std::vector<const WindowOverlayConfig*> unusedOverlays;
+            std::vector<const BrowserOverlayConfig*> unusedBrowserOverlays;
             std::unordered_set<std::string> activeMirrorNames;
             activeMirrorNames.reserve(activeMirrors.size());
             for (const auto& targetMirror : activeMirrors) {
                 activeMirrorNames.insert(targetMirror.name);
             }
 
-            CollectActiveElementsForMode(cfg, request.fromModeId, false, fromModeMirrors, unusedImages, unusedOverlays,
-                                         unusedBrowserOverlays);
+            CollectActiveElementsForMode(cfg, request.fromModeId, false, g_configSnapshotVersion.load(std::memory_order_acquire),
+                                         fromModeMirrors, unusedImages, unusedOverlays, unusedBrowserOverlays);
 
             s_cachedTransitionSlideOutMirrors.clear();
             s_cachedTransitionSlideOutMirrors.reserve(fromModeMirrors.size());
@@ -4646,12 +4651,12 @@ bool RenderModeOverlaysForIntegrationTest(const Config& config, const ModeConfig
     request.toY = gameY;
     request.toW = gameW;
     request.toH = gameH;
-    request.modeHasMirrors = gameTextureId != 0 && (!modeToRender.mirrorIds.empty() || !modeToRender.mirrorGroupIds.empty());
-    request.modeHasImages = !modeToRender.imageIds.empty();
+    request.modeHasMirrors = gameTextureId != 0 && ModeHasAnyMirrorSources(modeToRender);
+    request.modeHasImages = ModeHasSourceType(modeToRender, ModeSourceType::Image);
     request.modeHasWindowOverlays = g_windowOverlaysVisible.load(std::memory_order_acquire) &&
-                                    !modeToRender.windowOverlayIds.empty();
+                                    ModeHasSourceType(modeToRender, ModeSourceType::WindowOverlay);
     request.modeHasBrowserOverlays = g_browserOverlaysVisible.load(std::memory_order_acquire) &&
-                                     !modeToRender.browserOverlayIds.empty();
+                                     ModeHasSourceType(modeToRender, ModeSourceType::BrowserOverlay);
     request.isRawWindowedMode = !request.modeHasMirrors;
     request.toSlideMirrorsIn = modeToRender.slideMirrorsIn;
     request.mirrorSlideProgress = 1.0f;
@@ -5525,10 +5530,11 @@ static bool RenderSameThreadVirtualCameraComposeFrame(const ModeConfig* modeToRe
 
     {
         PROFILE_SCOPE_CAT("Render VC Background", "VirtualCamera");
+        const float bgSourceRect[] = { 0.0f, 0.0f, 1.0f, 1.0f };
         if (useFromBackground) {
-            RenderSameThreadObsBackgroundConfig(fromBackground, backgroundTexture, fullW, fullH);
+            RenderSameThreadObsBackgroundConfig(fromBackground, backgroundTexture, bgSourceRect, fullW, fullH);
         } else {
-            RenderSameThreadObsBackgroundConfig(modeToRender->background, backgroundTexture, fullW, fullH);
+            RenderSameThreadObsBackgroundConfig(modeToRender->background, backgroundTexture, bgSourceRect, fullW, fullH);
         }
     }
 
@@ -7041,20 +7047,8 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
                 bool leftButtonDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
                 std::string hoveredOverlay = "";
 
-                if (configSnap) {
-                    std::unordered_map<std::string, const BrowserOverlayConfig*> overlayByName;
-                    overlayByName.reserve(configSnap->browserOverlays.size());
-                    for (const auto& overlay : configSnap->browserOverlays) {
-                        overlayByName.emplace(overlay.name, &overlay);
-                    }
-
-                    for (const auto& overlayId : modeToRender->browserOverlayIds) {
-                        auto overlayIt = overlayByName.find(overlayId);
-                        if (overlayIt == overlayByName.end() || !overlayIt->second) {
-                            continue;
-                        }
-
-                        const BrowserOverlayConfig& conf = *overlayIt->second;
+                {
+                    for (const auto& conf : g_config.browserOverlays) {
                         BrowserOverlayTextureFrame frame{};
                         if (!PrepareBrowserOverlayTexture(conf, frame)) {
                             continue;

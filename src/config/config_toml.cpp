@@ -192,6 +192,8 @@ void RestoreModeDimensionsFromDefaults(const toml::table& tbl, const std::vector
     }
 }
 
+static void ModeSourceRefFromToml(const toml::table& tbl, ModeSourceRef& cfg);
+
 void ModeConfigFromTomlInternal(const toml::table& tbl, ModeConfig& cfg, const std::vector<ModeConfig>* defaultModes) {
     cfg.id = GetStringOr(tbl, "id", "");
 
@@ -291,39 +293,50 @@ void ModeConfigFromTomlInternal(const toml::table& tbl, ModeConfig& cfg, const s
 
     if (auto t = GetTable(tbl, "background")) { BackgroundConfigFromToml(*t, cfg.background); }
 
-    cfg.mirrorIds.clear();
+    cfg.sources.clear();
+    if (auto arr = GetArray(tbl, "sources")) {
+        for (const auto& elem : *arr) {
+            if (auto t = elem.as_table()) {
+                ModeSourceRef source;
+                ModeSourceRefFromToml(*t, source);
+                if (!source.id.empty()) { cfg.sources.push_back(std::move(source)); }
+            }
+        }
+    }
+
+    std::vector<std::string> legacyMirrorIds;
     if (auto arr = GetArray(tbl, "mirrorIds")) {
         for (const auto& elem : *arr) {
-            if (auto val = elem.value<std::string>()) { cfg.mirrorIds.push_back(*val); }
+            if (auto val = elem.value<std::string>()) { legacyMirrorIds.push_back(*val); }
         }
     }
-
-    cfg.mirrorGroupIds.clear();
+    std::vector<std::string> legacyMirrorGroupIds;
     if (auto arr = GetArray(tbl, "mirrorGroupIds")) {
         for (const auto& elem : *arr) {
-            if (auto val = elem.value<std::string>()) { cfg.mirrorGroupIds.push_back(*val); }
+            if (auto val = elem.value<std::string>()) { legacyMirrorGroupIds.push_back(*val); }
         }
     }
-
-    cfg.imageIds.clear();
+    std::vector<std::string> legacyImageIds;
     if (auto arr = GetArray(tbl, "imageIds")) {
         for (const auto& elem : *arr) {
-            if (auto val = elem.value<std::string>()) { cfg.imageIds.push_back(*val); }
+            if (auto val = elem.value<std::string>()) { legacyImageIds.push_back(*val); }
         }
     }
-
-    cfg.windowOverlayIds.clear();
+    std::vector<std::string> legacyWindowOverlayIds;
     if (auto arr = GetArray(tbl, "windowOverlayIds")) {
         for (const auto& elem : *arr) {
-            if (auto val = elem.value<std::string>()) { cfg.windowOverlayIds.push_back(*val); }
+            if (auto val = elem.value<std::string>()) { legacyWindowOverlayIds.push_back(*val); }
         }
     }
-
-    cfg.browserOverlayIds.clear();
+    std::vector<std::string> legacyBrowserOverlayIds;
     if (auto arr = GetArray(tbl, "browserOverlayIds")) {
         for (const auto& elem : *arr) {
-            if (auto val = elem.value<std::string>()) { cfg.browserOverlayIds.push_back(*val); }
+            if (auto val = elem.value<std::string>()) { legacyBrowserOverlayIds.push_back(*val); }
         }
+    }
+    if (cfg.sources.empty()) {
+        cfg.sources = BuildModeSourcesFromLegacyLists(legacyMirrorIds, legacyMirrorGroupIds, legacyImageIds,
+                                                     legacyWindowOverlayIds, legacyBrowserOverlayIds);
     }
 
     if (auto t = GetTable(tbl, "stretch")) { StretchConfigFromToml(*t, cfg.stretch); }

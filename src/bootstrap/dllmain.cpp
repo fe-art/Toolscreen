@@ -109,6 +109,9 @@ void ResizeHotkeySecondaryModes(size_t count) {
 
 TempSensitivityOverride g_tempSensitivityOverride;
 std::mutex g_tempSensitivityMutex;
+std::atomic<bool> g_tempSensitivityActiveAtomic{ false };
+std::atomic<float> g_tempSensitivityXAtomic{ 1.0f };
+std::atomic<float> g_tempSensitivityYAtomic{ 1.0f };
 
 void ClearTempSensitivityOverride() {
     std::lock_guard<std::mutex> lock(g_tempSensitivityMutex);
@@ -116,6 +119,9 @@ void ClearTempSensitivityOverride() {
     g_tempSensitivityOverride.sensitivityX = 1.0f;
     g_tempSensitivityOverride.sensitivityY = 1.0f;
     g_tempSensitivityOverride.activeSensHotkeyIndex = -1;
+    g_tempSensitivityXAtomic.store(1.0f, std::memory_order_release);
+    g_tempSensitivityYAtomic.store(1.0f, std::memory_order_release);
+    g_tempSensitivityActiveAtomic.store(false, std::memory_order_release);
 }
 
 std::atomic<bool> g_cursorsNeedReload{ false };
