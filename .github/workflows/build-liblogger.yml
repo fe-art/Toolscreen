@@ -420,6 +420,7 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
 
+          repo="${GITHUB_REPOSITORY}"
           tag="liblogger-signed-latest"
           title="Latest signed liblogger"
 
@@ -430,10 +431,10 @@ jobs:
           Commit: ${GITHUB_SHA}
           EOF
 
-          if gh release view "$tag" >/dev/null 2>&1; then
-            gh release edit "$tag" --title "$title" --notes-file notes.md --prerelease
+          if gh release view "$tag" -R "$repo" >/dev/null 2>&1; then
+            gh release edit "$tag" -R "$repo" --title "$title" --notes-file notes.md --prerelease
           else
-            gh release create "$tag" --title "$title" --notes-file notes.md --prerelease
+            gh release create "$tag" -R "$repo" --title "$title" --notes-file notes.md --prerelease
           fi
 
           assets=(
@@ -454,4 +455,4 @@ jobs:
             assets+=("$asset")
           done
 
-          gh release upload "$tag" "${assets[@]}" --clobber
+          gh release upload "$tag" -R "$repo" "${assets[@]}" --clobber
