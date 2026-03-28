@@ -24,6 +24,8 @@
 !.github/workflows/*
 !src/
 !src/**
+!liblogger
+!liblogger/**
 
 src/json.hpp
 src/packages.config
