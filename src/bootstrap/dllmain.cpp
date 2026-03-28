@@ -2308,15 +2308,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                             Log("WARNING: Could not rename old log to " + WideToUtf8(archivedLogPath) +
                                 ", error code: " + std::to_string(GetLastError()));
                         } else {
-                            // Compress the archived log to .gz on a background thread
-                            // so we don't block DLL initialization
-                            std::wstring archiveSrc = archivedLogPath;
-                            std::thread([archiveSrc]() {
-                                std::wstring gzPath = archiveSrc + L".gz";
-                                if (CompressFileToGzip(archiveSrc, gzPath)) {
-                                    DeleteFileW(archiveSrc.c_str());
-                                }
-                            }).detach();
+                            QueueArchivedLogCompression(archivedLogPath);
                         }
                     } else {
                         CloseHandle(hFile);

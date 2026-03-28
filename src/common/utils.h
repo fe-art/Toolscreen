@@ -312,6 +312,7 @@ void InvalidateTrackedGameTextureId(bool clearSwapThread = false);
 void StartLogThread(); // Start background log writer thread
 void StopLogThread();  // Stop background log writer thread (flushes first)
 void FlushLogs();
+void QueueArchivedLogCompression(const std::wstring& archivedLogPath);
 
 void LogCategory(const char* category, const std::string& message);
 

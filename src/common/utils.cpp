@@ -545,6 +545,8 @@ static constexpr size_t LOG_BUFFER_SIZE = 8192;
 static LogEntry g_logBuffer[LOG_BUFFER_SIZE];
 static std::atomic<size_t> g_logClaimIndex{ 0 };
 static std::atomic<size_t> g_logReadIndex{ 0 };
+static std::mutex g_logArchiveQueueMutex;
+static std::vector<std::wstring> g_pendingLogArchives;
 
 // Background writer thread
 static std::thread g_logThread;
@@ -552,6 +554,29 @@ static std::atomic<bool> g_logThreadRunning{ false };
 
 static void LogThreadMain();
 static void WriteLogsToFile();
+
+static void ProcessPendingLogArchives() {
+    std::vector<std::wstring> pendingArchives;
+    {
+        std::lock_guard<std::mutex> lock(g_logArchiveQueueMutex);
+        if (g_pendingLogArchives.empty()) return;
+        pendingArchives.swap(g_pendingLogArchives);
+    }
+
+    for (const std::wstring& archiveSrc : pendingArchives) {
+        const std::wstring gzPath = archiveSrc + L".gz";
+        if (CompressFileToGzip(archiveSrc, gzPath)) {
+            DeleteFileW(archiveSrc.c_str());
+        }
+    }
+}
+
+void QueueArchivedLogCompression(const std::wstring& archivedLogPath) {
+    if (archivedLogPath.empty()) return;
+
+    std::lock_guard<std::mutex> lock(g_logArchiveQueueMutex);
+    g_pendingLogArchives.push_back(archivedLogPath);
+}
 
 void StartLogThread() {
     if (g_logThreadRunning.load()) return;
@@ -570,8 +595,11 @@ void StopLogThread() {
 static void LogThreadMain() {
     while (g_logThreadRunning.load()) {
         WriteLogsToFile();
+        ProcessPendingLogArchives();
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
+
+    ProcessPendingLogArchives();
 }
 
 // Internal: Write all pending log entries to file (called by background thread or FlushLogs)
