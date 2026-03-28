@@ -8,6 +8,7 @@
 !build.bat
 !scripts/
 !scripts/verify_pe_metadata.ps1
+!scripts/**
 !docs
 !docs/images/
 !docs/images/screenshot.png
