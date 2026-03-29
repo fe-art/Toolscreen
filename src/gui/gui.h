@@ -540,6 +540,7 @@ struct Config {
     // Useful if a specific overlay/driver hook layer is unstable when chained.
     bool disableHookChaining = false;
     bool allowCursorEscape = false;
+    bool confineCursor = false;
     float mouseSensitivity = 1.0f;
     int windowsMouseSpeed = 0;                              // Windows mouse speed override (0 = disabled, 1-20 = override)
     bool hideAnimationsInGame = false;

@@ -834,6 +834,17 @@ static BOOL ClipCursorHook_Impl(CLIPCURSORPROC next, const RECT* lpRect) {
 
     if (g_showGui.load()) { return next(NULL); }
 
+    if (g_config.confineCursor) {
+        HWND hwnd = g_minecraftHwnd.load();
+        if (hwnd) {
+            RECT windowRect;
+            if (GetClientRect(hwnd, &windowRect)) {
+                MapWindowPoints(hwnd, HWND_DESKTOP, reinterpret_cast<POINT*>(&windowRect), 2);
+                return next(&windowRect);
+            }
+        }
+    }
+
     if (g_gameVersion >= GameVersion(1, 13, 0)) { return next(lpRect); }
 
     if (g_config.allowCursorEscape) {

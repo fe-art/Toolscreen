@@ -343,6 +343,8 @@
     "label.hotkey": "Hotkey:",
     "label.image": "Image",
     "label.let_cursor_escape_window": "Let Cursor Escape Window",
+    "label.confine_cursor": "Confine Cursor to Game Window",
+    "tooltip.confine_cursor": "Keeps the mouse cursor inside the game window while in chat, inventory, etc. Not active in this menu.",
     "label.manual": "Manual",
     "label.modes": "Modes",
     "label.mouse_sensitivity": "Mouse Sensitivity:",

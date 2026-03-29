@@ -1921,6 +1921,7 @@ void ConfigToToml(const Config& config, toml::table& out) {
     out.insert("fpsLimitSleepThreshold", config.fpsLimitSleepThreshold);
     out.insert("mirrorMatchColorspace", MirrorGammaModeToString(config.mirrorGammaMode));
     out.insert("allowCursorEscape", config.allowCursorEscape);
+    out.insert("confineCursor", config.confineCursor);
     out.insert("mouseSensitivity", config.mouseSensitivity);
     out.insert("windowsMouseSpeed", config.windowsMouseSpeed);
     out.insert("hideAnimationsInGame", config.hideAnimationsInGame);
@@ -2047,6 +2048,7 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
     config.mirrorGammaMode = StringToMirrorGammaMode(
         GetStringOr(tbl, "mirrorMatchColorspace", ConfigDefaults::CONFIG_MIRROR_MATCH_COLORSPACE));
     config.allowCursorEscape = GetOr(tbl, "allowCursorEscape", ConfigDefaults::CONFIG_ALLOW_CURSOR_ESCAPE);
+    config.confineCursor = GetOr(tbl, "confineCursor", false);
     config.mouseSensitivity = GetOr(tbl, "mouseSensitivity", ConfigDefaults::CONFIG_MOUSE_SENSITIVITY);
     config.windowsMouseSpeed = GetOr(tbl, "windowsMouseSpeed", ConfigDefaults::CONFIG_WINDOWS_MOUSE_SPEED);
     config.hideAnimationsInGame = GetOr(tbl, "hideAnimationsInGame", ConfigDefaults::CONFIG_HIDE_ANIMATIONS_IN_GAME);

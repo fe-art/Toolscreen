@@ -343,6 +343,8 @@
     "label.hotkey": "快捷键：",
     "label.image": "图像",
     "label.let_cursor_escape_window": "让光标离开窗口",
+    "label.confine_cursor": "将光标限制在游戏窗口内",
+    "tooltip.confine_cursor": "在聊天、背包等界面中将鼠标光标保持在游戏窗口内。打开 Toolscreen 界面时暂时释放。",
     "label.manual": "手动",
     "label.modes": "模式",
     "label.mouse_sensitivity": "鼠标灵敏度：",
