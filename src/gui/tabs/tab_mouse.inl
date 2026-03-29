@@ -31,6 +31,10 @@
                     HelpMarker(trc("tooptip.let_cursor_escape_window"));
                 }
 
+                if (ImGui::Checkbox(trc("label.confine_cursor"), &g_config.confineCursor)) { g_configIsDirty = true; }
+                ImGui::SameLine();
+                HelpMarker(trc("tooltip.confine_cursor"));
+
                 ImGui::Spacing();
                 ImGui::SeparatorText(trc("inputs.cursor_configuration"));
 

@@ -9,6 +9,9 @@ set "FAILURE_STEP="
 set "FAILURE_CODE=1"
 set "ARTIFACT_CONFIG_DIR=Release"
 set "CLI_TEST_RUNNER="
+set "PREBUILT_LIBLOGGER_DIR=%SCRIPT_DIR%out\prebuilt-liblogger"
+set "PREBUILT_LIBLOGGER_DLL=%PREBUILT_LIBLOGGER_DIR%\liblogger_x64.dll"
+set "PREBUILT_LIBLOGGER_PDB=%PREBUILT_LIBLOGGER_DIR%\liblogger_x64.pdb"
 
 for %%A in (%*) do (
     if /I "%%~A"=="release" (
@@ -31,8 +34,16 @@ set "CLI_TEST_RUNNER=%ARTIFACT_DIR%\toolscreen_gui_integration_tests.exe"
 
 pushd "%SCRIPT_DIR%" >nul || exit /b 1
 
+echo Downloading the latest signed liblogger artifacts...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%scripts\fetch_signed_liblogger.ps1" -DestinationDirectory "%PREBUILT_LIBLOGGER_DIR%"
+if errorlevel 1 (
+    set "FAILURE_STEP=Download signed liblogger artifacts"
+    set "FAILURE_CODE=12"
+    goto :fail
+)
+
 echo Configuring with preset vs2022-x64...
-cmake --preset vs2022-x64
+cmake --preset vs2022-x64 -DTOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH="%PREBUILT_LIBLOGGER_DLL%" -DTOOLSCREEN_PREBUILT_LIBLOGGER_PDB_PATH="%PREBUILT_LIBLOGGER_PDB%"
 if errorlevel 1 (
     set "FAILURE_STEP=Configure preset vs2022-x64"
     set "FAILURE_CODE=10"
@@ -80,7 +91,7 @@ if errorlevel 1 (
 )
 
 echo Reconfiguring with preset vs2022-x64 so the EXE packaging step sees the copied DLL...
-cmake --preset vs2022-x64
+cmake --preset vs2022-x64 -DTOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH="%PREBUILT_LIBLOGGER_DLL%" -DTOOLSCREEN_PREBUILT_LIBLOGGER_PDB_PATH="%PREBUILT_LIBLOGGER_PDB%"
 if errorlevel 1 (
     set "FAILURE_STEP=Reconfigure preset vs2022-x64 for EXE packaging"
     set "FAILURE_CODE=40"

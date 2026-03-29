@@ -92,6 +92,7 @@ function Assert-Metadata {
 
 $artifactRoot = (Resolve-Path $ArtifactDirectory).Path
 $dll = Get-SingleArtifact -Root $artifactRoot -Pattern 'Toolscreen.dll' -Label 'Toolscreen DLL'
+$loggerDll = Get-SingleArtifact -Root $artifactRoot -Pattern 'liblogger_x64.dll' -Label 'liblogger DLL'
 $installer = Get-SingleArtifact -Root $artifactRoot -Pattern 'Toolscreen-*-double-click-me.exe' -Label 'Toolscreen installer EXE'
 $downloader = Get-SingleArtifact -Root $artifactRoot -Pattern 'toolscreen-downloader.exe' -Label 'Toolscreen downloader EXE'
 
@@ -102,6 +103,7 @@ if (-not $expectedVersion) {
 }
 
 Assert-Metadata -File $dll -ExpectedDescription 'Toolscreen hook DLL' -ExpectedOriginalFilename 'Toolscreen.dll' -ExpectedVersion $expectedVersion
+Assert-Metadata -File $loggerDll -ExpectedDescription 'Toolscreen liblogger' -ExpectedOriginalFilename 'liblogger_x64.dll' -ExpectedVersion $expectedVersion
 Assert-Metadata -File $installer -ExpectedDescription 'Toolscreen installer' -ExpectedOriginalFilename $installer.Name -ExpectedVersion $expectedVersion
 Assert-Metadata -File $downloader -ExpectedDescription 'Toolscreen downloader' -ExpectedOriginalFilename 'toolscreen-downloader.exe' -ExpectedVersion $expectedVersion
 

@@ -44,6 +44,7 @@ const auto& GetTestCaseDefinitions() {
         {"config-load-eyezoom-legacy-margins-migrated", &RunConfigLoadEyeZoomLegacyMarginsMigratedTest},
         {"config-load-eyezoom-legacy-custom-position-migrated", &RunConfigLoadEyeZoomLegacyCustomPositionMigratedTest},
         {"config-load-eyezoom-invalid-active-overlay-reset", &RunConfigLoadEyeZoomInvalidActiveOverlayResetTest},
+        {"config-load-window-overlay-crop-migrated", &RunConfigLoadWindowOverlayCropMigratedTest},
         {"config-load-window-overlay-capture-method-migrated", &RunConfigLoadWindowOverlayCaptureMethodMigratedTest},
         {"config-load-key-rebind-unicode-string-parsed", &RunConfigLoadKeyRebindUnicodeStringParsedTest},
         {"config-load-key-rebind-escaped-unicode-string-parsed", &RunConfigLoadKeyRebindEscapedUnicodeStringParsedTest},

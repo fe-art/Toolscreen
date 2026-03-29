@@ -670,6 +670,34 @@ captureMethod = "Auto"
                       runMode);
 }
 
+void RunConfigLoadWindowOverlayCropMigratedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_window_overlay_crop_migrated",
+                      []() {
+                          WriteRawConfigTomlToDisk(R"(configVersion = 4
+defaultMode = "Fullscreen"
+
+[[windowOverlay]]
+name = "Legacy Crop"
+crop_top = 4
+crop_bottom = 5
+crop_left = 6
+crop_right = 7
+)");
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-window-overlay-crop-migrated");
+                          const WindowOverlayConfig& overlay = FindWindowOverlayOrThrow("Legacy Crop");
+                          Expect(overlay.crop_top == 8 && overlay.crop_bottom == 10 && overlay.crop_left == 12 &&
+                                     overlay.crop_right == 14,
+                                 "Expected legacy window overlay crop values to migrate to the v5 scale.");
+                          Expect(!overlay.cropToWidth && !overlay.cropToHeight,
+                                 "Expected crop-to toggles to stay disabled for migrated legacy window overlays.");
+                          Expect(g_config.configVersion == GetConfigVersion(),
+                                 "Expected legacy crop migration to upgrade the config to the current version.");
+                      },
+                      runMode);
+}
+
 void RunConfigLoadKeyRebindUnicodeStringParsedTest(TestRunMode runMode = TestRunMode::Automated) {
     RunConfigLoadCase("config_load_key_rebind_unicode_string_parsed",
                       []() {

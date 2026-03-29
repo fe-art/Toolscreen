@@ -998,6 +998,8 @@ void ImageConfigToToml(const ImageConfig& cfg, toml::table& out) {
     out.insert("crop_bottom", cfg.crop_bottom);
     out.insert("crop_left", cfg.crop_left);
     out.insert("crop_right", cfg.crop_right);
+    out.insert("cropToWidth", cfg.cropToWidth);
+    out.insert("cropToHeight", cfg.cropToHeight);
     out.insert("enableColorKey", cfg.enableColorKey);
 
     toml::array colorKeysArr;
@@ -1036,6 +1038,8 @@ void ImageConfigFromToml(const toml::table& tbl, ImageConfig& cfg) {
     cfg.crop_bottom = GetOr(tbl, "crop_bottom", ConfigDefaults::IMAGE_CROP_BOTTOM);
     cfg.crop_left = GetOr(tbl, "crop_left", ConfigDefaults::IMAGE_CROP_LEFT);
     cfg.crop_right = GetOr(tbl, "crop_right", ConfigDefaults::IMAGE_CROP_RIGHT);
+    cfg.cropToWidth = GetOr(tbl, "cropToWidth", false);
+    cfg.cropToHeight = GetOr(tbl, "cropToHeight", false);
     cfg.enableColorKey = GetOr(tbl, "enableColorKey", ConfigDefaults::IMAGE_ENABLE_COLOR_KEY);
 
     cfg.colorKeys.clear();
@@ -1073,6 +1077,8 @@ void WindowOverlayConfigToToml(const WindowOverlayConfig& cfg, toml::table& out)
     out.insert("crop_bottom", cfg.crop_bottom);
     out.insert("crop_left", cfg.crop_left);
     out.insert("crop_right", cfg.crop_right);
+    out.insert("cropToWidth", cfg.cropToWidth);
+    out.insert("cropToHeight", cfg.cropToHeight);
     out.insert("enableColorKey", cfg.enableColorKey);
 
     toml::array colorKeysArr;
@@ -1116,6 +1122,8 @@ void WindowOverlayConfigFromToml(const toml::table& tbl, WindowOverlayConfig& cf
     cfg.crop_bottom = GetOr(tbl, "crop_bottom", ConfigDefaults::IMAGE_CROP_BOTTOM);
     cfg.crop_left = GetOr(tbl, "crop_left", ConfigDefaults::IMAGE_CROP_LEFT);
     cfg.crop_right = GetOr(tbl, "crop_right", ConfigDefaults::IMAGE_CROP_RIGHT);
+    cfg.cropToWidth = GetOr(tbl, "cropToWidth", false);
+    cfg.cropToHeight = GetOr(tbl, "cropToHeight", false);
     cfg.enableColorKey = GetOr(tbl, "enableColorKey", ConfigDefaults::IMAGE_ENABLE_COLOR_KEY);
 
     cfg.colorKeys.clear();
@@ -1163,6 +1171,8 @@ void BrowserOverlayConfigToToml(const BrowserOverlayConfig& cfg, toml::table& ou
     out.insert("crop_bottom", cfg.crop_bottom);
     out.insert("crop_left", cfg.crop_left);
     out.insert("crop_right", cfg.crop_right);
+    out.insert("cropToWidth", cfg.cropToWidth);
+    out.insert("cropToHeight", cfg.cropToHeight);
     out.insert("enableColorKey", cfg.enableColorKey);
 
     toml::array colorKeysArr;
@@ -1208,6 +1218,8 @@ void BrowserOverlayConfigFromToml(const toml::table& tbl, BrowserOverlayConfig& 
     cfg.crop_bottom = GetOr(tbl, "crop_bottom", ConfigDefaults::IMAGE_CROP_BOTTOM);
     cfg.crop_left = GetOr(tbl, "crop_left", ConfigDefaults::IMAGE_CROP_LEFT);
     cfg.crop_right = GetOr(tbl, "crop_right", ConfigDefaults::IMAGE_CROP_RIGHT);
+    cfg.cropToWidth = GetOr(tbl, "cropToWidth", false);
+    cfg.cropToHeight = GetOr(tbl, "cropToHeight", false);
     cfg.enableColorKey = GetOr(tbl, "enableColorKey", ConfigDefaults::BROWSER_OVERLAY_ENABLE_COLOR_KEY);
 
     cfg.colorKeys.clear();
@@ -1870,6 +1882,10 @@ void KeyRebindsConfigToToml(const KeyRebindsConfig& cfg, toml::table& out) {
     out.insert("enabled", cfg.enabled);
     out.insert("resolveRebindTargetsForHotkeys", cfg.resolveRebindTargetsForHotkeys);
     out.insert("allowSystemAltTab", cfg.allowSystemAltTab);
+    out.insert("indicatorMode", cfg.indicatorMode);
+    out.insert("indicatorPosition", cfg.indicatorPosition);
+    if (!cfg.indicatorImageEnabled.empty()) out.insert("indicatorImageEnabled", cfg.indicatorImageEnabled);
+    if (!cfg.indicatorImageDisabled.empty()) out.insert("indicatorImageDisabled", cfg.indicatorImageDisabled);
     out.insert("allowSystemAltF4", cfg.allowSystemAltF4);
 
     toml::array toggleHotkeyArr;
@@ -1890,6 +1906,14 @@ void KeyRebindsConfigFromToml(const toml::table& tbl, KeyRebindsConfig& cfg) {
     cfg.resolveRebindTargetsForHotkeys =
         GetOr(tbl, "resolveRebindTargetsForHotkeys", ConfigDefaults::KEY_REBINDS_RESOLVE_REBIND_TARGETS_FOR_HOTKEYS);
     cfg.allowSystemAltTab = GetOr(tbl, "allowSystemAltTab", ConfigDefaults::KEY_REBINDS_ALLOW_SYSTEM_ALT_TAB);
+    if (tbl.contains("indicatorMode")) {
+        cfg.indicatorMode = GetOr(tbl, "indicatorMode", ConfigDefaults::KEY_REBINDS_INDICATOR_MODE);
+    } else {
+        cfg.indicatorMode = GetOr(tbl, "showIndicator", true) ? 1 : 0;
+    }
+    cfg.indicatorPosition = GetOr(tbl, "indicatorPosition", ConfigDefaults::KEY_REBINDS_INDICATOR_POSITION);
+    cfg.indicatorImageEnabled = GetStringOr(tbl, "indicatorImageEnabled", "");
+    cfg.indicatorImageDisabled = GetStringOr(tbl, "indicatorImageDisabled", "");
     cfg.allowSystemAltF4 = GetOr(tbl, "allowSystemAltF4", ConfigDefaults::KEY_REBINDS_ALLOW_SYSTEM_ALT_F4);
 
     cfg.toggleHotkey.clear();
@@ -1955,6 +1979,7 @@ void ConfigToToml(const Config& config, toml::table& out) {
     out.insert("fpsLimitSleepThreshold", config.fpsLimitSleepThreshold);
     out.insert("mirrorMatchColorspace", MirrorGammaModeToString(config.mirrorGammaMode));
     out.insert("allowCursorEscape", config.allowCursorEscape);
+    out.insert("confineCursor", config.confineCursor);
     out.insert("mouseSensitivity", config.mouseSensitivity);
     out.insert("windowsMouseSpeed", config.windowsMouseSpeed);
     out.insert("hideAnimationsInGame", config.hideAnimationsInGame);
@@ -2071,6 +2096,7 @@ void ConfigToToml(const Config& config, toml::table& out) {
 
 void ConfigFromToml(const toml::table& tbl, Config& config) {
     config.configVersion = GetOr(tbl, "configVersion", ConfigDefaults::DEFAULT_CONFIG_VERSION);
+    const int originalConfigVersion = config.configVersion;
     config.disableHookChaining = GetOr(tbl, "disableHookChaining", ConfigDefaults::CONFIG_DISABLE_HOOK_CHAINING);
     config.defaultMode = GetStringOr(tbl, "defaultMode", ConfigDefaults::CONFIG_DEFAULT_MODE);
     config.fontPath = GetStringOr(tbl, "fontPath", ConfigDefaults::CONFIG_FONT_PATH);
@@ -2081,6 +2107,7 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
     config.mirrorGammaMode = StringToMirrorGammaMode(
         GetStringOr(tbl, "mirrorMatchColorspace", ConfigDefaults::CONFIG_MIRROR_MATCH_COLORSPACE));
     config.allowCursorEscape = GetOr(tbl, "allowCursorEscape", ConfigDefaults::CONFIG_ALLOW_CURSOR_ESCAPE);
+    config.confineCursor = GetOr(tbl, "confineCursor", false);
     config.mouseSensitivity = GetOr(tbl, "mouseSensitivity", ConfigDefaults::CONFIG_MOUSE_SENSITIVITY);
     config.windowsMouseSpeed = GetOr(tbl, "windowsMouseSpeed", ConfigDefaults::CONFIG_WINDOWS_MOUSE_SPEED);
     config.hideAnimationsInGame = GetOr(tbl, "hideAnimationsInGame", ConfigDefaults::CONFIG_HIDE_ANIMATIONS_IN_GAME);
@@ -2088,10 +2115,9 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
     config.obsFramerate = ClampObsFramerateConfigValue(GetOr(tbl, "obsFramerate", ConfigDefaults::CONFIG_OBS_FRAMERATE));
     config.keyRepeatStartDelay = ClampKeyRepeatConfigValue(GetOr(tbl, "keyRepeatStartDelay", ConfigDefaults::CONFIG_KEY_REPEAT_START_DELAY));
     config.keyRepeatDelay = ClampKeyRepeatConfigValue(GetOr(tbl, "keyRepeatDelay", ConfigDefaults::CONFIG_KEY_REPEAT_DELAY));
-    if (config.configVersion < ConfigDefaults::DEFAULT_CONFIG_VERSION) {
+    if (originalConfigVersion < ConfigDefaults::DEFAULT_CONFIG_VERSION) {
         if (config.keyRepeatStartDelay == 0) { config.keyRepeatStartDelay = ConfigDefaults::CONFIG_KEY_REPEAT_START_DELAY; }
         if (config.keyRepeatDelay == 0) { config.keyRepeatDelay = ConfigDefaults::CONFIG_KEY_REPEAT_DELAY; }
-        config.configVersion = ConfigDefaults::DEFAULT_CONFIG_VERSION;
     }
     config.basicModeEnabled = GetOr(tbl, "basicModeEnabled", ConfigDefaults::CONFIG_BASIC_MODE_ENABLED);
     config.restoreWindowedModeOnFullscreenExit =
@@ -2235,6 +2261,15 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
                 SensitivityHotkeyConfigFromToml(*t, sensHotkey);
                 config.sensitivityHotkeys.push_back(sensHotkey);
             }
+        }
+    }
+
+    if (originalConfigVersion < 5) {
+        for (auto& wo : config.windowOverlays) {
+            wo.crop_top *= 2;
+            wo.crop_bottom *= 2;
+            wo.crop_left *= 2;
+            wo.crop_right *= 2;
         }
     }
 }

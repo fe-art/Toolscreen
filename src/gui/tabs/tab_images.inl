@@ -212,17 +212,23 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.images"))) {
             ImGui::NextColumn();
             if (Spinner("##img_crop_t", &img.crop_top, 1, 0)) g_configIsDirty = true;
             ImGui::NextColumn();
-            ImGui::Text(trc("images.crop_bottom"));
+            ImGui::Text(img.cropToHeight ? trc("label.crop_to_height") : trc("images.crop_bottom"));
             ImGui::NextColumn();
             if (Spinner("##img_crop_b", &img.crop_bottom, 1, 0)) g_configIsDirty = true;
+            ImGui::SameLine();
+            if (ImGui::Checkbox(trc("label.crop_to_target_h"), &img.cropToHeight)) g_configIsDirty = true;
+            ImGui::SameLine(); HelpMarker(trc("label.tooltip.crop_to"));
             ImGui::NextColumn();
             ImGui::Text(trc("images.crop_left"));
             ImGui::NextColumn();
             if (Spinner("##img_crop_l", &img.crop_left, 1, 0)) g_configIsDirty = true;
             ImGui::NextColumn();
-            ImGui::Text(trc("images.crop_right"));
+            ImGui::Text(img.cropToWidth ? trc("label.crop_to_width") : trc("images.crop_right"));
             ImGui::NextColumn();
             if (Spinner("##img_crop_r", &img.crop_right, 1, 0)) g_configIsDirty = true;
+            ImGui::SameLine();
+            if (ImGui::Checkbox(trc("label.crop_to_target_w"), &img.cropToWidth)) g_configIsDirty = true;
+            ImGui::SameLine(); HelpMarker(trc("label.tooltip.crop_to"));
             ImGui::NextColumn();
             ImGui::Columns(1);
 

@@ -198,17 +198,23 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.browser_overlays"))) {
             ImGui::NextColumn();
             if (Spinner("##browser_overlay_crop_t", &overlay.crop_top, 1, 0)) g_configIsDirty = true;
             ImGui::NextColumn();
-            ImGui::Text(trc("window.overlays_crop_bottom"));
+            ImGui::Text(overlay.cropToHeight ? trc("label.crop_to_height") : trc("window.overlays_crop_bottom"));
             ImGui::NextColumn();
             if (Spinner("##browser_overlay_crop_b", &overlay.crop_bottom, 1, 0)) g_configIsDirty = true;
+            ImGui::SameLine();
+            if (ImGui::Checkbox(trc("label.crop_to_target_h"), &overlay.cropToHeight)) g_configIsDirty = true;
+            ImGui::SameLine(); HelpMarker(trc("label.tooltip.crop_to"));
             ImGui::NextColumn();
             ImGui::Text(trc("window.overlays_crop_left"));
             ImGui::NextColumn();
             if (Spinner("##browser_overlay_crop_l", &overlay.crop_left, 1, 0)) g_configIsDirty = true;
             ImGui::NextColumn();
-            ImGui::Text(trc("window.overlays_crop_right"));
+            ImGui::Text(overlay.cropToWidth ? trc("label.crop_to_width") : trc("window.overlays_crop_right"));
             ImGui::NextColumn();
             if (Spinner("##browser_overlay_crop_r", &overlay.crop_right, 1, 0)) g_configIsDirty = true;
+            ImGui::SameLine();
+            if (ImGui::Checkbox(trc("label.crop_to_target_w"), &overlay.cropToWidth)) g_configIsDirty = true;
+            ImGui::SameLine(); HelpMarker(trc("label.tooltip.crop_to"));
             ImGui::Columns(1);
 
             ImGui::SeparatorText(trc("browser.overlays_capture_settings"));

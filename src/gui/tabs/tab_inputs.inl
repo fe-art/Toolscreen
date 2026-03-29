@@ -32,6 +32,10 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                 HelpMarker(trc("tooptip.let_cursor_escape_window"));
             }
 
+            if (ImGui::Checkbox(trc("label.confine_cursor"), &g_config.confineCursor)) { g_configIsDirty = true; }
+            ImGui::SameLine();
+            HelpMarker(trc("tooltip.confine_cursor"));
+
             ImGui::Spacing();
             ImGui::SeparatorText(trc("inputs.cursor_configuration"));
 
@@ -276,6 +280,13 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
             }
             ImGui::SameLine();
             HelpMarker(trc("inputs.tooltip.enable_key_rebinding"));
+            ImGui::SameLine();
+            {
+                const ImVec4 rebindActiveGreen = ImVec4(0.20f, 1.00f, 0.20f, 1.00f);
+                const ImVec4 rebindDisabledRed = ImVec4(1.00f, 0.20f, 0.20f, 1.00f);
+                ImGui::TextColored(g_config.keyRebinds.enabled ? rebindActiveGreen : rebindDisabledRed, "(%s)",
+                                   g_config.keyRebinds.enabled ? trc("label.enabled") : trc("label.disabled"));
+            }
 
             if (ImGui::Checkbox(trc("inputs.resolve_rebind_targets_for_hotkeys"), &g_config.keyRebinds.resolveRebindTargetsForHotkeys)) {
                 g_configIsDirty = true;
@@ -295,30 +306,86 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
             ImGui::SameLine();
             HelpMarker(trc("inputs.tooltip.allow_system_alt_f4"));
 
-            const ImVec4 rebindActiveGreen = ImVec4(0.20f, 1.00f, 0.20f, 1.00f);
-            const ImVec4 rebindDisabledRed = ImVec4(1.00f, 0.20f, 0.20f, 1.00f);
-            ImGui::TextDisabled(trc("label.status"));
-            ImGui::SameLine();
-            ImGui::TextColored(g_config.keyRebinds.enabled ? rebindActiveGreen : rebindDisabledRed, "%s",
-                               g_config.keyRebinds.enabled ? trc("label.enabled") : trc("label.disabled"));
-
-            if (g_config.keyRebinds.enabled) {
-                ImGui::Spacing();
-                ImGui::SeparatorText(trc("inputs.rebind_toggle_hotkey"));
-                std::string rebindToggleHotkeyStr = GetKeyComboString(g_config.keyRebinds.toggleHotkey);
-                const bool isBindingRebindToggle = (s_mainHotkeyToBind == -995);
-                const char* rebindToggleHotkeyButtonLabel =
-                    isBindingRebindToggle ? trc("hotkeys.press_keys")
-                                          : (rebindToggleHotkeyStr.empty() ? trc("hotkeys.click_to_bind") : rebindToggleHotkeyStr.c_str());
-                if (ImGui::Button(rebindToggleHotkeyButtonLabel, ImVec2(150, 0))) {
-                    s_mainHotkeyToBind = -995;
-                    s_altHotkeyToBind = { -1, -1 };
-                    s_exclusionToBind = { -1, -1 };
-                    MarkHotkeyBindingActive();
+            {
+                const char* modeLabels[] = {
+                    trc("label.off"), trc("inputs.indicator_when_active"),
+                    trc("inputs.indicator_when_inactive"), trc("inputs.indicator_both_states")
+                };
+                ImGui::SetNextItemWidth(200);
+                if (ImGui::Combo(trc("inputs.rebind_indicator"), &g_config.keyRebinds.indicatorMode, modeLabels, 4)) {
+                    g_configIsDirty = true;
                 }
                 ImGui::SameLine();
-                HelpMarker(trc("inputs.tooltip.rebind_toggle_hotkey"));
+                HelpMarker(trc("inputs.tooltip.show_rebind_indicator"));
+            }
 
+            if (g_config.keyRebinds.indicatorMode > 0) {
+                const char* positionLabels[] = {
+                    trc("label.top_left"), trc("label.top_right"),
+                    trc("label.bottom_left"), trc("label.bottom_right")
+                };
+                ImGui::SetNextItemWidth(150);
+                if (ImGui::Combo(trc("inputs.indicator_position"), &g_config.keyRebinds.indicatorPosition, positionLabels, 4)) {
+                    g_configIsDirty = true;
+                }
+
+                auto indicatorImageField = [&](const char* label, std::string& path, const char* browseId, const char* resetId) {
+                    std::string displayName = path.empty() ? tr("label.default") : std::filesystem::path(path).filename().string();
+                    float btnW = ImGui::CalcTextSize(displayName.c_str()).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+                    btnW = (std::max)(btnW, 80.0f);
+                    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, path.empty() ? 0.5f : 1.0f);
+                    if (ImGui::Button((displayName + browseId).c_str(), ImVec2(btnW, 0))) {
+                        ImagePickerResult result = OpenImagePickerAndValidate(g_minecraftHwnd.load(), g_toolscreenPath, g_toolscreenPath);
+                        if (result.completed && result.success) {
+                            path = result.path;
+                            g_configIsDirty = true;
+                            InvalidateRebindIndicatorTexture();
+                        }
+                    }
+                    ImGui::PopStyleVar();
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("%s", path.empty() ? trc("inputs.tooltip.default_indicator_image") : path.c_str());
+                    }
+                    ImGui::SameLine();
+                    ImGui::Text("%s", label);
+                    if (!path.empty()) {
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton(resetId)) {
+                            path.clear();
+                            g_configIsDirty = true;
+                            InvalidateRebindIndicatorTexture();
+                        }
+                    }
+                };
+
+                if (g_config.keyRebinds.indicatorMode == 1 || g_config.keyRebinds.indicatorMode == 3) {
+                    indicatorImageField(trc("inputs.indicator_image_enabled"), g_config.keyRebinds.indicatorImageEnabled,
+                                        "##rebind_ind_on", "X##rebind_img_on");
+                }
+
+                if (g_config.keyRebinds.indicatorMode == 2 || g_config.keyRebinds.indicatorMode == 3) {
+                    indicatorImageField(trc("inputs.indicator_image_disabled"), g_config.keyRebinds.indicatorImageDisabled,
+                                        "##rebind_ind_off", "X##rebind_img_off");
+                }
+            }
+
+            ImGui::Spacing();
+            ImGui::SeparatorText(trc("inputs.rebind_toggle_hotkey"));
+            std::string rebindToggleHotkeyStr = GetKeyComboString(g_config.keyRebinds.toggleHotkey);
+            const bool isBindingRebindToggle = (s_mainHotkeyToBind == -995);
+            const char* rebindToggleHotkeyButtonLabel =
+                isBindingRebindToggle ? trc("hotkeys.press_keys")
+                                      : (rebindToggleHotkeyStr.empty() ? trc("hotkeys.click_to_bind") : rebindToggleHotkeyStr.c_str());
+            if (ImGui::Button(rebindToggleHotkeyButtonLabel, ImVec2(150, 0))) {
+                s_mainHotkeyToBind = -995;
+                s_altHotkeyToBind = { -1, -1 };
+                s_exclusionToBind = { -1, -1 };
+                MarkHotkeyBindingActive();
+            }
+            ImGui::SameLine();
+            HelpMarker(trc("inputs.tooltip.rebind_toggle_hotkey"));
+
+            if (g_config.keyRebinds.enabled) {
                 ImGui::Separator();
                 ImGui::Spacing();
 

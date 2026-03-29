@@ -11,7 +11,9 @@
 #define IDR_LANG_EN            107
 #define IDR_LANG_ZH_CN         108
 
-#define IDR_ICON_DELETE        109
-#define IDR_ICON_RENAME        110
-#define IDR_ICON_DUPLICATE     111
-#define IDR_ICON_ADD           112
+#define IDR_REBIND_ON_PNG      109
+#define IDR_REBIND_OFF_PNG     110
+#define IDR_ICON_DELETE        111
+#define IDR_ICON_RENAME        112
+#define IDR_ICON_DUPLICATE     113
+#define IDR_ICON_ADD           114

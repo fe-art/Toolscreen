@@ -244,6 +244,8 @@ struct ImageConfig {
     int height = 0;
     std::string relativeTo = "topLeftScreen";
     int crop_top = 0, crop_bottom = 0, crop_left = 0, crop_right = 0;
+    bool cropToWidth = false;
+    bool cropToHeight = false;
     bool enableColorKey = false;
     std::vector<ColorKeyConfig> colorKeys;
     Color colorKey;
@@ -264,6 +266,8 @@ struct WindowOverlayConfig {
     float scale = 1.0f;
     std::string relativeTo = "topLeftScreen";
     int crop_top = 0, crop_bottom = 0, crop_left = 0, crop_right = 0;
+    bool cropToWidth = false;
+    bool cropToHeight = false;
     bool enableColorKey = false;
     std::vector<ColorKeyConfig> colorKeys;
     Color colorKey;
@@ -289,6 +293,8 @@ struct BrowserOverlayConfig {
     float scale = 1.0f;
     std::string relativeTo = "topLeftScreen";
     int crop_top = 0, crop_bottom = 0, crop_left = 0, crop_right = 0;
+    bool cropToWidth = false;
+    bool cropToHeight = false;
     bool enableColorKey = false;
     std::vector<ColorKeyConfig> colorKeys;
     float opacity = 1.0f;
@@ -304,6 +310,18 @@ struct BrowserOverlayConfig {
     int reloadInterval = 0;
     BorderConfig border;
 };
+
+struct ResolvedCrop {
+    int top, bottom, left, right;
+};
+
+inline ResolvedCrop ResolveCrop(int crop_top, int crop_bottom, int crop_left, int crop_right,
+                                bool cropToWidth, bool cropToHeight, int sourceW, int sourceH) {
+    int rt = crop_top, rb = crop_bottom, rl = crop_left, rr = crop_right;
+    if (cropToHeight && sourceH > 0) rb = (std::max)(0, sourceH - crop_top - crop_bottom);
+    if (cropToWidth && sourceW > 0) rr = (std::max)(0, sourceW - crop_left - crop_right);
+    return { rt, rb, rl, rr };
+}
 
 enum class GameTransitionType {
     Cut,
@@ -509,12 +527,16 @@ struct KeyRebindsConfig {
     bool enabled = false;
     bool resolveRebindTargetsForHotkeys = ConfigDefaults::KEY_REBINDS_RESOLVE_REBIND_TARGETS_FOR_HOTKEYS;
     bool allowSystemAltTab = ConfigDefaults::KEY_REBINDS_ALLOW_SYSTEM_ALT_TAB;
+    int indicatorMode = ConfigDefaults::KEY_REBINDS_INDICATOR_MODE;
+    int indicatorPosition = ConfigDefaults::KEY_REBINDS_INDICATOR_POSITION;
+    std::string indicatorImageEnabled;
+    std::string indicatorImageDisabled;
     bool allowSystemAltF4 = ConfigDefaults::KEY_REBINDS_ALLOW_SYSTEM_ALT_F4;
     std::vector<DWORD> toggleHotkey = {};
     std::vector<KeyRebind> rebinds;
 };
 struct Config {
-    int configVersion = 3;
+    int configVersion = GetConfigVersion();
     std::vector<MirrorConfig> mirrors;
     std::vector<MirrorGroupConfig> mirrorGroups;
     std::vector<ImageConfig> images;
@@ -540,6 +562,7 @@ struct Config {
     // Useful if a specific overlay/driver hook layer is unstable when chained.
     bool disableHookChaining = false;
     bool allowCursorEscape = false;
+    bool confineCursor = false;
     float mouseSensitivity = 1.0f;
     int windowsMouseSpeed = 0;                              // Windows mouse speed override (0 = disabled, 1-20 = override)
     bool hideAnimationsInGame = false;
@@ -807,6 +830,10 @@ void ClearGuiTabSelectionOverride();
 extern std::atomic<bool> g_welcomeToastVisible;
 extern std::atomic<bool> g_configurePromptDismissedThisSession;
 void RenderWelcomeToast(bool isFullscreen);
+
+void RenderRebindIndicator();
+bool IsRebindIndicatorVisible();
+void InvalidateRebindIndicatorTexture();
 
 void HandleConfigLoadFailed(HDC hDc, BOOL (*oWglSwapBuffers)(HDC));
 void RenderImGuiWithStateProtection(bool useFullProtection);

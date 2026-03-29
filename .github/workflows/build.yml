@@ -51,17 +51,28 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Fetch latest signed liblogger artifacts
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $destination = Join-Path (Get-Location) 'out/prebuilt-liblogger'
+          & .\scripts\fetch_signed_liblogger.ps1 -DestinationDirectory $destination
+
       - name: Configure build preset
         shell: pwsh
         run: |
+          $prebuiltLoggerDllPath = (Resolve-Path 'out/prebuilt-liblogger/liblogger_x64.dll').Path
+          $prebuiltLoggerPdbPath = (Resolve-Path 'out/prebuilt-liblogger/liblogger_x64.pdb').Path
+
           if ($env:SIGNPATH_API_TOKEN -and $env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') {
             $signedDllPath = (Join-Path (Get-Location) 'out/build/bin/Release/Toolscreen.signed-package-input.dll')
-            cmake --preset vs2022-x64 -DTOOLSCREEN_PACKAGING_DLL_PATH="$signedDllPath"
+            cmake --preset vs2022-x64 -DTOOLSCREEN_PACKAGING_DLL_PATH="$signedDllPath" -DTOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH="$prebuiltLoggerDllPath" -DTOOLSCREEN_PREBUILT_LIBLOGGER_PDB_PATH="$prebuiltLoggerPdbPath"
           } else {
-            cmake --preset vs2022-x64
+            cmake --preset vs2022-x64 -DTOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH="$prebuiltLoggerDllPath" -DTOOLSCREEN_PREBUILT_LIBLOGGER_PDB_PATH="$prebuiltLoggerPdbPath"
           }
 
-      - name: Build unsigned DLL
+      - name: Build unsigned DLLs
         shell: cmd
         run: cmake --build --preset release --target Toolscreen
 
@@ -128,11 +139,14 @@ jobs:
       - name: Reconfigure packaging preset
         shell: pwsh
         run: |
+          $prebuiltLoggerDllPath = (Resolve-Path 'out/prebuilt-liblogger/liblogger_x64.dll').Path
+          $prebuiltLoggerPdbPath = (Resolve-Path 'out/prebuilt-liblogger/liblogger_x64.pdb').Path
+
           if ($env:SIGNPATH_API_TOKEN -and $env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') {
             $signedDllPath = (Resolve-Path 'out/build/bin/Release/Toolscreen.signed-package-input.dll').Path
-            cmake --preset vs2022-x64 -DTOOLSCREEN_PACKAGING_DLL_PATH="$signedDllPath"
+            cmake --preset vs2022-x64 -DTOOLSCREEN_PACKAGING_DLL_PATH="$signedDllPath" -DTOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH="$prebuiltLoggerDllPath" -DTOOLSCREEN_PREBUILT_LIBLOGGER_PDB_PATH="$prebuiltLoggerPdbPath"
           } else {
-            cmake --preset vs2022-x64
+            cmake --preset vs2022-x64 -DTOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH="$prebuiltLoggerDllPath" -DTOOLSCREEN_PREBUILT_LIBLOGGER_PDB_PATH="$prebuiltLoggerPdbPath"
           }
 
       - name: Remove stale packaged artifacts
@@ -336,6 +350,8 @@ jobs:
           $filesToRename = @(
             Join-Path $outputDir 'Toolscreen.dll'
             Join-Path $outputDir 'Toolscreen.pdb'
+            Join-Path $outputDir 'liblogger_x64.dll'
+            Join-Path $outputDir 'liblogger_x64.pdb'
             Get-SingleArtifactPath 'Toolscreen-*-double-click-me.jar' 'main installer jar'
             Get-SingleArtifactPath 'Toolscreen-*-double-click-me.exe' 'main installer exe'
             Join-Path $outputDir 'toolscreen-downloader.jar'
@@ -361,6 +377,8 @@ jobs:
           path: |
             out/build/bin/Release/Toolscreen-not-legal-for-speedruns.dll
             out/build/bin/Release/Toolscreen-not-legal-for-speedruns.pdb
+            out/build/bin/Release/liblogger_x64-not-legal-for-speedruns.dll
+            out/build/bin/Release/liblogger_x64-not-legal-for-speedruns.pdb
             out/build/bin/Release/Toolscreen-*-double-click-me-not-legal-for-speedruns.jar
             out/build/bin/Release/Toolscreen-*-double-click-me-not-legal-for-speedruns.exe
             out/build/bin/Release/toolscreen-downloader-not-legal-for-speedruns.jar
