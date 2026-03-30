@@ -1924,7 +1924,7 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
             return next(hDc);
         }
 
-        bool isEyeZoom = modeToRenderCopy.id == "EyeZoom";
+        bool isEyeZoom = modeToRenderCopy.id == "EyeZoom" || modeToRenderCopy.id == "Preemptive";
         bool shouldRenderGui = g_showGui.load();
 
         bool isTransitioningFromEyeZoom = false;
@@ -1940,10 +1940,10 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                                             eyeZoomTransitionState.moveProgress);
             };
 
-            if (slideAnimationsEnabled && !isEyeZoom && fromModeId == "EyeZoom") {
+            if (slideAnimationsEnabled && !isEyeZoom && (fromModeId == "EyeZoom" || fromModeId == "Preemptive")) {
                 isTransitioningFromEyeZoom = true;
                 eyeZoomAnimatedViewportX = interpolateTransitionX();
-            } else if (slideAnimationsEnabled && isEyeZoom && fromModeId != "EyeZoom") {
+            } else if (slideAnimationsEnabled && isEyeZoom && fromModeId != "EyeZoom" && fromModeId != "Preemptive") {
                 eyeZoomAnimatedViewportX = eyeZoomTransitionState.x;
             }
         }

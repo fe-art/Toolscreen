@@ -7348,8 +7348,8 @@ void StartModeTransition(const std::string& fromModeId, const std::string& toMod
     g_modeTransition.active = true;
     g_modeTransition.startTime = std::chrono::steady_clock::now();
 
-    bool transitioningToEyeZoom = EqualsIgnoreCase(toModeId, "EyeZoom");
-    bool transitioningFromEyeZoom = EqualsIgnoreCase(fromModeId, "EyeZoom");
+    bool transitioningToEyeZoom = EqualsIgnoreCase(toModeId, "EyeZoom") || EqualsIgnoreCase(toModeId, "Preemptive");
+    bool transitioningFromEyeZoom = EqualsIgnoreCase(fromModeId, "EyeZoom") || EqualsIgnoreCase(fromModeId, "Preemptive");
     auto transitionSnap = GetConfigSnapshot();
     const ModeConfig* sourceMode = transitionSnap ? GetModeFromSnapshot(*transitionSnap, fromModeId) : nullptr;
     const bool preserveEyeZoomSlideOutDuration = transitioningFromEyeZoom && !transitioningToEyeZoom && transitionSnap &&
