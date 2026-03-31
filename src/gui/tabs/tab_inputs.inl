@@ -306,6 +306,14 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
             ImGui::SameLine();
             HelpMarker(trc("inputs.tooltip.allow_system_alt_f4"));
 
+            ImGui::BeginDisabled(!g_config.keyRebinds.enabled);
+            if (ImGui::Checkbox(trc("inputs.global_disable_caps_lock"), &g_config.keyRebinds.globalDisableCapsLock)) {
+                g_configIsDirty = true;
+            }
+            ImGui::SameLine();
+            HelpMarker(trc("inputs.tooltip.global_disable_caps_lock"));
+            ImGui::EndDisabled();
+
             {
                 const char* modeLabels[] = {
                     trc("label.off"), trc("inputs.indicator_when_active"),
@@ -2406,23 +2414,25 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                             }
                         }
 
-                        if (const int requestedShiftCapsLock = ConsumeGuiTestKeyboardLayoutShiftCapsLockRequest(); requestedShiftCapsLock != -1) {
-                            idx = createRebindForKeyIfMissing(s_layoutContextVk);
-                            s_layoutContextPreferredIndex = idx;
-                            if (idx >= 0) {
-                                auto& r = g_config.keyRebinds.rebinds[idx];
-                                r.shiftLayerEnabled = true;
-                                if (r.shiftLayerOutputVK == 0) {
-                                    r.shiftLayerOutputVK = resolveTypesVkFor(&r, r.fromKey, false);
-                                }
-                                r.shiftLayerUsesCapsLock = requestedShiftCapsLock != 0;
-                                clearShiftLayerOverrideIfDefault(r, r.fromKey);
-                                g_configIsDirty = true;
+                        if (!g_config.keyRebinds.globalDisableCapsLock) {
+                            if (const int requestedShiftCapsLock = ConsumeGuiTestKeyboardLayoutShiftCapsLockRequest(); requestedShiftCapsLock != -1) {
+                                idx = createRebindForKeyIfMissing(s_layoutContextVk);
+                                s_layoutContextPreferredIndex = idx;
+                                if (idx >= 0) {
+                                    auto& r = g_config.keyRebinds.rebinds[idx];
+                                    r.shiftLayerEnabled = true;
+                                    if (r.shiftLayerOutputVK == 0) {
+                                        r.shiftLayerOutputVK = resolveTypesVkFor(&r, r.fromKey, false);
+                                    }
+                                    r.shiftLayerUsesCapsLock = requestedShiftCapsLock != 0;
+                                    clearShiftLayerOverrideIfDefault(r, r.fromKey);
+                                    g_configIsDirty = true;
 
-                                if (isNoOpRebindForKey(r, r.fromKey)) {
-                                    eraseRebindIndex(idx);
-                                    s_layoutContextPreferredIndex = -1;
-                                    idx = -1;
+                                    if (isNoOpRebindForKey(r, r.fromKey)) {
+                                        eraseRebindIndex(idx);
+                                        s_layoutContextPreferredIndex = -1;
+                                        idx = -1;
+                                    }
                                 }
                             }
                         }
@@ -2645,6 +2655,9 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                 drawPopupRowLabel(trc("inputs.tooltip.rebind_types_shift_caps_lock"), trc("inputs.shift_layer_label"));
                                 ImGui::TableSetColumnIndex(1);
                                 {
+                                    const bool globalCapsLockDisabled = g_config.keyRebinds.globalDisableCapsLock;
+                                    ImGui::BeginDisabled(globalCapsLockDisabled);
+
                                     bool shiftLayerUsesCapsLock = rbPtr ? rbPtr->shiftLayerUsesCapsLock : false;
                                     const ImVec2 shiftCapsLockRectMin = ImGui::GetCursorScreenPos();
                                     if (ImGui::Checkbox(trc("inputs.shift_layer_caps_lock_label"), &shiftLayerUsesCapsLock)) {
@@ -2671,6 +2684,11 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                     recordPopupInteractionRect("inputs.keyboard_layout.popup.shift_caps_lock", shiftCapsLockRectMin,
                                                                popupToggleFallbackMax(trc("inputs.shift_layer_caps_lock_label"), shiftCapsLockRectMin));
 #endif
+
+                                    ImGui::EndDisabled();
+                                    if (globalCapsLockDisabled) {
+                                        ImGui::TextDisabled("%s", trc("inputs.global_disable_caps_lock_active_notice"));
+                                    }
                                 }
 
                                 ImGui::TableNextRow();

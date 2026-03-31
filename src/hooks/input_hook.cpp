@@ -247,14 +247,15 @@ static bool ShouldIgnoreCapsLockForRebindText(const KeyRebind& rebind) {
     return IsSplitRebindTextMode(rebind);
 }
 
-static bool IsShiftLayerActive(const KeyRebind& rebind, bool shiftDown, bool capsLockOn) {
+static bool IsShiftLayerActive(const KeyRebind& rebind, bool shiftDown, bool capsLockOn, bool globalDisableCapsLock) {
     if (!HasShiftLayerOutputOverride(rebind)) return false;
     if (shiftDown) return true;
+    if (globalDisableCapsLock) return false;
     return rebind.shiftLayerUsesCapsLock && capsLockOn;
 }
 
-static bool IsShiftLayerActiveForRebind(const KeyRebind& rebind, DWORD incomingVk, DWORD incomingRawVk, bool isKeyDown) {
-    return IsShiftLayerActive(rebind, IsShiftDownForIncomingEvent(incomingVk, incomingRawVk, isKeyDown), IsCapsLockCurrentlyOn());
+static bool IsShiftLayerActiveForRebind(const KeyRebind& rebind, DWORD incomingVk, DWORD incomingRawVk, bool isKeyDown, bool globalDisableCapsLock) {
+    return IsShiftLayerActive(rebind, IsShiftDownForIncomingEvent(incomingVk, incomingRawVk, isKeyDown), IsCapsLockCurrentlyOn(), globalDisableCapsLock);
 }
 
 static DWORD ResolveEffectiveCustomOutputVk(const KeyRebind& rebind, bool shiftLayerActive) {
@@ -1405,7 +1406,7 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
         for (const auto& rebind : cfg.keyRebinds.rebinds) {
             if (rebind.enabled && rebind.fromKey != 0 && rebind.toKey != 0 &&
                 (vkCode == rebind.fromKey || rawVkCode == rebind.fromKey)) {
-                const bool shiftLayerActive = IsShiftLayerActiveForRebind(rebind, vkCode, rawVkCode, isKeyDown);
+                const bool shiftLayerActive = IsShiftLayerActiveForRebind(rebind, vkCode, rawVkCode, isKeyDown, cfg.keyRebinds.globalDisableCapsLock);
                 const DWORD effectiveCustomOutputVk = ResolveEffectiveCustomOutputVk(rebind, shiftLayerActive);
                 rebindTargetVk = (effectiveCustomOutputVk != 0) ? effectiveCustomOutputVk : rebind.toKey;
                 break;
@@ -2046,10 +2047,10 @@ static bool ResolvePreferredOutputShiftState(const KeyRebind& rebind, bool shift
     return fallbackShifted;
 }
 
-static void ApplyPreferredOutputShiftState(const KeyRebind& rebind, bool shiftLayerActive, BYTE keyboardState[256]) {
+static void ApplyPreferredOutputShiftState(const KeyRebind& rebind, bool shiftLayerActive, BYTE keyboardState[256], bool globalDisableCapsLock) {
     if (!keyboardState) return;
 
-    if (ShouldIgnoreCapsLockForRebindText(rebind)) {
+    if (globalDisableCapsLock || ShouldIgnoreCapsLockForRebindText(rebind)) {
         keyboardState[VK_CAPITAL] = 0;
     }
 
@@ -2177,7 +2178,7 @@ static UINT BuildScanCodeWithFlagsFromLowLevelEvent(const KBDLLHOOKSTRUCT& info)
 
 static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, DWORD rawVkCode, DWORD vkCode,
                                                   bool isMouseButton, bool isKeyDown, bool isAutoRepeatKeyDown,
-                                                  const KeyRebind& rebind);
+                                                  const KeyRebind& rebind, bool globalDisableCapsLock);
 
 static bool ShouldSuppressLowLevelMenuModifierKey(DWORD rawVk) {
     if (!IsDeepSuppressionEligibleSourceVk(rawVk)) return false;
@@ -2356,8 +2357,8 @@ InputHandlerResult HandleInjectedMenuMaskKey(HWND hWnd, UINT uMsg, WPARAM wParam
 
 static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, DWORD rawVkCode, DWORD vkCode,
                                                   bool isMouseButton, bool isKeyDown, bool isAutoRepeatKeyDown,
-                                                  const KeyRebind& rebind) {
-    const bool shiftLayerActive = IsShiftLayerActiveForRebind(rebind, vkCode, rawVkCode, isKeyDown);
+                                                  const KeyRebind& rebind, bool globalDisableCapsLock) {
+    const bool shiftLayerActive = IsShiftLayerActiveForRebind(rebind, vkCode, rawVkCode, isKeyDown, globalDisableCapsLock);
     const DWORD defaultTextVK = NormalizeModifierVkFromConfig(rebind.fromKey);
     const DWORD effectiveCustomOutputVk = ResolveEffectiveCustomOutputVk(rebind, shiftLayerActive);
     const DWORD normalizedCustomOutputVk =
@@ -2476,7 +2477,7 @@ static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM w
                             ks[VK_RMENU] = 0;
                         }
 
-                        ApplyPreferredOutputShiftState(rebind, shiftLayerActive, ks);
+                        ApplyPreferredOutputShiftState(rebind, shiftLayerActive, ks, globalDisableCapsLock);
 
                         (void)TryTranslateVkToCharWithKeyboardState(textVK, ks, outChar);
                     }
@@ -2559,7 +2560,7 @@ static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM w
                     ks[VK_RMENU] = 0;
                 }
 
-                ApplyPreferredOutputShiftState(rebind, shiftLayerActive, ks);
+                ApplyPreferredOutputShiftState(rebind, shiftLayerActive, ks, globalDisableCapsLock);
 
                 (void)TryTranslateVkToCharWithKeyboardState(textVK, ks, outChar);
             }
@@ -2720,7 +2721,7 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
 
         if (rebind.enabled && rebind.fromKey != 0 && rebind.toKey != 0 && MatchesRebindSourceKey(vkCode, rawVkCode, rebind.fromKey)) {
             return ExecuteMatchedKeyRebind(hWnd, uMsg, wParam, lParam, rawVkCode, vkCode, isMouseButton, isKeyDown,
-                                           isAutoRepeatKeyDown, rebind);
+                                           isAutoRepeatKeyDown, rebind, rebindCfg->keyRebinds.globalDisableCapsLock);
         }
     }
 
@@ -2787,8 +2788,9 @@ InputHandlerResult HandleCharRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
         }
 
         if (matched) {
+            const bool globalDisableCapsLock = charRebindCfg->keyRebinds.globalDisableCapsLock;
             const bool shiftDown = IsShiftCurrentlyDown();
-            const bool shiftLayerActive = IsShiftLayerActive(rebind, shiftDown, IsCapsLockCurrentlyOn());
+            const bool shiftLayerActive = IsShiftLayerActive(rebind, shiftDown, IsCapsLockCurrentlyOn(), globalDisableCapsLock);
             const bool preferShiftedText = ResolvePreferredOutputShiftState(rebind, shiftLayerActive, shiftDown);
 
             if (shiftLayerActive && HasShiftLayerOutputUnicode(rebind)) {
@@ -2824,7 +2826,7 @@ InputHandlerResult HandleCharRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
             } else {
                 BYTE ks[256] = {};
                 if (GetKeyboardState(ks)) {
-                    ApplyPreferredOutputShiftState(rebind, shiftLayerActive, ks);
+                    ApplyPreferredOutputShiftState(rebind, shiftLayerActive, ks, globalDisableCapsLock);
                     (void)TryTranslateVkToCharWithKeyboardState(outputVK, ks, outputChar);
                 }
 
@@ -2846,6 +2848,30 @@ InputHandlerResult HandleCharRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
         }
     }
     return { false, 0 };
+}
+
+static InputHandlerResult HandleGlobalCapsLockDisable(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    if (uMsg != WM_CHAR) { return { false, 0 }; }
+    if (!IsCapsLockCurrentlyOn()) { return { false, 0 }; }
+
+    auto cfg = GetConfigSnapshot();
+    if (!cfg || !cfg->keyRebinds.enabled || !cfg->keyRebinds.globalDisableCapsLock) { return { false, 0 }; }
+
+    const WCHAR inputChar = static_cast<WCHAR>(wParam);
+    const SHORT vkScanResult = VkKeyScanW(inputChar);
+    if (vkScanResult == -1) { return { false, 0 }; }
+
+    const DWORD vk = static_cast<DWORD>(vkScanResult & 0xFF);
+
+    BYTE ks[256] = {};
+    if (!GetKeyboardState(ks)) { return { false, 0 }; }
+    ks[VK_CAPITAL] = 0;
+
+    WCHAR correctedChar = 0;
+    if (!TryTranslateVkToCharWithKeyboardState(vk, ks, correctedChar)) { return { false, 0 }; }
+    if (correctedChar == inputChar) { return { false, 0 }; }
+
+    return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, correctedChar, lParam) };
 }
 
 static void ResolveHotkeyPriority(UINT uMsg, WPARAM wParam, LPARAM lParam) {
@@ -3101,6 +3127,9 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     if (result.consumed) return result.result;
 
     result = HandleCharRebinding(hWnd, uMsg, wParam, lParam);
+    if (result.consumed) return result.result;
+
+    result = HandleGlobalCapsLockDisable(hWnd, uMsg, wParam, lParam);
     if (result.consumed) return result.result;
 
     const LRESULT forwarded = CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam);

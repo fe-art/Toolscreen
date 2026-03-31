@@ -1887,6 +1887,7 @@ void KeyRebindsConfigToToml(const KeyRebindsConfig& cfg, toml::table& out) {
     if (!cfg.indicatorImageEnabled.empty()) out.insert("indicatorImageEnabled", cfg.indicatorImageEnabled);
     if (!cfg.indicatorImageDisabled.empty()) out.insert("indicatorImageDisabled", cfg.indicatorImageDisabled);
     out.insert("allowSystemAltF4", cfg.allowSystemAltF4);
+    out.insert("globalDisableCapsLock", cfg.globalDisableCapsLock);
 
     toml::array toggleHotkeyArr;
     for (const auto& key : cfg.toggleHotkey) { toggleHotkeyArr.push_back(static_cast<int64_t>(key)); }
@@ -1915,6 +1916,7 @@ void KeyRebindsConfigFromToml(const toml::table& tbl, KeyRebindsConfig& cfg) {
     cfg.indicatorImageEnabled = GetStringOr(tbl, "indicatorImageEnabled", "");
     cfg.indicatorImageDisabled = GetStringOr(tbl, "indicatorImageDisabled", "");
     cfg.allowSystemAltF4 = GetOr(tbl, "allowSystemAltF4", ConfigDefaults::KEY_REBINDS_ALLOW_SYSTEM_ALT_F4);
+    cfg.globalDisableCapsLock = GetOr(tbl, "globalDisableCapsLock", ConfigDefaults::KEY_REBINDS_GLOBAL_DISABLE_CAPS_LOCK);
 
     cfg.toggleHotkey.clear();
     const bool hasToggleHotkey = tbl.contains("toggleHotkey");

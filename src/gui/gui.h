@@ -532,6 +532,7 @@ struct KeyRebindsConfig {
     std::string indicatorImageEnabled;
     std::string indicatorImageDisabled;
     bool allowSystemAltF4 = ConfigDefaults::KEY_REBINDS_ALLOW_SYSTEM_ALT_F4;
+    bool globalDisableCapsLock = ConfigDefaults::KEY_REBINDS_GLOBAL_DISABLE_CAPS_LOCK;
     std::vector<DWORD> toggleHotkey = {};
     std::vector<KeyRebind> rebinds;
 };
