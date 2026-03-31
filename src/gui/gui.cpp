@@ -82,6 +82,10 @@ int s_guiTestKeyboardLayoutSplitModeRequest = -1;
 GuiTestKeyboardLayoutBindTarget s_guiTestKeyboardLayoutBindTargetRequest = GuiTestKeyboardLayoutBindTarget::None;
 int s_guiTestKeyboardLayoutShiftUppercaseRequest = -1;
 int s_guiTestKeyboardLayoutShiftCapsLockRequest = -1;
+bool s_guiTestKeyboardLayoutOpenScanPickerRequested = false;
+int s_guiTestKeyboardLayoutScanFilterRequest = 99;
+DWORD s_guiTestKeyboardLayoutSelectScanRequest = 0;
+bool s_guiTestKeyboardLayoutResetScanToDefaultRequested = false;
 
 void RecordGuiTestInteractionRect(const char* id, const ImVec2& min, const ImVec2& max) {
     if (id == nullptr) {
@@ -135,6 +139,30 @@ int ConsumeGuiTestKeyboardLayoutShiftCapsLockRequest() {
     const int request = s_guiTestKeyboardLayoutShiftCapsLockRequest;
     s_guiTestKeyboardLayoutShiftCapsLockRequest = -1;
     return request;
+}
+
+bool ConsumeGuiTestKeyboardLayoutOpenScanPickerRequest() {
+    const bool requested = s_guiTestKeyboardLayoutOpenScanPickerRequested;
+    s_guiTestKeyboardLayoutOpenScanPickerRequested = false;
+    return requested;
+}
+
+int ConsumeGuiTestKeyboardLayoutScanFilterRequest() {
+    const int request = s_guiTestKeyboardLayoutScanFilterRequest;
+    s_guiTestKeyboardLayoutScanFilterRequest = 99;
+    return request;
+}
+
+DWORD ConsumeGuiTestKeyboardLayoutSelectScanRequest() {
+    const DWORD request = s_guiTestKeyboardLayoutSelectScanRequest;
+    s_guiTestKeyboardLayoutSelectScanRequest = 0;
+    return request;
+}
+
+bool ConsumeGuiTestKeyboardLayoutResetScanToDefaultRequest() {
+    const bool requested = s_guiTestKeyboardLayoutResetScanToDefaultRequested;
+    s_guiTestKeyboardLayoutResetScanToDefaultRequested = false;
+    return requested;
 }
 #endif
 
@@ -237,6 +265,22 @@ void RequestGuiTestKeyboardLayoutSetShiftLayerUppercase(bool enabled) {
 
 void RequestGuiTestKeyboardLayoutSetShiftLayerUsesCapsLock(bool enabled) {
     s_guiTestKeyboardLayoutShiftCapsLockRequest = enabled ? 1 : 0;
+}
+
+void RequestGuiTestKeyboardLayoutOpenScanPicker() {
+    s_guiTestKeyboardLayoutOpenScanPickerRequested = true;
+}
+
+void RequestGuiTestKeyboardLayoutSetScanFilter(GuiTestKeyboardLayoutScanFilterGroup group) {
+    s_guiTestKeyboardLayoutScanFilterRequest = static_cast<int>(group);
+}
+
+void RequestGuiTestKeyboardLayoutSelectScan(DWORD scan) {
+    s_guiTestKeyboardLayoutSelectScanRequest = scan;
+}
+
+void RequestGuiTestKeyboardLayoutResetScanToDefault() {
+    s_guiTestKeyboardLayoutResetScanToDefaultRequested = true;
 }
 #endif
 

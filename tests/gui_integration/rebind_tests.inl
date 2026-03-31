@@ -180,6 +180,22 @@ static void ExpectCapturedMessage(const ScopedRebindMessageCapture& capture, siz
                std::to_string(static_cast<unsigned long long>(message.wParam)) + ".");
 }
 
+static UINT ExtractScanCodeWithFlagsFromLParam(LPARAM lParam) {
+    const auto raw = static_cast<unsigned long long>(lParam);
+    UINT scanCode = static_cast<UINT>((raw >> 16) & 0xFFu);
+    if ((raw & (1ull << 24)) != 0) {
+        scanCode |= 0xE000u;
+    }
+    return scanCode;
+}
+
+static void ExpectCapturedScanCode(const ScopedRebindMessageCapture& capture, size_t index, UINT expectedScanCode, const std::string& label) {
+    Expect(index < capture.messages.size(), label + " missing captured message at index " + std::to_string(index) + ".");
+    const UINT actualScanCode = ExtractScanCodeWithFlagsFromLParam(capture.messages[index].lParam);
+    Expect(actualScanCode == expectedScanCode,
+           label + " expected scan code " + std::to_string(expectedScanCode) + ", got " + std::to_string(actualScanCode) + ".");
+}
+
 static void PrepareRebindGuiCase(std::string_view caseName, const std::vector<KeyRebind>& rebinds = {}) {
     const std::filesystem::path root = PrepareCaseDirectory(caseName);
     ResetGlobalTestState(root);
@@ -256,6 +272,48 @@ static void ClickGuiInteractionRect(DummyWindow& window, const char* id, bool ri
 
 static void SubmitKeyboardBindingEvent(DWORD vk) {
     RegisterBindingInputEvent(WM_KEYDOWN, static_cast<WPARAM>(vk), BuildTestKeyboardMessageLParam(vk, true));
+}
+
+static void OpenKeyboardLayoutContext(DummyWindow& window, DWORD sourceVk) {
+    RenderKeyboardInputsFrame(window);
+    RenderKeyboardInputsFrame(window);
+    RequestGuiTestOpenKeyboardLayout();
+    RenderKeyboardInputsFrame(window);
+    RequestGuiTestOpenKeyboardLayoutContext(sourceVk);
+    RenderKeyboardInputsFrame(window);
+}
+
+static void BindKeyboardLayoutTarget(DummyWindow& window, bool splitMode, DWORD targetVk) {
+    if (splitMode) {
+        RequestGuiTestKeyboardLayoutSetSplitMode(true);
+        RenderKeyboardInputsFrame(window);
+        RequestGuiTestKeyboardLayoutBeginBind(GuiTestKeyboardLayoutBindTarget::TriggersVk);
+    } else {
+        RequestGuiTestKeyboardLayoutBeginBind(GuiTestKeyboardLayoutBindTarget::FullOutputVk);
+    }
+    RenderKeyboardInputsFrame(window);
+    SubmitKeyboardBindingEvent(targetVk);
+    RenderKeyboardInputsFrame(window);
+}
+
+static void OpenKeyboardLayoutScanPicker(DummyWindow& window) {
+    RequestGuiTestKeyboardLayoutOpenScanPicker();
+    RenderKeyboardInputsFrame(window);
+}
+
+static void SetKeyboardLayoutScanFilter(DummyWindow& window, GuiTestKeyboardLayoutScanFilterGroup group) {
+    RequestGuiTestKeyboardLayoutSetScanFilter(group);
+    RenderKeyboardInputsFrame(window);
+}
+
+static void SelectKeyboardLayoutScan(DummyWindow& window, DWORD scan) {
+    RequestGuiTestKeyboardLayoutSelectScan(scan);
+    RenderKeyboardInputsFrame(window);
+}
+
+static void ResetKeyboardLayoutScanToDefault(DummyWindow& window) {
+    RequestGuiTestKeyboardLayoutResetScanToDefault();
+    RenderKeyboardInputsFrame(window);
 }
 
 void RunConfigLoadKeyRebindShiftLayerCapsLockParsedTest(TestRunMode runMode = TestRunMode::Automated) {
@@ -709,3 +767,118 @@ void RunKeyRebindGuiKeyboardLayoutMouseSourceBindAndTriggerTest(TestRunMode runM
     Expect(capture.messages.size() == 1, "Expected the GUI-created mouse-source rebind to forward exactly one WM_KEYUP message.");
     ExpectCapturedMessage(capture, 0, WM_KEYUP, 'Q', "GUI mouse-source rebind WM_KEYUP");
 }
+
+    void RunKeyRebindGuiKeyboardLayoutFullBindScanPickerRuntimeTest(TestRunMode runMode = TestRunMode::Automated) {
+        constexpr DWORD kNumpadEnterScan = 0xE01C;
+
+        DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+        if (SkipIfNoModernGuiTestGL(window)) { return; }
+        PrepareRebindGuiCase("key_rebind_gui_keyboard_layout_full_bind_scan_picker_runtime");
+
+        OpenKeyboardLayoutContext(window, 'A');
+        BindKeyboardLayoutTarget(window, false, VK_RETURN);
+        OpenKeyboardLayoutScanPicker(window);
+        SetKeyboardLayoutScanFilter(window, GuiTestKeyboardLayoutScanFilterGroup::Numpad);
+        SelectKeyboardLayoutScan(window, kNumpadEnterScan);
+
+        Expect(g_config.keyRebinds.rebinds.size() == 1, "Expected the full rebind scan picker flow to create exactly one key rebind.");
+        const KeyRebind& rebind = g_config.keyRebinds.rebinds.front();
+        Expect(rebind.fromKey == 'A', "Expected the full rebind scan picker flow to bind from the clicked A key.");
+        Expect(rebind.toKey == VK_RETURN, "Expected the full rebind scan picker flow to bind Return as the trigger key.");
+        Expect(rebind.useCustomOutput, "Expected the full rebind scan picker flow to enable custom output state.");
+        Expect(rebind.customOutputVK == VK_RETURN, "Expected the full rebind scan picker flow to mirror Return as the output VK.");
+        Expect(rebind.customOutputScanCode == kNumpadEnterScan,
+            "Expected the full rebind scan picker flow to store the Numpad Enter scan code override.");
+
+        g_showGui.store(false, std::memory_order_release);
+        PublishConfigSnapshot();
+
+        ScopedRebindMessageCapture capture(window.hwnd());
+        ScopedKeyboardStateOverride keyboardState;
+        keyboardState.SetKeyDown(VK_SHIFT, false);
+        keyboardState.SetToggle(VK_CAPITAL, false);
+        keyboardState.Apply();
+
+        const InputHandlerResult keyDownResult = HandleKeyRebinding(window.hwnd(), WM_KEYDOWN, 'A', BuildTestKeyboardMessageLParam('A', true));
+        Expect(keyDownResult.consumed, "Expected the GUI-created full rebind scan picker flow to consume WM_KEYDOWN.");
+        Expect(capture.messages.size() == 1,
+            "Expected the GUI-created full rebind scan picker flow to forward exactly one WM_KEYDOWN message.");
+        ExpectCapturedMessage(capture, 0, WM_KEYDOWN, VK_RETURN, "GUI full rebind scan picker WM_KEYDOWN");
+        ExpectCapturedScanCode(capture, 0, kNumpadEnterScan, "GUI full rebind scan picker WM_KEYDOWN");
+    }
+
+    void RunKeyRebindGuiKeyboardLayoutScanPickerFilterTest(TestRunMode runMode = TestRunMode::Automated) {
+        constexpr DWORD kNumpadEnterScan = 0xE01C;
+
+        DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+        if (SkipIfNoModernGuiTestGL(window)) { return; }
+        PrepareRebindGuiCase("key_rebind_gui_keyboard_layout_scan_picker_filter");
+
+        OpenKeyboardLayoutContext(window, 'A');
+        BindKeyboardLayoutTarget(window, true, VK_RETURN);
+        OpenKeyboardLayoutScanPicker(window);
+
+        SetKeyboardLayoutScanFilter(window, GuiTestKeyboardLayoutScanFilterGroup::Alpha);
+        SelectKeyboardLayoutScan(window, kNumpadEnterScan);
+
+        Expect(g_config.keyRebinds.rebinds.size() == 1, "Expected the split rebind scan picker filter flow to create exactly one key rebind.");
+        const KeyRebind& blockedRebind = g_config.keyRebinds.rebinds.front();
+        Expect(blockedRebind.toKey == VK_RETURN, "Expected the split rebind scan picker filter flow to keep Return as the trigger key.");
+        Expect(blockedRebind.customOutputScanCode == 0,
+            "Expected the Alpha filter to reject selecting the Numpad Enter scan code override.");
+        Expect(!blockedRebind.useCustomOutput,
+            "Expected the Alpha filter rejection to avoid enabling custom output state for the trigger scan override.");
+
+        SetKeyboardLayoutScanFilter(window, GuiTestKeyboardLayoutScanFilterGroup::Numpad);
+        SelectKeyboardLayoutScan(window, kNumpadEnterScan);
+
+        const KeyRebind& selectedRebind = g_config.keyRebinds.rebinds.front();
+        Expect(selectedRebind.customOutputScanCode == kNumpadEnterScan,
+            "Expected the Numpad filter to allow selecting the Numpad Enter scan code override.");
+        Expect(selectedRebind.useCustomOutput,
+            "Expected selecting the Numpad Enter scan code override to enable custom output state.");
+    }
+
+    void RunKeyRebindGuiKeyboardLayoutScanPickerResetToDefaultTest(TestRunMode runMode = TestRunMode::Automated) {
+        constexpr DWORD kNumpadEnterScan = 0xE01C;
+        constexpr DWORD kDefaultEnterScan = 0x001C;
+
+        DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+        if (SkipIfNoModernGuiTestGL(window)) { return; }
+        PrepareRebindGuiCase("key_rebind_gui_keyboard_layout_scan_picker_reset_to_default");
+
+        OpenKeyboardLayoutContext(window, 'A');
+        BindKeyboardLayoutTarget(window, true, VK_RETURN);
+        OpenKeyboardLayoutScanPicker(window);
+        SetKeyboardLayoutScanFilter(window, GuiTestKeyboardLayoutScanFilterGroup::Numpad);
+        SelectKeyboardLayoutScan(window, kNumpadEnterScan);
+
+        Expect(g_config.keyRebinds.rebinds.size() == 1, "Expected the split rebind scan picker reset flow to create exactly one key rebind.");
+        Expect(g_config.keyRebinds.rebinds.front().customOutputScanCode == kNumpadEnterScan,
+            "Expected the split rebind scan picker reset flow to start with the Numpad Enter scan code override.");
+
+        ResetKeyboardLayoutScanToDefault(window);
+
+        const KeyRebind& rebind = g_config.keyRebinds.rebinds.front();
+        Expect(rebind.fromKey == 'A', "Expected resetting the scan picker to preserve the source key.");
+        Expect(rebind.toKey == VK_RETURN, "Expected resetting the scan picker to preserve the trigger key.");
+        Expect(rebind.customOutputScanCode == 0, "Expected resetting the scan picker to clear the trigger scan override.");
+        Expect(!rebind.useCustomOutput,
+            "Expected resetting the scan picker to disable custom output state when no other overrides remain.");
+
+        g_showGui.store(false, std::memory_order_release);
+        PublishConfigSnapshot();
+
+        ScopedRebindMessageCapture capture(window.hwnd());
+        ScopedKeyboardStateOverride keyboardState;
+        keyboardState.SetKeyDown(VK_SHIFT, false);
+        keyboardState.SetToggle(VK_CAPITAL, false);
+        keyboardState.Apply();
+
+        const InputHandlerResult keyDownResult = HandleKeyRebinding(window.hwnd(), WM_KEYDOWN, 'A', BuildTestKeyboardMessageLParam('A', true));
+        Expect(keyDownResult.consumed, "Expected the reset split rebind scan picker flow to consume WM_KEYDOWN.");
+        Expect(capture.messages.size() == 1,
+            "Expected the reset split rebind scan picker flow to forward exactly one WM_KEYDOWN message.");
+        ExpectCapturedMessage(capture, 0, WM_KEYDOWN, VK_RETURN, "GUI split rebind scan picker reset WM_KEYDOWN");
+        ExpectCapturedScanCode(capture, 0, kDefaultEnterScan, "GUI split rebind scan picker reset WM_KEYDOWN");
+    }

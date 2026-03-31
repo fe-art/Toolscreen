@@ -611,6 +611,11 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                         if (fallbackVk == VK_PAUSE) return VkToString(VK_PAUSE);
                     }
 
+                    LONG keyNameLParam = static_cast<LONG>((scan & 0xFF) << 16);
+                    if ((scan & 0xFF00) != 0) { keyNameLParam |= (1 << 24); }
+                    char keyName[64] = {};
+                    if (GetKeyNameTextA(keyNameLParam, keyName, sizeof(keyName)) > 0) { return std::string(keyName); }
+
                     DWORD scanDisplayVK = MapVirtualKey(scan, MAPVK_VSC_TO_VK_EX);
                     if (scanDisplayVK != 0) {
                         if (scanLow == 0x45 && (fallbackVk == VK_NUMLOCK || fallbackVk == VK_PAUSE) &&
@@ -619,11 +624,6 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                         }
                         return VkToString(scanDisplayVK);
                     }
-
-                    LONG keyNameLParam = static_cast<LONG>((scan & 0xFF) << 16);
-                    if ((scan & 0xFF00) != 0) { keyNameLParam |= (1 << 24); }
-                    char keyName[64] = {};
-                    if (GetKeyNameTextA(keyNameLParam, keyName, sizeof(keyName)) > 0) { return std::string(keyName); }
                     return std::string(tr("inputs.keyboard_layout_unknown"));
                 };
 
@@ -764,9 +764,9 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                     constexpr float kKeyCapInsetYMul = 0.45f;
                     constexpr float kKeyRoundingPx = 5.0f;
 
-                    const float keyboardScale = s_keyboardLayoutScale * kKeyboardScaleMult;
+                    float keyboardScale = s_keyboardLayoutScale * kKeyboardScaleMult;
 
-                    const float keyH = roundPx(ImGui::GetFrameHeight() * kKeyHeightMul * keyboardScale);
+                    float keyH = roundPx(ImGui::GetFrameHeight() * kKeyHeightMul * keyboardScale);
                     float unit = roundPx(keyH * kKeyUnitMul);
                     unit = (float)(((int)(unit + 2.0f) / 4) * 4);
                     if (unit < 20.0f) unit = 20.0f;
@@ -793,6 +793,38 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                             w += row[c].w * pitchX;
                         }
                         if (w > keyboardMaxRowW) keyboardMaxRowW = w;
+                    }
+
+                    if (keyboardLayoutOpenedThisFrame && keyboardMaxRowW > 0.0f) {
+                        const float mousePanelExtra = unit * 4.5f;
+                        const float totalLayoutW = keyboardMaxRowW + mousePanelExtra;
+                        const float platePad = 10.0f * s_keyboardLayoutScale;
+                        const float availW = ImGui::GetContentRegionAvail().x - platePad * 2.0f;
+                        if (availW > 0.0f && totalLayoutW > 0.0f) {
+                            float fitScale = s_keyboardLayoutScale * (availW / totalLayoutW);
+                            fitScale = std::clamp(fitScale, 0.6f, 3.0f);
+                            if (fabsf(fitScale - s_keyboardLayoutScale) > 0.01f) {
+                                s_keyboardLayoutScale = fitScale;
+                                keyboardLayoutScaleChanged = true;
+
+                                const float ks2 = s_keyboardLayoutScale * kKeyboardScaleMult;
+                                const float kH2 = roundPx(ImGui::GetFrameHeight() * kKeyHeightMul * ks2);
+                                float u2 = roundPx(kH2 * kKeyUnitMul);
+                                u2 = (float)(((int)(u2 + 2.0f) / 4) * 4);
+                                if (u2 < 20.0f) u2 = 20.0f;
+                                float g2 = roundPx(ImGui::GetStyle().ItemInnerSpacing.x * ks2 * kKeyGapMul);
+                                if (g2 < 1.0f) g2 = 1.0f;
+                                keyboardScale = ks2;
+                                keyH = kH2;
+                                unit = u2; gap = g2;
+                                keyboardMaxRowW = 0.0f;
+                                for (const auto& row : rows) {
+                                    float w = 0.0f;
+                                    for (size_t c = 0; c < row.size(); ++c) { w += row[c].w * u2; }
+                                    if (w > keyboardMaxRowW) keyboardMaxRowW = w;
+                                }
+                            }
+                        }
                     }
 
                     const ImVec2 layoutStart = ImGui::GetCursorPos();
@@ -933,7 +965,8 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
 
                     auto drawKeyCell = [&](DWORD vk, const char* label, const ImVec2& pMin, const ImVec2& pMax, const KeyRebind* rb) {
                         const bool hovered = ImGui::IsItemHovered();
-                        const bool active = ImGui::IsItemActive();
+                        const bool physDown = (GetAsyncKeyState(vk) & 0x8000) != 0;
+                        const bool active = ImGui::IsItemActive() || physDown;
 
                         struct KeyTheme {
                             ImU32 top;
@@ -1853,7 +1886,10 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                             return resolveTypesVkFor(rb, originalVk, false) != resolveTriggerVkFor(rb, originalVk);
                         };
 
-                        static std::vector<std::pair<DWORD, std::string>> s_knownScanCodes;
+                        struct KnownScanCode { DWORD scan; std::string name; int group; };
+                        enum ScanGroup { SG_Alpha=0, SG_Digit, SG_Function, SG_Nav, SG_Numpad, SG_Modifier, SG_Other, SG_Raw, SG_COUNT };
+
+                        static std::vector<KnownScanCode> s_knownScanCodes;
                         static bool s_knownScanCodesBuilt = false;
                         if (!s_knownScanCodesBuilt) {
                             struct ScanMenuEntry {
@@ -1946,15 +1982,16 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                 }
                             };
 
+
                             auto classifyGroupOrder = [&](DWORD scan, DWORD vk) -> std::pair<int, int> {
                                 if (vk >= 'A' && vk <= 'Z') {
-                                    return { 0, (int)(vk - 'A') };
+                                    return { SG_Alpha, (int)(vk - 'A') };
                                 }
                                 if (vk >= '0' && vk <= '9') {
-                                    return { 1, (int)(vk - '0') };
+                                    return { SG_Digit, (int)(vk - '0') };
                                 }
                                 if (vk >= VK_F1 && vk <= VK_F24) {
-                                    return { 2, (int)(vk - VK_F1) };
+                                    return { SG_Function, (int)(vk - VK_F1) };
                                 }
 
                                 switch (vk) {
@@ -1971,7 +2008,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                 case VK_SNAPSHOT:
                                 case VK_SCROLL:
                                 case VK_PAUSE:
-                                    return { 3, navOrderForVk(vk) };
+                                    return { SG_Nav, navOrderForVk(vk) };
                                 default:
                                     break;
                                 }
@@ -1981,7 +2018,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                     vk == VK_MULTIPLY || vk == VK_SUBTRACT || vk == VK_ADD || vk == VK_DECIMAL ||
                                     (vk == VK_RETURN && ((scan & 0xFF00) != 0));
                                 if (isNumpad) {
-                                    return { 4, numpadOrderFor(vk, scan) };
+                                    return { SG_Numpad, numpadOrderFor(vk, scan) };
                                 }
 
                                 switch (vk) {
@@ -2003,20 +2040,43 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                 case VK_RETURN:
                                 case VK_BACK:
                                 case VK_APPS:
-                                    return { 5, modifierOrderForVk(vk) };
+                                    return { SG_Modifier, modifierOrderForVk(vk) };
                                 default:
                                     break;
                                 }
 
                                 if (vk == 0) {
-                                    return { 7, (int)scan };
+                                    return { SG_Raw, (int)scan };
                                 }
 
-                                return { 6, (int)vk };
+                                return { SG_Other, (int)vk };
+                            };
+
+                            auto numpadVkForNonExtendedScan = [](DWORD scan) -> DWORD {
+                                switch (scan) {
+                                case 0x47: return VK_NUMPAD7;
+                                case 0x48: return VK_NUMPAD8;
+                                case 0x49: return VK_NUMPAD9;
+                                case 0x4B: return VK_NUMPAD4;
+                                case 0x4C: return VK_NUMPAD5;
+                                case 0x4D: return VK_NUMPAD6;
+                                case 0x4F: return VK_NUMPAD1;
+                                case 0x50: return VK_NUMPAD2;
+                                case 0x51: return VK_NUMPAD3;
+                                case 0x4A: return VK_SUBTRACT;
+                                case 0x4E: return VK_ADD;
+                                case 0x52: return VK_NUMPAD0;
+                                case 0x53: return VK_DECIMAL;
+                                default: return 0;
+                                }
                             };
 
                             auto appendScan = [&](DWORD scan) {
                                 DWORD vkFromScan = MapVirtualKey(scan, MAPVK_VSC_TO_VK_EX);
+                                if ((scan & 0xFF00) == 0) {
+                                    DWORD npVk = numpadVkForNonExtendedScan(scan);
+                                    if (npVk != 0) vkFromScan = npVk;
+                                }
                                 std::string name = scanCodeToDisplayName(scan, vkFromScan);
                                 const auto [group, order] = classifyGroupOrder(scan, vkFromScan);
                                 ScanMenuEntry e;
@@ -2044,7 +2104,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                             });
 
                             for (const auto& e : entries) {
-                                s_knownScanCodes.emplace_back(e.scan, e.name);
+                                s_knownScanCodes.push_back({ e.scan, e.name, e.group });
                             }
 
                             s_knownScanCodesBuilt = true;
@@ -2366,6 +2426,11 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                 }
                             }
                         }
+
+                        if (ConsumeGuiTestKeyboardLayoutOpenScanPickerRequest()) {
+                            openTriggersCustomPopup = true;
+                            triggersCustomPopupAnchor = ImVec2(ImGui::GetCursorScreenPos().x, ImGui::GetCursorScreenPos().y + ImGui::GetFrameHeight());
+                        }
 #endif
 
                         const ImVec2 fullRebindRectMin = ImGui::GetCursorScreenPos();
@@ -2436,7 +2501,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                                                popupButtonFallbackMax(outputRectMin, bindButtonW));
 #endif
                                     ImGui::SameLine(0.0f, popupInlineGap);
-                                    if (ImGui::Button((tr("label.custom") + "##output_scan_custom").c_str(), ImVec2(auxButtonW, 0))) {
+                                    if (ImGui::Button((tr("label.pick") + "##output_scan_pick").c_str(), ImVec2(auxButtonW, 0))) {
                                         openTriggersCustomPopup = true;
                                         triggersCustomPopupAnchor =
                                             ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y + 4.0f);
@@ -2637,7 +2702,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                                                popupButtonFallbackMax(triggersRectMin, bindButtonW));
 #endif
                                     ImGui::SameLine(0.0f, popupInlineGap);
-                                    if (ImGui::Button((tr("label.custom") + "##triggers_scan_custom").c_str(), ImVec2(auxButtonW, 0))) {
+                                    if (ImGui::Button((tr("label.pick") + "##triggers_scan_pick").c_str(), ImVec2(auxButtonW, 0))) {
                                         openTriggersCustomPopup = true;
                                         triggersCustomPopupAnchor =
                                             ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y + 4.0f);
@@ -2670,42 +2735,113 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                 DWORD curScan = (r && r->useCustomOutput && r->customOutputScanCode != 0) ? r->customOutputScanCode
                                                                                                           : getScanCodeWithExtendedFlag(curTriggerVk);
                                 std::string preview = scanCodeToDisplayName(curScan, curTriggerVk);
+                                const DWORD defaultScan = getScanCodeWithExtendedFlag(curTriggerVk);
+                                const std::string defaultPreview = scanCodeToDisplayName(defaultScan, curTriggerVk);
 
                                 ImGui::Text(tr("inputs.current_format", preview.c_str()).c_str());
                                 ImGui::Separator();
 
-                                bool isDefault = !(r && r->useCustomOutput && r->customOutputScanCode != 0);
-                                if (ImGui::Selectable(trc("label.default"), isDefault)) {
+                                static int s_scanFilterGroup = -1; // -1 = All
+                                if (ImGui::IsWindowAppearing()) s_scanFilterGroup = -1;
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                                if (const int requestedScanFilterGroup = ConsumeGuiTestKeyboardLayoutScanFilterRequest();
+                                    requestedScanFilterGroup >= -1 && requestedScanFilterGroup < SG_Raw) {
+                                    s_scanFilterGroup = requestedScanFilterGroup;
+                                }
+#endif
+
+                                auto clearTriggerCustomScan = [&]() {
+                                    if (idx < 0 || idx >= (int)g_config.keyRebinds.rebinds.size()) return;
+                                    auto& rr = g_config.keyRebinds.rebinds[idx];
+                                    rr.customOutputScanCode = 0;
+                                    if (rr.customOutputVK == 0 && rr.customOutputUnicode == 0) rr.useCustomOutput = false;
+                                    g_configIsDirty = true;
+                                    r = &rr;
+                                };
+
+                                auto tryApplyTriggerCustomScan = [&](DWORD requestedScan) -> bool {
+                                    const auto found = std::find_if(s_knownScanCodes.begin(), s_knownScanCodes.end(),
+                                                                    [&](const KnownScanCode& known) { return known.scan == requestedScan; });
+                                    if (found == s_knownScanCodes.end()) return false;
+                                    if (found->group == SG_Raw) return false;
+                                    if (s_scanFilterGroup >= 0 && found->group != s_scanFilterGroup) return false;
+
                                     idx = createRebindForKeyIfMissing(s_layoutContextVk);
                                     s_layoutContextPreferredIndex = idx;
-                                    if (idx >= 0) {
-                                        auto& rr = g_config.keyRebinds.rebinds[idx];
-                                        rr.customOutputScanCode = 0;
-                                        if (rr.customOutputVK == 0 && rr.customOutputUnicode == 0) rr.useCustomOutput = false;
-                                        g_configIsDirty = true;
-                                    }
+                                    if (idx < 0) return false;
+
+                                    auto& rr = g_config.keyRebinds.rebinds[idx];
+                                    rr.useCustomOutput = true;
+                                    rr.customOutputScanCode = requestedScan;
+                                    g_configIsDirty = true;
+                                    r = &rr;
+                                    return true;
+                                };
+
+                                const bool isDefaultScan = !(r && r->useCustomOutput && r->customOutputScanCode != 0);
+                                if (ImGui::Selectable(tr("inputs.scan_reset_default_format", defaultPreview.c_str()).c_str(), isDefaultScan)) {
+                                    clearTriggerCustomScan();
                                 }
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                                if (ConsumeGuiTestKeyboardLayoutResetScanToDefaultRequest()) {
+                                    clearTriggerCustomScan();
+                                }
+#endif
                                 ImGui::Separator();
+
+                                const char* groupLabels[SG_COUNT + 1] = {
+                                    trc("inputs.scan_group_all"), trc("inputs.scan_group_alpha"), trc("inputs.scan_group_digit"),
+                                    trc("inputs.scan_group_function"), trc("inputs.scan_group_nav"), trc("inputs.scan_group_numpad"),
+                                    trc("inputs.scan_group_modifier"), trc("inputs.scan_group_other")
+                                };
+                                for (int g = -1; g < SG_Raw; ++g) {
+                                    if (g > -1) ImGui::SameLine();
+                                    bool active = (s_scanFilterGroup == g);
+                                    if (active) {
+                                        ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+                                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+                                    }
+                                    if (ImGui::Button(groupLabels[g + 1])) { s_scanFilterGroup = g; }
+                                    if (active) { ImGui::PopStyleColor(2); }
+                                }
+                                ImGui::Spacing();
+
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                                if (const DWORD requestedScan = ConsumeGuiTestKeyboardLayoutSelectScanRequest(); requestedScan != 0) {
+                                    (void)tryApplyTriggerCustomScan(requestedScan);
+                                }
+#endif
 
                                 ImGui::BeginChild("##triggers_custom_list", ImVec2(0.0f, 260.0f), true);
                                 for (const auto& it : s_knownScanCodes) {
-                                    const DWORD scan = it.first;
-                                    const std::string& name = it.second;
+                                    if (it.group == SG_Raw) continue;
+                                    if (s_scanFilterGroup >= 0 && it.group != s_scanFilterGroup) continue;
+                                    const DWORD scan = it.scan;
+                                    const std::string& name = it.name;
                                     const std::string itemLabel = name + "  (" + formatScanHex(scan) + ")##scan_" + std::to_string((unsigned)scan);
 
                                     const bool selected = (r && r->useCustomOutput && r->customOutputScanCode == scan);
                                     if (ImGui::Selectable(itemLabel.c_str(), selected)) {
-                                        idx = createRebindForKeyIfMissing(s_layoutContextVk);
-                                        s_layoutContextPreferredIndex = idx;
-                                        if (idx >= 0) {
-                                            auto& rr = g_config.keyRebinds.rebinds[idx];
-                                            rr.useCustomOutput = true;
-                                            rr.customOutputScanCode = scan;
-                                            g_configIsDirty = true;
-                                        }
+                                        (void)tryApplyTriggerCustomScan(scan);
                                     }
                                 }
                                 ImGui::EndChild();
+
+                                ImGui::Separator();
+                                ImGui::Text("%s", trc("inputs.tooltip.enter_unicode_or_codepoint"));
+                                if (ImGui::Button((tr("label.custom") + "##output_unicode_custom").c_str())) {
+                                    idx = createRebindForKeyIfMissing(s_layoutContextVk);
+                                    s_layoutContextPreferredIndex = idx;
+                                    if (idx >= 0) {
+                                        s_layoutUnicodeEditIndex = idx;
+                                        s_layoutUnicodeEditTarget = LayoutUnicodeEditTarget::TypesBase;
+                                        const auto& rr = g_config.keyRebinds.rebinds[idx];
+                                        s_layoutUnicodeEditText =
+                                            (rr.customOutputUnicode != 0) ? formatCodepointUPlus((uint32_t)rr.customOutputUnicode) : std::string();
+                                        MarkRebindBindingActive();
+                                    }
+                                    ImGui::CloseCurrentPopup();
+                                }
 
                                 ImGui::EndPopup();
                         }

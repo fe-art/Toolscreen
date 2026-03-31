@@ -848,6 +848,9 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     key-rebind-gui-keyboard-layout-full-bind-and-trigger
     key-rebind-gui-keyboard-layout-split-bind-and-trigger
     key-rebind-gui-keyboard-layout-mouse-source-bind-and-trigger
+    key-rebind-gui-keyboard-layout-full-bind-scan-picker-runtime
+    key-rebind-gui-keyboard-layout-scan-picker-filter
+    key-rebind-gui-keyboard-layout-scan-picker-reset-to-default
     config-load-fullscreen-stretch-repaired
     config-load-preemptive-sync-existing-mode
     config-load-thin-min-width-enforced

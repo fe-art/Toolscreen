@@ -82,6 +82,17 @@ enum class GuiTestKeyboardLayoutBindTarget {
     TriggersVk,
 };
 
+enum class GuiTestKeyboardLayoutScanFilterGroup {
+    All = -1,
+    Alpha = 0,
+    Digit,
+    Function,
+    Nav,
+    Numpad,
+    Modifier,
+    Other,
+};
+
 void ResetGuiTestInteractionRects();
 bool GetGuiTestInteractionRect(const char* id, GuiTestInteractionRect& outRect);
 void RequestGuiTestOpenKeyboardLayout();
@@ -90,6 +101,10 @@ void RequestGuiTestKeyboardLayoutSetSplitMode(bool splitMode);
 void RequestGuiTestKeyboardLayoutBeginBind(GuiTestKeyboardLayoutBindTarget target);
 void RequestGuiTestKeyboardLayoutSetShiftLayerUppercase(bool enabled);
 void RequestGuiTestKeyboardLayoutSetShiftLayerUsesCapsLock(bool enabled);
+void RequestGuiTestKeyboardLayoutOpenScanPicker();
+void RequestGuiTestKeyboardLayoutSetScanFilter(GuiTestKeyboardLayoutScanFilterGroup group);
+void RequestGuiTestKeyboardLayoutSelectScan(DWORD scan);
+void RequestGuiTestKeyboardLayoutResetScanToDefault();
 #endif
 
 extern ImFont* g_keyboardLayoutPrimaryFont;
