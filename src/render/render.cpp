@@ -4147,11 +4147,47 @@ struct SameThreadMirrorCaptureReuseState {
 static SameThreadMirrorCaptureReuseState s_sameThreadMirrorCaptureReuseState;
 static uint64_t s_sameThreadMirrorCaptureFrameTag = 0;
 
-static bool HasSameThreadOverlayWork(const SameThreadOverlayState& request, const Config& cfg) {
+static bool IsNinjabrainOverlayModeAllowed(const NinjabrainOverlayConfig& nb, const std::string& modeId) {
+    if (nb.allowedModes.empty()) { return true; }
+    return std::find(nb.allowedModes.begin(), nb.allowedModes.end(), modeId) != nb.allowedModes.end();
+}
+
+static bool HasNinjabrainOverlayContent(const NinjabrainOverlayConfig& nb, const NinjabrainData& data,
+                                        bool* outHasTriangulation = nullptr, bool* outShowForBoat = nullptr) {
+    const bool hasTriangulation = data.validPrediction &&
+        (data.resultType == "TRIANGULATION" || data.resultType == "DIVINE");
+    const bool boatError = (data.boatState == "ERROR");
+    const bool showForBoat = nb.alwaysShowBoat || boatError;
+
+    if (outHasTriangulation) { *outHasTriangulation = hasTriangulation; }
+    if (outShowForBoat) { *outShowForBoat = showForBoat; }
+    return hasTriangulation || showForBoat;
+}
+
+static bool ShouldRenderNinjabrainOverlayForRequest(const SameThreadOverlayState& request) {
+    auto configSnapshot = GetConfigSnapshot();
+    if (!configSnapshot) { return false; }
+
+    const auto& nb = configSnapshot->ninjabrainOverlay;
+    if (!nb.enabled) { return false; }
+    if (!g_windowOverlaysVisible.load(std::memory_order_acquire)) { return false; }
+    if (request.excludeOnlyOnMyScreen && nb.onlyOnMyScreen) { return false; }
+    if (!request.excludeOnlyOnMyScreen && nb.onlyOnObs) { return false; }
+    if (!IsNinjabrainOverlayModeAllowed(nb, request.modeId)) { return false; }
+
+    NinjabrainData data;
+    {
+        std::lock_guard<std::mutex> lock(g_ninjabrainDataMutex);
+        data = g_ninjabrainData;
+    }
+    return HasNinjabrainOverlayContent(nb, data);
+}
+
+static bool HasSameThreadOverlayWork(const SameThreadOverlayState& request, const Config& cfg, bool renderNinjabrainOverlay) {
     if (request.modeHasMirrors || request.modeHasImages || request.modeHasWindowOverlays || request.modeHasBrowserOverlays ||
         request.shouldRenderGui ||
         request.showPerformanceOverlay || request.showProfiler || request.showTextureGrid || request.showEyeZoom ||
-        request.showWelcomeToast || request.showRebindIndicator) {
+        request.showWelcomeToast || request.showRebindIndicator || renderNinjabrainOverlay) {
         return true;
     }
 
@@ -4203,20 +4239,9 @@ static void CacheSameThreadMirrorCapture(const Config& cfg, const SameThreadOver
     s_sameThreadMirrorCaptureReuseState.sourceH = sourceH;
 }
 
-static void RenderSameThreadImGui(const SameThreadOverlayState& request) {
-    // Check ninjabrain overlay active state
-    const bool nbOverlayActive = [&]() {
-        auto nbCfg = GetConfigSnapshot();
-        if (!nbCfg || !nbCfg->ninjabrainOverlay.enabled) return false;
-        if (!g_windowOverlaysVisible.load(std::memory_order_acquire)) return false;
-        const auto& nb = nbCfg->ninjabrainOverlay;
-        if (request.excludeOnlyOnMyScreen && nb.onlyOnMyScreen) return false;
-        if (!request.excludeOnlyOnMyScreen && nb.onlyOnObs) return false;
-        return true;
-    }();
-
+static void RenderSameThreadImGui(const SameThreadOverlayState& request, bool renderNinjabrainOverlay) {
     const bool shouldRenderAnyImGui = request.shouldRenderGui || request.showPerformanceOverlay || request.showProfiler ||
-                                      request.showTextureGrid || request.showEyeZoom || nbOverlayActive;
+                                      request.showTextureGrid || request.showEyeZoom || renderNinjabrainOverlay;
     if (!shouldRenderAnyImGui) return;
 
     std::lock_guard<std::recursive_mutex> imguiLock(GetImGuiContextMutex());
@@ -4280,10 +4305,10 @@ static void RenderSameThreadImGui(const SameThreadOverlayState& request) {
     }
 
     // NinjabrainBot overlay (rendered in ImGui space)
-    if (nbOverlayActive) {
+    if (renderNinjabrainOverlay) {
         PROFILE_SCOPE_CAT("ImGui Ninjabrain Overlay", "ImGui");
         auto nbCfg = GetConfigSnapshot();
-        if (nbCfg) RenderNinjabrainOverlay(nbCfg->ninjabrainOverlay, GetNinjabrainFont());
+        if (nbCfg) RenderNinjabrainOverlay(nbCfg->ninjabrainOverlay, GetNinjabrainFont(), request.modeId);
     }
 
     if (request.showProfiler) {
@@ -4308,7 +4333,8 @@ static void RenderSameThreadImGui(const SameThreadOverlayState& request) {
 }
 
 static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, const Config& cfg, const GLState& s) {
-    if (!HasSameThreadOverlayWork(request, cfg)) { return false; }
+    const bool renderNinjabrainOverlay = ShouldRenderNinjabrainOverlayForRequest(request);
+    if (!HasSameThreadOverlayWork(request, cfg, renderNinjabrainOverlay)) { return false; }
 
     {
         PROFILE_SCOPE_CAT("Prepare Overlay GL State", "Rendering");
@@ -4556,14 +4582,14 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
         RenderRebindIndicator();
     }
 
-    RenderSameThreadImGui(request);
+    RenderSameThreadImGui(request, renderNinjabrainOverlay);
     if (request.showWelcomeToast) {
         PROFILE_SCOPE_CAT("Render Welcome Toast", "Rendering");
         RenderWelcomeToast(request.welcomeToastIsFullscreen);
     }
     return !activeMirrors.empty() || !eyeZoomSlideOutMirrors->empty() || !transitionSlideOutMirrors->empty() || !activeImages.empty() ||
             !activeWindowOverlays.empty() || !activeBrowserOverlays.empty() || request.shouldRenderGui || request.showPerformanceOverlay || request.showProfiler ||
-           request.showTextureGrid || request.showEyeZoom || request.showWelcomeToast || request.showRebindIndicator;
+           request.showTextureGrid || request.showEyeZoom || request.showWelcomeToast || request.showRebindIndicator || renderNinjabrainOverlay;
 }
 
 bool RenderModeOverlaysForIntegrationTest(const Config& config, const ModeConfig& modeToRender, const GLState& s, int fullW,
@@ -8117,18 +8143,11 @@ static void EnsureBoatIconsLoaded()
 }
 #include <algorithm>
 
-void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font)
+void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, const std::string& modeId)
 {
     if (!ImGui::GetCurrentContext()) return;
 
-    // Mode filtering — only render if current mode is in allowedModes (or list is empty)
-    if (!nb.allowedModes.empty()) {
-        std::string curMode;
-        { std::lock_guard<std::mutex> lk(g_modeIdMutex); curMode = g_currentModeId; }
-        bool allowed = false;
-        for (const auto& m : nb.allowedModes) { if (m == curMode) { allowed = true; break; } }
-        if (!allowed) return;
-    }
+    if (!IsNinjabrainOverlayModeAllowed(nb, modeId)) return;
 
     EnsureBoatIconsLoaded();
 
@@ -8138,11 +8157,9 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font)
         data = g_ninjabrainData;
     }
 
-    const bool hasTriangulation = data.validPrediction &&
-        (data.resultType == "TRIANGULATION" || data.resultType == "DIVINE");
-    const bool boatError = (data.boatState == "ERROR");
-    const bool showForBoat = nb.alwaysShowBoat || boatError;
-    if (!hasTriangulation && !showForBoat) return;
+    bool hasTriangulation = false;
+    bool showForBoat = false;
+    if (!HasNinjabrainOverlayContent(nb, data, &hasTriangulation, &showForBoat)) return;
 
     ImDrawList* drawList = ImGui::GetForegroundDrawList();
     const float scale  = (nb.overlayScale > 0.01f) ? nb.overlayScale : 1.0f;

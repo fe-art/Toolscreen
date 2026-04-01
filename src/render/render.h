@@ -340,7 +340,7 @@ void GetAnimatedModePosition(int& outX, int& outY);
 struct NinjabrainOverlayConfig;
 struct ImFont;
 struct ImFontAtlas;
-void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font);
+void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, const std::string& modeId);
 ImFont* GetNinjabrainFont();
 float   GetNinjabrainFontSize();
 // Call this from RebuildImGuiFontAtlas (before io.Fonts->Build()) to add the NB font to the atlas.
