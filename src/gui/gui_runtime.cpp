@@ -1293,122 +1293,35 @@ void RenderProfilerOverlay(bool showProfiler, bool showPerformanceOverlay) {
 }
 
 void RenderImGuiWithStateProtection(bool useFullProtection) {
-    if (useFullProtection) {
-        GLint last_program;
-        GLint last_vertex_array;
-        GLint last_array_buffer;
-        GLint last_element_buffer;
-        GLint last_texture;
-        GLint last_active_texture;
-        GLboolean last_blend;
-        GLint last_blend_src_rgb, last_blend_dst_rgb, last_blend_src_alpha, last_blend_dst_alpha;
-        GLint last_viewport[4];
-        GLboolean last_depth_test;
-        GLboolean last_cull_face;
-        GLboolean last_scissor_test;
-        GLint last_scissor_box[4];
-        GLint last_framebuffer;
+    (void)useFullProtection;
 
-        {
-            PROFILE_SCOPE_CAT("ImGui GL State Snapshot", "ImGui");
+    // Dear ImGui's OpenGL backend already snapshots and restores the render state it mutates.
+    // Keep this wrapper lean so same-thread UI doesn't pay for a second full round of GL queries.
+    auto normalizePixelStoreState = []() {
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+        glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    };
 
-            glGetIntegerv(GL_CURRENT_PROGRAM, &last_program);
-            glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &last_vertex_array);
-            glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &last_array_buffer);
-            glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &last_element_buffer);
-            glGetIntegerv(GL_TEXTURE_BINDING_2D, &last_texture);
-            glGetIntegerv(GL_ACTIVE_TEXTURE, &last_active_texture);
-            last_blend = glIsEnabled(GL_BLEND);
-            glGetIntegerv(GL_BLEND_SRC_RGB, &last_blend_src_rgb);
-            glGetIntegerv(GL_BLEND_DST_RGB, &last_blend_dst_rgb);
-            glGetIntegerv(GL_BLEND_SRC_ALPHA, &last_blend_src_alpha);
-            glGetIntegerv(GL_BLEND_DST_ALPHA, &last_blend_dst_alpha);
-            glGetIntegerv(GL_VIEWPORT, last_viewport);
-            last_depth_test = glIsEnabled(GL_DEPTH_TEST);
-            last_cull_face = glIsEnabled(GL_CULL_FACE);
-            last_scissor_test = glIsEnabled(GL_SCISSOR_TEST);
-            glGetIntegerv(GL_SCISSOR_BOX, last_scissor_box);
-            glGetIntegerv(GL_FRAMEBUFFER_BINDING, &last_framebuffer);
+    GLint last_framebuffer = 0;
 
-            glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-            glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
-            glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
-            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-            glPixelStorei(GL_PACK_ALIGNMENT, 1);
-        }
+    {
+        PROFILE_SCOPE_CAT("ImGui Minimal GL State Snapshot", "ImGui");
+        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &last_framebuffer);
+        normalizePixelStoreState();
+    }
 
-        {
-            PROFILE_SCOPE_CAT("ImGui Draw Submission", "ImGui");
-            ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-        }
+    {
+        PROFILE_SCOPE_CAT("ImGui Draw Submission", "ImGui");
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    }
 
-        {
-            PROFILE_SCOPE_CAT("ImGui GL State Restore", "ImGui");
-
-            glUseProgram(last_program);
-            glBindVertexArray(last_vertex_array);
-            glBindBuffer(GL_ARRAY_BUFFER, last_array_buffer);
-            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, last_element_buffer);
-            glActiveTexture(last_active_texture);
-            BindTextureDirect(GL_TEXTURE_2D, last_texture);
-            if (oglViewport)
-                oglViewport(last_viewport[0], last_viewport[1], last_viewport[2], last_viewport[3]);
-            else
-                glViewport(last_viewport[0], last_viewport[1], last_viewport[2], last_viewport[3]);
-            glScissor(last_scissor_box[0], last_scissor_box[1], last_scissor_box[2], last_scissor_box[3]);
-            glBindFramebuffer(GL_FRAMEBUFFER, last_framebuffer);
-
-            if (last_depth_test)
-                glEnable(GL_DEPTH_TEST);
-            else
-                glDisable(GL_DEPTH_TEST);
-            if (last_cull_face)
-                glEnable(GL_CULL_FACE);
-            else
-                glDisable(GL_CULL_FACE);
-            if (last_scissor_test)
-                glEnable(GL_SCISSOR_TEST);
-            else
-                glDisable(GL_SCISSOR_TEST);
-
-            if (last_blend) {
-                glEnable(GL_BLEND);
-                glBlendFuncSeparate(last_blend_src_rgb, last_blend_dst_rgb, last_blend_src_alpha, last_blend_dst_alpha);
-            } else {
-                glDisable(GL_BLEND);
-            }
-        }
-    } else {
-        GLint last_program;
-        GLint last_vertex_array;
-        GLint last_array_buffer;
-        GLboolean last_blend;
-
-        {
-            PROFILE_SCOPE_CAT("ImGui Minimal GL State Snapshot", "ImGui");
-
-            glGetIntegerv(GL_CURRENT_PROGRAM, &last_program);
-            glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &last_vertex_array);
-            glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &last_array_buffer);
-            last_blend = glIsEnabled(GL_BLEND);
-        }
-
-        {
-            PROFILE_SCOPE_CAT("ImGui Draw Submission", "ImGui");
-            ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-        }
-
-        {
-            PROFILE_SCOPE_CAT("ImGui Minimal GL State Restore", "ImGui");
-
-            glUseProgram(last_program);
-            glBindVertexArray(last_vertex_array);
-            glBindBuffer(GL_ARRAY_BUFFER, last_array_buffer);
-            if (last_blend)
-                glEnable(GL_BLEND);
-            else
-                glDisable(GL_BLEND);
-        }
+    {
+        PROFILE_SCOPE_CAT("ImGui Minimal GL State Restore", "ImGui");
+        glBindFramebuffer(GL_FRAMEBUFFER, last_framebuffer);
+        normalizePixelStoreState();
     }
 }
 
