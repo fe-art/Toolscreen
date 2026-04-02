@@ -1,11 +1,20 @@
+#if defined(TOOLSCREEN_NINJABRAIN_OVERLAY_ONLY)
+if (BeginSelectableSettingsTopTabItem(trc("ninjabrain.title"))) {
+#else
 if (BeginSelectableSettingsTopTabItem(trc("tabs.window_overlays"))) {
+#endif
     g_currentlyEditingMirror = "";
     g_imageDragMode.store(false);
 
+#if defined(TOOLSCREEN_NINJABRAIN_OVERLAY_ONLY)
+    g_windowOverlayDragMode.store(false);
+#else
     g_windowOverlayDragMode.store(true);
+#endif
 
     SliderCtrlClickTip();
 
+#if !defined(TOOLSCREEN_NINJABRAIN_OVERLAY_ONLY)
     int windowOverlay_to_remove = -1;
     for (size_t i = 0; i < g_config.windowOverlays.size(); ++i) {
         auto& overlay = g_config.windowOverlays[i];
@@ -407,7 +416,9 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.window_overlays"))) {
         if (ImGui::Button(trc("button.cancel"), ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
         ImGui::EndPopup();
     }
+#endif
 
+#if !defined(TOOLSCREEN_WINDOW_OVERLAYS_ONLY)
     // NinjabrainBot Overlay
     ImGui::Spacing();
     ImGui::Separator();
@@ -516,7 +527,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.window_overlays"))) {
                 if (nb.enabled) {
                     StartNinjabrainClient();
                 } else {
-                    StopNinjabrainClient();
+                    StopNinjabrainClientAsync();
                 }
             }
         }
@@ -881,8 +892,13 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.window_overlays"))) {
 
         if (changed) g_configIsDirty = true;
     }
+#endif
 
     ImGui::EndTabItem();
-} else {
+}
+
+#if !defined(TOOLSCREEN_NINJABRAIN_OVERLAY_ONLY)
+else {
     g_windowOverlayDragMode.store(false);
 }
+#endif

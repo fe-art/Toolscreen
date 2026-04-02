@@ -93,6 +93,7 @@ const auto& GetTestCaseDefinitions() {
         {"mode-image-overlay-render-mpeg", &RunModeImageOverlayRenderMpegTest},
         {"rebind-indicator-renders-below-settings-gui", &RunRebindIndicatorRendersBelowSettingsGuiTest},
         {"config-error-gui", &RunConfigErrorGuiTest},
+        {"profiler-unspecified-breakdown", &RunProfilerUnspecifiedBreakdownTest},
         {"settings-gui-basic", &RunSettingsGuiBasicTest},
         {"settings-gui-advanced", &RunSettingsGuiAdvancedTest},
         {"settings-tab-general-default", &RunSettingsTabGeneralDefaultTest},

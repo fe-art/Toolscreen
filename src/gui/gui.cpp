@@ -1136,10 +1136,7 @@ void RenderSettingsGUI() {
             } else {
                 if (ImGui::BeginTabBar("SettingsTabs")) {
 #include "tabs/tab_modes.inl"
-#include "tabs/tab_mirrors.inl"
-#include "tabs/tab_images.inl"
-#include "tabs/tab_window_overlays.inl"
-#include "tabs/tab_browser_overlays.inl"
+#include "tabs/tab_overlays.inl"
 #include "tabs/tab_hotkeys.inl"
 #include "tabs/tab_inputs.inl"
 #include "tabs/tab_settings.inl"

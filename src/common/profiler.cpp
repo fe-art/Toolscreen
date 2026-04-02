@@ -6,6 +6,8 @@
 
 namespace {
 constexpr char kProfilerPathSeparator = '\x1f';
+constexpr double kProfilerUnspecifiedDisplayThresholdMs = 0.01;
+constexpr char kProfilerUnspecifiedName[] = "Unspecified";
 
 std::string BuildScopeKey(const Profiler::TimingEvent& event, uint8_t scopeDepth) {
     std::string key;
@@ -29,6 +31,33 @@ double SumRootScopeTimes(const std::unordered_map<std::string, Profiler::Profile
         if (entry.parentPath.empty()) { totalTime += entry.totalTime; }
     }
     return totalTime;
+}
+
+std::string BuildUnspecifiedDisplayKey(const std::string& parentPath) {
+    std::string key = parentPath;
+    if (!key.empty()) { key.push_back(kProfilerPathSeparator); }
+    key += "<unspecified-self>";
+    return key;
+}
+
+Profiler::ProfileEntry BuildUnspecifiedDisplayEntry(const std::string& parentPath, const Profiler::ProfileEntry& parentEntry) {
+    Profiler::ProfileEntry entry;
+    entry.displayName = kProfilerUnspecifiedName;
+    entry.totalTime = parentEntry.rollingSelfTime;
+    entry.selfTime = parentEntry.rollingSelfTime;
+    entry.depth = parentEntry.depth + 1;
+    entry.parentPath = parentPath;
+    entry.rollingAverageTime = parentEntry.rollingSelfTime;
+    entry.rollingSelfTime = parentEntry.rollingSelfTime;
+    entry.rollingAverageCalls = parentEntry.rollingAverageCalls;
+
+    if (parentEntry.rollingAverageTime > 0.0) {
+        const double parentRatio = parentEntry.rollingSelfTime / parentEntry.rollingAverageTime;
+        entry.parentPercentage = parentRatio * 100.0;
+        entry.totalPercentage = parentEntry.totalPercentage * parentRatio;
+    }
+
+    return entry;
 }
 } // namespace
 
@@ -277,6 +306,12 @@ void Profiler::BuildDisplayTree(const std::unordered_map<std::string, ProfileEnt
                                 std::vector<std::pair<std::string, ProfileEntry>>& output) {
     output.clear();
 
+    struct DisplayChild {
+        std::string path;
+        double rollingAverageTime = 0.0;
+        bool isSyntheticUnspecified = false;
+    };
+
     std::unordered_map<std::string, std::vector<std::string>> childrenMap;
     std::vector<std::string> rootEntries;
 
@@ -305,11 +340,43 @@ void Profiler::BuildDisplayTree(const std::unordered_map<std::string, ProfileEnt
     std::function<void(const std::string&)> addEntryWithChildren = [&](const std::string& path) {
         auto it = entries.find(path);
         if (it != entries.end()) {
-            output.emplace_back(path, it->second);
+            const ProfileEntry& entry = it->second;
+            output.emplace_back(path, entry);
 
+            std::vector<DisplayChild> displayChildren;
             auto childIt = childrenMap.find(path);
             if (childIt != childrenMap.end()) {
-                for (const auto& childPath : childIt->second) { addEntryWithChildren(childPath); }
+                displayChildren.reserve(childIt->second.size() + 1);
+                for (const auto& childPath : childIt->second) {
+                    auto childEntryIt = entries.find(childPath);
+                    if (childEntryIt == entries.end()) { continue; }
+
+                    displayChildren.push_back({ childPath, childEntryIt->second.rollingAverageTime, false });
+                }
+
+                if (!displayChildren.empty() && entry.rollingSelfTime > kProfilerUnspecifiedDisplayThresholdMs) {
+                    displayChildren.push_back({ BuildUnspecifiedDisplayKey(path), entry.rollingSelfTime, true });
+                }
+            }
+
+            std::sort(displayChildren.begin(), displayChildren.end(), [](const DisplayChild& a, const DisplayChild& b) {
+                if (a.rollingAverageTime != b.rollingAverageTime) {
+                    return a.rollingAverageTime > b.rollingAverageTime;
+                }
+
+                if (a.isSyntheticUnspecified != b.isSyntheticUnspecified) {
+                    return !a.isSyntheticUnspecified;
+                }
+
+                return a.path < b.path;
+            });
+
+            for (const auto& child : displayChildren) {
+                if (child.isSyntheticUnspecified) {
+                    output.emplace_back(child.path, BuildUnspecifiedDisplayEntry(path, entry));
+                } else {
+                    addEntryWithChildren(child.path);
+                }
             }
         }
     };

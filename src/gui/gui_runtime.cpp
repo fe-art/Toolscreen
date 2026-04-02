@@ -1243,7 +1243,7 @@ void RenderProfilerOverlay(bool showProfiler, bool showPerformanceOverlay) {
                     }
                 }
 
-                bool isUnspecified = (displayName == "[Unspecified]");
+                bool isUnspecified = (displayName == "Unspecified" || displayName == "[Unspecified]");
                 if (isUnspecified) {
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
                 } else if (entry.depth == 0) {

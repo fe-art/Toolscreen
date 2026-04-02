@@ -1,4 +1,5 @@
 #include "common/i18n.h"
+#include "common/profiler.h"
 #include "common/utils.h"
 #include "config/config_toml.h"
 #include "features/browser_overlay.h"
@@ -16,6 +17,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <cmath>

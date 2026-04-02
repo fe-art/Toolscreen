@@ -4331,8 +4331,12 @@ static void RenderSameThreadImGui(const SameThreadOverlayState& request, bool re
 }
 
 static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, const Config& cfg, const GLState& s) {
-    const bool renderNinjabrainOverlay = ShouldRenderNinjabrainOverlayForRequest(request);
-    if (!HasSameThreadOverlayWork(request, cfg, renderNinjabrainOverlay)) { return false; }
+    bool renderNinjabrainOverlay = false;
+    {
+        PROFILE_SCOPE_CAT("Resolve Same-Thread Overlay Work", "Rendering");
+        renderNinjabrainOverlay = ShouldRenderNinjabrainOverlayForRequest(request);
+        if (!HasSameThreadOverlayWork(request, cfg, renderNinjabrainOverlay)) { return false; }
+    }
 
     {
         PROFILE_SCOPE_CAT("Prepare Overlay GL State", "Rendering");
@@ -6891,95 +6895,107 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
 
     const bool wantOverlayThisFrame = wantOverlayElements || wantAnyImGui || wantWelcomeToast || wantRebindIndicator;
     const auto populateOverlayState = [&](auto& target) {
-        target.fullW = (std::max)(1, fullW);
-        target.fullH = (std::max)(1, fullH);
-        target.gameW = current_gameW;
-        target.gameH = current_gameH;
-        target.finalX = currentGeo.finalX;
-        target.finalY = currentGeo.finalY;
-        target.finalW = currentGeo.finalW;
-        target.finalH = currentGeo.finalH;
-        target.gameTextureId = gameTextureToUse;
-        target.modeId = modeToRender->id;
-        target.isAnimating = isAnimating;
-        target.overlayOpacity = overlayOpacity;
-        target.excludeOnlyOnMyScreen = excludeOnlyOnMyScreen;
-        target.skipAnimation = skipAnimation;
-        target.relativeStretching = modeToRender->relativeStretching;
-
-        const bool transitionEffectivelyCompleteForOverlays = transitionState.active && transitionState.moveProgress >= 1.0f;
-        const bool overlaysShouldLerp = transitionState.active && !transitionEffectivelyCompleteForOverlays &&
-                                        transitionState.overlayTransition != OverlayTransitionType::Cut;
-        if (overlaysShouldLerp) {
-            target.transitionProgress = transitionState.moveProgress;
-            target.fromW = transitionState.fromWidth;
-            target.fromH = transitionState.fromHeight;
-            target.fromX = transitionState.fromX;
-            target.fromY = transitionState.fromY;
-            target.toW = transitionState.targetWidth;
-            target.toH = transitionState.targetHeight;
-            target.toX = transitionState.targetX;
-            target.toY = transitionState.targetY;
-        } else if (transitionState.active) {
-            target.transitionProgress = 1.0f;
-            target.fromX = transitionState.fromX;
-            target.fromY = transitionState.fromY;
-            target.fromW = transitionState.fromWidth;
-            target.fromH = transitionState.fromHeight;
-            target.toX = transitionState.targetX;
-            target.toY = transitionState.targetY;
-            target.toW = transitionState.targetWidth;
-            target.toH = transitionState.targetHeight;
-        } else {
-            target.transitionProgress = 1.0f;
-            target.fromX = currentGeo.finalX;
-            target.fromY = currentGeo.finalY;
-            target.fromW = currentGeo.finalW;
-            target.fromH = currentGeo.finalH;
-            target.toX = currentGeo.finalX;
-            target.toY = currentGeo.finalY;
-            target.toW = currentGeo.finalW;
-            target.toH = currentGeo.finalH;
-        }
-
         const bool slideAnimationsEnabled = transitionState.active && transitionState.gameTransition == GameTransitionType::Bounce;
 
-        target.isTransitioningFromEyeZoom = slideAnimationsEnabled && g_isTransitioningFromEyeZoom.load(std::memory_order_acquire);
-        target.shouldRenderGui = g_shouldRenderGui.load(std::memory_order_relaxed);
-        target.showPerformanceOverlay = g_showPerformanceOverlay.load(std::memory_order_relaxed);
-        target.showProfiler = g_showProfiler.load(std::memory_order_relaxed);
-        target.showEyeZoom = EqualsIgnoreCase(target.modeId, "EyeZoom") ||
-                     (target.isTransitioningFromEyeZoom && !target.skipAnimation);
-        target.eyeZoomFadeOpacity = g_eyeZoomFadeOpacity.load(std::memory_order_relaxed);
-        target.eyeZoomAnimatedViewportX = (skipAnimation || !slideAnimationsEnabled)
-                             ? -1
-                             : g_eyeZoomAnimatedViewportX.load(std::memory_order_relaxed);
-        target.eyeZoomSnapshotTexture = GetEyeZoomSnapshotTexture();
-        target.eyeZoomSnapshotWidth = GetEyeZoomSnapshotWidth();
-        target.eyeZoomSnapshotHeight = GetEyeZoomSnapshotHeight();
-        target.showTextureGrid = g_showTextureGrid.load(std::memory_order_relaxed);
-        target.textureGridModeWidth = g_textureGridModeWidth.load(std::memory_order_relaxed);
-        target.textureGridModeHeight = g_textureGridModeHeight.load(std::memory_order_relaxed);
+        {
+            PROFILE_SCOPE_CAT("Populate Overlay Geometry", "Rendering");
+            target.fullW = (std::max)(1, fullW);
+            target.fullH = (std::max)(1, fullH);
+            target.gameW = current_gameW;
+            target.gameH = current_gameH;
+            target.finalX = currentGeo.finalX;
+            target.finalY = currentGeo.finalY;
+            target.finalW = currentGeo.finalW;
+            target.finalH = currentGeo.finalH;
+            target.gameTextureId = gameTextureToUse;
+            target.modeId = modeToRender->id;
+            target.isAnimating = isAnimating;
+            target.overlayOpacity = overlayOpacity;
+            target.excludeOnlyOnMyScreen = excludeOnlyOnMyScreen;
+            target.skipAnimation = skipAnimation;
+            target.relativeStretching = modeToRender->relativeStretching;
+        }
 
-        target.welcomeToastIsFullscreen = isFullscreenMode;
-        target.showWelcomeToast = wantWelcomeToast;
-        target.showRebindIndicator = wantRebindIndicator;
-        target.modeHasMirrors = hasMirrors;
-        target.modeHasImages = g_imageOverlaysVisible.load(std::memory_order_acquire) && !modeToRender->imageIds.empty();
-        target.modeHasWindowOverlays = g_windowOverlaysVisible.load(std::memory_order_acquire) &&
-                                       !modeToRender->windowOverlayIds.empty();
-        target.modeHasBrowserOverlays = g_browserOverlaysVisible.load(std::memory_order_acquire) &&
-                        !modeToRender->browserOverlayIds.empty();
-
-        target.fromModeId = transitionState.fromModeId;
-        if (!transitionState.fromModeId.empty()) {
-            if (const ModeConfig* fromMode = GetMode_Internal(transitionState.fromModeId)) {
-                target.fromSlideMirrorsIn = fromMode->slideMirrorsIn;
+        {
+            PROFILE_SCOPE_CAT("Populate Overlay Transition", "Rendering");
+            const bool transitionEffectivelyCompleteForOverlays = transitionState.active && transitionState.moveProgress >= 1.0f;
+            const bool overlaysShouldLerp = transitionState.active && !transitionEffectivelyCompleteForOverlays &&
+                                            transitionState.overlayTransition != OverlayTransitionType::Cut;
+            if (overlaysShouldLerp) {
+                target.transitionProgress = transitionState.moveProgress;
+                target.fromW = transitionState.fromWidth;
+                target.fromH = transitionState.fromHeight;
+                target.fromX = transitionState.fromX;
+                target.fromY = transitionState.fromY;
+                target.toW = transitionState.targetWidth;
+                target.toH = transitionState.targetHeight;
+                target.toX = transitionState.targetX;
+                target.toY = transitionState.targetY;
+            } else if (transitionState.active) {
+                target.transitionProgress = 1.0f;
+                target.fromX = transitionState.fromX;
+                target.fromY = transitionState.fromY;
+                target.fromW = transitionState.fromWidth;
+                target.fromH = transitionState.fromHeight;
+                target.toX = transitionState.targetX;
+                target.toY = transitionState.targetY;
+                target.toW = transitionState.targetWidth;
+                target.toH = transitionState.targetHeight;
+            } else {
+                target.transitionProgress = 1.0f;
+                target.fromX = currentGeo.finalX;
+                target.fromY = currentGeo.finalY;
+                target.fromW = currentGeo.finalW;
+                target.fromH = currentGeo.finalH;
+                target.toX = currentGeo.finalX;
+                target.toY = currentGeo.finalY;
+                target.toW = currentGeo.finalW;
+                target.toH = currentGeo.finalH;
             }
         }
-        target.toSlideMirrorsIn = modeToRender->slideMirrorsIn;
-        target.mirrorSlideProgress =
-            (slideAnimationsEnabled && transitionState.moveProgress < 1.0f) ? transitionState.moveProgress : 1.0f;
+
+        {
+            PROFILE_SCOPE_CAT("Populate Overlay Runtime State", "Rendering");
+            target.isTransitioningFromEyeZoom = slideAnimationsEnabled && g_isTransitioningFromEyeZoom.load(std::memory_order_acquire);
+            target.shouldRenderGui = g_shouldRenderGui.load(std::memory_order_relaxed);
+            target.showPerformanceOverlay = g_showPerformanceOverlay.load(std::memory_order_relaxed);
+            target.showProfiler = g_showProfiler.load(std::memory_order_relaxed);
+            target.showEyeZoom = EqualsIgnoreCase(target.modeId, "EyeZoom") ||
+                         (target.isTransitioningFromEyeZoom && !target.skipAnimation);
+            target.eyeZoomFadeOpacity = g_eyeZoomFadeOpacity.load(std::memory_order_relaxed);
+            target.eyeZoomAnimatedViewportX = (skipAnimation || !slideAnimationsEnabled)
+                                 ? -1
+                                 : g_eyeZoomAnimatedViewportX.load(std::memory_order_relaxed);
+            target.eyeZoomSnapshotTexture = GetEyeZoomSnapshotTexture();
+            target.eyeZoomSnapshotWidth = GetEyeZoomSnapshotWidth();
+            target.eyeZoomSnapshotHeight = GetEyeZoomSnapshotHeight();
+            target.showTextureGrid = g_showTextureGrid.load(std::memory_order_relaxed);
+            target.textureGridModeWidth = g_textureGridModeWidth.load(std::memory_order_relaxed);
+            target.textureGridModeHeight = g_textureGridModeHeight.load(std::memory_order_relaxed);
+        }
+
+        {
+            PROFILE_SCOPE_CAT("Populate Overlay Element State", "Rendering");
+            target.welcomeToastIsFullscreen = isFullscreenMode;
+            target.showWelcomeToast = wantWelcomeToast;
+            target.showRebindIndicator = wantRebindIndicator;
+            target.modeHasMirrors = hasMirrors;
+            target.modeHasImages = g_imageOverlaysVisible.load(std::memory_order_acquire) && !modeToRender->imageIds.empty();
+            target.modeHasWindowOverlays = g_windowOverlaysVisible.load(std::memory_order_acquire) &&
+                                           !modeToRender->windowOverlayIds.empty();
+            target.modeHasBrowserOverlays = g_browserOverlaysVisible.load(std::memory_order_acquire) &&
+                                            !modeToRender->browserOverlayIds.empty();
+
+            target.fromModeId = transitionState.fromModeId;
+            if (!transitionState.fromModeId.empty()) {
+                if (const ModeConfig* fromMode = GetMode_Internal(transitionState.fromModeId)) {
+                    target.fromSlideMirrorsIn = fromMode->slideMirrorsIn;
+                }
+            }
+            target.toSlideMirrorsIn = modeToRender->slideMirrorsIn;
+            target.mirrorSlideProgress =
+                (slideAnimationsEnabled && transitionState.moveProgress < 1.0f) ? transitionState.moveProgress : 1.0f;
+        }
     };
 
     const uint64_t mirrorCaptureFrameTag = BeginSameThreadMirrorCaptureFrame();
@@ -6987,9 +7003,12 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
         PROFILE_SCOPE_CAT("Immediate Overlay Render", "Rendering");
 
         SameThreadOverlayState request;
-        populateOverlayState(request);
-        request.allowMirrorCaptureReuse = true;
-        request.mirrorCaptureFrameTag = mirrorCaptureFrameTag;
+        {
+            PROFILE_SCOPE_CAT("Build Overlay Request", "Rendering");
+            populateOverlayState(request);
+            request.allowMirrorCaptureReuse = true;
+            request.mirrorCaptureFrameTag = mirrorCaptureFrameTag;
+        }
         RenderSameThreadOverlayPass(request, *configSnap, s);
     }
 

@@ -96,6 +96,67 @@ void RunSettingsGuiAdvancedTest(TestRunMode runMode = TestRunMode::Automated) {
     }
 }
 
+void RunProfilerUnspecifiedBreakdownTest(TestRunMode runMode = TestRunMode::Automated) {
+    (void)runMode;
+
+    const std::filesystem::path root = PrepareCaseDirectory("profiler_unspecified_breakdown");
+    ResetGlobalTestState(root);
+
+    Profiler& profiler = Profiler::GetInstance();
+    Profiler::ThreadRingBuffer& threadBuffer = Profiler::GetThreadBuffer();
+    const bool wasRenderThread = threadBuffer.isRenderThread;
+
+    profiler.Clear();
+    profiler.SetEnabled(true);
+    profiler.MarkAsRenderThread();
+
+    {
+        PROFILE_SCOPE("Parent Scope");
+        {
+            PROFILE_SCOPE("Tracked Child Scope");
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+
+    profiler.EndFrame();
+    profiler.SetEnabled(false);
+
+    const auto displayData = profiler.GetProfileData();
+    const auto& renderEntries = displayData.renderThread;
+    Expect(!renderEntries.empty(), "Expected profiler display data after ending a profiled frame.");
+
+    const auto parentIt = std::find_if(renderEntries.begin(), renderEntries.end(), [](const auto& item) {
+        return item.second.displayName == "Parent Scope";
+    });
+    Expect(parentIt != renderEntries.end(), "Expected the parent profiler scope to appear in the render-thread tree.");
+
+    const int parentDepth = parentIt->second.depth;
+    const auto subtreeEnd = std::find_if(parentIt + 1, renderEntries.end(), [parentDepth](const auto& item) {
+        return item.second.depth <= parentDepth;
+    });
+
+    const auto childIt = std::find_if(parentIt + 1, subtreeEnd, [](const auto& item) {
+        return item.second.displayName == "Tracked Child Scope";
+    });
+    Expect(childIt != subtreeEnd, "Expected the tracked child profiler scope to appear below the parent scope.");
+
+    const auto unspecifiedIt = std::find_if(parentIt + 1, subtreeEnd, [](const auto& item) {
+        return item.second.displayName == "Unspecified";
+    });
+    Expect(unspecifiedIt != subtreeEnd, "Expected an Unspecified profiler row for parent self time.");
+    Expect(unspecifiedIt->second.depth == parentDepth + 1, "Expected the Unspecified row to be emitted as a child of the parent scope.");
+    Expect(unspecifiedIt->second.rollingAverageTime > 0.01,
+           "Expected the Unspecified profiler row to respect the 0.01ms visibility threshold.");
+    Expect(unspecifiedIt->second.parentPercentage > 0.0,
+           "Expected the Unspecified profiler row to report a non-zero share of the parent scope.");
+
+    profiler.Clear();
+    profiler.SetEnabled(false);
+    threadBuffer.isRenderThread = wasRenderThread;
+}
+
 void RunSettingsTabGeneralPopulatedTest(TestRunMode runMode = TestRunMode::Automated) {
     RunPopulatedSettingsTabCase("settings_tab_general_populated", tr("tabs.general"), std::string(), runMode);
 }
