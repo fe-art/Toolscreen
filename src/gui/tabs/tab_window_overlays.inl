@@ -262,7 +262,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.window_overlays"))) {
             }
             ImGui::PopItemWidth();
             if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip(trc("tooltip.capture_methond"));
+                ImGui::SetTooltip(trc("tooltip.capture_method"));
             }
 
             if (ImGui::Checkbox(trc("window.overlays_force_update"), &overlay.forceUpdate)) g_configIsDirty = true;
@@ -280,7 +280,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.window_overlays"))) {
             if (ImGui::Checkbox(trc("window.overlays_enable_background"), &overlay.background.enabled)) g_configIsDirty = true;
             ImGui::BeginDisabled(!overlay.background.enabled);
             if (ImGui::ColorEdit3(trc("window.overlays_bg_color"), &overlay.background.color.r)) g_configIsDirty = true;
-            if (ImGui::SliderFloat(trc("window.overlays_bg_Opacity"), &overlay.background.opacity, 0.0f, 1.0f)) g_configIsDirty = true;
+            if (ImGui::SliderFloat(trc("window.overlays_bg_opacity"), &overlay.background.opacity, 0.0f, 1.0f)) g_configIsDirty = true;
             ImGui::EndDisabled();
 
             ImGui::SeparatorText(trc("window.overlays_color_keying"));

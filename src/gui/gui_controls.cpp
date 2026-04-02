@@ -164,7 +164,7 @@ void RenderTransitionSettingsHorizontalNoBackground(ModeConfig& mode, const std:
                 g_configIsDirty = true;
             }
             if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip(trc("transition.tooltip.relative_streching"));
+                ImGui::SetTooltip(trc("transition.tooltip.relative_stretching"));
             }
         }
 
@@ -246,7 +246,7 @@ void RenderTransitionSettingsHorizontal(ModeConfig& mode, const std::string& idS
                 g_configIsDirty = true;
             }
             if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip(trc("transition.tooltip.relative_streching"));
+                ImGui::SetTooltip(trc("transition.tooltip.relative_stretching"));
             }
 
             if (ImGui::Checkbox((tr("transition.skip_x_animation") + "##" + idSuffix).c_str(), &mode.skipAnimateX)) { g_configIsDirty = true; }

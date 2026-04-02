@@ -1743,7 +1743,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                         if (ImGui::SliderFloat((tr("modes.gradient_angle") + "##bgGradAngleThin").c_str(), &mode.background.gradientAngle, 0.0f, 360.0f, "%.0f deg")) {
                             g_configIsDirty = true;
                         }
-                        ImGui::Text("Color Stops:");
+                        ImGui::Text(trc("modes.color_stops"));
                         int stopToRemove = -1;
                         for (size_t i = 0; i < mode.background.gradientStops.size(); i++) {
                             ImGui::PushID(static_cast<int>(i));
@@ -1779,8 +1779,10 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                         }
 
                         ImGui::Separator();
-                        ImGui::Text("Animation:");
-                        const char* animTypeNamesThin[] = { "None", "Rotate", "Slide", "Wave", "Spiral", "Fade" };
+                        ImGui::Text(trc("modes.gradient_animation"));
+                        const char* animTypeNamesThin[] = { trc("modes.gradient_animation_none"), trc("modes.gradient_animation_rotate"),
+                                                           trc("modes.gradient_animation_slide"), trc("modes.gradient_animation_wave"),
+                                                           trc("modes.gradient_animation_spiral"), trc("modes.gradient_animation_fade") };
                         int currentAnimTypeThin = static_cast<int>(mode.background.gradientAnimation);
                         ImGui::SetNextItemWidth(120);
                         if (ImGui::Combo((tr("modes.gradient_animation_type") + "##GradAnimThin").c_str(), &currentAnimTypeThin, animTypeNamesThin, IM_ARRAYSIZE(animTypeNamesThin))) {
@@ -1809,7 +1811,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                             g_pendingImageLoad = true;
                         }
                         ImGui::SameLine();
-                        if (ImGui::Button("Browse...##thin_bg")) {
+                        if (ImGui::Button((tr("button.browse") + "##thin_bg").c_str())) {
                             ImagePickerResult result =
                                 OpenImagePickerAndValidate(g_minecraftHwnd.load(), g_toolscreenPath, g_toolscreenPath);
                             if (result.completed) {
@@ -2162,7 +2164,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                         if (ImGui::SliderFloat((tr("modes.gradient_angle") + "##bgGradAngleWide").c_str(), &mode.background.gradientAngle, 0.0f, 360.0f, "%.0f deg")) {
                             g_configIsDirty = true;
                         }
-                        ImGui::Text("Color Stops:");
+                        ImGui::Text(trc("modes.color_stops"));
                         int stopToRemove = -1;
                         for (size_t i = 0; i < mode.background.gradientStops.size(); i++) {
                             ImGui::PushID(static_cast<int>(i));
@@ -2198,8 +2200,10 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                         }
 
                         ImGui::Separator();
-                        ImGui::Text("Animation:");
-                        const char* animTypeNamesWide[] = { "None", "Rotate", "Slide", "Wave", "Spiral", "Fade" };
+                        ImGui::Text(trc("modes.gradient_animation"));
+                        const char* animTypeNamesWide[] = { trc("modes.gradient_animation_none"), trc("modes.gradient_animation_rotate"),
+                                                           trc("modes.gradient_animation_slide"), trc("modes.gradient_animation_wave"),
+                                                           trc("modes.gradient_animation_spiral"), trc("modes.gradient_animation_fade") };
                         int currentAnimTypeWide = static_cast<int>(mode.background.gradientAnimation);
                         ImGui::SetNextItemWidth(120);
                         if (ImGui::Combo((tr("modes.gradient_animation_type") + "##GradAnimWide").c_str(), &currentAnimTypeWide, animTypeNamesWide, IM_ARRAYSIZE(animTypeNamesWide))) {
@@ -2228,7 +2232,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                             g_pendingImageLoad = true;
                         }
                         ImGui::SameLine();
-                        if (ImGui::Button("Browse...##wide_bg")) {
+                        if (ImGui::Button((tr("button.browse") + "##wide_bg").c_str())) {
                             ImagePickerResult result =
                                 OpenImagePickerAndValidate(g_minecraftHwnd.load(), g_toolscreenPath, g_toolscreenPath);
                             if (result.completed) {
@@ -2436,26 +2440,27 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
             if (!resolutionSupported) { ImGui::BeginDisabled(); }
 
             std::string delete_button_label = "X##delete_mode_" + std::to_string(i);
+            std::string delete_popup_id = tr("modes.delete_mode") + "###delete_mode_" + std::to_string(i);
             if (ImGui::Button(delete_button_label.c_str(), ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()))) {
-                std::string popup_id = "Delete Mode?##" + std::to_string(i);
-                ImGui::OpenPopup(popup_id.c_str());
+                ImGui::OpenPopup(delete_popup_id.c_str());
             }
 
             if (!resolutionSupported) { ImGui::EndDisabled(); }
 
             // Popup modal outside of node_open block so it can be displayed even when collapsed
-            std::string popup_id = "Delete Mode?##" + std::to_string(i);
-            if (ImGui::BeginPopupModal(popup_id.c_str(), NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-                ImGui::Text("Are you sure you want to delete mode '%s'?\nThis cannot be undone.", mode.id.c_str());
+            if (ImGui::BeginPopupModal(delete_popup_id.c_str(), NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+                const std::string delete_mode_confirm = tr("modes.delete_mode_confirm", mode.id);
+                ImGui::TextWrapped("%s", delete_mode_confirm.c_str());
+                ImGui::TextUnformatted(trc("label.action_cannot_be_undone"));
                 ImGui::Separator();
-                if (ImGui::Button("OK", ImVec2(120, 0))) {
+                if (ImGui::Button(trc("button.ok"), ImVec2(120, 0))) {
                     mode_to_remove = (int)i;
                     g_configIsDirty = true;
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::SetItemDefaultFocus();
                 ImGui::SameLine();
-                if (ImGui::Button("Cancel", ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
+                if (ImGui::Button(trc("button.cancel"), ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
                 ImGui::EndPopup();
             }
 
@@ -2700,7 +2705,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                         if (ImGui::SliderFloat((tr("modes.gradient_angle") + gradId).c_str(), &mode.background.gradientAngle, 0.0f, 360.0f, "%.0f deg")) {
                             g_configIsDirty = true;
                         }
-                        ImGui::Text("Color Stops:");
+                        ImGui::Text(trc("modes.color_stops"));
                         int stopToRemove = -1;
                         for (size_t i = 0; i < mode.background.gradientStops.size(); i++) {
                             ImGui::PushID(static_cast<int>(i));
@@ -2736,8 +2741,10 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                         }
 
                         ImGui::Separator();
-                        ImGui::Text("Animation:");
-                        const char* animTypeNamesCustom[] = { "None", "Rotate", "Slide", "Wave", "Spiral", "Fade" };
+                        ImGui::Text(trc("modes.gradient_animation"));
+                        const char* animTypeNamesCustom[] = { trc("modes.gradient_animation_none"), trc("modes.gradient_animation_rotate"),
+                                                             trc("modes.gradient_animation_slide"), trc("modes.gradient_animation_wave"),
+                                                             trc("modes.gradient_animation_spiral"), trc("modes.gradient_animation_fade") };
                         int currentAnimTypeCustom = static_cast<int>(mode.background.gradientAnimation);
                         ImGui::SetNextItemWidth(120);
                         if (ImGui::Combo((tr("modes.gradient_animation_type") + gradId).c_str(), &currentAnimTypeCustom, animTypeNamesCustom, IM_ARRAYSIZE(animTypeNamesCustom))) {

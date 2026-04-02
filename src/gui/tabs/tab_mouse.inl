@@ -28,7 +28,7 @@
                 if (g_gameVersion < GameVersion(1, 13, 0)) {
                     if (ImGui::Checkbox(trc("label.let_cursor_escape_window"), &g_config.allowCursorEscape)) { g_configIsDirty = true; }
                     ImGui::SameLine();
-                    HelpMarker(trc("tooptip.let_cursor_escape_window"));
+                    HelpMarker(trc("tooltip.let_cursor_escape_window"));
                 }
 
                 if (ImGui::Checkbox(trc("label.confine_cursor"), &g_config.confineCursor)) {
