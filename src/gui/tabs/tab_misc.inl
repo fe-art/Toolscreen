@@ -29,86 +29,44 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.misc"))) {
 
     ImGui::Spacing();
 
-    ConfigStateUploadUiState configStateUpload = GetConfigStateUploadUiState();
-    if (configStateUpload.status == ConfigStateUploadStatus::Success && !configStateUpload.shareUrlAutoCopied && !configStateUpload.shareUrl.empty()) {
-        CopyToClipboard(g_minecraftHwnd.load(std::memory_order_relaxed), configStateUpload.shareUrl);
-        MarkConfigStateUploadShareUrlAutoCopied();
-        configStateUpload = GetConfigStateUploadUiState();
+    UploadUiState debugInfoUpload = GetDebugInfoUploadUiState();
+    if (debugInfoUpload.status == UploadStatus::Success && !debugInfoUpload.shareUrlAutoCopied && !debugInfoUpload.shareUrl.empty()) {
+        CopyToClipboard(g_minecraftHwnd.load(std::memory_order_relaxed), debugInfoUpload.shareUrl);
+        MarkDebugInfoUploadShareUrlAutoCopied();
+        debugInfoUpload = GetDebugInfoUploadUiState();
     }
 
-    ImGui::BeginDisabled(configStateUpload.status == ConfigStateUploadStatus::Uploading);
-    if (ImGui::Button(trc("button.upload_config_state"))) {
-        StartConfigStateUpload();
-        configStateUpload = GetConfigStateUploadUiState();
-    }
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    HelpMarker(trc("tooltip.upload_config_state"));
-
-    if (configStateUpload.status == ConfigStateUploadStatus::Uploading) {
-        ImGui::TextDisabled("%s", trc("misc.upload_config_state.uploading"));
-    } else if (configStateUpload.status == ConfigStateUploadStatus::Success) {
-        ImGui::TextWrapped("%s", trc("misc.upload_config_state.success"));
-
-        if (!configStateUpload.shareUrl.empty()) {
-            ImGui::TextUnformatted(trc("misc.upload_config_state.share_link"));
-            ImGui::SameLine();
-            ImGui::TextLinkOpenURL(configStateUpload.shareUrl.c_str());
-            ImGui::SameLine();
-            if (ImGui::SmallButton(trc("button.copy_share_link"))) {
-                CopyToClipboard(g_minecraftHwnd.load(std::memory_order_relaxed), configStateUpload.shareUrl);
-                SetConfigStateUploadClipboardTarget(ConfigStateUploadClipboardTarget::ShareUrl);
-                configStateUpload = GetConfigStateUploadUiState();
-            }
-        }
-
-        if (configStateUpload.clipboardTarget == ConfigStateUploadClipboardTarget::ShareUrl) {
-            ImGui::TextDisabled("%s", trc("misc.upload_config_state.copied_share"));
-        }
-    } else if (configStateUpload.status == ConfigStateUploadStatus::Error) {
-        ImGui::TextWrapped("%s", trc("misc.upload_config_state.error", configStateUpload.error));
-    }
-
-    ImGui::Spacing();
-
-    ConfigStateUploadUiState megaDebugUpload = GetMegaDebugUploadUiState();
-    if (megaDebugUpload.status == ConfigStateUploadStatus::Success && !megaDebugUpload.shareUrlAutoCopied && !megaDebugUpload.shareUrl.empty()) {
-        CopyToClipboard(g_minecraftHwnd.load(std::memory_order_relaxed), megaDebugUpload.shareUrl);
-        MarkMegaDebugUploadShareUrlAutoCopied();
-        megaDebugUpload = GetMegaDebugUploadUiState();
-    }
-
-    ImGui::BeginDisabled(megaDebugUpload.status == ConfigStateUploadStatus::Uploading);
-    if (ImGui::Button(trc("button.mega_debug_upload"))) {
-        StartMegaDebugUpload();
-        megaDebugUpload = GetMegaDebugUploadUiState();
+    ImGui::BeginDisabled(debugInfoUpload.status == UploadStatus::Uploading);
+    if (ImGui::Button(trc("button.upload_debug_info"))) {
+        StartDebugInfoUpload();
+        debugInfoUpload = GetDebugInfoUploadUiState();
     }
     ImGui::EndDisabled();
     ImGui::SameLine();
-    HelpMarker(trc("tooltip.mega_debug_upload"));
+    HelpMarker(trc("tooltip.upload_debug_info"));
 
-    if (megaDebugUpload.status == ConfigStateUploadStatus::Uploading) {
-        ImGui::TextDisabled("%s", trc("misc.mega_debug_upload.uploading"));
-    } else if (megaDebugUpload.status == ConfigStateUploadStatus::Success) {
-        ImGui::TextWrapped("%s", trc("misc.mega_debug_upload.success"));
+    if (debugInfoUpload.status == UploadStatus::Uploading) {
+        ImGui::TextDisabled("%s", trc("misc.debug_info_upload.uploading"));
+    } else if (debugInfoUpload.status == UploadStatus::Success) {
+        ImGui::TextWrapped("%s", trc("misc.debug_info_upload.success"));
 
-        if (!megaDebugUpload.shareUrl.empty()) {
-            ImGui::TextUnformatted(trc("misc.upload_config_state.share_link"));
+        if (!debugInfoUpload.shareUrl.empty()) {
+            ImGui::TextUnformatted(trc("misc.debug_info_upload.share_link"));
             ImGui::SameLine();
-            ImGui::TextLinkOpenURL(megaDebugUpload.shareUrl.c_str());
+            ImGui::TextLinkOpenURL(debugInfoUpload.shareUrl.c_str());
             ImGui::SameLine();
             if (ImGui::SmallButton(trc("button.copy_share_link"))) {
-                CopyToClipboard(g_minecraftHwnd.load(std::memory_order_relaxed), megaDebugUpload.shareUrl);
-                SetMegaDebugUploadClipboardTarget(ConfigStateUploadClipboardTarget::ShareUrl);
-                megaDebugUpload = GetMegaDebugUploadUiState();
+                CopyToClipboard(g_minecraftHwnd.load(std::memory_order_relaxed), debugInfoUpload.shareUrl);
+                SetDebugInfoUploadClipboardTarget(UploadClipboardTarget::ShareUrl);
+                debugInfoUpload = GetDebugInfoUploadUiState();
             }
         }
 
-        if (megaDebugUpload.clipboardTarget == ConfigStateUploadClipboardTarget::ShareUrl) {
-            ImGui::TextDisabled("%s", trc("misc.upload_config_state.copied_share"));
+        if (debugInfoUpload.clipboardTarget == UploadClipboardTarget::ShareUrl) {
+            ImGui::TextDisabled("%s", trc("misc.debug_info_upload.copied_share"));
         }
-    } else if (megaDebugUpload.status == ConfigStateUploadStatus::Error) {
-        ImGui::TextWrapped("%s", trc("misc.mega_debug_upload.error", megaDebugUpload.error));
+    } else if (debugInfoUpload.status == UploadStatus::Error) {
+        ImGui::TextWrapped("%s", trc("misc.debug_info_upload.error", debugInfoUpload.error));
     }
 
     // License popup modal

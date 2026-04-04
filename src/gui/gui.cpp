@@ -76,37 +76,37 @@ namespace {
 const char* s_forcedSettingsTopTabLabel = nullptr;
 const char* s_forcedSettingsInputsSubTabLabel = nullptr;
 
-enum class ConfigStateUploadStatus {
+enum class UploadStatus {
     Idle,
     Uploading,
     Success,
     Error,
 };
 
-enum class ConfigStateUploadClipboardTarget {
+enum class UploadClipboardTarget {
     None,
     ShareUrl,
 };
 
-struct ConfigStateUploadUiState {
-    ConfigStateUploadStatus status = ConfigStateUploadStatus::Idle;
+struct UploadUiState {
+    UploadStatus status = UploadStatus::Idle;
     std::string shareUrl;
     std::string error;
     bool shareUrlAutoCopied = false;
-    ConfigStateUploadClipboardTarget clipboardTarget = ConfigStateUploadClipboardTarget::None;
+    UploadClipboardTarget clipboardTarget = UploadClipboardTarget::None;
 };
 
-enum class UploadUiKind {
-    ConfigState,
-    MegaDebug,
+struct MclogsUploadEndpoint {
+    const wchar_t* apiUrl = nullptr;
+    const char* serviceName = nullptr;
 };
 
 std::mutex s_uploadUiMutex;
-ConfigStateUploadUiState s_configStateUploadUiState;
-ConfigStateUploadUiState s_megaDebugUploadUiState;
+UploadUiState s_debugInfoUploadUiState;
 
-constexpr const wchar_t* kConfigStateUploadApiUrl = L"https://api.mclogs.minestrator.com/1/log";
-constexpr const char* kConfigStateUploadServiceName = "mclogs.minestrator.com";
+constexpr MclogsUploadEndpoint kPrimaryMclogsUploadEndpoint{ L"https://api.mclo.gs/1/log", "api.mclo.gs" };
+constexpr MclogsUploadEndpoint kFallbackMclogsUploadEndpoint{ L"https://api.mclogs.minestrator.com/1/log",
+                                                              "api.mclogs.minestrator.com" };
 constexpr size_t kMclogsMaxContentBytes = 10u * 1024u * 1024u;
 constexpr size_t kMclogsMaxContentLines = 25000u;
 
@@ -173,107 +173,52 @@ std::string FormatResponseBodyForLog(const std::string& responseBody) {
     return responseBody;
 }
 
-void LogMclogsHttpResponse(const HttpJsonResponse& response) {
-    Log(std::string(kConfigStateUploadServiceName) + " response HTTP status: " +
+bool IsSuccessfulHttpStatusCode(DWORD statusCode) {
+    return statusCode >= 200 && statusCode < 300;
+}
+
+void LogMclogsHttpResponse(const char* serviceName, const HttpJsonResponse& response) {
+    Log(std::string(serviceName) + " response HTTP status: " +
         (response.statusCode == 0 ? std::string("<unavailable>") : std::to_string(response.statusCode)));
-    Log(std::string(kConfigStateUploadServiceName) + " response content type: " +
+    Log(std::string(serviceName) + " response content type: " +
         (response.contentType.empty() ? std::string("<unavailable>") : response.contentType));
-    Log(std::string(kConfigStateUploadServiceName) + " response body: " + FormatResponseBodyForLog(response.body));
+    Log(std::string(serviceName) + " response body: " + FormatResponseBodyForLog(response.body));
 }
 
-ConfigStateUploadUiState& SelectUploadUiState(UploadUiKind kind) {
-    if (kind == UploadUiKind::MegaDebug) {
-        return s_megaDebugUploadUiState;
-    }
-    return s_configStateUploadUiState;
-}
-
-ConfigStateUploadUiState GetUploadUiState(UploadUiKind kind) {
+UploadUiState GetDebugInfoUploadUiState() {
     std::lock_guard<std::mutex> lock(s_uploadUiMutex);
-    return SelectUploadUiState(kind);
+    return s_debugInfoUploadUiState;
 }
 
-void SetUploadUiStateUploading(UploadUiKind kind) {
+void SetDebugInfoUploadUiStateUploading() {
     std::lock_guard<std::mutex> lock(s_uploadUiMutex);
-    ConfigStateUploadUiState& state = SelectUploadUiState(kind);
-    state = {};
-    state.status = ConfigStateUploadStatus::Uploading;
+    s_debugInfoUploadUiState = {};
+    s_debugInfoUploadUiState.status = UploadStatus::Uploading;
 }
 
-void SetUploadUiStateSuccess(UploadUiKind kind, std::string shareUrl) {
+void SetDebugInfoUploadUiStateSuccess(std::string shareUrl) {
     std::lock_guard<std::mutex> lock(s_uploadUiMutex);
-    ConfigStateUploadUiState& state = SelectUploadUiState(kind);
-    state = {};
-    state.status = ConfigStateUploadStatus::Success;
-    state.shareUrl = std::move(shareUrl);
+    s_debugInfoUploadUiState = {};
+    s_debugInfoUploadUiState.status = UploadStatus::Success;
+    s_debugInfoUploadUiState.shareUrl = std::move(shareUrl);
 }
 
-void SetUploadUiStateError(UploadUiKind kind, std::string error) {
+void SetDebugInfoUploadUiStateError(std::string error) {
     std::lock_guard<std::mutex> lock(s_uploadUiMutex);
-    ConfigStateUploadUiState& state = SelectUploadUiState(kind);
-    state = {};
-    state.status = ConfigStateUploadStatus::Error;
-    state.error = std::move(error);
+    s_debugInfoUploadUiState = {};
+    s_debugInfoUploadUiState.status = UploadStatus::Error;
+    s_debugInfoUploadUiState.error = std::move(error);
 }
 
-void MarkUploadShareUrlAutoCopied(UploadUiKind kind) {
+void MarkDebugInfoUploadShareUrlAutoCopied() {
     std::lock_guard<std::mutex> lock(s_uploadUiMutex);
-    ConfigStateUploadUiState& state = SelectUploadUiState(kind);
-    state.shareUrlAutoCopied = true;
-    state.clipboardTarget = ConfigStateUploadClipboardTarget::ShareUrl;
+    s_debugInfoUploadUiState.shareUrlAutoCopied = true;
+    s_debugInfoUploadUiState.clipboardTarget = UploadClipboardTarget::ShareUrl;
 }
 
-void SetUploadClipboardTarget(UploadUiKind kind, ConfigStateUploadClipboardTarget target) {
+void SetDebugInfoUploadClipboardTarget(UploadClipboardTarget target) {
     std::lock_guard<std::mutex> lock(s_uploadUiMutex);
-    SelectUploadUiState(kind).clipboardTarget = target;
-}
-
-ConfigStateUploadUiState GetConfigStateUploadUiState() {
-    return GetUploadUiState(UploadUiKind::ConfigState);
-}
-
-void SetConfigStateUploadUiStateUploading() {
-    SetUploadUiStateUploading(UploadUiKind::ConfigState);
-}
-
-void SetConfigStateUploadUiStateSuccess(std::string shareUrl) {
-    SetUploadUiStateSuccess(UploadUiKind::ConfigState, std::move(shareUrl));
-}
-
-void SetConfigStateUploadUiStateError(std::string error) {
-    SetUploadUiStateError(UploadUiKind::ConfigState, std::move(error));
-}
-
-void MarkConfigStateUploadShareUrlAutoCopied() {
-    MarkUploadShareUrlAutoCopied(UploadUiKind::ConfigState);
-}
-
-void SetConfigStateUploadClipboardTarget(ConfigStateUploadClipboardTarget target) {
-    SetUploadClipboardTarget(UploadUiKind::ConfigState, target);
-}
-
-ConfigStateUploadUiState GetMegaDebugUploadUiState() {
-    return GetUploadUiState(UploadUiKind::MegaDebug);
-}
-
-void SetMegaDebugUploadUiStateUploading() {
-    SetUploadUiStateUploading(UploadUiKind::MegaDebug);
-}
-
-void SetMegaDebugUploadUiStateSuccess(std::string shareUrl) {
-    SetUploadUiStateSuccess(UploadUiKind::MegaDebug, std::move(shareUrl));
-}
-
-void SetMegaDebugUploadUiStateError(std::string error) {
-    SetUploadUiStateError(UploadUiKind::MegaDebug, std::move(error));
-}
-
-void MarkMegaDebugUploadShareUrlAutoCopied() {
-    MarkUploadShareUrlAutoCopied(UploadUiKind::MegaDebug);
-}
-
-void SetMegaDebugUploadClipboardTarget(ConfigStateUploadClipboardTarget target) {
-    SetUploadClipboardTarget(UploadUiKind::MegaDebug, target);
+    s_debugInfoUploadUiState.clipboardTarget = target;
 }
 
 std::string ExtractMclogsErrorMessage(const std::string& responseBody) {
@@ -482,7 +427,7 @@ bool GetMinecraftInstanceDirectory(std::wstring& outDirectory, std::string& outE
     return true;
 }
 
-void AppendMegaDebugSection(std::string& outBundle, const std::string& title, const std::wstring& path, const std::string& body) {
+void AppendDebugInfoSection(std::string& outBundle, const std::string& title, const std::wstring& path, const std::string& body) {
     outBundle += "========================================\n";
     outBundle += title + "\n";
     if (!path.empty()) {
@@ -496,7 +441,7 @@ void AppendMegaDebugSection(std::string& outBundle, const std::string& title, co
     outBundle.push_back('\n');
 }
 
-bool BuildMegaDebugUploadText(std::string& outBundle, std::string& outError) {
+bool BuildDebugInfoUploadText(std::string& outBundle, std::string& outError) {
     outBundle.clear();
     outError.clear();
 
@@ -509,7 +454,7 @@ bool BuildMegaDebugUploadText(std::string& outBundle, std::string& outError) {
         return false;
     }
 
-    Log("Preparing mega debug upload bundle.");
+    Log("Preparing debug info upload bundle.");
     FlushLogs();
 
     std::wstring toolscreenLogPath;
@@ -543,7 +488,7 @@ bool BuildMegaDebugUploadText(std::string& outBundle, std::string& outError) {
     }
 
     outBundle += "========================================\n";
-    outBundle += "Toolscreen Mega Debug Upload\n";
+    outBundle += "Toolscreen Debug Info Upload\n";
     outBundle += "Toolscreen Version: " + GetToolscreenVersionString() + "\n";
     outBundle += "Config Version: " + std::to_string(GetConfigVersion()) + "\n";
     outBundle += "Toolscreen Directory: " + (g_toolscreenPath.empty() ? std::string("<unavailable>") : WideToUtf8(g_toolscreenPath)) + "\n";
@@ -551,36 +496,14 @@ bool BuildMegaDebugUploadText(std::string& outBundle, std::string& outError) {
                  (minecraftInstanceDirectory.empty() ? std::string("<unavailable>") : WideToUtf8(minecraftInstanceDirectory)) + "\n";
     outBundle += "========================================\n\n";
 
-    AppendMegaDebugSection(outBundle, "Toolscreen Log", toolscreenLogPath, toolscreenLogText);
-    AppendMegaDebugSection(outBundle, "Minecraft latest.log", minecraftLogPath, minecraftLogText);
-    AppendMegaDebugSection(outBundle, "Effective Config State", std::wstring(), configToml);
+    AppendDebugInfoSection(outBundle, "Toolscreen Log", toolscreenLogPath, toolscreenLogText);
+    AppendDebugInfoSection(outBundle, "Minecraft latest.log", minecraftLogPath, minecraftLogText);
+    AppendDebugInfoSection(outBundle, "Effective Config State", std::wstring(), configToml);
     return true;
 }
 
-bool UploadTextToMclogs(const std::string& uploadLabel, const std::string& textContent, std::string& outShareUrl, std::string& outError) {
+bool ParseMclogsUploadResponse(const HttpJsonResponse& response, std::string& outShareUrl, std::string& outError) {
     try {
-        const size_t textLineCount = CountTextLines(textContent);
-        if (textContent.size() > kMclogsMaxContentBytes || textLineCount > kMclogsMaxContentLines) {
-            Log("WARNING: " + uploadLabel + " exceeds documented " + std::string(kConfigStateUploadServiceName) + " limits (" +
-                std::to_string(textContent.size()) +
-                " bytes, " + std::to_string(textLineCount) + " lines; documented limits are " +
-                std::to_string(kMclogsMaxContentBytes) + " bytes and " + std::to_string(kMclogsMaxContentLines) + " lines).");
-        }
-
-        const std::string requestBody = "content=" + UrlEncodeFormField(textContent);
-        const std::wstring requestHeaders = L"Content-Type: application/x-www-form-urlencoded\r\nAccept: application/json\r\n";
-        Log("Uploading " + uploadLabel + " to " + std::string(kConfigStateUploadServiceName) + " (content " +
-            std::to_string(textContent.size()) + " bytes, " +
-            std::to_string(textLineCount) + " lines; HTTP payload " + std::to_string(requestBody.size()) + " bytes).");
-
-        HttpJsonResponse response;
-        if (!HttpPostToString(kConfigStateUploadApiUrl, requestHeaders, requestBody, response, outError)) {
-            LogMclogsHttpResponse(response);
-            return false;
-        }
-
-        LogMclogsHttpResponse(response);
-
         const nlohmann::json responseJson = nlohmann::json::parse(response.body);
         if (!responseJson.value("success", false)) {
             outError = responseJson.value("error", std::string("Upload failed."));
@@ -600,67 +523,93 @@ bool UploadTextToMclogs(const std::string& uploadLabel, const std::string& textC
     }
 }
 
-bool UploadConfigStateToMclogs(const std::string& configToml, std::string& outShareUrl, std::string& outError) {
-    return UploadTextToMclogs("config state", configToml, outShareUrl, outError);
-}
+bool UploadTextToMclogsEndpoint(const MclogsUploadEndpoint& endpoint, const std::string& uploadLabel, const std::string& requestBody,
+                                const std::wstring& requestHeaders, size_t contentBytes, size_t contentLines, std::string& outShareUrl,
+                                std::string& outError, DWORD& outStatusCode) {
+    outStatusCode = 0;
+    Log("Uploading " + uploadLabel + " to " + std::string(endpoint.serviceName) + " (content " + std::to_string(contentBytes) +
+        " bytes, " + std::to_string(contentLines) + " lines; HTTP payload " + std::to_string(requestBody.size()) + " bytes).");
 
-bool UploadMegaDebugToMclogs(const std::string& megaDebugText, std::string& outShareUrl, std::string& outError) {
-    return UploadTextToMclogs("mega debug bundle", megaDebugText, outShareUrl, outError);
-}
-
-void StartConfigStateUpload() {
-    if (GetConfigStateUploadUiState().status == ConfigStateUploadStatus::Uploading) {
-        return;
+    HttpJsonResponse response;
+    std::string requestError;
+    if (!HttpPostToString(endpoint.apiUrl, requestHeaders, requestBody, response, requestError)) {
+        outStatusCode = response.statusCode;
+        LogMclogsHttpResponse(endpoint.serviceName, response);
+        outError = std::move(requestError);
+        return false;
     }
 
-    Config configSnapshot = g_config;
-    configSnapshot.configVersion = GetConfigVersion();
+    outStatusCode = response.statusCode;
+    LogMclogsHttpResponse(endpoint.serviceName, response);
+    return ParseMclogsUploadResponse(response, outShareUrl, outError);
+}
 
-    std::string configToml;
-    if (!SerializeConfigToTomlString(configSnapshot, configToml)) {
-        SetConfigStateUploadUiStateError("Failed to generate config TOML.");
-        return;
-    }
-
-    SetConfigStateUploadUiStateUploading();
-    std::thread([configToml = std::move(configToml)]() {
-        std::string shareUrl;
-        std::string error;
-        if (!UploadConfigStateToMclogs(configToml, shareUrl, error)) {
-            Log("ERROR: Failed to upload config state: " + error);
-            SetConfigStateUploadUiStateError(std::move(error));
-            return;
+bool UploadTextToMclogs(const std::string& uploadLabel, const std::string& textContent, std::string& outShareUrl, std::string& outError) {
+    try {
+        const size_t textLineCount = CountTextLines(textContent);
+        if (textContent.size() > kMclogsMaxContentBytes || textLineCount > kMclogsMaxContentLines) {
+            Log("WARNING: " + uploadLabel + " exceeds documented " + std::string(kPrimaryMclogsUploadEndpoint.serviceName) + " limits (" +
+                std::to_string(textContent.size()) +
+                " bytes, " + std::to_string(textLineCount) + " lines; documented limits are " +
+                std::to_string(kMclogsMaxContentBytes) + " bytes and " + std::to_string(kMclogsMaxContentLines) + " lines).");
         }
 
-        Log("Uploaded config state to " + shareUrl);
-        SetConfigStateUploadUiStateSuccess(std::move(shareUrl));
-    }).detach();
+        const std::string requestBody = "content=" + UrlEncodeFormField(textContent);
+        const std::wstring requestHeaders = L"Content-Type: application/x-www-form-urlencoded\r\nAccept: application/json\r\n";
+
+        DWORD primaryStatusCode = 0;
+        if (UploadTextToMclogsEndpoint(kPrimaryMclogsUploadEndpoint, uploadLabel, requestBody, requestHeaders, textContent.size(),
+                                       textLineCount, outShareUrl, outError, primaryStatusCode)) {
+            return true;
+        }
+
+        if (!IsSuccessfulHttpStatusCode(primaryStatusCode)) {
+            Log("WARNING: " + uploadLabel + " upload to " + std::string(kPrimaryMclogsUploadEndpoint.serviceName) + " returned HTTP status " +
+                (primaryStatusCode == 0 ? std::string("<unavailable>") : std::to_string(primaryStatusCode)) +
+                "; retrying with " + std::string(kFallbackMclogsUploadEndpoint.serviceName) + ".");
+
+            DWORD fallbackStatusCode = 0;
+            if (UploadTextToMclogsEndpoint(kFallbackMclogsUploadEndpoint, uploadLabel, requestBody, requestHeaders,
+                                           textContent.size(), textLineCount, outShareUrl, outError, fallbackStatusCode)) {
+                return true;
+            }
+        }
+
+        return false;
+    } catch (const std::exception& e) {
+        outError = std::string("Failed to upload text: ") + e.what();
+        return false;
+    }
 }
 
-void StartMegaDebugUpload() {
-    if (GetMegaDebugUploadUiState().status == ConfigStateUploadStatus::Uploading) {
+bool UploadDebugInfoToMclogs(const std::string& debugInfoText, std::string& outShareUrl, std::string& outError) {
+    return UploadTextToMclogs("debug info bundle", debugInfoText, outShareUrl, outError);
+}
+
+void StartDebugInfoUpload() {
+    if (GetDebugInfoUploadUiState().status == UploadStatus::Uploading) {
         return;
     }
 
-    std::string megaDebugText;
+    std::string debugInfoText;
     std::string buildError;
-    if (!BuildMegaDebugUploadText(megaDebugText, buildError)) {
-        SetMegaDebugUploadUiStateError(buildError.empty() ? std::string("Failed to generate mega debug bundle.") : std::move(buildError));
+    if (!BuildDebugInfoUploadText(debugInfoText, buildError)) {
+        SetDebugInfoUploadUiStateError(buildError.empty() ? std::string("Failed to generate debug info bundle.") : std::move(buildError));
         return;
     }
 
-    SetMegaDebugUploadUiStateUploading();
-    std::thread([megaDebugText = std::move(megaDebugText)]() {
+    SetDebugInfoUploadUiStateUploading();
+    std::thread([debugInfoText = std::move(debugInfoText)]() {
         std::string shareUrl;
         std::string error;
-        if (!UploadMegaDebugToMclogs(megaDebugText, shareUrl, error)) {
-            Log("ERROR: Failed to upload mega debug bundle: " + error);
-            SetMegaDebugUploadUiStateError(std::move(error));
+        if (!UploadDebugInfoToMclogs(debugInfoText, shareUrl, error)) {
+            Log("ERROR: Failed to upload debug info bundle: " + error);
+            SetDebugInfoUploadUiStateError(std::move(error));
             return;
         }
 
-        Log("Uploaded mega debug bundle to " + shareUrl);
-        SetMegaDebugUploadUiStateSuccess(std::move(shareUrl));
+        Log("Uploaded debug info bundle to " + shareUrl);
+        SetDebugInfoUploadUiStateSuccess(std::move(shareUrl));
     }).detach();
 }
 
