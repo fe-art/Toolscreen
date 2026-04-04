@@ -658,6 +658,9 @@ SETCURSORPROC g_oSetCursorThirdParty = NULL;
 std::atomic<void*> g_setCursorThirdPartyHookTarget{ nullptr };
 typedef void(WINAPI* GLVIEWPORTPROC)(GLint x, GLint y, GLsizei width, GLsizei height);
 GLVIEWPORTPROC oglViewport = NULL;
+typedef void(APIENTRY* GLBINDFRAMEBUFFERPROC)(GLenum target, GLuint framebuffer);
+GLBINDFRAMEBUFFERPROC oglBindFramebuffer = NULL;
+GLBINDFRAMEBUFFERPROC g_oglBindFramebufferDriver = NULL;
 
 // Additional glViewport hook chains for compatibility with driver-level entrypoints and
 GLVIEWPORTPROC g_oglViewportDriver = NULL;
@@ -667,6 +670,18 @@ std::atomic<void*> g_glViewportThirdPartyHookTarget{ nullptr };
 
 // Thread-local flag to track if glViewport is being called from our own code
 thread_local bool g_internalViewportCall = false;
+
+struct PendingViewportRestoreEntry {
+    bool active = false;
+    uint64_t sequence = 0;
+    GLint x = 0;
+    GLint y = 0;
+    GLsizei width = 0;
+    GLsizei height = 0;
+};
+
+thread_local PendingViewportRestoreEntry g_pendingViewportRestore;
+thread_local uint64_t g_glStateHookSequence = 0;
 
 struct TextureBindingCacheEntry {
     HGLRC context = nullptr;
@@ -696,6 +711,33 @@ std::atomic<bool> g_glBlitFramebufferHooked{ false };
 typedef void (APIENTRY* GLBINDTEXTUREPROC)(GLenum target, GLuint texture);
 GLBINDTEXTUREPROC oglBindTexture = NULL;
 GLBINDTEXTUREPROC g_oglBindTextureDriver = NULL;
+
+struct InternalViewportCallScope {
+    bool previous = false;
+
+    InternalViewportCallScope() : previous(g_internalViewportCall) {
+        g_internalViewportCall = true;
+    }
+
+    ~InternalViewportCallScope() {
+        g_internalViewportCall = previous;
+    }
+};
+
+static inline uint64_t NextGlStateHookSequence() {
+    return ++g_glStateHookSequence;
+}
+
+static inline void ViewportDirect(GLint x, GLint y, GLsizei width, GLsizei height) {
+    GLVIEWPORTPROC next = g_oglViewportDriver ? g_oglViewportDriver : oglViewport;
+    InternalViewportCallScope scope;
+    if (next) {
+        next(x, y, width, height);
+        return;
+    }
+
+    glViewport(x, y, width, height);
+}
 
 static __forceinline bool IsDynamicMemoryCaller(void* caller_address) {
     if (!caller_address) {
@@ -824,6 +866,61 @@ void APIENTRY hkglBindTexture_Driver(GLenum target, GLuint texture) {
     }
 
     BindTextureHook_Impl(g_oglBindTextureDriver, target, texture);
+}
+
+static inline bool BindFramebufferTargetAffectsDraw(GLenum target) {
+    return target == GL_FRAMEBUFFER || target == GL_DRAW_FRAMEBUFFER;
+}
+
+static inline void BindFramebufferHook_Impl(GLBINDFRAMEBUFFERPROC next, GLenum target, GLuint framebuffer) {
+    if (!next) {
+        return;
+    }
+
+    const uint64_t hookSequence = NextGlStateHookSequence();
+    const PendingViewportRestoreEntry pendingRestore = g_pendingViewportRestore;
+    const bool targetAffectsDraw = BindFramebufferTargetAffectsDraw(target);
+
+    const bool shouldRestoreViewport = pendingRestore.active && targetAffectsDraw && framebuffer != 0 &&
+                                       hookSequence <= (pendingRestore.sequence + 2);
+
+    next(target, framebuffer);
+
+    if (pendingRestore.active && targetAffectsDraw) {
+        g_pendingViewportRestore.active = false;
+    }
+
+    if (shouldRestoreViewport) {
+        ViewportDirect(pendingRestore.x, pendingRestore.y, pendingRestore.width, pendingRestore.height);
+    }
+}
+
+void APIENTRY hkglBindFramebuffer(GLenum target, GLuint framebuffer) {
+    if (!oglBindFramebuffer) {
+        return;
+    }
+
+    void* caller_address = _ReturnAddress();
+    if (!IsDynamicMemoryCaller(caller_address)) {
+        oglBindFramebuffer(target, framebuffer);
+        return;
+    }
+
+    BindFramebufferHook_Impl(oglBindFramebuffer, target, framebuffer);
+}
+
+void APIENTRY hkglBindFramebuffer_Driver(GLenum target, GLuint framebuffer) {
+    if (!g_oglBindFramebufferDriver) {
+        return;
+    }
+
+    void* caller_address = _ReturnAddress();
+    if (!IsDynamicMemoryCaller(caller_address)) {
+        g_oglBindFramebufferDriver(target, framebuffer);
+        return;
+    }
+
+    BindFramebufferHook_Impl(g_oglBindFramebufferDriver, target, framebuffer);
 }
 
 typedef void (*GLFWSETINPUTMODE)(void* window, int mode, int value);
@@ -1101,6 +1198,9 @@ static inline void ViewportHook_Impl(GLVIEWPORTPROC next, GLint x, GLint y, GLsi
         return next(x, y, width, height);
     }
 
+    const uint64_t hookSequence = NextGlStateHookSequence();
+    g_pendingViewportRestore.active = false;
+
     // Lock-free read of transition snapshot
     const ViewportTransitionSnapshot& transitionSnap =
         g_viewportTransitionSnapshots[g_viewportTransitionSnapshotIndex.load(std::memory_order_acquire)];
@@ -1172,17 +1272,17 @@ static inline void ViewportHook_Impl(GLVIEWPORTPROC next, GLint x, GLint y, GLsi
         return next(x, y, width, height);
     }
 
-    GLint readFBO = 0;
+    GLint drawFBO = 0;
 
-    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &readFBO);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &drawFBO);
     const GLuint currentTexture = GetTrackedTextureBindingForViewportHook();
 
-    if(g_gameVersion >= GameVersion(1, 17, 0) && g_gameVersion < GameVersion(1, 20, 0)) {
-        if (currentTexture != 0 || readFBO != 0) {
+    if (g_gameVersion >= GameVersion(1, 17, 0) && g_gameVersion < GameVersion(1, 20, 0)) {
+        if (currentTexture != 0 || drawFBO != 0) {
             return next(x, y, width, height);
         }
     } else {
-        if (currentTexture == 0 || readFBO != 0) {
+        if (currentTexture == 0 || drawFBO != 0) {
             return next(x, y, width, height);
         }
     }
@@ -1238,6 +1338,13 @@ static inline void ViewportHook_Impl(GLVIEWPORTPROC next, GLint x, GLint y, GLsi
         ", modeWidth=" + std::to_string(modeWidth) + ", modeHeight=" + std::to_string(modeHeight) +
         ", screenW=" + std::to_string(screenW) + ", screenH=" + std::to_string(screenH) +
         (useAnimatedDimensions ? ", animated" : ""));*/
+
+    g_pendingViewportRestore.active = true;
+    g_pendingViewportRestore.sequence = hookSequence;
+    g_pendingViewportRestore.x = x;
+    g_pendingViewportRestore.y = y;
+    g_pendingViewportRestore.width = width;
+    g_pendingViewportRestore.height = height;
 
     return next(stretchX, stretchY_gl, stretchWidth, stretchHeight);
 }
@@ -1744,6 +1851,52 @@ static void AttemptHookGlBindTextureViaWgl() {
     }
 }
 
+static void AttemptHookGlBindFramebufferViaWgl() {
+    static std::atomic<bool> s_hooked{ false };
+    if (s_hooked.load(std::memory_order_acquire)) return;
+
+    HMODULE hOpenGL32 = GetModuleHandle(L"opengl32.dll");
+    if (!hOpenGL32) return;
+
+    typedef PROC(WINAPI* PFN_wglGetProcAddress)(LPCSTR);
+    PFN_wglGetProcAddress pwglGetProcAddress =
+        reinterpret_cast<PFN_wglGetProcAddress>(GetProcAddress(hOpenGL32, "wglGetProcAddress"));
+    if (!pwglGetProcAddress) return;
+
+    PROC pBindFramebufferWGL = pwglGetProcAddress("glBindFramebuffer");
+    if (pBindFramebufferWGL != NULL &&
+        reinterpret_cast<void*>(pBindFramebufferWGL) != reinterpret_cast<void*>(&hkglBindFramebuffer) &&
+        reinterpret_cast<void*>(pBindFramebufferWGL) != reinterpret_cast<void*>(&hkglBindFramebuffer_Driver) &&
+        reinterpret_cast<void*>(pBindFramebufferWGL) != reinterpret_cast<void*>(oglBindFramebuffer)) {
+        LogCategory("init", "Attempting glBindFramebuffer hook via wglGetProcAddress: " +
+                   std::to_string(reinterpret_cast<uintptr_t>(pBindFramebufferWGL)));
+        if (HookChain::TryCreateAndEnableHook(reinterpret_cast<void*>(pBindFramebufferWGL),
+                                              reinterpret_cast<void*>(&hkglBindFramebuffer_Driver),
+                                              reinterpret_cast<void**>(&g_oglBindFramebufferDriver),
+                                              "glBindFramebuffer (wglGetProcAddress)")) {
+            s_hooked.store(true, std::memory_order_release);
+            LogCategory("init", "SUCCESS: glBindFramebuffer hooked via wglGetProcAddress (driver target)");
+            return;
+        }
+    }
+
+    GLBINDFRAMEBUFFERPROC pBindFramebufferGLEW = glBindFramebuffer;
+    if (pBindFramebufferGLEW != NULL &&
+        reinterpret_cast<void*>(pBindFramebufferGLEW) != reinterpret_cast<void*>(&hkglBindFramebuffer) &&
+        reinterpret_cast<void*>(pBindFramebufferGLEW) != reinterpret_cast<void*>(&hkglBindFramebuffer_Driver) &&
+        reinterpret_cast<void*>(pBindFramebufferGLEW) != reinterpret_cast<void*>(oglBindFramebuffer)) {
+        LogCategory("init", "Attempting glBindFramebuffer hook via GLEW pointer: " +
+                   std::to_string(reinterpret_cast<uintptr_t>(pBindFramebufferGLEW)));
+        if (HookChain::TryCreateAndEnableHook(reinterpret_cast<void*>(pBindFramebufferGLEW),
+                                              reinterpret_cast<void*>(&hkglBindFramebuffer_Driver),
+                                              reinterpret_cast<void**>(&g_oglBindFramebufferDriver),
+                                              "glBindFramebuffer (GLEW pointer)")) {
+            s_hooked.store(true, std::memory_order_release);
+            LogCategory("init", "SUCCESS: glBindFramebuffer hooked via GLEW pointer (driver target)");
+        }
+    }
+}
+
 static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
     if (!next) return FALSE;
 
@@ -1795,6 +1948,8 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
                 AttemptAggressiveGlViewportHook();
 
                 AttemptHookGlBindTextureViaWgl();
+
+                AttemptHookGlBindFramebufferViaWgl();
 
                 AttemptHookGlNamedFramebufferTextureViaGlew();
 
@@ -2554,6 +2709,14 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             LogCategory("init", "WARNING: glfw.dll not loaded; skipping glfwSetInputMode hook");
         }
 #undef HOOK
+
+        LPVOID pGlBindFramebuffer = GetProcAddress(hOpenGL32, "glBindFramebuffer");
+        if (pGlBindFramebuffer != NULL) {
+            CreateHookOrDie(pGlBindFramebuffer, &hkglBindFramebuffer, &oglBindFramebuffer, "glBindFramebuffer");
+        } else {
+            LogCategory("init",
+                        "WARNING: glBindFramebuffer not found in opengl32.dll - will attempt to hook via WGL/GLEW after context init");
+        }
 
         LPVOID pGlBlitNamedFramebuffer = GetProcAddress(hOpenGL32, "glBlitNamedFramebuffer");
         if (pGlBlitNamedFramebuffer != NULL) {
