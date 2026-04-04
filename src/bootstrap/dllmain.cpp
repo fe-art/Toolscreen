@@ -25,6 +25,7 @@
 #include <ShlObj.h>
 #include <cmath>
 #include <cstring>
+#include <cwctype>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -649,6 +650,11 @@ typedef BOOL(WINAPI* SETCURSORPOSPROC)(int, int);
 SETCURSORPOSPROC oSetCursorPos = NULL;
 SETCURSORPOSPROC g_oSetCursorPosThirdParty = NULL;
 std::atomic<void*> g_setCursorPosThirdPartyHookTarget{ nullptr };
+typedef BOOL(WINAPI* GETCLIENTRECTPROC)(HWND, LPRECT);
+GETCLIENTRECTPROC oGetClientRect = NULL;
+std::atomic<HWND> g_lastLegacyLwjglResizeSyncHwnd{ NULL };
+std::atomic<int> g_lastLegacyLwjglResizeSyncWidth{ 0 };
+std::atomic<int> g_lastLegacyLwjglResizeSyncHeight{ 0 };
 typedef BOOL(WINAPI* CLIPCURSORPROC)(const RECT*);
 CLIPCURSORPROC oClipCursor = NULL;
 CLIPCURSORPROC g_oClipCursorThirdParty = NULL;
@@ -766,6 +772,84 @@ static __forceinline bool IsDynamicMemoryCaller(void* caller_address) {
     entry.caller = caller_address;
     entry.isDynamic = isDynamic;
     return isDynamic;
+}
+
+static __forceinline bool IsLegacyLwjglCaller(void* caller_address) {
+    if (!caller_address) {
+        return false;
+    }
+
+    struct CallerCacheEntry {
+        void* caller = nullptr;
+        bool isLegacyLwjgl = false;
+    };
+
+    constexpr size_t kCallerCacheSize = 32;
+    constexpr size_t kCallerCacheMask = kCallerCacheSize - 1;
+    thread_local std::array<CallerCacheEntry, kCallerCacheSize> callerCache{};
+
+    const size_t cacheIndex = (reinterpret_cast<uintptr_t>(caller_address) >> 4) & kCallerCacheMask;
+    CallerCacheEntry& entry = callerCache[cacheIndex];
+    if (entry.caller == caller_address) {
+        return entry.isLegacyLwjgl;
+    }
+
+    PVOID baseOfImage = nullptr;
+    bool isLegacyLwjgl = false;
+    if (RtlPcToFileHeader(caller_address, &baseOfImage) != NULL && baseOfImage != nullptr) {
+        WCHAR modulePath[MAX_PATH] = {};
+        DWORD len = GetModuleFileNameW(static_cast<HMODULE>(baseOfImage), modulePath, static_cast<DWORD>(std::size(modulePath)));
+        if (len > 0) {
+            std::wstring modulePathLower(modulePath, len);
+            for (wchar_t& ch : modulePathLower) {
+                ch = static_cast<wchar_t>(towlower(ch));
+            }
+            isLegacyLwjgl = modulePathLower.find(L"lwjgl") != std::wstring::npos;
+        }
+    }
+
+    entry.caller = caller_address;
+    entry.isLegacyLwjgl = isLegacyLwjgl;
+    return isLegacyLwjgl;
+}
+
+static bool ShouldUseLegacyRequestedClientRect(HWND hwnd, int actualWidth, int actualHeight, int& outWidth, int& outHeight) {
+    outWidth = 0;
+    outHeight = 0;
+
+    if (!hwnd || !IsWindow(hwnd)) {
+        return false;
+    }
+
+    const HWND trackedHwnd = g_minecraftHwnd.load(std::memory_order_acquire);
+    const HWND subclassedHwnd = g_subclassedHwnd.load(std::memory_order_acquire);
+    if (hwnd != trackedHwnd && hwnd != subclassedHwnd) {
+        return false;
+    }
+
+    int requestedWidth = 0;
+    int requestedHeight = 0;
+    int previousRequestedWidth = 0;
+    int previousRequestedHeight = 0;
+    if (!GetRecentRequestedWindowClientResizes(requestedWidth, requestedHeight, previousRequestedWidth, previousRequestedHeight)) {
+        return false;
+    }
+
+    if (requestedWidth <= 0 || requestedHeight <= 0) {
+        return false;
+    }
+
+    if (actualWidth <= 0 || actualHeight <= 0) {
+        return false;
+    }
+
+    if (requestedWidth == actualWidth && requestedHeight == actualHeight) {
+        return false;
+    }
+
+    outWidth = requestedWidth;
+    outHeight = requestedHeight;
+    return true;
 }
 
 static __forceinline bool IsDisallowedThirdPartySwapCaller(void* caller_address) {
@@ -1525,6 +1609,81 @@ BOOL WINAPI hkSetCursorPos(int X, int Y) { return SetCursorPosHook_Impl(oSetCurs
 BOOL WINAPI hkSetCursorPos_ThirdParty(int X, int Y) {
     SETCURSORPOSPROC next = g_oSetCursorPosThirdParty ? g_oSetCursorPosThirdParty : oSetCursorPos;
     return SetCursorPosHook_Impl(next, X, Y);
+}
+
+static BOOL GetClientRectHook_Impl(GETCLIENTRECTPROC next, HWND hWnd, LPRECT lpRect) {
+    if (!next) {
+        return FALSE;
+    }
+
+    const BOOL result = next(hWnd, lpRect);
+    if (!result || lpRect == nullptr) {
+        return result;
+    }
+
+    if (!g_gameVersion.valid || g_gameVersion >= GameVersion(1, 13, 0)) {
+        return result;
+    }
+
+    void* caller_address = _ReturnAddress();
+    if (!IsLegacyLwjglCaller(caller_address)) {
+        return result;
+    }
+
+    const int actualWidth = lpRect->right - lpRect->left;
+    const int actualHeight = lpRect->bottom - lpRect->top;
+    int requestedWidth = 0;
+    int requestedHeight = 0;
+    if (!ShouldUseLegacyRequestedClientRect(hWnd, actualWidth, actualHeight, requestedWidth, requestedHeight)) {
+        return result;
+    }
+
+    lpRect->left = 0;
+    lpRect->top = 0;
+    lpRect->right = requestedWidth;
+    lpRect->bottom = requestedHeight;
+    return TRUE;
+}
+
+BOOL WINAPI hkGetClientRect(HWND hWnd, LPRECT lpRect) { return GetClientRectHook_Impl(oGetClientRect, hWnd, lpRect); }
+
+static void SyncLegacyLwjglRequestedResizeOnSwapThread(HWND hwnd) {
+    if (!g_gameVersion.valid || g_gameVersion >= GameVersion(1, 13, 0)) {
+        return;
+    }
+
+    if (!hwnd || !IsWindow(hwnd)) {
+        return;
+    }
+
+    int requestedWidth = 0;
+    int requestedHeight = 0;
+    int previousRequestedWidth = 0;
+    int previousRequestedHeight = 0;
+    if (!GetRecentRequestedWindowClientResizes(requestedWidth, requestedHeight, previousRequestedWidth, previousRequestedHeight)) {
+        return;
+    }
+
+    if (requestedWidth <= 0 || requestedHeight <= 0) {
+        return;
+    }
+
+    const HWND lastSyncedHwnd = g_lastLegacyLwjglResizeSyncHwnd.load(std::memory_order_acquire);
+    const int lastSyncedWidth = g_lastLegacyLwjglResizeSyncWidth.load(std::memory_order_acquire);
+    const int lastSyncedHeight = g_lastLegacyLwjglResizeSyncHeight.load(std::memory_order_acquire);
+    if (lastSyncedHwnd == hwnd && lastSyncedWidth == requestedWidth && lastSyncedHeight == requestedHeight) {
+        return;
+    }
+
+    if (!PostMessageW(hwnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(requestedWidth, requestedHeight))) {
+        Log("[WINDOW] Failed to post legacy LWJGL WM_SIZE resize request: " + std::to_string(requestedWidth) + "x" +
+            std::to_string(requestedHeight) + ", error=" + std::to_string(GetLastError()));
+        return;
+    }
+
+    g_lastLegacyLwjglResizeSyncHwnd.store(hwnd, std::memory_order_release);
+    g_lastLegacyLwjglResizeSyncWidth.store(requestedWidth, std::memory_order_release);
+    g_lastLegacyLwjglResizeSyncHeight.store(requestedHeight, std::memory_order_release);
 }
 
 #define GLFW_CURSOR 0x00033001
@@ -2400,6 +2559,8 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
 
         if (frameCfg.debug.delayRenderingUntilFinished) { glFinish(); }
 
+        SyncLegacyLwjglRequestedResizeOnSwapThread(hwnd);
+
         auto swapStartTime = std::chrono::high_resolution_clock::now();
         BOOL result = next(hDc);
 
@@ -2645,6 +2806,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             }
         }
         HOOK(hUser32, SetCursorPos);
+        HOOK(hUser32, GetClientRect);
         HOOK(hUser32, ClipCursor);
         HOOK(hUser32, SetCursor);
         HOOK(hUser32, GetRawInputData);
