@@ -1449,8 +1449,8 @@ void SaveAndReloadCurrentConfig() {
 
 void WriteConfigFixtureToDisk(const Config& config) {
     g_config = config;
-    g_configIsDirty.store(true, std::memory_order_release);
-    SaveConfigImmediate();
+    Expect(SaveConfigToTomlFile(config, GetCurrentConfigPath().wstring()),
+           "Failed to serialize config fixture to disk.");
     Expect(std::filesystem::exists(GetCurrentConfigPath()), "Failed to write config fixture to disk.");
 }
 
