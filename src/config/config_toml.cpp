@@ -489,6 +489,98 @@ Color ColorFromTomlArray(const toml::array* arr, Color defaultColor = { 0.0f, 0.
     return color;
 }
 
+bool IsValidAppearanceCustomColorKey(const std::string& key) {
+    static const std::unordered_set<std::string> validKeys = {
+        "WindowBg",
+        "ChildBg",
+        "PopupBg",
+        "Border",
+        "Text",
+        "TextDisabled",
+        "FrameBg",
+        "FrameBgHovered",
+        "FrameBgActive",
+        "TitleBg",
+        "TitleBgActive",
+        "TitleBgCollapsed",
+        "Button",
+        "ButtonHovered",
+        "ButtonActive",
+        "Header",
+        "HeaderHovered",
+        "HeaderActive",
+        "Tab",
+        "TabHovered",
+        "TabSelected",
+        "SliderGrab",
+        "SliderGrabActive",
+        "ScrollbarBg",
+        "ScrollbarGrab",
+        "ScrollbarGrabHovered",
+        "ScrollbarGrabActive",
+        "CheckMark",
+        "TextSelectedBg",
+        "Separator",
+        "SeparatorHovered",
+        "SeparatorActive",
+        "ResizeGrip",
+        "ResizeGripHovered",
+        "ResizeGripActive",
+    };
+
+    return validKeys.find(key) != validKeys.end();
+}
+
+bool IsValidAppearanceCustomColorArray(const toml::array* arr) {
+    return arr != nullptr && (arr->size() == 3 || arr->size() == 4);
+}
+
+bool SanitizeAppearanceCustomColorsTable(toml::table& tbl, const char* customColorsKey) {
+    toml::node* colorsNode = tbl.get(customColorsKey);
+    if (colorsNode == nullptr) {
+        return false;
+    }
+
+    toml::table* colorsTbl = colorsNode->as_table();
+    if (colorsTbl == nullptr) {
+        tbl.erase(customColorsKey);
+        return true;
+    }
+
+    bool changed = false;
+    for (auto it = colorsTbl->begin(); it != colorsTbl->end();) {
+        const std::string keyName(it->first.str());
+        const toml::array* arr = it->second.as_array();
+        if (!IsValidAppearanceCustomColorKey(keyName) || !IsValidAppearanceCustomColorArray(arr)) {
+            it = colorsTbl->erase(it);
+            changed = true;
+            continue;
+        }
+        ++it;
+    }
+
+    if (colorsTbl->empty()) {
+        tbl.erase(customColorsKey);
+        changed = true;
+    }
+
+    return changed;
+}
+
+static bool SanitizeConfigAppearanceCustomColors(toml::table& tbl) {
+    toml::node* appearanceNode = tbl.get("appearance");
+    if (appearanceNode == nullptr) {
+        return false;
+    }
+
+    toml::table* appearanceTbl = appearanceNode->as_table();
+    if (appearanceTbl == nullptr) {
+        return false;
+    }
+
+    return SanitizeAppearanceCustomColorsTable(*appearanceTbl, "customColors");
+}
+
 
 std::string GradientAnimationTypeToString(GradientAnimationType type) {
     switch (type) {
@@ -1952,8 +2044,15 @@ void AppearanceConfigToToml(const AppearanceConfig& cfg, toml::table& out) {
 
     if (!cfg.customColors.empty()) {
         toml::table colorsTbl;
-        for (const auto& [name, color] : cfg.customColors) { colorsTbl.insert(name, ColorToTomlArray(color)); }
-        out.insert("customColors", colorsTbl);
+        for (const auto& [name, color] : cfg.customColors) {
+            if (!IsValidAppearanceCustomColorKey(name)) {
+                continue;
+            }
+            colorsTbl.insert(name, ColorToTomlArray(color));
+        }
+        if (!colorsTbl.empty()) {
+            out.insert("customColors", colorsTbl);
+        }
     }
 }
 
@@ -1964,7 +2063,13 @@ void AppearanceConfigFromToml(const toml::table& tbl, AppearanceConfig& cfg) {
     cfg.customColors.clear();
     if (auto colorsTbl = GetTable(tbl, "customColors")) {
         for (const auto& [key, value] : *colorsTbl) {
-            if (auto arr = value.as_array()) { cfg.customColors[std::string(key.str())] = ColorFromTomlArray(arr); }
+            const std::string keyName(key.str());
+            if (!IsValidAppearanceCustomColorKey(keyName)) {
+                continue;
+            }
+            if (auto arr = value.as_array(); IsValidAppearanceCustomColorArray(arr)) {
+                cfg.customColors[keyName] = ColorFromTomlArray(arr);
+            }
         }
     }
 }
@@ -3222,11 +3327,13 @@ bool LoadConfigFromTomlFile(const std::wstring& path, Config& config) {
         toml::table tbl;
         std::string parseError;
         const std::string source = buffer.str();
+        bool repairedLegacyArrayConflict = false;
         if (!ParseTomlTableFromString(source, tbl, parseError)) {
             std::string repairedSource;
             if (parseError.find("cannot redefine existing array") != std::string::npos &&
                 RepairLegacyArrayOfTablesConflicts(source, repairedSource) &&
                 ParseTomlTableFromString(repairedSource, tbl, parseError)) {
+                repairedLegacyArrayConflict = true;
                 Log("WARNING: Repaired legacy TOML array-of-tables conflict while loading: " + WideToUtf8(path));
             } else {
                 Log("ERROR: TOML parse error: " + parseError);
@@ -3234,7 +3341,17 @@ bool LoadConfigFromTomlFile(const std::wstring& path, Config& config) {
             }
         }
 
+        const bool cleanedAppearanceCustomColors = SanitizeConfigAppearanceCustomColors(tbl);
+
         ConfigFromToml(tbl, config);
+
+        if (cleanedAppearanceCustomColors || repairedLegacyArrayConflict) {
+            if (!SaveConfigToTomlFile(config, path)) {
+                Log("WARNING: Failed to persist sanitized config/profile TOML after load: " + WideToUtf8(path));
+            } else if (cleanedAppearanceCustomColors) {
+                Log("WARNING: Removed invalid appearance.customColors entries while loading: " + WideToUtf8(path));
+            }
+        }
         return true;
     } catch (const std::exception& e) {
         Log("ERROR: Failed to load config from TOML: " + std::string(e.what()));

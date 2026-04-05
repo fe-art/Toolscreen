@@ -1796,7 +1796,8 @@ void RenderSettingsGUI() {
 
         if (!s_bindingKeys.empty()) {
             std::string combo = GetKeyComboString(s_bindingKeys);
-            ImGui::Text(tr("hotkeys.bind_hotkey.current", combo.c_str()).c_str());
+            const std::string hotkeyCurrentText = tr("hotkeys.bind_hotkey.current", combo.c_str());
+            ImGui::TextUnformatted(hotkeyCurrentText.c_str());
         } else {
             ImGui::Text(trc("hotkeys.bind_hotkey.current_none"));
         }

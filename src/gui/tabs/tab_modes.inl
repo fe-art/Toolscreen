@@ -9,15 +9,17 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
     bool resolutionSupported = IsResolutionChangeSupported(g_gameVersion);
     if (!resolutionSupported) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.7f, 0.0f, 1.0f));
-        ImGui::TextWrapped(trc("modes.warning.resolution_change", g_gameVersion.valid ? g_gameVersion.major : 0, g_gameVersion.valid ? g_gameVersion.minor : 0, g_gameVersion.valid ? g_gameVersion.patch : 0));
-        ImGui::TextWrapped(trc("modes.features_remain_functional"));
+        ImGui::TextWrapped("%s", trc("modes.warning.resolution_change", g_gameVersion.valid ? g_gameVersion.major : 0,
+                                       g_gameVersion.valid ? g_gameVersion.minor : 0,
+                                       g_gameVersion.valid ? g_gameVersion.patch : 0));
+        ImGui::TextWrapped("%s", trc("modes.features_remain_functional"));
         ImGui::PopStyleColor();
         ImGui::Separator();
     }
 
     if (g_wmMouseMoveCount.load() > 50) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.5f, 0.5f, 1.0f));
-        ImGui::TextWrapped(trc("modes.warning.raw_input"));
+        ImGui::TextWrapped("%s", trc("modes.warning.raw_input"));
         ImGui::PopStyleColor();
         ImGui::Separator();
     }
@@ -536,7 +538,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                     {
                         std::string popupId = (tr("modes.eyezoom.delete_overlay") + "##ezov_" + std::to_string(ovi));
                         if (ImGui::BeginPopupModal(popupId.c_str(), NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-                            ImGui::Text(trc("modes.eyezoom.delete_overlay_confirm", ov.name));
+                            ImGui::TextWrapped("%s", trc("modes.eyezoom.delete_overlay_confirm", ov.name));
                             ImGui::Separator();
                             if (ImGui::Button(trc("button.ok"), ImVec2(120, 0))) {
                                 ezoverlay_to_remove = (int)ovi;
@@ -3059,7 +3061,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
     }
     if (ImGui::BeginPopupModal((tr("modes.change_default_mode_confirm") + "##confirm").c_str(), NULL,
                                ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextWrapped(trc("modes.change_default_mode_confirm_message", pendingDefaultModeId));
+        ImGui::TextWrapped("%s", trc("modes.change_default_mode_confirm_message", pendingDefaultModeId));
         ImGui::Separator();
         if (ImGui::Button(trc("button.ok"), ImVec2(120, 0))) {
             g_config.defaultMode = pendingDefaultModeId;

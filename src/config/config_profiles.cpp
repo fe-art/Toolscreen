@@ -801,10 +801,12 @@ bool DuplicateProfile(const std::string& srcName, const std::string& dstName) {
     }
 
     const std::wstring srcPath = GetProfilePath(trackedSourceName);
-    const std::wstring dstPath = GetProfilePath(dstName);
-    try {
-        std::filesystem::copy_file(srcPath, dstPath, std::filesystem::copy_options::overwrite_existing);
-    } catch (...) {
+    Config sourceConfig;
+    if (!LoadProfileConfigFromPath(srcPath, sourceConfig)) {
+        return false;
+    }
+
+    if (!SaveProfileSnapshotLocked(dstName, sourceConfig)) {
         return false;
     }
 
@@ -818,7 +820,7 @@ bool DuplicateProfile(const std::string& srcName, const std::string& dstName) {
     if (!SaveProfilesConfigLocked()) {
         g_profilesConfig.profiles.pop_back();
         std::error_code cleanupError;
-        std::filesystem::remove(std::filesystem::path(dstPath), cleanupError);
+        std::filesystem::remove(std::filesystem::path(GetProfilePath(dstName)), cleanupError);
         return false;
     }
 

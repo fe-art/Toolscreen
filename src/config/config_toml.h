@@ -44,6 +44,9 @@ struct NinjabrainPresetDefinition {
 
 toml::array ColorToTomlArray(const Color& color);
 Color ColorFromTomlArray(const toml::array* arr, Color defaultColor);
+bool IsValidAppearanceCustomColorKey(const std::string& key);
+bool IsValidAppearanceCustomColorArray(const toml::array* arr);
+bool SanitizeAppearanceCustomColorsTable(toml::table& tbl, const char* customColorsKey);
 void BackgroundConfigToToml(const BackgroundConfig& cfg, toml::table& out);
 void MirrorCaptureConfigToToml(const MirrorCaptureConfig& cfg, toml::table& out);
 void MirrorRenderConfigToToml(const MirrorRenderConfig& cfg, toml::table& out);

@@ -1461,12 +1461,15 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                     const std::string typesTip = typesValueForDisplay(rb, kc.vk);
                                     const std::string triggersTip =
                                         normalizeMouseButtonLabel(scanCodeToDisplayName(triggerScanTip, triggerVkTip));
-                                    ImGui::Text(tr("inputs.types_format", typesTip.c_str()).c_str());
+                                    const std::string typesText = tr("inputs.types_format", typesTip.c_str());
+                                    ImGui::TextUnformatted(typesText.c_str());
                                     if (hasShiftLayerOverride(rb, kc.vk)) {
                                         const std::string typesShiftTip = typesShiftValueForDisplay(rb, kc.vk);
-                                        ImGui::Text(tr("inputs.types_shift_format", typesShiftTip.c_str()).c_str());
+                                        const std::string typesShiftText = tr("inputs.types_shift_format", typesShiftTip.c_str());
+                                        ImGui::TextUnformatted(typesShiftText.c_str());
                                     }
-                                    ImGui::Text(tr("inputs.triggers_format", triggersTip.c_str()).c_str());
+                                    const std::string triggersText = tr("inputs.triggers_format", triggersTip.c_str());
+                                    ImGui::TextUnformatted(triggersText.c_str());
                                 } else {
                                     ImGui::Text("%s (%u)", VkToString(kc.vk).c_str(), (unsigned)kc.vk);
                                     ImGui::TextUnformatted(trc("inputs.tooltip.right_click_to_configure"));
@@ -1509,12 +1512,15 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                 DWORD triggerScanTip = resolveTriggerScanFor(rb, vk);
                                 const std::string typesTip = typesValueForDisplay(rb, vk);
                                 const std::string triggersTip = normalizeMouseButtonLabel(scanCodeToDisplayName(triggerScanTip, triggerVkTip));
-                                ImGui::Text(trc("inputs.types_format"), typesTip.c_str());
+                                const std::string typesText = tr("inputs.types_format", typesTip.c_str());
+                                ImGui::TextUnformatted(typesText.c_str());
                                 if (hasShiftLayerOverride(rb, vk)) {
                                     const std::string typesShiftTip = typesShiftValueForDisplay(rb, vk);
-                                    ImGui::Text(trc("inputs.types_shift_format"), typesShiftTip.c_str());
+                                    const std::string typesShiftText = tr("inputs.types_shift_format", typesShiftTip.c_str());
+                                    ImGui::TextUnformatted(typesShiftText.c_str());
                                 }
-                                ImGui::Text(trc("inputs.triggers_format"), triggersTip.c_str());
+                                const std::string triggersText = tr("inputs.triggers_format", triggersTip.c_str());
+                                ImGui::TextUnformatted(triggersText.c_str());
                             } else {
                                 ImGui::Text("%s (%u)", VkToString(vk).c_str(), (unsigned)vk);
                                 ImGui::TextUnformatted(trc("inputs.tooltip.right_click_to_configure"));
@@ -2745,7 +2751,8 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                 const DWORD defaultScan = getScanCodeWithExtendedFlag(curTriggerVk);
                                 const std::string defaultPreview = scanCodeToDisplayName(defaultScan, curTriggerVk);
 
-                                ImGui::Text(tr("inputs.current_format", preview.c_str()).c_str());
+                                const std::string currentPreviewText = tr("inputs.current_format", preview.c_str());
+                                ImGui::TextUnformatted(currentPreviewText.c_str());
                                 ImGui::Separator();
 
                                 static int s_scanFilterGroup = -1; // -1 = All

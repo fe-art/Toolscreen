@@ -267,8 +267,6 @@ void SaveConfig() {
         Config profileSnapshot;
         const ActiveProfileSaveState activeProfileState = PrepareConfigPersistence(sharedSnapshot, profileSnapshot);
 
-        toml::table tbl;
-        ConfigToToml(sharedSnapshot, tbl);
         const std::string activeProfileName = activeProfileState.name;
         const bool activeProfileTracked = activeProfileState.tracked;
 
@@ -278,17 +276,13 @@ void SaveConfig() {
         s_lastSaveTime = currentTime;
         s_isConfigSaving = true;
 
-        std::thread([configPath, tbl = std::move(tbl), activeProfileName, activeProfileTracked,
+        std::thread([configPath, sharedSnapshot = std::move(sharedSnapshot), activeProfileName, activeProfileTracked,
                      profileSnapshot = std::move(profileSnapshot)]() {
             _set_se_translator(SEHTranslator);
             try {
                 try {
-                    std::ofstream o(std::filesystem::path(configPath), std::ios::binary | std::ios::trunc);
-                    if (!o.is_open()) {
-                        Log("ERROR: Failed to open config file for writing.");
-                    } else {
-                        o << tbl;
-                        o.close();
+                    if (!SaveConfigToTomlFile(sharedSnapshot, configPath)) {
+                        Log("ERROR: Failed to write config file.");
                     }
                 } catch (const std::exception& e) {
                     Log("ERROR: Failed to write config file: " + std::string(e.what()));
@@ -336,18 +330,12 @@ void SaveConfigImmediate() {
         Config profileSnapshot;
         const ActiveProfileSaveState activeProfileState = PrepareConfigPersistence(sharedSnapshot, profileSnapshot);
 
-        toml::table tbl;
-        ConfigToToml(sharedSnapshot, tbl);
-
         PublishConfigSnapshot();
 
-        std::ofstream o(std::filesystem::path(configPath), std::ios::binary | std::ios::trunc);
-        if (!o.is_open()) {
-            Log("ERROR: Failed to open config file for writing.");
+        if (!SaveConfigToTomlFile(sharedSnapshot, configPath)) {
+            Log("ERROR: Failed to write config file.");
             return;
         }
-        o << tbl;
-        o.close();
 
         if (activeProfileState.tracked && !SaveProfileSnapshotIfTracked(activeProfileState.name, profileSnapshot)) {
             Log("INFO: Skipped immediate profile save for removed or renamed profile '" + activeProfileState.name + "'.");
@@ -434,12 +422,10 @@ void WriteDefaultConfig(const std::wstring& path) {
         defaultConfig.cursors.ingame.cursorSize = systemCursorSize;
 
         try {
-            toml::table tbl;
-            ConfigToToml(defaultConfig, tbl);
-
-            std::ofstream o(std::filesystem::path(path), std::ios::binary | std::ios::trunc);
-            o << tbl;
-            o.close();
+            if (!SaveConfigToTomlFile(defaultConfig, path)) {
+                Log("ERROR: Failed to write default config file.");
+                return;
+            }
             Log("Wrote default config.toml from embedded defaults, customized for your monitor (" + std::to_string(screenWidth) + "x" +
                 std::to_string(screenHeight) + ").");
         } catch (const std::exception& e) {
@@ -463,12 +449,10 @@ void WriteDefaultConfig(const std::wstring& path) {
         defaultConfig.modes.push_back(fullscreenMode);
 
         try {
-            toml::table tbl;
-            ConfigToToml(defaultConfig, tbl);
-
-            std::ofstream o(std::filesystem::path(path), std::ios::binary | std::ios::trunc);
-            o << tbl;
-            o.close();
+            if (!SaveConfigToTomlFile(defaultConfig, path)) {
+                Log("ERROR: Failed to write fallback config file.");
+                return;
+            }
             Log("Wrote fallback config.toml for your monitor (" + std::to_string(screenWidth) + "x" + std::to_string(screenHeight) + ").");
         } catch (const std::exception& e) {
             Log("ERROR: Failed to write fallback config file: " + std::string(e.what()));

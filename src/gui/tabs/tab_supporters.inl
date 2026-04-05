@@ -5,7 +5,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.supporters"))) {
 
     if (g_supporterTierTexturesDirty.exchange(false, std::memory_order_acq_rel)) { ClearSupporterTierTextureCache(); }
 
-    ImGui::TextWrapped(trc("supporters.thanks"));
+    ImGui::TextWrapped("%s", trc("supporters.thanks"));
     ImGui::TextUnformatted(trc("supporters.donate"));
     ImGui::SameLine(0.0f, 4.0f);
     ImGui::TextLinkOpenURL("https://patreon.com/jojoe77777");
@@ -16,9 +16,9 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.supporters"))) {
 
     if (!loaded) {
         if (failedBefore) {
-            ImGui::TextWrapped(trc("supporters.unable_to_load"));
+            ImGui::TextWrapped("%s", trc("supporters.unable_to_load"));
         } else {
-            ImGui::TextWrapped(trc("supporters.loading"));
+            ImGui::TextWrapped("%s", trc("supporters.loading"));
         }
     } else {
         std::shared_lock<std::shared_mutex> readLock(g_supportersMutex);

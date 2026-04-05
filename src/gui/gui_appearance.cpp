@@ -430,6 +430,9 @@ void SaveTheme() {
 
         toml::table colorsTbl;
         for (const auto& [name, color] : g_config.appearance.customColors) {
+            if (!IsValidAppearanceCustomColorKey(name)) {
+                continue;
+            }
             colorsTbl.insert(name, ColorToTomlArray(color));
         }
         tbl.insert_or_assign("customColors", colorsTbl);
@@ -470,6 +473,7 @@ void LoadTheme() {
         }
         tbl = std::move(result).table();
 #endif
+        const bool cleanedThemeCustomColors = SanitizeAppearanceCustomColorsTable(tbl, "customColors");
         if (tbl.contains("theme")) {
             std::string themeName = tbl["theme"].value_or<std::string>("Dark");
             g_config.appearance.theme = themeName;
@@ -480,12 +484,21 @@ void LoadTheme() {
             if (const toml::table* colorsTbl = ccNode->as_table()) {
                 g_config.appearance.customColors.clear();
                 for (const auto& [key, value] : *colorsTbl) {
-                    if (auto arr = value.as_array()) {
-                        g_config.appearance.customColors[std::string(key.str())] =
+                    const std::string keyName(key.str());
+                    if (!IsValidAppearanceCustomColorKey(keyName)) {
+                        continue;
+                    }
+                    if (auto arr = value.as_array(); IsValidAppearanceCustomColorArray(arr)) {
+                        g_config.appearance.customColors[keyName] =
                             ColorFromTomlArray(arr, { 0.0f, 0.0f, 0.0f, 1.0f });
                     }
                 }
             }
+        }
+
+        if (cleanedThemeCustomColors) {
+            SaveTheme();
+            Log("WARNING: Removed invalid customColors entries while loading theme.toml.");
         }
     } catch (const std::exception& e) { Log("ERROR: Failed to load theme: " + std::string(e.what())); }
 }

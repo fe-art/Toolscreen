@@ -19,7 +19,7 @@ if (BeginSelectableSettingsNestedTabItem(trc("tabs.window_overlays"))) {
 
         std::string overlay_popup_id = (tr("window.overlays_delete") + "##" + std::to_string(i));
         if (ImGui::BeginPopupModal(overlay_popup_id.c_str(), NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::Text(trc("window.tooltip_delete", overlay.name));
+            ImGui::TextWrapped("%s", trc("window.tooltip_delete", overlay.name));
             ImGui::Separator();
             if (ImGui::Button(trc("button.ok"), ImVec2(120, 0))) {
                 windowOverlay_to_remove = (int)i;

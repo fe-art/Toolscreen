@@ -25,7 +25,8 @@ if (BeginSelectableSettingsNestedTabItem(trc("tabs.images"))) {
         // Popup modal outside of node_open block so it can be displayed even when collapsed
         std::string img_popup_id = (tr("images.delete_images") + "##" + std::to_string(i));
         if (ImGui::BeginPopupModal(img_popup_id.c_str(), NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::Text(tr("images.delete_images_confirm", img.name.c_str()).c_str());
+            const std::string deleteImageConfirm = tr("images.delete_images_confirm", img.name.c_str());
+            ImGui::TextWrapped("%s", deleteImageConfirm.c_str());
             ImGui::Separator();
             if (ImGui::Button(trc("button.ok"), ImVec2(120, 0))) {
                 image_to_remove = (int)i;

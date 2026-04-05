@@ -28,7 +28,8 @@ if (BeginSelectableSettingsNestedTabItem(trc("tabs.mirrors"))) {
 
         // Popup modal outside of node_open block so it can be displayed even when collapsed
         if (ImGui::BeginPopupModal(popup_id.c_str(), NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::Text(tr("mirrors.delete_mirror_confirm", mirror.name.c_str()).c_str());
+            const std::string deleteMirrorConfirm = tr("mirrors.delete_mirror_confirm", mirror.name.c_str());
+            ImGui::TextWrapped("%s", deleteMirrorConfirm.c_str());
             ImGui::Separator();
             if (ImGui::Button(trc("button.ok"), ImVec2(120, 0))) {
                 if (selectedMirrorName == mirror.name) selectedMirrorName = "";
@@ -617,7 +618,8 @@ if (BeginSelectableSettingsNestedTabItem(trc("tabs.mirrors"))) {
                     }
                     std::string zone_popup_id = tr("mirrors.delete_zone") + "##" + std::to_string(j);
                     if (ImGui::BeginPopupModal(zone_popup_id.c_str(), NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-                        ImGui::Text(tr("mirrors.delete_capture_zone", j + 1).c_str());
+                        const std::string deleteCaptureZoneText = tr("mirrors.delete_capture_zone", j + 1);
+                        ImGui::TextWrapped("%s", deleteCaptureZoneText.c_str());
                         ImGui::Separator();
                         if (ImGui::Button(trc("button.ok"))) {
                             zone_to_remove = (int)j;
@@ -756,7 +758,8 @@ if (BeginSelectableSettingsNestedTabItem(trc("tabs.mirrors"))) {
 
         std::string popup_id_group = tr("mirrors.delete_group") + "##" + std::to_string(i);
         if (ImGui::BeginPopupModal(popup_id_group.c_str(), NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::Text(tr("mirrors.delete_group_confirm", group.name.c_str()).c_str());
+            const std::string deleteGroupConfirm = tr("mirrors.delete_group_confirm", group.name.c_str());
+            ImGui::TextWrapped("%s", deleteGroupConfirm.c_str());
             ImGui::Separator();
             if (ImGui::Button(trc("button.ok"), ImVec2(120, 0))) {
                 if (selectedGroupName == group.name) selectedGroupName = "";
