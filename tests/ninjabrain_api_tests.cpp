@@ -438,7 +438,9 @@ std::string DescribeSessionState(const SessionState& state) {
                 << ", hasBoatAngle=" << (state.data.hasBoatAngle ? "true" : "false")
                 << ", boatAngle=" << state.data.boatAngle << ", predictionCount=" << state.data.predictionCount
                 << ", eyeCount=" << state.data.eyeCount
-                << ", informationMessageCount=" << state.data.informationMessageCount;
+                << ", informationMessageCount=" << state.data.informationMessageCount
+                << ", blindEnabled=" << (state.data.blind.enabled ? "true" : "false")
+                << ", blindHasResult=" << (state.data.blind.hasResult ? "true" : "false");
 
     if (!state.logs.empty()) {
         description << ", lastLog='" << state.logs.back() << '\'';
@@ -493,6 +495,17 @@ NinjabrainApiSessionCallbacks CreateSessionCallbacks(SessionState& state) {
     callbacks.onBoatDisconnect = [&](const std::string&) {
         std::lock_guard<std::mutex> lock(state.mutex);
         ClearNinjabrainBoatData(state.data);
+    };
+    callbacks.onBlindConnect = []() {};
+    callbacks.onBlindMessage = [&](const std::string& payload) {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        ApplyNinjabrainBlindEvent(payload, state.data, [&](const std::string& message) {
+            state.logs.push_back(message);
+        });
+    };
+    callbacks.onBlindDisconnect = [&](const std::string&) {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        ClearNinjabrainBlindData(state.data);
     };
     return callbacks;
 }
@@ -552,6 +565,25 @@ TOOLSCREEN_TEST(connection_tracker_treats_information_messages_as_connected) {
     }
 }
 
+TOOLSCREEN_TEST(connection_tracker_treats_blind_as_connected) {
+    NinjabrainApiConnectionTracker tracker;
+
+    tracker.Start(std::string(" ") + kServerBaseUrl + "/");
+    tracker.MarkStrongholdDisconnected("Connection refused");
+
+    {
+        const NinjabrainApiStatus status = tracker.Snapshot();
+        REQUIRE(status.connectionState == NinjabrainApiConnectionState::Offline);
+    }
+
+    tracker.MarkBlindConnected();
+
+    {
+        const NinjabrainApiStatus status = tracker.Snapshot();
+        REQUIRE(status.connectionState == NinjabrainApiConnectionState::Connected);
+    }
+}
+
 TOOLSCREEN_TEST(boat_event_parses_snapshot) {
     NinjabrainData data;
 
@@ -567,6 +599,9 @@ TOOLSCREEN_TEST(stronghold_failure_preserves_boat) {
     data.boatState = "VALID";
     data.boatAngle = 12.5;
     data.hasBoatAngle = true;
+    data.blind.enabled = true;
+    data.blind.hasResult = true;
+    data.blind.evaluation = "NOT_IN_RING";
     data.resultType = "TRIANGULATED";
     data.eyeCount = 2;
     data.predictionCount = 1;
@@ -578,9 +613,66 @@ TOOLSCREEN_TEST(stronghold_failure_preserves_boat) {
     RequireEqual(data.boatState, std::string("VALID"), "boatState");
     RequireNear(data.boatAngle, 12.5, 1e-9, "boatAngle");
     REQUIRE(data.hasBoatAngle);
+    REQUIRE(data.blind.enabled);
+    REQUIRE(data.blind.hasResult);
+    RequireEqual(data.blind.evaluation, std::string("NOT_IN_RING"), "blind.evaluation");
     RequireEqual(data.eyeCount, 0, "eyeCount");
     RequireEqual(data.predictionCount, 0, "predictionCount");
     REQUIRE(!data.validPrediction);
+}
+
+TOOLSCREEN_TEST(blind_event_parses_snapshot) {
+    NinjabrainData data;
+
+    ApplyNinjabrainBlindEvent(
+        R"({
+            "isBlindModeEnabled":true,
+            "hasDivine":false,
+            "blindResult":{
+                "evaluation":"NOT_IN_RING",
+                "xInNether":27.15,
+                "improveDistance":198.84401723376595,
+                "zInNether":-0.57,
+                "averageDistance":1718.3948071451914,
+                "improveDirection":-1.591787718184331,
+                "highrollProbability":0,
+                "highrollThreshold":400
+            }
+        })",
+        data);
+
+    REQUIRE(data.blind.enabled);
+    REQUIRE(!data.blind.hasDivine);
+    REQUIRE(data.blind.hasResult);
+    RequireEqual(data.blind.evaluation, std::string("NOT_IN_RING"), "blind.evaluation");
+    RequireNear(data.blind.xInNether, 27.15, 1e-9, "blind.xInNether");
+    RequireNear(data.blind.zInNether, -0.57, 1e-9, "blind.zInNether");
+    RequireNear(data.blind.improveDistance, 198.84401723376595, 1e-9, "blind.improveDistance");
+    RequireNear(data.blind.averageDistance, 1718.3948071451914, 1e-9, "blind.averageDistance");
+    RequireNear(data.blind.improveDirection, -1.591787718184331, 1e-9, "blind.improveDirection");
+    RequireNear(data.blind.highrollProbability, 0.0, 1e-9, "blind.highrollProbability");
+    RequireNear(data.blind.highrollThreshold, 400.0, 1e-9, "blind.highrollThreshold");
+}
+
+TOOLSCREEN_TEST(blind_event_disabled_clears_snapshot) {
+    NinjabrainData data;
+    data.blind.enabled = true;
+    data.blind.hasDivine = true;
+    data.blind.hasResult = true;
+    data.blind.evaluation = "NOT_IN_RING";
+
+    ApplyNinjabrainBlindEvent(
+        R"({
+            "isBlindModeEnabled":false,
+            "hasDivine":false,
+            "blindResult":{}
+        })",
+        data);
+
+    REQUIRE(!data.blind.enabled);
+    REQUIRE(!data.blind.hasDivine);
+    REQUIRE(!data.blind.hasResult);
+    RequireEqual(data.blind.evaluation, std::string(), "blind.evaluation");
 }
 
 TOOLSCREEN_TEST(information_messages_event_parses_snapshot) {
@@ -632,6 +724,21 @@ TOOLSCREEN_TEST(stronghold_clear_preserves_information_messages) {
     RequireEqual(data.informationMessages[0].severity, std::string("WARNING"), "informationMessages[0].severity");
     RequireEqual(data.informationMessages[0].type, std::string("MISMEASURE"), "informationMessages[0].type");
     RequireEqual(data.informationMessages[0].message, std::string("Keep this warning"), "informationMessages[0].message");
+}
+
+TOOLSCREEN_TEST(stronghold_clear_preserves_blind) {
+    NinjabrainData data;
+    data.blind.enabled = true;
+    data.blind.hasResult = true;
+    data.blind.evaluation = "NOT_IN_RING";
+    data.blind.xInNether = 27.15;
+
+    ApplyNinjabrainStrongholdEvent(R"({"resultType":"NONE"})", data);
+
+    REQUIRE(data.blind.enabled);
+    REQUIRE(data.blind.hasResult);
+    RequireEqual(data.blind.evaluation, std::string("NOT_IN_RING"), "blind.evaluation");
+    RequireNear(data.blind.xInNether, 27.15, 1e-9, "blind.xInNether");
 }
 
 TOOLSCREEN_TEST(stronghold_event_preserves_information_messages) {
@@ -814,6 +921,12 @@ TOOLSCREEN_TEST(live_ninjabrain_api_http_server_smoke) {
     RequireEqual(boatBody.at("boatState").get<std::string>(), std::string("VALID"), "boat.boatState");
     RequireNear(boatBody.at("boatAngle").get<double>(), 0.0, 1e-9, "boat.boatAngle");
 
+    const json blindBody = json::parse(GetEndpointBody("/api/v1/blind"));
+    REQUIRE(!blindBody.at("isBlindModeEnabled").get<bool>());
+    REQUIRE(!blindBody.at("hasDivine").get<bool>());
+    REQUIRE(blindBody.at("blindResult").is_object());
+    REQUIRE(blindBody.at("blindResult").empty());
+
     const json strongholdSseBody = json::parse(ReadFirstSseMessage("/api/v1/stronghold/events"));
     RequireEqual(strongholdSseBody.at("resultType").get<std::string>(), std::string("NONE"), "strongholdSse.resultType");
     REQUIRE(strongholdSseBody.at("eyeThrows").is_array());
@@ -822,6 +935,12 @@ TOOLSCREEN_TEST(live_ninjabrain_api_http_server_smoke) {
     const json boatSseBody = json::parse(ReadFirstSseMessage("/api/v1/boat/events"));
     RequireEqual(boatSseBody.at("boatState").get<std::string>(), std::string("VALID"), "boatSse.boatState");
     RequireNear(boatSseBody.at("boatAngle").get<double>(), 0.0, 1e-9, "boatSse.boatAngle");
+
+    const json blindSseBody = json::parse(ReadFirstSseMessage("/api/v1/blind/events"));
+    REQUIRE(!blindSseBody.at("isBlindModeEnabled").get<bool>());
+    REQUIRE(!blindSseBody.at("hasDivine").get<bool>());
+    REQUIRE(blindSseBody.at("blindResult").is_object());
+    REQUIRE(blindSseBody.at("blindResult").empty());
 }
 
 TOOLSCREEN_TEST(live_ninjabrain_api_session_reconnects) {

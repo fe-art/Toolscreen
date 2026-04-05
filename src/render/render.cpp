@@ -4161,13 +4161,15 @@ static bool HasNinjabrainOverlayContent(const NinjabrainOverlayConfig& nb, const
     const bool hasTriangulation = data.validPrediction &&
         (data.resultType == "TRIANGULATION" || data.resultType == "DIVINE");
     const bool hasFailedResult = data.resultType == "FAILED";
+    const bool hasBlindResult = data.blind.enabled && data.blind.hasResult;
     const bool hasInformationMessages = data.informationMessageCount > 0;
     const bool boatError = (data.boatState == "ERROR");
     const bool showForBoat = nb.alwaysShowBoat || boatError;
 
     if (outHasTriangulation) { *outHasTriangulation = hasTriangulation; }
     if (outShowForBoat) { *outShowForBoat = showForBoat; }
-    return hasTriangulation || hasFailedResult || hasInformationMessages || showForBoat || nb.alwaysShow;
+    return hasTriangulation || hasFailedResult || hasBlindResult || hasInformationMessages || showForBoat ||
+           nb.alwaysShow;
 }
 
 static bool ShouldRenderNinjabrainOverlayForRequest(const SameThreadOverlayState& request) {
@@ -8205,13 +8207,15 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
     if (!dataSnapshot) return;
 
     const NinjabrainData& data = *dataSnapshot;
-    const bool failedResult = data.resultType == "FAILED";
+    const bool blindResult = data.blind.enabled && data.blind.hasResult;
+    const bool failedResult = data.resultType == "FAILED" && !blindResult;
     const bool hasInformationMessages = data.informationMessageCount > 0;
 
     bool hasTriangulation = false;
     bool showForBoat = false;
     if (!HasNinjabrainOverlayContent(nb, data, &hasTriangulation, &showForBoat)) return;
-    const bool showEmptyState = nb.alwaysShow && !hasTriangulation && !failedResult && !hasInformationMessages;
+    const bool showEmptyState = nb.alwaysShow && !hasTriangulation && !failedResult && !blindResult &&
+                                !hasInformationMessages;
     const bool showPredictionTable = hasTriangulation || showForBoat || showEmptyState;
     const bool renderBlankPredictionRows = showEmptyState && data.predictionCount <= 0;
 
@@ -8252,6 +8256,20 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
     const float failureMarginTop = (std::max)(0.0f, nb.failureMarginTop) * scale;
     const float failureMarginBottom = (std::max)(0.0f, nb.failureMarginBottom) * scale;
     const float failureLineGap = (std::max)(0.0f, nb.failureLineGap) * scale;
+    const float blindMarginLeft = (std::max)(0.0f, nb.blindMarginLeft) * scale;
+    const float blindMarginRight = (std::max)(0.0f, nb.blindMarginRight) * scale;
+    const float blindMarginTop = (std::max)(0.0f, nb.blindMarginTop) * scale;
+    const float blindMarginBottom = (std::max)(0.0f, nb.blindMarginBottom) * scale;
+    const float blindLineGap = (std::max)(0.0f, nb.blindLineGap) * scale;
+    const float summaryMarginLeft = blindResult ? blindMarginLeft : failureMarginLeft;
+    const float summaryMarginRight = blindResult ? blindMarginRight : failureMarginRight;
+    const float summaryMarginTop = blindResult ? blindMarginTop : failureMarginTop;
+    const float summaryMarginBottom = blindResult ? blindMarginBottom : failureMarginBottom;
+    const float summaryLineGap = blindResult ? blindLineGap : failureLineGap;
+    const std::string* summaryAnchor = blindResult ? &nb.blindAnchor : &nb.failureAnchor;
+    const float summaryOffsetX = (blindResult ? nb.blindOffsetX : nb.failureOffsetX) * scale;
+    const float summaryOffsetY = (blindResult ? nb.blindOffsetY : nb.failureOffsetY) * scale;
+    const int summaryDrawOrder = blindResult ? nb.blindDrawOrder : nb.failureDrawOrder;
     const int minimumThrowRows = std::clamp(nb.eyeThrowRows, 1, static_cast<int>(kNinjabrainThrowLimit));
     const float boatStateSize = (std::max)(0.0f, nb.boatStateSize) * scale;
     const float boatStateMarginRight = (std::max)(0.0f, nb.boatStateMarginRight) * scale;
@@ -8323,6 +8341,98 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
     ImU32 negAdjustmentCol = ColorToImU32(nb.subpixelNegativeColor);
     ImU32 posCoordCol = ColorToImU32(nb.coordPositiveColor);
     ImU32 negCoordCol = ColorToImU32(nb.coordNegativeColor);
+
+    std::string blindLine1Prefix;
+    std::string blindLine1Highlight;
+    std::string blindLine2Percent;
+    std::string blindLine2Suffix;
+    std::string blindLine3;
+    ImU32 blindHighlightCol = dataCol;
+    ImU32 blindProbabilityCol = dataCol;
+    float blindLine1PrefixW = 0.0f;
+    float blindLine2PercentW = 0.0f;
+    float blindMessageW = 0.0f;
+
+    if (blindResult) {
+        auto humanizeBlindEvaluation = [](const std::string& evaluation) {
+            if (evaluation == "NOT_IN_RING") {
+                return std::string(tr("ninjabrain.blind_evaluation.not_in_ring"));
+            }
+            if (evaluation == "BAD") {
+                return std::string(tr("ninjabrain.blind_evaluation.bad"));
+            }
+            if (evaluation == "BAD_BUT_IN_RING") {
+                return std::string(tr("ninjabrain.blind_evaluation.bad_but_in_ring"));
+            }
+            if (evaluation == "HIGHROLL_OKAY") {
+                return std::string(tr("ninjabrain.blind_evaluation.highroll_okay"));
+            }
+            if (evaluation == "EXCELLENT") {
+                return std::string(tr("ninjabrain.blind_evaluation.excellent"));
+            }
+            return std::string(tr("ninjabrain.blind_evaluation.unknown"));
+        };
+        auto blindEvaluationGradientPosition = [](const std::string& evaluation, double& progress) {
+            if (evaluation == "NOT_IN_RING") {
+                progress = 0.0;
+                return true;
+            }
+            if (evaluation == "BAD") {
+                progress = 0.25;
+                return true;
+            }
+            if (evaluation == "BAD_BUT_IN_RING") {
+                progress = 0.5;
+                return true;
+            }
+            if (evaluation == "HIGHROLL_OKAY") {
+                progress = 0.75;
+                return true;
+            }
+            if (evaluation == "EXCELLENT") {
+                progress = 1.0;
+                return true;
+            }
+            return false;
+        };
+
+        constexpr double kPi = 3.14159265358979323846;
+        const int blindX = static_cast<int>(std::lround(data.blind.xInNether));
+        const int blindZ = static_cast<int>(std::lround(data.blind.zInNether));
+        const double blindProbability = std::clamp(data.blind.highrollProbability, 0.0, 1.0);
+        const double blindProbabilityPercent = blindProbability * 100.0;
+        const int blindThreshold = static_cast<int>(std::lround(data.blind.highrollThreshold));
+        const int blindImproveHeading = static_cast<int>(std::lround(data.blind.improveDirection * 180.0 / kPi));
+        const int blindImproveDistance = static_cast<int>(std::lround(data.blind.improveDistance));
+
+        blindLine1Prefix = tr("ninjabrain.blind_coords_prefix", blindX, blindZ);
+        blindLine1Prefix.push_back(' ');
+
+        blindLine1Highlight = humanizeBlindEvaluation(data.blind.evaluation);
+
+        char blindProbabilityText[32];
+        std::snprintf(blindProbabilityText, sizeof(blindProbabilityText), "%.1f%%", blindProbabilityPercent);
+        blindLine2Percent = blindProbabilityText;
+        blindLine2Suffix = tr("ninjabrain.blind_highroll_probability_suffix", blindThreshold);
+        blindLine3 = tr("ninjabrain.blind_improve_direction", blindImproveHeading, blindImproveDistance);
+
+        blindLine1PrefixW = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, blindLine1Prefix.c_str()).x;
+        const float blindLine1W = blindLine1PrefixW + font->CalcTextSizeA(fs, FLT_MAX, 0.0f, blindLine1Highlight.c_str()).x;
+        blindLine2PercentW = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, blindLine2Percent.c_str()).x;
+        const float blindLine2W = blindLine2PercentW + font->CalcTextSizeA(fs, FLT_MAX, 0.0f, blindLine2Suffix.c_str()).x;
+        const float blindLine3W = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, blindLine3.c_str()).x;
+        blindMessageW = (std::max)(blindLine1W, (std::max)(blindLine2W, blindLine3W));
+
+        const double blindProbabilityColorProgress = std::clamp(blindProbabilityPercent / 10.0, 0.0, 1.0);
+        blindProbabilityCol = NBGradientColor(blindProbabilityColorProgress, nb.certaintyLowColor, nb.certaintyMidColor,
+                                              nb.certaintyColor);
+
+        double blindEvaluationProgress = 0.0;
+        if (blindEvaluationGradientPosition(data.blind.evaluation, blindEvaluationProgress)) {
+            blindHighlightCol = NBGradientColor(blindEvaluationProgress, nb.certaintyLowColor, nb.certaintyMidColor,
+                                                nb.certaintyColor);
+        }
+    }
 
     int boatIconIdx = 0;
     if      (data.boatState == "MEASURING") boatIconIdx = 1;
@@ -8608,6 +8718,20 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
             }
         }
         drawList->AddText(font, sz, pos, col, txt);
+    };
+    auto drawFailureSummaryBlock = [&](float messageX, float messageTop) {
+        if (blindResult) {
+            drawText(fs, ImVec2(messageX, messageTop), dataCol, blindLine1Prefix.c_str());
+            drawText(fs, ImVec2(messageX + blindLine1PrefixW, messageTop), blindHighlightCol, blindLine1Highlight.c_str());
+            drawText(fs, ImVec2(messageX, messageTop + lineH + summaryLineGap), blindProbabilityCol, blindLine2Percent.c_str());
+            drawText(fs, ImVec2(messageX + blindLine2PercentW, messageTop + lineH + summaryLineGap), dataCol,
+                     blindLine2Suffix.c_str());
+            drawText(fs, ImVec2(messageX, messageTop + (lineH + summaryLineGap) * 2.0f), dataCol, blindLine3.c_str());
+            return;
+        }
+
+        drawText(fs, ImVec2(messageX, messageTop), dataCol, trc("ninjabrain.failed_line1"));
+        drawText(fs, ImVec2(messageX, messageTop + lineH + summaryLineGap), dataCol, trc("ninjabrain.failed_line2"));
     };
     auto touchesPanelEdge = [](float edge, float panelEdge) {
         return std::fabs(edge - panelEdge) <= 0.5f;
@@ -9051,10 +9175,8 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
         row.angleCenterOnPart1 = false;
     };
 
-    if (failedResult) {
-        const char* failureLine1 = trc("ninjabrain.failed_line1");
-        const char* failureLine2 = trc("ninjabrain.failed_line2");
-        const float failureBlockH = lineH * 2.0f + failureLineGap;
+    if (failedResult || blindResult) {
+        const float summaryBlockH = blindResult ? (lineH * 3.0f + summaryLineGap * 2.0f) : (lineH * 2.0f + summaryLineGap);
         const float sectionHeaderH = lineH;
         const float detailHeaderH = lineH + throwsHeaderPadY * 2.0f;
         const float detailRowH = lineH + throwsRowPadY * 2.0f;
@@ -9095,16 +9217,18 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
 
         const char* throwSectionTitle = "Ender eye throws";
         const float throwSectionTitleW = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, throwSectionTitle).x;
-        const float failureMessageW = (std::max)(font->CalcTextSizeA(fs, FLT_MAX, 0.0f, failureLine1).x,
-                                                 font->CalcTextSizeA(fs, FLT_MAX, 0.0f, failureLine2).x);
+        const float summaryMessageW = blindResult
+            ? blindMessageW
+            : (std::max)(font->CalcTextSizeA(fs, FLT_MAX, 0.0f, trc("ninjabrain.failed_line1")).x,
+                         font->CalcTextSizeA(fs, FLT_MAX, 0.0f, trc("ninjabrain.failed_line2")).x);
         const float failedThrowsMinContentW = (std::max)(throwSectionTitleW, failedTableMinW);
-        const float failureMinContentW = failureMarginLeft + failureMessageW + failureMarginRight;
-        const float failedPreferredContentW = (std::max)((std::max)(failureMinContentW, infoMarginLeft + infoPreferredContentW + infoMarginRight),
+        const float summaryMinContentW = summaryMarginLeft + summaryMessageW + summaryMarginRight;
+        const float failedPreferredContentW = (std::max)((std::max)(summaryMinContentW, infoMarginLeft + infoPreferredContentW + infoMarginRight),
                                  throwsMarginLeft + failedThrowsMinContentW + throwsMarginRight);
 
         if (useManualSectionLayout) {
-            const float failureSectionW = (std::max)(failureMinContentW, failedPreferredContentW);
-            const float failureSectionH = failureMarginTop + failureBlockH + failureMarginBottom;
+            const float summarySectionW = (std::max)(summaryMinContentW, failedPreferredContentW);
+            const float summarySectionH = summaryMarginTop + summaryBlockH + summaryMarginBottom;
             const float infoSectionContentW = (std::max)(infoPreferredContentW, failedPreferredContentW - infoMarginLeft - infoMarginRight);
             const float infoSectionW = infoMarginLeft + infoSectionContentW + infoMarginRight;
             const float infoSectionH = hasInformationMessages ? measureInfoMessagesBlock(infoSectionContentW) : 0.0f;
@@ -9116,8 +9240,8 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
 
             std::vector<NinjabrainManualSectionPlacement> sections;
             sections.reserve(3);
-            sections.push_back({ parseManualAnchor(nb.failureAnchor), nb.failureOffsetX * scale, nb.failureOffsetY * scale,
-                                 nb.failureDrawOrder, failureSectionW, failureSectionH });
+            sections.push_back({ parseManualAnchor(*summaryAnchor), summaryOffsetX, summaryOffsetY,
+                                 summaryDrawOrder, summarySectionW, summarySectionH });
             if (hasInformationMessages) {
                 sections.push_back({ parseManualAnchor(nb.informationMessagesAnchor), nb.informationMessagesOffsetX * scale,
                                      nb.informationMessagesOffsetY * scale, nb.informationMessagesDrawOrder,
@@ -9158,18 +9282,17 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
 
             {
                 NinjabrainManualSectionPlacement placement = {
-                    parseManualAnchor(nb.failureAnchor), nb.failureOffsetX * scale, nb.failureOffsetY * scale,
-                    nb.failureDrawOrder, failureSectionW, failureSectionH
+                    parseManualAnchor(*summaryAnchor), summaryOffsetX, summaryOffsetY,
+                    summaryDrawOrder, summarySectionW, summarySectionH
                 };
                 float sectionX = 0.0f;
                 float sectionY = 0.0f;
                 computeManualSectionOrigin(placement, contentLeft, contentTop, contentW, contentH, sectionX, sectionY);
                 drawSections.push_back({ placement.drawOrder, [=, &drawText, &drawList]() {
-                    const float blockTop = sectionY + failureMarginTop;
+                    const float blockTop = sectionY + summaryMarginTop;
                     const float messageTop = blockTop;
-                    const float messageX = sectionX + failureMarginLeft;
-                    drawText(fs, ImVec2(messageX, messageTop), dataCol, failureLine1);
-                    drawText(fs, ImVec2(messageX, messageTop + lineH + failureLineGap), dataCol, failureLine2);
+                    const float messageX = sectionX + summaryMarginLeft;
+                    drawFailureSummaryBlock(messageX, messageTop);
                 } });
             }
 
@@ -9274,7 +9397,7 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
         if (hasInformationMessages && infoPlacement == "top") {
             totalH += infoBlockH;
         }
-        totalH += failureMarginTop + failureBlockH + failureMarginBottom;
+        totalH += summaryMarginTop + summaryBlockH + summaryMarginBottom;
         if (hasInformationMessages && infoPlacement == "middle") {
             totalH += infoBlockH;
         }
@@ -9307,9 +9430,9 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
         }
         if (failedThrowCount > 0) {
             if (hasInformationMessages && infoPlacement == "middle") {
-                coveredCursorY += failureMarginTop + failureBlockH + failureMarginBottom + infoBlockH;
+                coveredCursorY += summaryMarginTop + summaryBlockH + summaryMarginBottom + infoBlockH;
             } else {
-                coveredCursorY += failureMarginTop + failureBlockH + failureMarginBottom;
+                coveredCursorY += summaryMarginTop + summaryBlockH + summaryMarginBottom;
             }
             const float coveredSectionTop = coveredCursorY + throwsMarginTop;
             const float coveredSectionBottom = coveredSectionTop + sectionHeaderH + detailHeaderH + detailRowH * (float)failedThrowCount;
@@ -9333,14 +9456,13 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
                 throwsTextCol);
         }
 
-        const float failureBlockTop = contentBottomY + failureMarginTop;
-        const float messageTop = failureBlockTop;
-        const float messageX = contentLeft + failureMarginLeft;
-        drawText(fs, ImVec2(messageX, messageTop), dataCol, failureLine1);
-        drawText(fs, ImVec2(messageX, messageTop + lineH + failureLineGap), dataCol, failureLine2);
+            const float summaryBlockTop = contentBottomY + summaryMarginTop;
+            const float messageTop = summaryBlockTop;
+            const float messageX = contentLeft + summaryMarginLeft;
+        drawFailureSummaryBlock(messageX, messageTop);
 
-        const float failureBottomY = failureBlockTop + failureBlockH;
-        contentBottomY = failureBottomY + failureMarginBottom;
+            const float summaryBottomY = summaryBlockTop + summaryBlockH;
+            contentBottomY = summaryBottomY + summaryMarginBottom;
 
         if (hasInformationMessages && infoPlacement == "middle") {
             contentBottomY = drawInfoMessagesBlock(

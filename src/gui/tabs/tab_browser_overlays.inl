@@ -10,6 +10,7 @@ if (BeginSelectableSettingsNestedTabItem(trc("tabs.browser_overlays"))) {
     g_browserOverlayDragMode.store(true);
 
     SliderCtrlClickTip();
+    const std::string g_currentModeId = GetPublishedCurrentModeId();
 
     int browserOverlayToRemove = -1;
     for (size_t i = 0; i < g_config.browserOverlays.size(); ++i) {

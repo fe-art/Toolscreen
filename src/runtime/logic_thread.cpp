@@ -22,7 +22,6 @@ extern const int GRAPHICS_HOOK_CHECK_INTERVAL_MS;
 
 extern std::atomic<HWND> g_minecraftHwnd;
 extern std::atomic<bool> g_configLoaded;
-extern Config g_config;
 
 extern std::string g_gameStateBuffers[2];
 extern std::atomic<int> g_currentGameStateIndex;
@@ -36,9 +35,6 @@ extern std::atomic<bool> g_gameWindowActive;
 
 extern PendingModeSwitch g_pendingModeSwitch;
 extern std::mutex g_pendingModeSwitchMutex;
-
-extern PendingDimensionChange g_pendingDimensionChange;
-extern std::mutex g_pendingDimensionChangeMutex;
 
 extern GameVersion g_gameVersion;
 
@@ -317,19 +313,23 @@ void UpdateCachedScreenMetrics() {
     // Require only that current metrics are valid so resize after startup/minimize still triggers recalculation.
     const bool startupShouldRunNow = startupPending && startupClientReady;
     if (newWidth > 0 && newHeight > 0 && (startupShouldRunNow || changed || recalcRequested || prevWidth != newWidth || prevHeight != newHeight)) {
-        std::string currentModeId = g_modeIdBuffers[g_currentModeIdIndex.load(std::memory_order_acquire)];
+        auto baseSnapshot = GetConfigSnapshot();
+        if (!baseSnapshot) { return; }
+
+        std::string currentModeId = GetPublishedCurrentModeId();
         int beforeModeW = 0;
         int beforeModeH = 0;
-        if (ModeConfig* currentModeBefore = GetModeMutable(currentModeId)) {
+        if (const ModeConfig* currentModeBefore = GetModeFromSnapshot(*baseSnapshot, currentModeId)) {
             beforeModeW = currentModeBefore->width;
             beforeModeH = currentModeBefore->height;
         }
 
-        RecalculateModeDimensions();
+        Config resolvedConfig = *baseSnapshot;
+        RecalculateModeDimensions(resolvedConfig, newWidth, newHeight);
 
         int afterModeW = 0;
         int afterModeH = 0;
-        if (ModeConfig* currentModeAfter = GetModeMutable(currentModeId)) {
+        if (const ModeConfig* currentModeAfter = GetModeFromSnapshot(resolvedConfig, currentModeId)) {
             afterModeW = currentModeAfter->width;
             afterModeH = currentModeAfter->height;
         }
@@ -357,13 +357,17 @@ void UpdateCachedScreenMetrics() {
         const bool shouldEnforceModeSize = !fullscreenStretchMode && (modeSizeChanged || shouldEnforceForExternalResize);
         const bool shouldSendWmSize = shouldSendStartupWmSize || shouldSendFullscreenModeSize || shouldEnforceModeSize;
 
-        if (afterModeW > 0 && afterModeH > 0 && shouldSendWmSize && IsResolutionChangeSupported(g_gameVersion)) {
+        const bool sourceSnapshotStillCurrent = (GetConfigSnapshot() == baseSnapshot);
+        const bool sameModeStillActive = (GetPublishedCurrentModeId() == currentModeId);
+
+        if (sourceSnapshotStillCurrent && sameModeStillActive && afterModeW > 0 && afterModeH > 0 && shouldSendWmSize &&
+            IsResolutionChangeSupported(g_gameVersion)) {
             HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
             if (hwnd) { RequestWindowClientResize(hwnd, afterModeW, afterModeH, "logic_thread:screen_metrics"); }
         }
 
         // Publish updated snapshot so reader threads see the recalculated dimensions.
-        PublishConfigSnapshot();
+        if (sourceSnapshotStillCurrent) { PublishConfigSnapshot(resolvedConfig); }
 
         if (startupShouldRunNow) { s_startupMetricsResyncPending.store(false, std::memory_order_relaxed); }
     }
@@ -569,107 +573,6 @@ void ProcessPendingModeSwitch() {
     g_pendingModeSwitch.previewFromModeId.clear();
 }
 
-// This processes dimension changes from the GUI (render thread) on the logic thread
-// to avoid race conditions between render thread modifying config and game thread reading it
-void ProcessPendingDimensionChange() {
-    PROFILE_SCOPE_CAT("LT Dimension Change", "Logic Thread");
-    std::lock_guard<std::mutex> lock(g_pendingDimensionChangeMutex);
-    if (!g_pendingDimensionChange.pending) { return; }
-
-    ModeConfig* mode = GetModeMutable(g_pendingDimensionChange.modeId);
-    if (mode) {
-        const bool fullscreenStretchMode = EqualsIgnoreCase(mode->id, "Fullscreen");
-
-        if (g_pendingDimensionChange.newWidth > 0) {
-            mode->width = EqualsIgnoreCase(mode->id, "Thin") ? (std::max)(330, g_pendingDimensionChange.newWidth)
-                                                               : g_pendingDimensionChange.newWidth;
-            mode->manualWidth = mode->width;
-            mode->relativeWidth = -1.0f;
-            mode->widthExpr.clear();
-        }
-        if (g_pendingDimensionChange.newHeight > 0) {
-            mode->height = g_pendingDimensionChange.newHeight;
-            mode->manualHeight = mode->height;
-            mode->relativeHeight = -1.0f;
-            mode->heightExpr.clear();
-        }
-
-        if (EqualsIgnoreCase(mode->id, "EyeZoom")) {
-            g_config.eyezoom.windowWidth = mode->width;
-            g_config.eyezoom.windowHeight = mode->height;
-        }
-
-        const bool hasRelativeWidth = (mode->relativeWidth >= 0.0f && mode->relativeWidth <= 1.0f);
-        const bool hasRelativeHeight = (mode->relativeHeight >= 0.0f && mode->relativeHeight <= 1.0f);
-        if (!hasRelativeWidth && !hasRelativeHeight) { mode->useRelativeSize = false; }
-
-        if (fullscreenStretchMode) {
-            int currentClientW = GetCachedWindowWidth();
-            int currentClientH = GetCachedWindowHeight();
-            if (currentClientW < 1) currentClientW = 1;
-            if (currentClientH < 1) currentClientH = 1;
-            mode->stretch.enabled = true;
-            mode->stretch.x = 0;
-            mode->stretch.y = 0;
-            mode->stretch.width = currentClientW;
-            mode->stretch.height = currentClientH;
-        }
-
-        if (g_pendingDimensionChange.sendWmSize && fullscreenStretchMode && g_currentModeId == g_pendingDimensionChange.modeId) {
-            HWND hwnd = g_minecraftHwnd.load();
-            if (hwnd) { RequestWindowClientResize(hwnd, mode->width, mode->height, "logic_thread:pending_dimension"); }
-        }
-
-        ModeConfig* eyezoomMode = GetModeMutable("EyeZoom");
-        ModeConfig* preemptiveMode = GetModeMutable("Preemptive");
-        bool preemptiveWasResynced = false;
-        if (eyezoomMode && preemptiveMode) {
-            if (preemptiveMode->useRelativeSize || preemptiveMode->relativeWidth >= 0.0f || preemptiveMode->relativeHeight >= 0.0f) {
-                preemptiveMode->useRelativeSize = false;
-                preemptiveMode->relativeWidth = -1.0f;
-                preemptiveMode->relativeHeight = -1.0f;
-                preemptiveMode->widthExpr.clear();
-                preemptiveMode->heightExpr.clear();
-                preemptiveWasResynced = true;
-            }
-
-            if (preemptiveMode->width != eyezoomMode->width) {
-                preemptiveMode->width = eyezoomMode->width;
-                preemptiveMode->manualWidth = (eyezoomMode->manualWidth > 0) ? eyezoomMode->manualWidth : eyezoomMode->width;
-                preemptiveWasResynced = true;
-            }
-            if (preemptiveMode->height != eyezoomMode->height) {
-                preemptiveMode->height = eyezoomMode->height;
-                preemptiveMode->manualHeight = (eyezoomMode->manualHeight > 0) ? eyezoomMode->manualHeight : eyezoomMode->height;
-                preemptiveWasResynced = true;
-            }
-        }
-
-        if (g_pendingDimensionChange.sendWmSize && !fullscreenStretchMode && g_currentModeId == g_pendingDimensionChange.modeId) {
-            HWND hwnd = g_minecraftHwnd.load();
-            if (hwnd) { RequestWindowClientResize(hwnd, mode->width, mode->height, "logic_thread:pending_dimension"); }
-        }
-
-        if (g_pendingDimensionChange.sendWmSize && g_currentModeId == "Preemptive" && g_pendingDimensionChange.modeId == "EyeZoom" &&
-            preemptiveMode) {
-            HWND hwnd = g_minecraftHwnd.load();
-            if (hwnd) {
-                RequestWindowClientResize(hwnd, preemptiveMode->width, preemptiveMode->height, "logic_thread:preemptive_eyezoom_sync");
-            }
-        }
-
-        if (preemptiveWasResynced) { g_configIsDirty = true; }
-
-        g_configIsDirty = true;
-    }
-
-    g_pendingDimensionChange.pending = false;
-    g_pendingDimensionChange.modeId.clear();
-    g_pendingDimensionChange.newWidth = 0;
-    g_pendingDimensionChange.newHeight = 0;
-    g_pendingDimensionChange.sendWmSize = false;
-}
-
 void CheckGameStateReset() {
     PROFILE_SCOPE_CAT("LT Game State Reset", "Logic Thread");
 
@@ -702,7 +605,8 @@ static void CheckAutoBorderless() {
     HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
     if (!hwnd) { return; }
 
-    if (!g_config.autoBorderless) {
+    auto cfgSnap = GetConfigSnapshot();
+    if (!cfgSnap || !cfgSnap->autoBorderless) {
         s_checked = true;
         return;
     }
@@ -748,7 +652,6 @@ static void LogicThreadFunc() {
         CheckWorldExitReset();
         CheckWindowsMouseSpeedChange();
         ProcessPendingModeSwitch();
-        ProcessPendingDimensionChange();
         CheckGameStateReset();
         CheckAutoBorderless();
 

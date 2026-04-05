@@ -162,6 +162,27 @@ void StartNinjabrainClient() {
             ClearNinjabrainBoatData(data);
         });
     };
+    callbacks.onBlindMessage = [generation](const std::string& payload) {
+        if (!IsActiveNinjabrainClientGeneration(generation)) { return; }
+        ModifyNinjabrainData([&](NinjabrainData& data) {
+            ApplyNinjabrainBlindEvent(payload, data, LogNinjabrainMessage);
+        });
+    };
+    callbacks.onBlindConnect = [generation]() {
+        if (!IsActiveNinjabrainClientGeneration(generation)) { return; }
+        std::lock_guard<std::mutex> lock(g_ninjabrainClientMutex);
+        g_ninjabrainClientStatus.MarkBlindConnected();
+    };
+    callbacks.onBlindDisconnect = [generation](const std::string& error) {
+        if (!IsActiveNinjabrainClientGeneration(generation)) { return; }
+        {
+            std::lock_guard<std::mutex> lock(g_ninjabrainClientMutex);
+            g_ninjabrainClientStatus.MarkBlindDisconnected(error);
+        }
+        ModifyNinjabrainData([](NinjabrainData& data) {
+            ClearNinjabrainBlindData(data);
+        });
+    };
     callbacks.onLog = LogNinjabrainMessage;
 
     try {

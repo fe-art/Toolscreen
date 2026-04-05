@@ -2134,6 +2134,15 @@ void ConfigToToml(const Config& config, toml::table& out) {
         nb.insert("failureOffsetX",       o.failureOffsetX);
         nb.insert("failureOffsetY",       o.failureOffsetY);
         nb.insert("failureDrawOrder",     o.failureDrawOrder);
+        nb.insert("blindMarginLeft",      o.blindMarginLeft);
+        nb.insert("blindMarginRight",     o.blindMarginRight);
+        nb.insert("blindMarginTop",       o.blindMarginTop);
+        nb.insert("blindMarginBottom",    o.blindMarginBottom);
+        nb.insert("blindLineGap",         o.blindLineGap);
+        nb.insert("blindAnchor",          o.blindAnchor);
+        nb.insert("blindOffsetX",         o.blindOffsetX);
+        nb.insert("blindOffsetY",         o.blindOffsetY);
+        nb.insert("blindDrawOrder",       o.blindDrawOrder);
         nb.insert("customFontPath",       o.customFontPath);
         nb.insert("overlayOpacity",       o.overlayOpacity);
         nb.insert("overlayScale",         o.overlayScale);
@@ -2436,6 +2445,15 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
         c.failureOffsetX       = GetOr(*nb, "failureOffsetX", 0.0f);
         c.failureOffsetY       = GetOr(*nb, "failureOffsetY", 0.0f);
         c.failureDrawOrder     = GetOr(*nb, "failureDrawOrder", 0);
+        c.blindMarginLeft      = GetOr(*nb, "blindMarginLeft",     0.0f);
+        c.blindMarginRight     = GetOr(*nb, "blindMarginRight",    0.0f);
+        c.blindMarginTop       = GetOr(*nb, "blindMarginTop",      0.0f);
+        c.blindMarginBottom    = GetOr(*nb, "blindMarginBottom",   0.0f);
+        c.blindLineGap         = GetOr(*nb, "blindLineGap",        8.0f);
+        c.blindAnchor          = GetStringOr(*nb, "blindAnchor", "topLeft");
+        c.blindOffsetX         = GetOr(*nb, "blindOffsetX", 0.0f);
+        c.blindOffsetY         = GetOr(*nb, "blindOffsetY", 0.0f);
+        c.blindDrawOrder       = GetOr(*nb, "blindDrawOrder", 0);
         c.customFontPath       = GetStringOr(*nb, "customFontPath", "");
         c.overlayOpacity       = GetOr(*nb, "overlayOpacity",       1.0f);
         c.overlayScale         = GetOr(*nb, "overlayScale",         c.overlayScale);
@@ -2511,6 +2529,17 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
         c.failureOffsetX = std::clamp(c.failureOffsetX, 0.0f, 1000.0f);
         c.failureOffsetY = std::clamp(c.failureOffsetY, 0.0f, 1000.0f);
         c.failureDrawOrder = std::clamp(c.failureDrawOrder, 0, 32);
+        c.blindMarginLeft = std::clamp(c.blindMarginLeft, 0.0f, 400.0f);
+        c.blindMarginRight = std::clamp(c.blindMarginRight, 0.0f, 400.0f);
+        c.blindMarginTop = std::clamp(c.blindMarginTop, 0.0f, 160.0f);
+        c.blindMarginBottom = std::clamp(c.blindMarginBottom, 0.0f, 160.0f);
+        c.blindLineGap = std::clamp(c.blindLineGap, 0.0f, 96.0f);
+        if (c.blindAnchor != "topLeft" && c.blindAnchor != "topRight" && c.blindAnchor != "bottomLeft" && c.blindAnchor != "bottomRight") {
+            c.blindAnchor = "topLeft";
+        }
+        c.blindOffsetX = std::clamp(c.blindOffsetX, 0.0f, 1000.0f);
+        c.blindOffsetY = std::clamp(c.blindOffsetY, 0.0f, 1000.0f);
+        c.blindDrawOrder = std::clamp(c.blindDrawOrder, 0, 32);
         if (auto* arr = nb->get_as<toml::array>("allowedModes")) {
             c.allowedModes.clear();
             for (auto& el : *arr) { if (auto* s = el.as_string()) c.allowedModes.push_back(s->get()); }

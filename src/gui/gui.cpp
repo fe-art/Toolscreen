@@ -87,7 +87,7 @@ struct SettingsTopTabBounceState {
 
 SettingsTopTabBounceState s_settingsTopTabBounceState;
 
-constexpr float kSettingsTopTabBounceDurationSeconds = 0.0f;
+constexpr float kSettingsTopTabBounceDurationSeconds = 1.0f;
 constexpr float kSettingsTopTabBounceOvershoot = 0.0f;
 constexpr float kSettingsTopTabBounceMinOffset = 0.0f;
 constexpr float kSettingsTopTabBounceLineHeightScale = 0.0f;
@@ -135,9 +135,15 @@ float ComputeSettingsTopTabBounceOffsetY() {
         return 0.0f;
     }
 
+    const float startOffset =
+        (std::max)(kSettingsTopTabBounceMinOffset, ImGui::GetTextLineHeightWithSpacing() * kSettingsTopTabBounceLineHeightScale);
+    if (startOffset <= 0.0f || kSettingsTopTabBounceDurationSeconds <= 0.0f) {
+        return 0.0f;
+    }
+
     const float elapsedSeconds = static_cast<float>(ImGui::GetTime() - s_settingsTopTabBounceState.animationStartTime);
     if (elapsedSeconds <= 0.0f) {
-        return (std::max)(kSettingsTopTabBounceMinOffset, ImGui::GetTextLineHeightWithSpacing() * kSettingsTopTabBounceLineHeightScale);
+        return startOffset;
     }
 
     const float progress = (std::clamp)(elapsedSeconds / kSettingsTopTabBounceDurationSeconds, 0.0f, 1.0f);
@@ -149,8 +155,6 @@ float ComputeSettingsTopTabBounceOffsetY() {
     const float c1 = kSettingsTopTabBounceOvershoot;
     const float c3 = c1 + 1.0f;
     const float eased = 1.0f + c3 * t * t * t + c1 * t * t;
-    const float startOffset =
-        (std::max)(kSettingsTopTabBounceMinOffset, ImGui::GetTextLineHeightWithSpacing() * kSettingsTopTabBounceLineHeightScale);
     return startOffset * (1.0f - eased);
 }
 

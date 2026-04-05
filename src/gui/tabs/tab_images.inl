@@ -5,6 +5,7 @@ if (BeginSelectableSettingsNestedTabItem(trc("tabs.images"))) {
     g_windowOverlayDragMode.store(false);
 
     SliderCtrlClickTip();
+    const std::string g_currentModeId = GetPublishedCurrentModeId();
 
     ImGui::TextColored(ImVec4(0.7f, 0.9f, 0.7f, 1.0f),
                        trc("images.tooltip"));

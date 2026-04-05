@@ -669,6 +669,15 @@ struct NinjabrainOverlayConfig {
     float failureOffsetX = 0.0f;
     float failureOffsetY = 0.0f;
     int failureDrawOrder = 0;
+    float blindMarginLeft = 0.0f;
+    float blindMarginRight = 0.0f;
+    float blindMarginTop = 0.0f;
+    float blindMarginBottom = 0.0f;
+    float blindLineGap = 8.0f;
+    std::string blindAnchor = "topLeft";
+    float blindOffsetX = 0.0f;
+    float blindOffsetY = 0.0f;
+    int blindDrawOrder = 0;
     bool alwaysShowBoat = false;
     bool showBoatStateInTopBar = false;
     float boatStateSize = 20.0f;
@@ -842,8 +851,16 @@ extern std::atomic<bool> g_configIsDirty;
 // Atomically publish current g_config as an immutable snapshot.
 void PublishConfigSnapshot();
 
+// Atomically publish a specific config instance as an immutable snapshot.
+// Use this for derived/runtime snapshots built off the latest published config.
+void PublishConfigSnapshot(const Config& config);
+
 // Get the latest published config snapshot. Lock-free, safe from any thread.
 std::shared_ptr<const Config> GetConfigSnapshot();
+
+// Lock-free read of the published current mode id.
+// Render/input readers should prefer this over reading g_currentModeId directly.
+std::string GetPublishedCurrentModeId();
 
 // HOTKEY SECONDARY MODE STATE (separated from Config for thread safety)
 // state mutated by input_hook and logic_thread while Config is read elsewhere.
@@ -875,7 +892,8 @@ extern std::atomic<HWND> g_minecraftHwnd;
 extern std::wstring g_toolscreenPath;
 extern std::string g_currentModeId;
 extern std::mutex g_modeIdMutex;
-// Lock-free mode ID access (double-buffered)
+// Lock-free mode ID access (double-buffered). Readers should prefer
+// GetPublishedCurrentModeId() over touching g_currentModeId directly.
 extern std::string g_modeIdBuffers[2];
 extern std::atomic<int> g_currentModeIdIndex;
 extern GameVersion g_gameVersion;
@@ -957,18 +975,6 @@ struct PendingModeSwitch {
 };
 extern PendingModeSwitch g_pendingModeSwitch;
 extern std::mutex g_pendingModeSwitchMutex;
-
-// When GUI spinners change mode dimensions, the change is deferred to the game thread
-// to avoid race conditions between render thread (GUI) and game thread (reading config)
-struct PendingDimensionChange {
-    bool pending = false;
-    std::string modeId;
-    int newWidth = 0;
-    int newHeight = 0;
-    bool sendWmSize = false;
-};
-extern PendingDimensionChange g_pendingDimensionChange;
-extern std::mutex g_pendingDimensionChangeMutex;
 
 extern std::atomic<double> g_lastFrameTimeMs;
 extern std::atomic<double> g_originalFrameTimeMs;

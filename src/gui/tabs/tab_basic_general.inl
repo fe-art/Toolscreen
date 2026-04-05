@@ -4,6 +4,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.general"))) {
     g_windowOverlayDragMode.store(false);
 
     SliderCtrlClickTip();
+    const std::string g_currentModeId = GetPublishedCurrentModeId();
 
     ImGui::SeparatorText(trc("label.window"));
     {

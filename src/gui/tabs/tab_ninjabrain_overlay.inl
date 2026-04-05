@@ -687,6 +687,8 @@ if (BeginSelectableSettingsNestedTabItem(trc("ninjabrain.title"))) {
                                        nb.throwsOffsetX, nb.throwsOffsetY, nb.throwsDrawOrder);
                 renderManualSectionRow(trc("ninjabrain.section_failed_result"), "failure", nb.failureAnchor,
                                        nb.failureOffsetX, nb.failureOffsetY, nb.failureDrawOrder);
+                renderManualSectionRow(trc("ninjabrain.section_blind_result"), "blind", nb.blindAnchor,
+                                       nb.blindOffsetX, nb.blindOffsetY, nb.blindDrawOrder);
 
                 ImGui::EndTable();
             }
@@ -865,6 +867,43 @@ if (BeginSelectableSettingsNestedTabItem(trc("ninjabrain.title"))) {
             ImGui::NextColumn();
             ImGui::SetNextItemWidth(250);
             if (ImGui::SliderFloat("##nbFailureLineGap", &nb.failureLineGap, 0.0f, 64.0f, "%.0f px")) changed = true;
+            ImGui::NextColumn();
+
+            ImGui::Columns(1);
+        }
+
+        if (ImGui::CollapsingHeader(trc("ninjabrain.blind_layout"), kNinjabrainSectionFlags)) {
+            ImGui::Columns(2, "nb_blind_layout_cols", false);
+            ImGui::SetColumnWidth(0, kNinjabrainLabelColumnWidth);
+
+            ImGui::Text("%s", trc("ninjabrain.blind_margin_left"));
+            ImGui::NextColumn();
+            ImGui::SetNextItemWidth(250);
+            if (ImGui::SliderFloat("##nbBlindMarginLeft", &nb.blindMarginLeft, 0.0f, 240.0f, "%.0f px")) changed = true;
+            ImGui::NextColumn();
+
+            ImGui::Text("%s", trc("ninjabrain.blind_margin_right"));
+            ImGui::NextColumn();
+            ImGui::SetNextItemWidth(250);
+            if (ImGui::SliderFloat("##nbBlindMarginRight", &nb.blindMarginRight, 0.0f, 240.0f, "%.0f px")) changed = true;
+            ImGui::NextColumn();
+
+            ImGui::Text("%s", trc("ninjabrain.blind_margin_top"));
+            ImGui::NextColumn();
+            ImGui::SetNextItemWidth(250);
+            if (ImGui::SliderFloat("##nbBlindMarginTop", &nb.blindMarginTop, 0.0f, 96.0f, "%.0f px")) changed = true;
+            ImGui::NextColumn();
+
+            ImGui::Text("%s", trc("ninjabrain.blind_margin_bottom"));
+            ImGui::NextColumn();
+            ImGui::SetNextItemWidth(250);
+            if (ImGui::SliderFloat("##nbBlindMarginBottom", &nb.blindMarginBottom, 0.0f, 96.0f, "%.0f px")) changed = true;
+            ImGui::NextColumn();
+
+            ImGui::Text("%s", trc("ninjabrain.blind_line_gap"));
+            ImGui::NextColumn();
+            ImGui::SetNextItemWidth(250);
+            if (ImGui::SliderFloat("##nbBlindLineGap", &nb.blindLineGap, 0.0f, 64.0f, "%.0f px")) changed = true;
             ImGui::NextColumn();
 
             ImGui::Columns(1);

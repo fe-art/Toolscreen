@@ -41,6 +41,20 @@ struct NinjabrainInformationMessage {
     std::string message;
 };
 
+struct NinjabrainBlindData {
+    bool enabled = false;
+    bool hasDivine = false;
+    bool hasResult = false;
+    std::string evaluation;
+    double xInNether = 0.0;
+    double zInNether = 0.0;
+    double improveDistance = 0.0;
+    double averageDistance = 0.0;
+    double improveDirection = 0.0;
+    double highrollProbability = 0.0;
+    double highrollThreshold = 0.0;
+};
+
 struct NinjabrainData {
     int strongholdX = 0;
     int strongholdZ = 0;
@@ -76,6 +90,8 @@ struct NinjabrainData {
 
     std::array<NinjabrainInformationMessage, kNinjabrainInformationMessageLimit> informationMessages{};
     int informationMessageCount = 0;
+
+    NinjabrainBlindData blind;
 
     // For NB 1.5.1 increment recovery: integer counter incremented/decremented by 1
     // per SSE event (one event = one hotkey press = one click). Never uses division.

@@ -66,7 +66,11 @@ std::atomic<uint64_t> g_configSnapshotVersion{ 0 };
 static std::atomic<std::shared_ptr<const Config>> g_configSnapshot;
 
 void PublishConfigSnapshot() {
-    auto snapshot = std::make_shared<const Config>(g_config);
+    PublishConfigSnapshot(g_config);
+}
+
+void PublishConfigSnapshot(const Config& config) {
+    auto snapshot = std::make_shared<const Config>(config);
     // Lock-free publish: atomic store of shared_ptr.
     g_configSnapshot.store(std::move(snapshot), std::memory_order_release);
 
@@ -76,6 +80,11 @@ void PublishConfigSnapshot() {
 std::shared_ptr<const Config> GetConfigSnapshot() {
     // Lock-free read: atomic load of shared_ptr.
     return g_configSnapshot.load(std::memory_order_acquire);
+}
+
+std::string GetPublishedCurrentModeId() {
+    const int index = g_currentModeIdIndex.load(std::memory_order_acquire);
+    return g_modeIdBuffers[index];
 }
 
 // HOTKEY SECONDARY MODE STATE - Thread-safe runtime state separated from Config
@@ -195,9 +204,6 @@ std::atomic<int> g_viewportTransitionSnapshotIndex{ 0 };
 
 PendingModeSwitch g_pendingModeSwitch;
 std::mutex g_pendingModeSwitchMutex;
-
-PendingDimensionChange g_pendingDimensionChange;
-std::mutex g_pendingDimensionChangeMutex;
 
 std::atomic<double> g_lastFrameTimeMs{ 0.0 };
 std::atomic<double> g_originalFrameTimeMs{ 0.0 };

@@ -543,7 +543,11 @@ if(BUILD_TESTING AND TOOLSCREEN_ENABLE_NINJABRAIN_API_MANUAL_TESTS)
 
     set(TOOLSCREEN_NINJABRAIN_API_TEST_CASES
         boat_event_parses_snapshot
+        connection_tracker_treats_blind_as_connected
+        blind_event_parses_snapshot
+        blind_event_disabled_clears_snapshot
         stronghold_failure_preserves_boat
+        stronghold_clear_preserves_blind
         stronghold_event_parses_prediction_details
         stronghold_increment_recovery_without_correction_increments
         live_ninjabrain_api_http_server_smoke

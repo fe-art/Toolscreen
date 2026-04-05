@@ -23,6 +23,67 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
     }
 
     SliderCtrlClickTip();
+    const std::string g_currentModeId = GetPublishedCurrentModeId();
+
+    auto applyManualModeDimensionChange = [&](ModeConfig& mode, bool updateWidth, int requestedValue, int minValue,
+                                              const char* resizeSource) {
+        int clampedValue = (std::max)(minValue, requestedValue);
+        if (updateWidth) {
+            if (EqualsIgnoreCase(mode.id, "Thin")) {
+                clampedValue = (std::max)(330, clampedValue);
+            }
+            mode.width = clampedValue;
+            mode.manualWidth = mode.width;
+            mode.relativeWidth = -1.0f;
+            mode.widthExpr.clear();
+        } else {
+            mode.height = clampedValue;
+            mode.manualHeight = mode.height;
+            mode.relativeHeight = -1.0f;
+            mode.heightExpr.clear();
+        }
+
+        const bool hasRelativeWidth = (mode.relativeWidth >= 0.0f && mode.relativeWidth <= 1.0f);
+        const bool hasRelativeHeight = (mode.relativeHeight >= 0.0f && mode.relativeHeight <= 1.0f);
+        if (!hasRelativeWidth && !hasRelativeHeight) { mode.useRelativeSize = false; }
+
+        if (EqualsIgnoreCase(mode.id, "EyeZoom")) {
+            g_config.eyezoom.windowWidth = mode.width;
+            g_config.eyezoom.windowHeight = mode.height;
+            if (SyncPreemptiveModeFromEyeZoom(g_config)) { g_configIsDirty = true; }
+        }
+
+        if (EqualsIgnoreCase(mode.id, "Fullscreen")) {
+            int currentClientW = GetCachedWindowWidth();
+            int currentClientH = GetCachedWindowHeight();
+            if (currentClientW < 1) currentClientW = 1;
+            if (currentClientH < 1) currentClientH = 1;
+            mode.stretch.enabled = true;
+            mode.stretch.x = 0;
+            mode.stretch.y = 0;
+            mode.stretch.width = currentClientW;
+            mode.stretch.height = currentClientH;
+        }
+
+        g_configIsDirty = true;
+
+        HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
+        if (!hwnd) { return; }
+
+        if (g_currentModeId == mode.id) {
+            RequestWindowClientResize(hwnd, mode.width, mode.height, resizeSource);
+            return;
+        }
+
+        if (EqualsIgnoreCase(g_currentModeId, "Preemptive") && EqualsIgnoreCase(mode.id, "EyeZoom")) {
+            for (const auto& syncedMode : g_config.modes) {
+                if (EqualsIgnoreCase(syncedMode.id, "Preemptive")) {
+                    RequestWindowClientResize(hwnd, syncedMode.width, syncedMode.height, "gui:preemptive_eyezoom_sync");
+                    break;
+                }
+            }
+        }
+    };
 
     auto renderModeBrowserOverlayAssignments = [&](ModeConfig& mode, const std::string& idSuffix) {
         if (ImGui::TreeNode((tr("modes.browser_overlays") + "##" + idSuffix).c_str())) {
@@ -117,12 +178,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                 } else {
                     int tempWidth = mode.width;
                     if (Spinner("##Width", &tempWidth, 1, 1)) {
-                        std::lock_guard<std::mutex> lock(g_pendingDimensionChangeMutex);
-                        g_pendingDimensionChange.pending = true;
-                        g_pendingDimensionChange.modeId = mode.id;
-                        g_pendingDimensionChange.newWidth = tempWidth;
-                        g_pendingDimensionChange.newHeight = 0;
-                        g_pendingDimensionChange.sendWmSize = (g_currentModeId == mode.id);
+                        applyManualModeDimensionChange(mode, true, tempWidth, 1, "gui:fullscreen_width_spinner");
                     }
                 }
                 ImGui::NextColumn();
@@ -149,12 +205,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                 } else {
                     int tempHeight = mode.height;
                     if (Spinner("##Height", &tempHeight, 1, 1)) {
-                        std::lock_guard<std::mutex> lock(g_pendingDimensionChangeMutex);
-                        g_pendingDimensionChange.pending = true;
-                        g_pendingDimensionChange.modeId = mode.id;
-                        g_pendingDimensionChange.newWidth = 0;
-                        g_pendingDimensionChange.newHeight = tempHeight;
-                        g_pendingDimensionChange.sendWmSize = (g_currentModeId == mode.id);
+                        applyManualModeDimensionChange(mode, false, tempHeight, 1, "gui:fullscreen_height_spinner");
                     }
                 }
                 ImGui::Columns(1);
@@ -396,24 +447,14 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                 ImGui::NextColumn();
                 int tempWidth2 = mode.width;
                 if (Spinner("##ModeWidth", &tempWidth2, 1, 1, screenWidth)) {
-                    std::lock_guard<std::mutex> lock(g_pendingDimensionChangeMutex);
-                    g_pendingDimensionChange.pending = true;
-                    g_pendingDimensionChange.modeId = mode.id;
-                    g_pendingDimensionChange.newWidth = tempWidth2;
-                    g_pendingDimensionChange.newHeight = 0;
-                    g_pendingDimensionChange.sendWmSize = (g_currentModeId == mode.id);
+                    applyManualModeDimensionChange(mode, true, tempWidth2, 1, "gui:eyezoom_width_spinner");
                 }
                 ImGui::NextColumn();
                 ImGui::Text(trc("modes.game_height"));
                 ImGui::NextColumn();
                 int tempHeight2 = mode.height;
                 if (Spinner("##ModeHeight", &tempHeight2, 1, 1, 16384)) {
-                    std::lock_guard<std::mutex> lock(g_pendingDimensionChangeMutex);
-                    g_pendingDimensionChange.pending = true;
-                    g_pendingDimensionChange.modeId = mode.id;
-                    g_pendingDimensionChange.newWidth = 0;
-                    g_pendingDimensionChange.newHeight = tempHeight2;
-                    g_pendingDimensionChange.sendWmSize = (g_currentModeId == mode.id);
+                    applyManualModeDimensionChange(mode, false, tempHeight2, 1, "gui:eyezoom_height_spinner");
                 }
                 ImGui::Columns(1);
 
@@ -1629,12 +1670,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                 } else {
                     int tempWidth3 = mode.width;
                     if (Spinner("##Width", &tempWidth3, 1, 330, screenWidth)) {
-                        std::lock_guard<std::mutex> lock(g_pendingDimensionChangeMutex);
-                        g_pendingDimensionChange.pending = true;
-                        g_pendingDimensionChange.modeId = mode.id;
-                        g_pendingDimensionChange.newWidth = tempWidth3;
-                        g_pendingDimensionChange.newHeight = 0;
-                        g_pendingDimensionChange.sendWmSize = (g_currentModeId == mode.id);
+                        applyManualModeDimensionChange(mode, true, tempWidth3, 330, "gui:thin_width_spinner");
                     }
                 }
                 ImGui::NextColumn();
@@ -1661,12 +1697,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                 } else {
                     int tempHeight3 = mode.height;
                     if (Spinner("##Height", &tempHeight3, 1, 1, screenHeight)) {
-                        std::lock_guard<std::mutex> lock(g_pendingDimensionChangeMutex);
-                        g_pendingDimensionChange.pending = true;
-                        g_pendingDimensionChange.modeId = mode.id;
-                        g_pendingDimensionChange.newWidth = 0;
-                        g_pendingDimensionChange.newHeight = tempHeight3;
-                        g_pendingDimensionChange.sendWmSize = (g_currentModeId == mode.id);
+                        applyManualModeDimensionChange(mode, false, tempHeight3, 1, "gui:thin_height_spinner");
                     }
                 }
                 ImGui::Columns(1);
@@ -2050,12 +2081,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                 } else {
                     int tempWidth4 = mode.width;
                     if (Spinner("##Width", &tempWidth4, 1, 1, screenWidth)) {
-                        std::lock_guard<std::mutex> lock(g_pendingDimensionChangeMutex);
-                        g_pendingDimensionChange.pending = true;
-                        g_pendingDimensionChange.modeId = mode.id;
-                        g_pendingDimensionChange.newWidth = tempWidth4;
-                        g_pendingDimensionChange.newHeight = 0;
-                        g_pendingDimensionChange.sendWmSize = (g_currentModeId == mode.id);
+                        applyManualModeDimensionChange(mode, true, tempWidth4, 1, "gui:wide_width_spinner");
                     }
                 }
                 ImGui::NextColumn();
@@ -2082,12 +2108,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                 } else {
                     int tempHeight4 = mode.height;
                     if (Spinner("##Height", &tempHeight4, 1, 1, screenHeight)) {
-                        std::lock_guard<std::mutex> lock(g_pendingDimensionChangeMutex);
-                        g_pendingDimensionChange.pending = true;
-                        g_pendingDimensionChange.modeId = mode.id;
-                        g_pendingDimensionChange.newWidth = 0;
-                        g_pendingDimensionChange.newHeight = tempHeight4;
-                        g_pendingDimensionChange.sendWmSize = (g_currentModeId == mode.id);
+                        applyManualModeDimensionChange(mode, false, tempHeight4, 1, "gui:wide_height_spinner");
                     }
                 }
                 ImGui::Columns(1);
@@ -2555,12 +2576,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                 } else {
                     int tempWidth5 = mode.width;
                     if (Spinner("##Width", &tempWidth5, 1, 1)) {
-                        std::lock_guard<std::mutex> lock(g_pendingDimensionChangeMutex);
-                        g_pendingDimensionChange.pending = true;
-                        g_pendingDimensionChange.modeId = mode.id;
-                        g_pendingDimensionChange.newWidth = tempWidth5;
-                        g_pendingDimensionChange.newHeight = 0;
-                        g_pendingDimensionChange.sendWmSize = (g_currentModeId == mode.id);
+                        applyManualModeDimensionChange(mode, true, tempWidth5, 1, "gui:custom_mode_width_spinner");
                     }
                 }
 
@@ -2593,12 +2609,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                 } else {
                     int tempHeight5 = mode.height;
                     if (Spinner("##Height", &tempHeight5, 1, 1)) {
-                        std::lock_guard<std::mutex> lock(g_pendingDimensionChangeMutex);
-                        g_pendingDimensionChange.pending = true;
-                        g_pendingDimensionChange.modeId = mode.id;
-                        g_pendingDimensionChange.newWidth = 0;
-                        g_pendingDimensionChange.newHeight = tempHeight5;
-                        g_pendingDimensionChange.sendWmSize = (g_currentModeId == mode.id);
+                        applyManualModeDimensionChange(mode, false, tempHeight5, 1, "gui:custom_mode_height_spinner");
                     }
                 }
                 ImGui::Columns(1);

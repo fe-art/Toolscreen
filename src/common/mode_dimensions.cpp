@@ -7,13 +7,65 @@
 
 #include <cmath>
 
-void RecalculateModeDimensions() {
-    int screenW = GetCachedWindowWidth();
-    int screenH = GetCachedWindowHeight();
+bool SyncPreemptiveModeFromEyeZoom(Config& config) {
+    ModeConfig* eyezoomMode = nullptr;
+    ModeConfig* preemptiveMode = nullptr;
+    for (auto& mode : config.modes) {
+        if (!eyezoomMode && mode.id == "EyeZoom") { eyezoomMode = &mode; }
+        if (!preemptiveMode && mode.id == "Preemptive") { preemptiveMode = &mode; }
+    }
+
+    if (!eyezoomMode || !preemptiveMode) { return false; }
+
+    bool changed = false;
+    if (preemptiveMode->width != eyezoomMode->width) {
+        preemptiveMode->width = eyezoomMode->width;
+        changed = true;
+    }
+    if (preemptiveMode->height != eyezoomMode->height) {
+        preemptiveMode->height = eyezoomMode->height;
+        changed = true;
+    }
+
+    const int syncedManualWidth = (eyezoomMode->manualWidth > 0) ? eyezoomMode->manualWidth : eyezoomMode->width;
+    const int syncedManualHeight = (eyezoomMode->manualHeight > 0) ? eyezoomMode->manualHeight : eyezoomMode->height;
+    if (preemptiveMode->manualWidth != syncedManualWidth) {
+        preemptiveMode->manualWidth = syncedManualWidth;
+        changed = true;
+    }
+    if (preemptiveMode->manualHeight != syncedManualHeight) {
+        preemptiveMode->manualHeight = syncedManualHeight;
+        changed = true;
+    }
+    if (preemptiveMode->useRelativeSize) {
+        preemptiveMode->useRelativeSize = false;
+        changed = true;
+    }
+    if (preemptiveMode->relativeWidth != -1.0f) {
+        preemptiveMode->relativeWidth = -1.0f;
+        changed = true;
+    }
+    if (preemptiveMode->relativeHeight != -1.0f) {
+        preemptiveMode->relativeHeight = -1.0f;
+        changed = true;
+    }
+    if (!preemptiveMode->widthExpr.empty()) {
+        preemptiveMode->widthExpr.clear();
+        changed = true;
+    }
+    if (!preemptiveMode->heightExpr.empty()) {
+        preemptiveMode->heightExpr.clear();
+        changed = true;
+    }
+
+    return changed;
+}
+
+void RecalculateModeDimensions(Config& config, int screenW, int screenH) {
     if (screenW < 1) screenW = 1;
     if (screenH < 1) screenH = 1;
 
-    for (auto& mode : g_config.modes) {
+    for (auto& mode : config.modes) {
         if (mode.id == "Fullscreen") {
             // Fullscreen is always defined by the live game-window client size.
             // Keep width/height in sync so all consumers see the latest dimensions,
@@ -79,21 +131,11 @@ void RecalculateModeDimensions() {
         if (mode.id == "Thin" && mode.width < 330) { mode.width = 330; }
     }
 
-    ModeConfig* eyezoomMode = nullptr;
-    ModeConfig* preemptiveMode = nullptr;
-    for (auto& mode : g_config.modes) {
-        if (!eyezoomMode && mode.id == "EyeZoom") { eyezoomMode = &mode; }
-        if (!preemptiveMode && mode.id == "Preemptive") { preemptiveMode = &mode; }
-    }
-    if (eyezoomMode && preemptiveMode) {
-        preemptiveMode->width = eyezoomMode->width;
-        preemptiveMode->height = eyezoomMode->height;
-        preemptiveMode->manualWidth = (eyezoomMode->manualWidth > 0) ? eyezoomMode->manualWidth : eyezoomMode->width;
-        preemptiveMode->manualHeight = (eyezoomMode->manualHeight > 0) ? eyezoomMode->manualHeight : eyezoomMode->height;
-        preemptiveMode->useRelativeSize = false;
-        preemptiveMode->relativeWidth = -1.0f;
-        preemptiveMode->relativeHeight = -1.0f;
-        preemptiveMode->widthExpr.clear();
-        preemptiveMode->heightExpr.clear();
-    }
+    SyncPreemptiveModeFromEyeZoom(config);
+}
+
+void RecalculateModeDimensions() {
+    int screenW = GetCachedWindowWidth();
+    int screenH = GetCachedWindowHeight();
+    RecalculateModeDimensions(g_config, screenW, screenH);
 }
