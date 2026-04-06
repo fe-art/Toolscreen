@@ -135,6 +135,7 @@ std::atomic<bool> g_cursorsNeedReload{ false };
 std::atomic<bool> g_showGui{ false };
 std::atomic<bool> g_imageOverlaysVisible{ true };
 std::atomic<bool> g_windowOverlaysVisible{ true };
+std::atomic<bool> g_ninjabrainOverlayVisible{ true };
 std::atomic<bool> g_browserOverlaysVisible{ true };
 std::string g_currentlyEditingMirror;
 std::atomic<HWND> g_minecraftHwnd{ NULL };
@@ -496,6 +497,12 @@ void RebuildHotkeyMainKeys_Internal() {
     addMainKey(g_config.guiHotkey);
 
     addMainKey(g_config.borderlessHotkey);
+
+    addMainKey(g_config.imageOverlaysHotkey);
+
+    addMainKey(g_config.windowOverlaysHotkey);
+
+    addMainKey(g_config.ninjabrainOverlayHotkey);
 
     addMainKey(g_config.keyRebinds.toggleHotkey);
 

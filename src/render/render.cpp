@@ -4184,7 +4184,7 @@ static bool ShouldRenderNinjabrainOverlayForRequest(const SameThreadOverlayState
 
     const auto& nb = configSnapshot->ninjabrainOverlay;
     if (!nb.enabled) { return false; }
-    if (!g_windowOverlaysVisible.load(std::memory_order_acquire)) { return false; }
+    if (!g_ninjabrainOverlayVisible.load(std::memory_order_acquire)) { return false; }
     if (request.excludeOnlyOnMyScreen && nb.onlyOnMyScreen) { return false; }
     if (!request.excludeOnlyOnMyScreen && nb.onlyOnObs) { return false; }
     if (!IsNinjabrainOverlayModeAllowed(nb, request.modeId)) { return false; }

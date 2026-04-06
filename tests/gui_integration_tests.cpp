@@ -1592,6 +1592,7 @@ void PopulateRichConfigFixture() {
     g_config.autoBorderless = true;
     g_config.imageOverlaysHotkey = { VK_F8 };
     g_config.windowOverlaysHotkey = { VK_F7 };
+    g_config.ninjabrainOverlayHotkey = { VK_F10 };
 
     g_config.debug.showPerformanceOverlay = true;
     g_config.debug.showProfiler = true;
@@ -2023,6 +2024,7 @@ void VerifyRichGlobalSettings() {
     Expect(g_config.autoBorderless, "Expected autoBorderless to roundtrip.");
     ExpectVectorEquals(g_config.imageOverlaysHotkey, std::vector<DWORD>{ VK_F8 }, "Expected image overlay hotkey to roundtrip.");
     ExpectVectorEquals(g_config.windowOverlaysHotkey, std::vector<DWORD>{ VK_F7 }, "Expected window overlay hotkey to roundtrip.");
+    ExpectVectorEquals(g_config.ninjabrainOverlayHotkey, std::vector<DWORD>{ VK_F10 }, "Expected Ninjabrain overlay hotkey to roundtrip.");
 
     std::string currentModeId;
     {

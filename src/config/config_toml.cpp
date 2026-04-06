@@ -2124,6 +2124,10 @@ void ConfigToToml(const Config& config, toml::table& out) {
     for (const auto& key : config.windowOverlaysHotkey) { windowOverlaysHotkeyArr.push_back(static_cast<int64_t>(key)); }
     out.insert("windowOverlaysHotkey", windowOverlaysHotkeyArr);
 
+    toml::array ninjabrainOverlayHotkeyArr;
+    for (const auto& key : config.ninjabrainOverlayHotkey) { ninjabrainOverlayHotkeyArr.push_back(static_cast<int64_t>(key)); }
+    out.insert("ninjabrainOverlayHotkey", ninjabrainOverlayHotkeyArr);
+
     toml::table debugTbl;
     DebugGlobalConfigToToml(config.debug, debugTbl);
     out.insert("debug", debugTbl);
@@ -2410,6 +2414,15 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
         }
     }
     if (!hasWindowOverlaysHotkey) { config.windowOverlaysHotkey = ConfigDefaults::GetDefaultWindowOverlaysHotkey(); }
+
+    config.ninjabrainOverlayHotkey.clear();
+    const bool hasNinjabrainOverlayHotkey = tbl.contains("ninjabrainOverlayHotkey");
+    if (auto arr = GetArray(tbl, "ninjabrainOverlayHotkey")) {
+        for (const auto& elem : *arr) {
+            if (auto val = elem.value<int64_t>()) { config.ninjabrainOverlayHotkey.push_back(static_cast<DWORD>(*val)); }
+        }
+    }
+    if (!hasNinjabrainOverlayHotkey) { config.ninjabrainOverlayHotkey = ConfigDefaults::GetDefaultNinjabrainOverlayHotkey(); }
 
     if (auto t = GetTable(tbl, "debug")) { DebugGlobalConfigFromToml(*t, config.debug); }
 
@@ -2820,6 +2833,7 @@ const std::vector<std::string>& GetConfigTomlOrderedKeys() {
         "autoBorderless",
         "imageOverlaysHotkey",
         "windowOverlaysHotkey",
+        "ninjabrainOverlayHotkey",
         "debug",
         "eyezoom",
         "ninjabrainOverlay",

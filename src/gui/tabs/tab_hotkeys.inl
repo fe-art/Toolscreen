@@ -124,6 +124,40 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                 }
                 ImGui::TreePop();
             }
+
+            std::string ninjabrainOverlayKeyStr = GetKeyComboString(g_config.ninjabrainOverlayHotkey);
+            std::string ninjabrainOverlayNodeLabel =
+                tr("hotkeys.toggle_ninjabrain_overlay_prefix") +
+                (ninjabrainOverlayKeyStr.empty() ? trc("hotkeys.none") : ninjabrainOverlayKeyStr);
+
+            const bool ninjabrainOverlayVisible = g_ninjabrainOverlayVisible.load(std::memory_order_acquire);
+
+            bool ninjabrainOverlayNodeOpen =
+                ImGui::TreeNodeEx("##ninjabrain_overlay_toggle_node", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", ninjabrainOverlayNodeLabel.c_str());
+
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", trc("label.status"));
+            ImGui::SameLine();
+            ImGui::TextColored(ninjabrainOverlayVisible ? visibleGreen : hiddenRed, "%s",
+                               ninjabrainOverlayVisible ? trc("label.shown") : trc("label.hidden"));
+            if (ninjabrainOverlayNodeOpen) {
+                const bool isBindingNinjabrainOverlay = (s_mainHotkeyToBind == -994);
+                const char* ninjabrainOverlayButtonLabel =
+                    isBindingNinjabrainOverlay ? trc("hotkeys.press_keys")
+                                               : (ninjabrainOverlayKeyStr.empty() ? trc("hotkeys.none") : ninjabrainOverlayKeyStr.c_str());
+                if (ImGui::Button(ninjabrainOverlayButtonLabel)) {
+                    s_mainHotkeyToBind = -994;
+                    s_altHotkeyToBind = { -1, -1 };
+                    s_exclusionToBind = { -1, -1 };
+                    MarkHotkeyBindingActive();
+                }
+                ImGui::SameLine();
+                ImGui::TextDisabled(trc("label.question_mark"));
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(trc("tooltip.toggle_ninjabrain_overlay.advanced"));
+                }
+                ImGui::TreePop();
+            }
         }
         ImGui::PopID();
 

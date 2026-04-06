@@ -84,6 +84,38 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.other"))) {
     }
     ImGui::PopID();
 
+    ImGui::PushID("basic_ninjabrain_overlay_toggle_hotkey");
+    {
+        const bool ninjabrainOverlayVisible = g_ninjabrainOverlayVisible.load(std::memory_order_acquire);
+        const ImVec4 visibleGreen = ImVec4(0.20f, 1.00f, 0.20f, 1.00f);
+        const ImVec4 hiddenRed = ImVec4(1.00f, 0.20f, 0.20f, 1.00f);
+
+        std::string ninjabrainKeyStr = GetKeyComboString(g_config.ninjabrainOverlayHotkey);
+        ImGui::Text(trc("label.toggle_ninjabrain_overlay"));
+        ImGui::SameLine();
+        const bool isBindingNinjabrain = (s_mainHotkeyToBind == -994);
+        const char* ninjabrainBtnLabel =
+            isBindingNinjabrain ? trc("hotkeys.press_keys") : (ninjabrainKeyStr.empty() ? trc("hotkeys.click_to_bind") : ninjabrainKeyStr.c_str());
+        if (ImGui::Button(ninjabrainBtnLabel, ImVec2(150, 0))) {
+            s_mainHotkeyToBind = -994;
+            s_altHotkeyToBind = { -1, -1 };
+            s_exclusionToBind = { -1, -1 };
+                MarkHotkeyBindingActive();
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled(trc("label.question_mark"));
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(trc("tooltip.toggle_ninjabrain_overlay.basic"));
+        }
+
+        ImGui::SameLine();
+        ImGui::TextDisabled(trc("label.status"));
+        ImGui::SameLine();
+        ImGui::TextColored(ninjabrainOverlayVisible ? visibleGreen : hiddenRed, "%s",
+                           ninjabrainOverlayVisible ? trc("label.shown") : trc("label.hidden"));
+    }
+    ImGui::PopID();
+
     ImGui::SeparatorText(trc("hotkeys.window_hotkeys"));
     ImGui::PushID("basic_borderless_toggle");
     HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);

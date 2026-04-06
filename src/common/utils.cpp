@@ -2627,6 +2627,7 @@ std::string FindHotkeyConflict(const std::vector<DWORD>& newKeys, const std::str
     add(g_config.borderlessHotkey, "Borderless Toggle");
     add(g_config.imageOverlaysHotkey, "Image Overlays Toggle");
     add(g_config.windowOverlaysHotkey, "Window Overlays Toggle");
+    add(g_config.ninjabrainOverlayHotkey, "Ninjabrain Overlay Toggle");
     add(g_config.keyRebinds.toggleHotkey, "Key Rebinds Toggle");
 
     for (size_t i = 0; i < g_config.hotkeys.size(); ++i) {

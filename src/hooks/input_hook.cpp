@@ -46,6 +46,7 @@ extern std::atomic<bool> g_windowOverlayDragMode;
 extern std::atomic<HCURSOR> g_specialCursorHandle;
 // g_glInitialized is declared in render.h as atomic bool
 extern std::atomic<bool> g_gameWindowActive;
+extern std::atomic<bool> g_ninjabrainOverlayVisible;
 
 extern std::unordered_map<std::string, std::chrono::steady_clock::time_point> g_hotkeyTimestamps;
 extern std::mutex g_hotkeyTimestampsMutex;
@@ -993,6 +994,72 @@ InputHandlerResult HandleWindowOverlaysToggle(HWND hWnd, UINT uMsg, WPARAM wPara
     if (!newVisible) {
         UnfocusWindowOverlay();
     }
+
+    return { true, 1 };
+}
+
+InputHandlerResult HandleNinjabrainOverlayToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    switch (uMsg) {
+    case WM_KEYDOWN:
+    case WM_SYSKEYDOWN:
+    case WM_LBUTTONDOWN:
+    case WM_RBUTTONDOWN:
+    case WM_MBUTTONDOWN:
+    case WM_XBUTTONDOWN:
+        break;
+    default:
+        return { false, 0 };
+    }
+    PROFILE_SCOPE("HandleNinjabrainOverlayToggle");
+
+    const bool isAutoRepeatKeyDown =
+        (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) && ((lParam & (static_cast<LPARAM>(1) << 30)) != 0);
+
+    if (g_config.ninjabrainOverlayHotkey.empty()) { return { false, 0 }; }
+
+    if (IsHotkeyBindingActive() || IsRebindBindingActive()) { return { false, 0 }; }
+
+    DWORD vkCode = 0;
+    switch (uMsg) {
+    case WM_KEYDOWN:
+    case WM_SYSKEYDOWN: {
+        vkCode = static_cast<DWORD>(wParam);
+        vkCode = NormalizeModifierVkFromKeyMessage(vkCode, lParam);
+        break;
+    }
+    case WM_LBUTTONDOWN:
+        vkCode = VK_LBUTTON;
+        break;
+    case WM_RBUTTONDOWN:
+        vkCode = VK_RBUTTON;
+        break;
+    case WM_MBUTTONDOWN:
+        vkCode = VK_MBUTTON;
+        break;
+    case WM_XBUTTONDOWN: {
+        WORD xButton = GET_XBUTTON_WPARAM(wParam);
+        vkCode = (xButton == XBUTTON1) ? VK_XBUTTON1 : VK_XBUTTON2;
+        break;
+    }
+    default:
+        return { false, 0 };
+    }
+
+    if (!CheckHotkeyMatch(g_config.ninjabrainOverlayHotkey, vkCode, {}, false, s_bestMatchKeyCount)) { return { false, 0 }; }
+
+    if (ShouldMaskWindowsKeyForHotkey(g_config.ninjabrainOverlayHotkey, true, isAutoRepeatKeyDown)) {
+        (void)SendMenuMaskKeyTap();
+    }
+
+    static std::atomic<int64_t> s_lastToggleMs{ 0 };
+    auto now = std::chrono::steady_clock::now();
+    int64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+    int64_t lastMs = s_lastToggleMs.load(std::memory_order_relaxed);
+    if (nowMs - lastMs < 250) { return { true, 1 }; }
+    s_lastToggleMs.store(nowMs, std::memory_order_relaxed);
+
+    bool newVisible = !g_ninjabrainOverlayVisible.load(std::memory_order_acquire);
+    g_ninjabrainOverlayVisible.store(newVisible, std::memory_order_release);
 
     return { true, 1 };
 }
@@ -2937,6 +3004,7 @@ static void ResolveHotkeyPriority(UINT uMsg, WPARAM wParam, LPARAM lParam) {
     check(g_config.borderlessHotkey);
     check(g_config.imageOverlaysHotkey);
     check(g_config.windowOverlaysHotkey);
+    check(g_config.ninjabrainOverlayHotkey);
     check(g_config.keyRebinds.toggleHotkey);
 
     for (const auto& hk : g_config.hotkeys) {
@@ -3022,6 +3090,8 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     result = HandleImageOverlaysToggle(hWnd, uMsg, wParam, lParam);
     if (result.consumed) return result.result;
     result = HandleWindowOverlaysToggle(hWnd, uMsg, wParam, lParam);
+    if (result.consumed) return result.result;
+    result = HandleNinjabrainOverlayToggle(hWnd, uMsg, wParam, lParam);
     if (result.consumed) return result.result;
     result = HandleKeyRebindsToggle(hWnd, uMsg, wParam, lParam);
     if (result.consumed) return result.result;

@@ -492,6 +492,7 @@ void ApplyProfileFields(const Config& src, Config& dst, const ProfileSectionSele
         dst.borderlessHotkey = src.borderlessHotkey;
         dst.imageOverlaysHotkey = src.imageOverlaysHotkey;
         dst.windowOverlaysHotkey = src.windowOverlaysHotkey;
+        dst.ninjabrainOverlayHotkey = src.ninjabrainOverlayHotkey;
     }
     if (sections.inputsMouse) {
         dst.keyRebinds = src.keyRebinds;

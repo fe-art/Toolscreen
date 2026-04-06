@@ -2423,6 +2423,7 @@ void RenderSettingsGUI() {
                 else if (s_mainHotkeyToBind == -998) excludeLabel = "Borderless Toggle";
                 else if (s_mainHotkeyToBind == -997) excludeLabel = "Image Overlays Toggle";
                 else if (s_mainHotkeyToBind == -996) excludeLabel = "Window Overlays Toggle";
+                else if (s_mainHotkeyToBind == -994) excludeLabel = "Ninjabrain Overlay Toggle";
                 else if (s_mainHotkeyToBind == -995) excludeLabel = "Key Rebinds Toggle";
                 else if (s_mainHotkeyToBind >= 0) excludeLabel = "Mode Hotkey #" + std::to_string(s_mainHotkeyToBind + 1);
                 else if (s_sensHotkeyToBind != -1) excludeLabel = "Sensitivity Hotkey #" + std::to_string(s_sensHotkeyToBind + 1);
@@ -2448,6 +2449,8 @@ void RenderSettingsGUI() {
                     g_config.imageOverlaysHotkey = keys;
                 } else if (s_mainHotkeyToBind == -996) {
                     g_config.windowOverlaysHotkey = keys;
+                } else if (s_mainHotkeyToBind == -994) {
+                    g_config.ninjabrainOverlayHotkey = keys;
                 } else if (s_mainHotkeyToBind == -995) {
                     g_config.keyRebinds.toggleHotkey = keys;
                 } else {

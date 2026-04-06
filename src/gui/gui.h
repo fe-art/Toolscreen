@@ -709,6 +709,7 @@ struct Config {
     bool autoBorderless = false;
     std::vector<DWORD> imageOverlaysHotkey = {};
     std::vector<DWORD> windowOverlaysHotkey = {};
+    std::vector<DWORD> ninjabrainOverlayHotkey = {};
     CursorsConfig cursors;
     std::string fontPath = ConfigDefaults::CONFIG_DEFAULT_GUI_FONT_PATH;
     std::string lang = "en";
@@ -887,6 +888,7 @@ extern std::atomic<bool> g_showGui;
 extern std::atomic<bool> g_wasCursorVisible;
 extern std::atomic<bool> g_imageOverlaysVisible;
 extern std::atomic<bool> g_windowOverlaysVisible;
+extern std::atomic<bool> g_ninjabrainOverlayVisible;
 extern std::atomic<bool> g_browserOverlaysVisible;
 extern std::string g_currentlyEditingMirror;
 extern std::atomic<HWND> g_minecraftHwnd;

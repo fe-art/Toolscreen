@@ -45,6 +45,7 @@ InputHandlerResult HandleBorderlessToggle(HWND hWnd, UINT uMsg, WPARAM wParam, L
 
 InputHandlerResult HandleImageOverlaysToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 InputHandlerResult HandleWindowOverlaysToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+InputHandlerResult HandleNinjabrainOverlayToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 InputHandlerResult HandleKeyRebindsToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
 InputHandlerResult HandleWindowOverlayKeyboard(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);

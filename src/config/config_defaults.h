@@ -229,6 +229,7 @@ constexpr bool CONFIG_AUTO_BORDERLESS = false;
 
 inline std::vector<DWORD> GetDefaultImageOverlaysHotkey() { return {}; }
 inline std::vector<DWORD> GetDefaultWindowOverlaysHotkey() { return {}; }
+inline std::vector<DWORD> GetDefaultNinjabrainOverlayHotkey() { return {}; }
 
 inline const std::string GAME_TRANSITION_CUT = "Cut";
 inline const std::string GAME_TRANSITION_BOUNCE = "Bounce";
