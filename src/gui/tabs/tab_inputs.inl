@@ -623,8 +623,9 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                     }
                 };
 
+                constexpr float kDefaultKeyboardLayoutScale = 1.35f;
                 static bool s_keyboardLayoutOpen = false;
-                static float s_keyboardLayoutScale = 1.35f;
+                static float s_keyboardLayoutScale = kDefaultKeyboardLayoutScale;
                 static int s_physicalLayout = 0;
                 static int s_keyLabelLayout = 0;
                 static bool s_layoutEscapeRequiresRelease = false;
@@ -1990,14 +1991,16 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                          ImDrawFlags_RoundCornersAll);
                     }
 
+                    const float popupUiScale = std::clamp(s_keyboardLayoutScale / kDefaultKeyboardLayoutScale, 0.85f, 2.0f);
                     ImGui::SetNextWindowPos(ImGui::GetMousePos(), ImGuiCond_Appearing);
-                    ImGui::SetNextWindowSizeConstraints(ImVec2(420.0f, 0.0f), ImVec2(640.0f, FLT_MAX));
+                    ImGui::SetNextWindowSizeConstraints(ImVec2(420.0f * popupUiScale, 0.0f), ImVec2(640.0f * popupUiScale, FLT_MAX));
                     if (ImGui::BeginPopup(trc("inputs.rebind_config"))) {
                         // Also block global ESC-to-close-GUI while editing inside this popup.
                         MarkRebindBindingActive();
-                        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.0f, 4.0f));
-                        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(7.0f, 6.0f));
-                        ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4.0f, 3.0f));
+                        ImGui::SetWindowFontScale(popupUiScale);
+                        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.0f * popupUiScale, 4.0f * popupUiScale));
+                        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(7.0f * popupUiScale, 6.0f * popupUiScale));
+                        ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4.0f * popupUiScale, 3.0f * popupUiScale));
 
                         const bool nestedLayoutPopupOpen = ImGui::IsPopupOpen(trc("inputs.triggers_custom")) || ImGui::IsPopupOpen(trc("inputs.custom_unicode"));
                         if (ImGui::IsKeyPressed(ImGuiKey_Escape) && !nestedLayoutPopupOpen) {
@@ -2521,6 +2524,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
 
                         if (ImGui::BeginPopupModal(trc("inputs.custom_unicode"), NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
                             MarkRebindBindingActive();
+                            ImGui::SetWindowFontScale(popupUiScale);
                             if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
                                 s_layoutEscapeRequiresRelease = true;
                                 layoutEscapeConsumedThisFrame = true;
@@ -2532,12 +2536,12 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                             ImGui::TextUnformatted(trc("inputs.tooltip.enter_unicode_or_codepoint"));
                             ImGui::TextDisabled(trc("inputs.tooltip.unicode_examples"));
                             ImGui::Separator();
-                            ImGui::SetNextItemWidth(260.0f);
+                            ImGui::SetNextItemWidth(260.0f * popupUiScale);
                             ImGui::InputTextWithHint("##unicode", trc("inputs.tooltip.unicode_hint"), &s_layoutUnicodeEditText);
                             ImGui::Spacing();
 
                             const bool canApply = true;
-                            if (ImGui::Button(trc("button.apply"), ImVec2(120, 0)) && canApply) {
+                            if (ImGui::Button(trc("button.apply"), ImVec2(120.0f * popupUiScale, 0)) && canApply) {
                                 if (s_layoutUnicodeEditIndex >= 0 && s_layoutUnicodeEditIndex < (int)g_config.keyRebinds.rebinds.size()) {
                                     auto& r = g_config.keyRebinds.rebinds[s_layoutUnicodeEditIndex];
                                     if (s_layoutUnicodeEditTarget == LayoutUnicodeEditTarget::TypesShift) {
@@ -2587,7 +2591,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                 ImGui::CloseCurrentPopup();
                             }
                             ImGui::SameLine();
-                            if (ImGui::Button(trc("label.cancel"), ImVec2(120, 0))) {
+                            if (ImGui::Button(trc("label.cancel"), ImVec2(120.0f * popupUiScale, 0))) {
                                 if (s_layoutUnicodeEditIndex >= 0 && s_layoutUnicodeEditIndex < (int)g_config.keyRebinds.rebinds.size()) {
                                     auto& r = g_config.keyRebinds.rebinds[s_layoutUnicodeEditIndex];
                                     int maybeErase = isNoOpRebindForKey(r, r.fromKey) ? s_layoutUnicodeEditIndex : -1;
@@ -2609,10 +2613,10 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                             s_layoutContextSplitMode = isSplitRebindUiMode(rbPtr, s_layoutContextVk);
                         }
 
-                        const float bindButtonW = 132.0f;
-                        const float auxButtonW = 82.0f;
-                        const float labelColumnW = 142.0f;
-                        const float popupInlineGap = 6.0f;
+                        const float bindButtonW = 132.0f * popupUiScale;
+                        const float auxButtonW = 82.0f * popupUiScale;
+                        const float labelColumnW = 142.0f * popupUiScale;
+                        const float popupInlineGap = 6.0f * popupUiScale;
                         bool openTriggersCustomPopup = false;
                         ImVec2 triggersCustomPopupAnchor = ImVec2(0.0f, 0.0f);
                         const std::string typesValue = typesValueFor(rbPtr, s_layoutContextVk);
@@ -2765,13 +2769,13 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
 #endif
 
                         rbPtr = (idx >= 0 && idx < (int)g_config.keyRebinds.rebinds.size()) ? &g_config.keyRebinds.rebinds[idx] : nullptr;
-                        ImGui::Dummy(ImVec2(0.0f, 4.0f));
+                        ImGui::Dummy(ImVec2(0.0f, 4.0f * popupUiScale));
                         ImGui::Separator();
 
                         auto drawPopupRowLabel = [&](const char* tooltip, const char* label) {
                             const float rowBaseY = ImGui::GetCursorPosY();
-                            const float markerYOffset = 2.0f;
-                            const float labelYOffset = -1.0f;
+                            const float markerYOffset = 2.0f * popupUiScale;
+                            const float labelYOffset = -1.0f * popupUiScale;
                             ImGui::SetCursorPosY(rowBaseY + markerYOffset);
                             HelpMarker(tooltip);
                             ImGui::SameLine(0.0f, popupInlineGap);
@@ -2812,7 +2816,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                     if (ImGui::Button((tr("label.pick") + "##output_scan_pick").c_str(), ImVec2(auxButtonW, 0))) {
                                         openTriggersCustomPopup = true;
                                         triggersCustomPopupAnchor =
-                                            ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y + 4.0f);
+                                            ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y + 4.0f * popupUiScale);
                                     }
                                 }
                             } else {
@@ -3019,7 +3023,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                     if (ImGui::Button((tr("label.pick") + "##triggers_scan_pick").c_str(), ImVec2(auxButtonW, 0))) {
                                         openTriggersCustomPopup = true;
                                         triggersCustomPopupAnchor =
-                                            ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y + 4.0f);
+                                            ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y + 4.0f * popupUiScale);
                                     }
                                 }
                             }
@@ -3034,10 +3038,12 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                             ImGui::SetNextWindowPos(triggersCustomPopupAnchor, ImGuiCond_Appearing);
                             ImGui::OpenPopup(trc("inputs.triggers_custom"));
                         }
-                        ImGui::SetNextWindowSizeConstraints(ImVec2(340.0f, 220.0f), ImVec2(520.0f, 460.0f));
+                        ImGui::SetNextWindowSizeConstraints(ImVec2(340.0f * popupUiScale, 220.0f * popupUiScale),
+                                                            ImVec2(520.0f * popupUiScale, 460.0f * popupUiScale));
 
                         if (ImGui::BeginPopup(trc("inputs.triggers_custom"))) {
                                 MarkRebindBindingActive();
+                                ImGui::SetWindowFontScale(popupUiScale);
                                 if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
                                     s_layoutEscapeRequiresRelease = true;
                                     layoutEscapeConsumedThisFrame = true;
@@ -3127,7 +3133,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                 }
 #endif
 
-                                ImGui::BeginChild("##triggers_custom_list", ImVec2(0.0f, 260.0f), true);
+                                ImGui::BeginChild("##triggers_custom_list", ImVec2(0.0f, 260.0f * popupUiScale), true);
                                 for (const auto& it : s_knownScanCodes) {
                                     if (it.group == SG_Raw) continue;
                                     if (s_scanFilterGroup >= 0 && it.group != s_scanFilterGroup) continue;
@@ -3167,7 +3173,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
 
                         ImGui::Spacing();
 
-                        if (ImGui::Button((tr("label.reset") + "##layout_reset").c_str(), ImVec2(102, 0))) {
+                        if (ImGui::Button((tr("label.reset") + "##layout_reset").c_str(), ImVec2(102.0f * popupUiScale, 0))) {
                             if (idx >= 0 && idx < (int)g_config.keyRebinds.rebinds.size()) {
                                 auto& r = g_config.keyRebinds.rebinds[idx];
                                 r.toKey = r.fromKey;

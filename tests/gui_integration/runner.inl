@@ -101,6 +101,7 @@ const auto& GetTestCaseDefinitions() {
         {"settings-gui-advanced", &RunSettingsGuiAdvancedTest},
         {"settings-search-subcategory-filtering", &RunSettingsSearchSubcategoryFilteringTest},
         {"settings-search-specific-options", &RunSettingsSearchSpecificOptionsTest},
+        {"settings-search-reset-on-close", &RunSettingsSearchResetOnCloseTest},
         {"settings-tab-general-default", &RunSettingsTabGeneralDefaultTest},
         {"settings-tab-other-default", &RunSettingsTabOtherDefaultTest},
         {"settings-tab-supporters-default", &RunSettingsTabSupportersDefaultTest},

@@ -159,6 +159,34 @@ void RunSettingsSearchSpecificOptionsTest(TestRunMode runMode = TestRunMode::Aut
                                      "Expected unrelated appearance sections to be hidden for the slider grab active option query.");
 }
 
+void RunSettingsSearchResetOnCloseTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    if (!window.hasModernGL()) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
+    PrepareDefaultConfigForGui("settings_search_reset_on_close", false);
+
+    if (runMode == TestRunMode::Visual) {
+        RunVisualLoopWithNinjabrainPreview(window, "settings-search-reset-on-close", [&](DummyWindow& visualWindow) {
+            RenderSettingsSearchFrame(visualWindow, trc("appearance.title_bar"), tr("tabs.appearance").c_str());
+        });
+        return;
+    }
+
+    RenderSettingsSearchFrame(window, trc("appearance.title_bar"), tr("tabs.appearance").c_str());
+    ExpectGuiInteractionRectPresence("config.section.appearance.title_bar", true,
+                                     "Expected the title bar section to remain visible while the config search is active.");
+    ExpectGuiInteractionRectPresence("config.section.appearance.sliders_scrollbars", false,
+                                     "Expected the search filter to hide unrelated appearance sections before closing the GUI.");
+
+    CloseSettingsGuiWindow();
+    Expect(!g_showGui.load(std::memory_order_acquire), "Expected closing the settings GUI to hide the config window.");
+
+    g_showGui.store(true, std::memory_order_release);
+    g_guiNeedsRecenter.store(true, std::memory_order_release);
+    RenderSettingsFrame(window, tr("tabs.appearance").c_str());
+    ExpectGuiInteractionRectPresence("config.section.appearance.sliders_scrollbars", true,
+                                     "Expected reopening the settings GUI after closing it to clear the config search filter.");
+}
+
 void RunProfilerUnspecifiedBreakdownTest(TestRunMode runMode = TestRunMode::Automated) {
     (void)runMode;
 

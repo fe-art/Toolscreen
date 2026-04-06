@@ -1017,6 +1017,7 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     settings-gui-advanced
     settings-search-subcategory-filtering
     settings-search-specific-options
+    settings-search-reset-on-close
     settings-tab-general-default
     settings-tab-other-default
     settings-tab-supporters-default

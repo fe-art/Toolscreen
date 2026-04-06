@@ -1004,6 +1004,7 @@ void Log(const std::wstring& message);
 std::wstring Utf8ToWide(const std::string& utf8_string);
 
 void RenderSettingsGUI();
+void CloseSettingsGuiWindow();
 void RenderConfigErrorGUI();
 void RenderPerformanceOverlay(bool showPerformanceOverlay);
 void RenderProfilerOverlay(bool showProfiler, bool showPerformanceOverlay);

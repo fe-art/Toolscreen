@@ -717,58 +717,18 @@ InputHandlerResult HandleGuiToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     if (isEscape && IsRebindBindingActive()) { is_closing = false; }
 
     if (is_closing) {
-        g_showGui = false;
-        InvalidateImGuiCache();
+        CloseSettingsGuiWindow();
+
         if (s_forcedShowCursor) {
             EnsureSystemCursorHidden();
             s_forcedShowCursor = false;
         }
-
-        // Flush any queued ImGui input and release any mouse capture we may have taken.
-        ImGuiInputQueue_Clear();
-        ImGuiInputQueue_ResetMouseCapture(hWnd);
-
-        ApplyConfineCursorToGameWindow();
         if (!g_wasCursorVisible.load()) {
-            RECT clipRect{};
-            if (GetWindowClientRectInScreen(hWnd, clipRect)) {
-                ClipCursor(&clipRect);
-            } else {
-                ClipCursor(NULL);
-            }
-            SetCursor(NULL);
-
             if (g_gameVersion < GameVersion(1, 13, 0)) {
                 HCURSOR airCursor = g_specialCursorHandle.load();
                 if (airCursor) SetCursor(airCursor);
             }
         }
-        g_currentlyEditingMirror = "";
-
-        g_imageDragMode.store(false);
-        g_windowOverlayDragMode.store(false);
-        g_browserOverlayDragMode.store(false);
-
-        extern std::string s_hoveredImageName;
-        extern std::string s_draggedImageName;
-        extern bool s_isDragging;
-        s_hoveredImageName = "";
-        s_draggedImageName = "";
-        s_isDragging = false;
-
-        extern std::string s_hoveredWindowOverlayName;
-        extern std::string s_draggedWindowOverlayName;
-        extern bool s_isWindowOverlayDragging;
-        s_hoveredWindowOverlayName = "";
-        s_draggedWindowOverlayName = "";
-        s_isWindowOverlayDragging = false;
-
-        extern std::string s_hoveredBrowserOverlayName;
-        extern std::string s_draggedBrowserOverlayName;
-        extern bool s_isBrowserOverlayDragging;
-        s_hoveredBrowserOverlayName = "";
-        s_draggedBrowserOverlayName = "";
-        s_isBrowserOverlayDragging = false;
     } else if (!isEscape) {
         g_showGui = true;
         InvalidateImGuiCache();
