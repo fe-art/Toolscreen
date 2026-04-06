@@ -3,8 +3,10 @@
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 
+#include "common/utils.h"
 #include "config/config_defaults.h"
 
+#include <chrono>
 #include <cmath>
 #include <functional>
 #include <utility>
@@ -13,6 +15,7 @@ namespace {
 
 using json = nlohmann::json;
 using namespace std::chrono_literals;
+using SteadyClock = std::chrono::steady_clock;
 
 constexpr auto kNinjabrainReconnectIntervalMs = 3000;
 constexpr auto kNinjabrainConnectionTimeout = 3s;
@@ -37,6 +40,10 @@ double NormalizeAngleDegrees(double angle) {
 
 void LogIfPresent(const NinjabrainLogCallback& callback, const std::string& message) {
     if (callback) { callback(message); }
+}
+
+long long DurationToMilliseconds(SteadyClock::duration duration) {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
 }
 
 template <typename Callback, typename... Args>
@@ -472,29 +479,95 @@ void NinjabrainApiSession::RunStream(
     httplib::sse::SSEClient sse(client, path, headers);
     sse.set_reconnect_interval(kNinjabrainReconnectIntervalMs);
 
+    const std::string streamNameString = streamName;
+    const long long connectionTimeoutMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(kNinjabrainConnectionTimeout).count();
+    auto currentAttemptStartedAt = SteadyClock::now();
+    auto outageStartedAt = currentAttemptStartedAt;
+    auto connectedAt = SteadyClock::time_point{};
+    bool outageInProgress = true;
+    bool connected = false;
     bool disconnected = false;
-    sse.on_open([&, streamName = std::string(streamName)]() {
+    bool hasConnectedOnce = false;
+
+    Log(
+        "NinjabrainBot API connecting " + streamNameString + " stream to " + apiBaseUrl_ + path +
+        " (connection timeout " + std::to_string(connectionTimeoutMs) + " ms, reconnect delay " +
+        std::to_string(kNinjabrainReconnectIntervalMs) + " ms).");
+
+    sse.on_open([&, streamName = streamNameString]() {
+        const auto now = SteadyClock::now();
+        const long long outageDurationMs = DurationToMilliseconds(now - outageStartedAt);
+
         InvokeIfPresent(onConnect);
-        if (disconnected) {
+        connectedAt = now;
+        connected = true;
+        currentAttemptStartedAt = now;
+
+        if (!hasConnectedOnce) {
+            Log(
+                "NinjabrainBot API connected " + streamName + " stream after " +
+                std::to_string(outageDurationMs) + " ms.");
+            hasConnectedOnce = true;
+        } else if (disconnected) {
+            Log(
+                "NinjabrainBot API reconnected " + streamName + " stream after " +
+                std::to_string(outageDurationMs) + " ms of downtime.");
             LogIfPresent(callbacks_.onLog, "Reconnected " + streamName + " stream.");
-            disconnected = false;
         }
+
+        disconnected = false;
+        outageInProgress = false;
     });
     sse.on_message([&](const httplib::sse::SSEMessage& message) {
         if (onMessage) { onMessage(message.data); }
     });
-    sse.on_error([&, streamName = std::string(streamName)](httplib::Error error) {
+    sse.on_error([&, streamName = streamNameString](httplib::Error error) {
         if (stopToken.stop_requested() || error == httplib::Error::Canceled) { return; }
 
+        const auto now = SteadyClock::now();
         const std::string errorString = httplib::to_string(error);
+        const long long attemptDurationMs = DurationToMilliseconds(now - currentAttemptStartedAt);
+
+        if (!outageInProgress) {
+            outageStartedAt = now;
+            outageInProgress = true;
+        }
+
+        const long long outageDurationMs = DurationToMilliseconds(now - outageStartedAt);
 
         InvokeIfPresent(onDisconnect, errorString);
+
+        if (connected) {
+            const long long connectedDurationMs = DurationToMilliseconds(now - connectedAt);
+            Log(
+                "NinjabrainBot API lost " + streamName + " stream after " +
+                std::to_string(connectedDurationMs) + " ms connected: " + errorString +
+                ". Retrying in " + std::to_string(kNinjabrainReconnectIntervalMs) + " ms.");
+            connected = false;
+        } else if (error == httplib::Error::ConnectionTimeout) {
+            Log(
+                "NinjabrainBot API " + streamName + " stream connection attempt timed out after " +
+                std::to_string(attemptDurationMs) + " ms (total delay " +
+                std::to_string(outageDurationMs) + " ms). Retrying in " +
+                std::to_string(kNinjabrainReconnectIntervalMs) + " ms.");
+        } else {
+            const std::string attemptKind = hasConnectedOnce ? "reconnect" : "initial connection";
+            Log(
+                "NinjabrainBot API " + streamName + " stream " + attemptKind + " failed after " +
+                std::to_string(attemptDurationMs) + " ms (total delay " +
+                std::to_string(outageDurationMs) + " ms): " + errorString + ". Retrying in " +
+                std::to_string(kNinjabrainReconnectIntervalMs) + " ms.");
+        }
+
         if (!disconnected) {
             LogIfPresent(
                 callbacks_.onLog,
                 "Lost " + streamName + " stream: " + errorString + ". Waiting for reconnect.");
             disconnected = true;
         }
+
+        currentAttemptStartedAt = now;
     });
 
     std::stop_callback stopCallback(stopToken, [&]() {
