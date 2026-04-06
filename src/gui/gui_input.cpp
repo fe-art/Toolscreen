@@ -168,6 +168,14 @@ void RegisterBindingInputEvent(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         isMouseButton = true;
         break;
     }
+    case WM_MOUSEWHEEL: {
+        if (!IsRebindBindingActive()) return;
+        const short wheelDelta = GET_WHEEL_DELTA_WPARAM(wParam);
+        if (wheelDelta == 0) return;
+        vk = (wheelDelta > 0) ? VK_TOOLSCREEN_SCROLL_UP : VK_TOOLSCREEN_SCROLL_DOWN;
+        isMouseButton = true;
+        break;
+    }
     default:
         return;
     }

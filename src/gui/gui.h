@@ -525,6 +525,9 @@ struct AppearanceConfig {
     std::map<std::string, Color> customColors;
 };
 
+inline constexpr DWORD VK_TOOLSCREEN_SCROLL_UP = 0x1000;
+inline constexpr DWORD VK_TOOLSCREEN_SCROLL_DOWN = 0x1001;
+
 struct KeyRebind {
     DWORD fromKey = 0;
     DWORD toKey = 0;

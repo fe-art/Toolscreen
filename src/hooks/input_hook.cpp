@@ -1998,9 +1998,21 @@ static bool IsMouseButtonVk(DWORD vk) {
     return vk == VK_LBUTTON || vk == VK_RBUTTON || vk == VK_MBUTTON || vk == VK_XBUTTON1 || vk == VK_XBUTTON2;
 }
 
+static bool IsMouseWheelPseudoVk(DWORD vk) {
+    return vk == VK_TOOLSCREEN_SCROLL_UP || vk == VK_TOOLSCREEN_SCROLL_DOWN;
+}
+
+static short GetMouseWheelDeltaForPseudoVk(DWORD vk) {
+    return (vk == VK_TOOLSCREEN_SCROLL_DOWN) ? static_cast<short>(-WHEEL_DELTA) : static_cast<short>(WHEEL_DELTA);
+}
+
+static bool IsMouseLikeVk(DWORD vk) {
+    return IsMouseButtonVk(vk) || IsMouseWheelPseudoVk(vk);
+}
+
 static bool IsNonCharKeyVk(DWORD vk) {
     if (IsModifierVk(vk)) return true;
-    if (IsMouseButtonVk(vk)) return true;
+    if (IsMouseLikeVk(vk)) return true;
     if (vk == VK_LWIN || vk == VK_RWIN) return true;
     if (vk >= VK_F1 && vk <= VK_F24) return true;
 
@@ -2044,7 +2056,7 @@ static bool RebindCannotType(const KeyRebind& rebind) {
     }
 
     if (IsModifierVk(triggerVk) || IsModifierScanCode(triggerScan)) return true;
-    if (IsMouseButtonVk(triggerVk)) return true;
+    if (IsMouseLikeVk(triggerVk)) return true;
 
     switch (triggerVk) {
     case VK_BACK:
@@ -2438,6 +2450,8 @@ static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM w
     const DWORD textVK = NormalizeModifierVkFromConfig((effectiveCustomOutputVk != 0) ? effectiveCustomOutputVk : defaultTextVK);
     const bool preferShiftedText =
         ResolvePreferredOutputShiftState(rebind, shiftLayerActive, IsShiftDownForIncomingEvent(vkCode, rawVkCode, isKeyDown));
+    const bool sourceIsScrollWheel =
+        IsMouseWheelPseudoVk(rebind.fromKey) || IsMouseWheelPseudoVk(vkCode) || IsMouseWheelPseudoVk(rawVkCode);
 
     DWORD triggerVK = NormalizeModifierVkFromConfig(rebind.toKey, (rebind.useCustomOutput ? rebind.customOutputScanCode : 0));
     if (isMouseButton && normalizedCustomOutputVk != 0 && IsNonCharKeyVk(normalizedCustomOutputVk)) {
@@ -2454,60 +2468,105 @@ static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM w
     }
     const bool outputScanIsModifier = IsModifierScanCode(outputScanCode);
 
-    if (triggerVK == VK_LBUTTON || triggerVK == VK_RBUTTON || triggerVK == VK_MBUTTON || triggerVK == VK_XBUTTON1 || triggerVK == VK_XBUTTON2) {
-        UINT newMsg = 0;
-        auto buildMouseKeyState = [&](DWORD buttonVk, bool buttonDown) -> WORD {
-            WORD mk = 0;
-            if ((GetKeyState(VK_CONTROL) & 0x8000) != 0) mk |= MK_CONTROL;
-            if ((GetKeyState(VK_SHIFT) & 0x8000) != 0) mk |= MK_SHIFT;
+    auto buildMouseKeyState = [&](DWORD buttonVk, bool buttonDown) -> WORD {
+        WORD mk = 0;
+        if ((GetKeyState(VK_CONTROL) & 0x8000) != 0) mk |= MK_CONTROL;
+        if ((GetKeyState(VK_SHIFT) & 0x8000) != 0) mk |= MK_SHIFT;
 
-            auto setBtn = [&](int vk, WORD mask, bool isThisButton) {
-                bool down = (GetKeyState(vk) & 0x8000) != 0;
-                if (isThisButton) down = buttonDown;
-                if (down) mk |= mask;
-            };
-
-            setBtn(VK_LBUTTON, MK_LBUTTON, buttonVk == VK_LBUTTON);
-            setBtn(VK_RBUTTON, MK_RBUTTON, buttonVk == VK_RBUTTON);
-            setBtn(VK_MBUTTON, MK_MBUTTON, buttonVk == VK_MBUTTON);
-            setBtn(VK_XBUTTON1, MK_XBUTTON1, buttonVk == VK_XBUTTON1);
-            setBtn(VK_XBUTTON2, MK_XBUTTON2, buttonVk == VK_XBUTTON2);
-            return mk;
+        auto setBtn = [&](int vk, WORD mask, bool isThisButton) {
+            bool down = (GetKeyState(vk) & 0x8000) != 0;
+            if (isThisButton) down = buttonDown;
+            if (down) mk |= mask;
         };
 
-        LPARAM mouseLParam = lParam;
-        if (!isMouseButton) {
-            POINT pt{};
-            if (GetCursorPos(&pt) && ScreenToClient(hWnd, &pt)) {
-                mouseLParam = MAKELPARAM(pt.x, pt.y);
-            } else {
-                RECT clientRect{};
-                if (GetClientRect(hWnd, &clientRect)) {
-                    mouseLParam = MAKELPARAM((clientRect.right - clientRect.left) / 2, (clientRect.bottom - clientRect.top) / 2);
-                }
+        setBtn(VK_LBUTTON, MK_LBUTTON, buttonVk == VK_LBUTTON);
+        setBtn(VK_RBUTTON, MK_RBUTTON, buttonVk == VK_RBUTTON);
+        setBtn(VK_MBUTTON, MK_MBUTTON, buttonVk == VK_MBUTTON);
+        setBtn(VK_XBUTTON1, MK_XBUTTON1, buttonVk == VK_XBUTTON1);
+        setBtn(VK_XBUTTON2, MK_XBUTTON2, buttonVk == VK_XBUTTON2);
+        return mk;
+    };
+
+    auto resolveMouseButtonLParam = [&]() -> LPARAM {
+        if (isMouseButton && uMsg != WM_MOUSEWHEEL && uMsg != WM_MOUSEHWHEEL) {
+            return lParam;
+        }
+
+        POINT pt{};
+        if (GetCursorPos(&pt) && ScreenToClient(hWnd, &pt)) {
+            return MAKELPARAM(pt.x, pt.y);
+        }
+
+        RECT clientRect{};
+        if (GetClientRect(hWnd, &clientRect)) {
+            return MAKELPARAM((clientRect.right - clientRect.left) / 2, (clientRect.bottom - clientRect.top) / 2);
+        }
+
+        return lParam;
+    };
+
+    auto resolveMouseWheelLParam = [&]() -> LPARAM {
+        if (uMsg == WM_MOUSEWHEEL || uMsg == WM_MOUSEHWHEEL) {
+            return lParam;
+        }
+
+        POINT pt{};
+        if (GetCursorPos(&pt)) {
+            return MAKELPARAM(pt.x, pt.y);
+        }
+
+        RECT clientRect{};
+        if (GetClientRect(hWnd, &clientRect)) {
+            POINT center{ (clientRect.right - clientRect.left) / 2, (clientRect.bottom - clientRect.top) / 2 };
+            if (ClientToScreen(hWnd, &center)) {
+                return MAKELPARAM(center.x, center.y);
             }
         }
 
-        WORD mkState = buildMouseKeyState(triggerVK, isKeyDown);
-        WPARAM newWParam = mkState;
+        return lParam;
+    };
 
-        if (triggerVK == VK_LBUTTON) {
-            newMsg = isKeyDown ? WM_LBUTTONDOWN : WM_LBUTTONUP;
-        } else if (triggerVK == VK_RBUTTON) {
-            newMsg = isKeyDown ? WM_RBUTTONDOWN : WM_RBUTTONUP;
-        } else if (triggerVK == VK_MBUTTON) {
-            newMsg = isKeyDown ? WM_MBUTTONDOWN : WM_MBUTTONUP;
-        } else if (triggerVK == VK_XBUTTON1) {
-            newMsg = isKeyDown ? WM_XBUTTONDOWN : WM_XBUTTONUP;
-            newWParam = MAKEWPARAM(mkState, XBUTTON1);
-        } else if (triggerVK == VK_XBUTTON2) {
-            newMsg = isKeyDown ? WM_XBUTTONDOWN : WM_XBUTTONUP;
-            newWParam = MAKEWPARAM(mkState, XBUTTON2);
-        }
-
-        LRESULT mouseResult = CallWindowProc(g_originalWndProc, hWnd, newMsg, newWParam, mouseLParam);
-
+    if (IsMouseLikeVk(triggerVK)) {
+        LRESULT mouseResult = 0;
         const bool fromKeyIsNonCharMouse = isMouseButton || IsNonCharKeyVk(rebind.fromKey);
+
+        if (IsMouseWheelPseudoVk(triggerVK)) {
+            const WORD mkState = buildMouseKeyState(0, false);
+            const WPARAM newWParam = MAKEWPARAM(mkState, static_cast<WORD>(GetMouseWheelDeltaForPseudoVk(triggerVK)));
+            mouseResult = CallWindowProc(g_originalWndProc, hWnd, WM_MOUSEWHEEL, newWParam, resolveMouseWheelLParam());
+        } else {
+            const LPARAM mouseLParam = resolveMouseButtonLParam();
+            auto dispatchMouseButton = [&](bool buttonDown) {
+                UINT newMsg = 0;
+                WORD mkState = buildMouseKeyState(triggerVK, buttonDown);
+                WPARAM newWParam = mkState;
+
+                if (triggerVK == VK_LBUTTON) {
+                    newMsg = buttonDown ? WM_LBUTTONDOWN : WM_LBUTTONUP;
+                } else if (triggerVK == VK_RBUTTON) {
+                    newMsg = buttonDown ? WM_RBUTTONDOWN : WM_RBUTTONUP;
+                } else if (triggerVK == VK_MBUTTON) {
+                    newMsg = buttonDown ? WM_MBUTTONDOWN : WM_MBUTTONUP;
+                } else if (triggerVK == VK_XBUTTON1) {
+                    newMsg = buttonDown ? WM_XBUTTONDOWN : WM_XBUTTONUP;
+                    newWParam = MAKEWPARAM(mkState, XBUTTON1);
+                } else if (triggerVK == VK_XBUTTON2) {
+                    newMsg = buttonDown ? WM_XBUTTONDOWN : WM_XBUTTONUP;
+                    newWParam = MAKEWPARAM(mkState, XBUTTON2);
+                }
+
+                if (newMsg != 0) {
+                    mouseResult = CallWindowProc(g_originalWndProc, hWnd, newMsg, newWParam, mouseLParam);
+                }
+            };
+
+            if (sourceIsScrollWheel) {
+                dispatchMouseButton(true);
+                dispatchMouseButton(false);
+            } else {
+                dispatchMouseButton(isKeyDown);
+            }
+        }
 
         if (isKeyDown && fromKeyIsNonCharMouse) {
             const uint32_t configuredUnicodeText =
@@ -2651,7 +2710,12 @@ static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM w
             return { true, 0 };
         }
 
-        (void)SendSynthKeyByScanCode(outputScanCode, isKeyDown);
+        if (sourceIsScrollWheel) {
+            (void)SendSynthKeyByScanCode(outputScanCode, true);
+            (void)SendSynthKeyByScanCode(outputScanCode, false);
+        } else {
+            (void)SendSynthKeyByScanCode(outputScanCode, isKeyDown);
+        }
 
         if (isKeyDown && fromKeyIsNonChar && !outputScanIsModifier) {
             const UINT textScanCode = GetScanCodeWithExtendedFlag(textVK);
@@ -2669,6 +2733,21 @@ static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM w
         if (triggerVK == VK_LMENU || triggerVK == VK_RMENU) return VK_MENU;
         return triggerVK;
     }();
+
+    if (sourceIsScrollWheel) {
+        const UINT keyDownMsg = outputUsesSystemMessage ? WM_SYSKEYDOWN : WM_KEYDOWN;
+        const UINT keyUpMsg = outputUsesSystemMessage ? WM_SYSKEYUP : WM_KEYUP;
+        const LPARAM keyDownLParam = BuildKeyboardMessageLParam(outputScanCode, true, outputHasAltContext, 1, false, false);
+        LRESULT keyResult = CallWindowProc(g_originalWndProc, hWnd, keyDownMsg, msgVk, keyDownLParam);
+        const LPARAM keyUpLParam = BuildKeyboardMessageLParam(outputScanCode, false, outputHasAltContext, 1, true, true);
+        keyResult = CallWindowProc(g_originalWndProc, hWnd, keyUpMsg, msgVk, keyUpLParam);
+
+        if (fromKeyIsNonChar) {
+            emitTypedChar(keyDownLParam);
+        }
+
+        return { true, keyResult };
+    }
 
     LPARAM newLParam =
         BuildKeyboardMessageLParam(outputScanCode, isKeyDown, outputHasAltContext, repeatCount, previousState, transitionState);
@@ -2688,6 +2767,7 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
     case WM_SYSKEYDOWN:
     case WM_KEYUP:
     case WM_SYSKEYUP:
+    case WM_MOUSEWHEEL:
     case WM_XBUTTONDOWN:
     case WM_XBUTTONUP:
     case WM_LBUTTONDOWN:
@@ -2719,6 +2799,12 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
     } else if (uMsg == WM_KEYUP || uMsg == WM_SYSKEYUP) {
         rawVkCode = static_cast<DWORD>(wParam);
         isKeyDown = false;
+    } else if (uMsg == WM_MOUSEWHEEL) {
+        const short wheelDelta = GET_WHEEL_DELTA_WPARAM(wParam);
+        if (wheelDelta == 0) return { false, 0 };
+        rawVkCode = (wheelDelta > 0) ? VK_TOOLSCREEN_SCROLL_UP : VK_TOOLSCREEN_SCROLL_DOWN;
+        isMouseButton = true;
+        isKeyDown = true;
     } else if (uMsg == WM_XBUTTONDOWN) {
         WORD xButton = GET_XBUTTON_WPARAM(wParam);
         rawVkCode = (xButton == XBUTTON1) ? VK_XBUTTON1 : VK_XBUTTON2;

@@ -624,7 +624,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                 };
 
                 static bool s_keyboardLayoutOpen = false;
-                static float s_keyboardLayoutScale = 1.45f;
+                static float s_keyboardLayoutScale = 1.35f;
                 static int s_physicalLayout = 0;
                 static int s_keyLabelLayout = 0;
                 static bool s_layoutEscapeRequiresRelease = false;
@@ -651,22 +651,59 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
 
                 if (s_keyboardLayoutOpen) {
                     const ImGuiViewport* vp = ImGui::GetMainViewport();
-                    ImVec2 target = vp ? vp->WorkSize : ImVec2(1400.0f, 800.0f);
-                    target.x *= 0.70f;
-                    target.y *= 0.62f;
-                    if (target.x < 920.0f) target.x = 920.0f;
-                    if (target.y < 560.0f) target.y = 560.0f;
+                    const ImVec2 workSize = vp ? vp->WorkSize : ImVec2(1600.0f, 900.0f);
+                    ImVec2 target = ImVec2(workSize.x * 0.92f, workSize.y * 0.88f);
+                    if (!vp || workSize.x >= 1100.0f) target.x = (std::max)(target.x, 1100.0f);
+                    if (!vp || workSize.y >= 680.0f) target.y = (std::max)(target.y, 680.0f);
+                    if (vp) {
+                        const float maxTargetW = (workSize.x > 32.0f) ? (workSize.x - 32.0f) : workSize.x;
+                        const float maxTargetH = (workSize.y > 32.0f) ? (workSize.y - 32.0f) : workSize.y;
+                        if (target.x > maxTargetW) target.x = maxTargetW;
+                        if (target.y > maxTargetH) target.y = maxTargetH;
+                    }
                     ImGui::SetNextWindowSize(target, ImGuiCond_Appearing);
                     const ImVec2 center = vp ? ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f)
                                               : ImVec2(ImGui::GetIO().DisplaySize.x * 0.5f, ImGui::GetIO().DisplaySize.y * 0.5f);
                     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
                 }
 
+                auto isScrollWheelVk = [](DWORD vk) -> bool {
+                    return vk == VK_TOOLSCREEN_SCROLL_UP || vk == VK_TOOLSCREEN_SCROLL_DOWN;
+                };
+
+                auto normalizeModifierVkForDisplay = [](DWORD vk, DWORD scanCodeWithFlags) -> DWORD {
+                    const DWORD scanLow = (scanCodeWithFlags & 0xFF);
+                    const bool isExtended = (scanCodeWithFlags & 0xFF00) != 0;
+
+                    switch (vk) {
+                    case VK_SHIFT:
+                        if (scanLow == 0x36) return VK_RSHIFT;
+                        if (scanLow == 0x2A) return VK_LSHIFT;
+                        return vk;
+                    case VK_CONTROL:
+                        return isExtended ? VK_RCONTROL : VK_LCONTROL;
+                    case VK_MENU:
+                        return isExtended ? VK_RMENU : VK_LMENU;
+                    default:
+                        return vk;
+                    }
+                };
+
+                auto usesSpecificModifierDisplayName = [](DWORD vk) -> bool {
+                    return vk == VK_LSHIFT || vk == VK_RSHIFT || vk == VK_LCONTROL || vk == VK_RCONTROL || vk == VK_LMENU ||
+                           vk == VK_RMENU || vk == VK_LWIN || vk == VK_RWIN;
+                };
+
                 auto scanCodeToDisplayName = [&](DWORD scan, DWORD fallbackVk) -> std::string {
+                    const DWORD normalizedFallbackVk = normalizeModifierVkForDisplay(fallbackVk, scan);
+
                         if (scan == 0) {
                             if (fallbackVk == VK_LBUTTON || fallbackVk == VK_RBUTTON || fallbackVk == VK_MBUTTON || fallbackVk == VK_XBUTTON1 ||
-                                fallbackVk == VK_XBUTTON2) {
+                                fallbackVk == VK_XBUTTON2 || isScrollWheelVk(fallbackVk)) {
                                 return VkToString(fallbackVk);
+                            }
+                            if (usesSpecificModifierDisplayName(normalizedFallbackVk)) {
+                                return VkToString(normalizedFallbackVk);
                             }
                             return std::string(tr("inputs.keyboard_layout_unbound"));
                         }
@@ -679,10 +716,14 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
 
                     LONG keyNameLParam = static_cast<LONG>((scan & 0xFF) << 16);
                     if ((scan & 0xFF00) != 0) { keyNameLParam |= (1 << 24); }
+                    if (usesSpecificModifierDisplayName(normalizedFallbackVk)) {
+                        return VkToString(normalizedFallbackVk);
+                    }
                     char keyName[64] = {};
                     if (GetKeyNameTextA(keyNameLParam, keyName, sizeof(keyName)) > 0) { return std::string(keyName); }
 
                     DWORD scanDisplayVK = MapVirtualKey(scan, MAPVK_VSC_TO_VK_EX);
+                    scanDisplayVK = normalizeModifierVkForDisplay(scanDisplayVK, scan);
                     if (scanDisplayVK != 0) {
                         if (scanLow == 0x45 && (fallbackVk == VK_NUMLOCK || fallbackVk == VK_PAUSE) &&
                             (scanDisplayVK == VK_NUMLOCK || scanDisplayVK == VK_PAUSE) && scanDisplayVK != fallbackVk) {
@@ -970,7 +1011,10 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                         const float platePad = 10.0f * s_keyboardLayoutScale;
                         const float availW = ImGui::GetContentRegionAvail().x - platePad * 2.0f;
                         if (availW > 0.0f && totalLayoutW > 0.0f) {
-                            float fitScale = s_keyboardLayoutScale * (availW / totalLayoutW);
+                            float fitScale = s_keyboardLayoutScale;
+                            if (totalLayoutW > availW) {
+                                fitScale = s_keyboardLayoutScale * (availW / totalLayoutW);
+                            }
                             fitScale = std::clamp(fitScale, 0.6f, 3.0f);
                             if (fabsf(fitScale - s_keyboardLayoutScale) > 0.01f) {
                                 s_keyboardLayoutScale = fitScale;
@@ -1049,6 +1093,23 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                         return vk == VK_LBUTTON || vk == VK_RBUTTON || vk == VK_MBUTTON || vk == VK_XBUTTON1 || vk == VK_XBUTTON2;
                     };
 
+                    auto isNonTypableTextVk = [&](DWORD vk) -> bool {
+                        if (isModifierVk(vk) || isMouseButtonVk(vk) || isScrollWheelVk(vk)) return true;
+                        switch (vk) {
+                        case VK_BACK:
+                        case VK_CAPITAL:
+                        case VK_DELETE:
+                        case VK_HOME:
+                        case VK_INSERT:
+                        case VK_END:
+                        case VK_PRIOR:
+                        case VK_NEXT:
+                            return true;
+                        default:
+                            return false;
+                        }
+                    };
+
                     auto hasShiftLayerOverride = [&](const KeyRebind* rb, DWORD originalVk) -> bool {
                         if (!rb || !rb->shiftLayerEnabled) return false;
                         if (rb->shiftLayerOutputUnicode != 0) return true;
@@ -1101,10 +1162,10 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                     };
 
                     auto cannotTypeFor = [&](const KeyRebind* rb, DWORD originalVk) -> bool {
-                        if (!rb) return false;
                         const DWORD triggerVk = resolveTriggerVkFor(rb, originalVk);
                         const DWORD triggerScan = resolveTriggerScanFor(rb, originalVk);
                         if (isModifierTriggerScan(triggerScan, triggerVk)) return true;
+                        if (isScrollWheelVk(triggerVk)) return true;
                         if (isMouseButtonVk(triggerVk)) return true;
                         if (triggerVk == VK_BACK || triggerVk == VK_CAPITAL) return true;
                         if (triggerVk == VK_DELETE || triggerVk == VK_HOME || triggerVk == VK_INSERT ||
@@ -1113,28 +1174,39 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                     };
 
                     auto typesValueForDisplay = [&](const KeyRebind* rb, DWORD originalVk) -> std::string {
-                        if (!rb) return VkToString(originalVk);
                         if (cannotTypeFor(rb, originalVk)) return tr("inputs.cannot_type");
-                        if (rb->useCustomOutput && rb->customOutputUnicode != 0) return codepointToDisplay((uint32_t)rb->customOutputUnicode);
+                        if (rb && rb->useCustomOutput && rb->customOutputUnicode != 0) {
+                            return codepointToDisplay((uint32_t)rb->customOutputUnicode);
+                        }
 
                         DWORD textVk = resolveTypesVkFor(rb, originalVk, false);
+                        if (isNonTypableTextVk(textVk)) return tr("inputs.cannot_type");
                         return normalizeMouseButtonLabel(VkToString(textVk));
                     };
 
                     auto typesShiftValueForDisplay = [&](const KeyRebind* rb, DWORD originalVk) -> std::string {
-                        if (!rb) return VkToString(originalVk);
+                        if (cannotTypeFor(rb, originalVk)) return tr("inputs.cannot_type");
                         if (!hasShiftLayerOverride(rb, originalVk)) return typesValueForDisplay(rb, originalVk);
                         if (rb->shiftLayerEnabled && rb->shiftLayerOutputUnicode != 0) {
                             return codepointToDisplay((uint32_t)rb->shiftLayerOutputUnicode);
                         }
 
                         DWORD textVk = resolveTypesVkFor(rb, originalVk, true);
+                        if (isNonTypableTextVk(textVk)) return tr("inputs.cannot_type");
                         return normalizeMouseButtonLabel(VkToString(textVk));
                     };
 
+                    const std::string cannotTypeText = tr("inputs.cannot_type");
+                    auto keyboardLayoutIndicatorText = [&](const std::string& text) -> std::string {
+                        return text == cannotTypeText ? std::string("CT") : text;
+                    };
+
+                    extern std::atomic<bool> g_isGameFocused;
+                    const bool keyboardLayoutGameFocused = g_isGameFocused.load(std::memory_order_acquire);
+
                     auto drawKeyCell = [&](DWORD vk, const char* label, const ImVec2& pMin, const ImVec2& pMax, const KeyRebind* rb) {
                         const bool hovered = ImGui::IsItemHovered();
-                        const bool physDown = (GetAsyncKeyState(vk) & 0x8000) != 0;
+                        const bool physDown = keyboardLayoutGameFocused && !isScrollWheelVk(vk) && (GetAsyncKeyState(vk) & 0x8000) != 0;
                         const bool active = ImGui::IsItemActive() || physDown;
 
                         struct KeyTheme {
@@ -1248,12 +1320,14 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                         DWORD triggerVK = showRebindInfo ? resolveTriggerVkFor(rb, vk) : vk;
                         DWORD outScan = showRebindInfo ? resolveTriggerScanFor(rb, vk) : 0;
 
-                        const std::string primaryText = showRebindInfo ? typesValueForDisplay(rb, vk) : std::string(label);
+                        const std::string primaryText =
+                            showRebindInfo ? keyboardLayoutIndicatorText(typesValueForDisplay(rb, vk)) : std::string(label);
                         const std::string secondaryText = showRebindInfo ? normalizeMouseButtonLabel(scanCodeToDisplayName(outScan, triggerVK))
                                                                           : std::string();
                         const bool showShiftLayerText = showRebindInfo && hasShiftLayerOverride(rb, vk);
-                        const std::string shiftLayerText =
-                            showShiftLayerText ? normalizeMouseButtonLabel(typesShiftValueForDisplay(rb, vk)) : std::string();
+                        const std::string shiftLayerText = showShiftLayerText
+                                                               ? keyboardLayoutIndicatorText(normalizeMouseButtonLabel(typesShiftValueForDisplay(rb, vk)))
+                                                               : std::string();
                         const bool showSecondaryText = showRebindInfo && !secondaryText.empty();
 
                         ImFont* fLabel = g_keyboardLayoutPrimaryFont ? g_keyboardLayoutPrimaryFont : ImGui::GetFont();
@@ -1838,6 +1912,20 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                         const ImVec2 side1Max = ImVec2(sideX0 + sideW, sideY0 + sideH);
                         const ImVec2 side2Min = ImVec2(sideX0, sideY0 + sideH + sideGap);
                         const ImVec2 side2Max = ImVec2(sideX0 + sideW, sideY0 + sideH + sideGap + sideH);
+                        const float scrollButtonGap = 3.0f * keyboardScale;
+                        float scrollButtonW = wheelW - 4.0f * keyboardScale;
+                        if (scrollButtonW < 20.0f * keyboardScale) scrollButtonW = 20.0f * keyboardScale;
+                        const float scrollButtonHAvailTop = (wheelMin.y - innerMin.y) - scrollButtonGap;
+                        const float scrollButtonHAvailBottom = (splitY - wheelMax.y) - scrollButtonGap;
+                        float scrollButtonH = 10.0f * keyboardScale;
+                        if (scrollButtonH > scrollButtonHAvailTop) scrollButtonH = scrollButtonHAvailTop;
+                        if (scrollButtonH > scrollButtonHAvailBottom) scrollButtonH = scrollButtonHAvailBottom;
+                        if (scrollButtonH < 8.0f * keyboardScale) scrollButtonH = 8.0f * keyboardScale;
+                        const ImVec2 scrollUpMin =
+                            ImVec2(midX - scrollButtonW * 0.5f, wheelMin.y - scrollButtonGap - scrollButtonH);
+                        const ImVec2 scrollUpMax = ImVec2(midX + scrollButtonW * 0.5f, wheelMin.y - scrollButtonGap);
+                        const ImVec2 scrollDownMin = ImVec2(midX - scrollButtonW * 0.5f, wheelMax.y + scrollButtonGap);
+                        const ImVec2 scrollDownMax = ImVec2(midX + scrollButtonW * 0.5f, wheelMax.y + scrollButtonGap + scrollButtonH);
 
                         dl->AddLine(ImVec2(midX, innerMin.y + 2), ImVec2(midX, splitY - 2), IM_COL32(10, 10, 12, 255), 1.0f);
                         dl->AddLine(ImVec2(innerMin.x + 2, splitY), ImVec2(innerMax.x - 2, splitY), IM_COL32(10, 10, 12, 255), 1.0f);
@@ -1881,6 +1969,25 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                         RecordGuiTestKeyboardLayoutKeyRect(VK_XBUTTON1, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
 #endif
                         drawMouseSegment(VK_XBUTTON1, "MB4", side2Min, side2Max, 6.0f * keyboardScale, ImDrawFlags_RoundCornersAll);
+
+                        ImGui::SetCursorScreenPos(scrollUpMin);
+                        ImGui::InvisibleButton("##mouse_scroll_up", ImVec2(scrollUpMax.x - scrollUpMin.x, scrollUpMax.y - scrollUpMin.y),
+                                              ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                        RecordGuiTestKeyboardLayoutKeyRect(VK_TOOLSCREEN_SCROLL_UP, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+#endif
+                        drawMouseSegment(VK_TOOLSCREEN_SCROLL_UP, "UP", scrollUpMin, scrollUpMax, 6.0f * keyboardScale,
+                                         ImDrawFlags_RoundCornersAll);
+
+                        ImGui::SetCursorScreenPos(scrollDownMin);
+                        ImGui::InvisibleButton("##mouse_scroll_down",
+                                              ImVec2(scrollDownMax.x - scrollDownMin.x, scrollDownMax.y - scrollDownMin.y),
+                                              ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                        RecordGuiTestKeyboardLayoutKeyRect(VK_TOOLSCREEN_SCROLL_DOWN, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+#endif
+                        drawMouseSegment(VK_TOOLSCREEN_SCROLL_DOWN, "DN", scrollDownMin, scrollDownMax, 6.0f * keyboardScale,
+                                         ImDrawFlags_RoundCornersAll);
                     }
 
                     ImGui::SetNextWindowPos(ImGui::GetMousePos(), ImGuiCond_Appearing);
@@ -2260,6 +2367,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                     DWORD npVk = numpadVkForNonExtendedScan(scan);
                                     if (npVk != 0) vkFromScan = npVk;
                                 }
+                                vkFromScan = normalizeModifierVkForDisplay(vkFromScan, scan);
                                 std::string name = scanCodeToDisplayName(scan, vkFromScan);
                                 const auto [group, order] = classifyGroupOrder(scan, vkFromScan);
                                 ScanMenuEntry e;
@@ -2328,6 +2436,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                     }
                                 } else {
                                     auto& r = g_config.keyRebinds.rebinds[s_layoutBindIndex];
+                                    bool captureAccepted = true;
                                     if (s_layoutBindTarget == LayoutBindTarget::FullOutputVk) {
                                         r.toKey = capturedVk;
                                         r.customOutputUnicode = 0;
@@ -2346,22 +2455,30 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                         clearBaseTypesOverrideIfDefault(r, r.fromKey);
                                         g_configIsDirty = true;
                                     } else if (s_layoutBindTarget == LayoutBindTarget::TypesVk) {
-                                        r.useCustomOutput = true;
-                                        r.customOutputVK = capturedVk;
-                                        r.customOutputUnicode = 0;
-                                        if (s_layoutBindIndex >= 0 && s_layoutBindIndex < (int)s_rebindUnicodeTextEdit.size()) {
-                                            s_rebindUnicodeTextEdit[s_layoutBindIndex].clear();
+                                        if (cannotTypeFor(&r, r.fromKey) || isNonTypableTextVk(capturedVk)) {
+                                            captureAccepted = false;
+                                        } else {
+                                            r.useCustomOutput = true;
+                                            r.customOutputVK = capturedVk;
+                                            r.customOutputUnicode = 0;
+                                            if (s_layoutBindIndex >= 0 && s_layoutBindIndex < (int)s_rebindUnicodeTextEdit.size()) {
+                                                s_rebindUnicodeTextEdit[s_layoutBindIndex].clear();
+                                            }
+
+                                            clearBaseTypesOverrideIfDefault(r, r.fromKey);
+                                            g_configIsDirty = true;
                                         }
-
-                                        clearBaseTypesOverrideIfDefault(r, r.fromKey);
-                                        g_configIsDirty = true;
                                     } else if (s_layoutBindTarget == LayoutBindTarget::TypesVkShift) {
-                                        r.shiftLayerEnabled = true;
-                                        r.shiftLayerOutputVK = capturedVk;
-                                        r.shiftLayerOutputUnicode = 0;
+                                        if (cannotTypeFor(&r, r.fromKey) || isNonTypableTextVk(capturedVk)) {
+                                            captureAccepted = false;
+                                        } else {
+                                            r.shiftLayerEnabled = true;
+                                            r.shiftLayerOutputVK = capturedVk;
+                                            r.shiftLayerOutputUnicode = 0;
 
-                                        clearShiftLayerOverrideIfDefault(r, r.fromKey);
-                                        g_configIsDirty = true;
+                                            clearShiftLayerOverrideIfDefault(r, r.fromKey);
+                                            g_configIsDirty = true;
+                                        }
                                     } else if (s_layoutBindTarget == LayoutBindTarget::TriggersVk) {
                                         r.toKey = capturedVk;
 
@@ -2380,16 +2497,18 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                         g_configIsDirty = true;
                                     }
 
-                                    if (isNoOpRebindForKey(r, r.fromKey)) {
-                                        int eraseIdx = s_layoutBindIndex;
-                                        s_layoutBindTarget = LayoutBindTarget::None;
-                                        s_layoutBindIndex = -1;
-                                        eraseRebindIndex(eraseIdx);
-                                    } else {
-                                        s_layoutBindTarget = LayoutBindTarget::None;
-                                        s_layoutBindIndex = -1;
-                                        (void)capturedLParam;
-                                        (void)capturedIsMouse;
+                                    if (captureAccepted) {
+                                        if (isNoOpRebindForKey(r, r.fromKey)) {
+                                            int eraseIdx = s_layoutBindIndex;
+                                            s_layoutBindTarget = LayoutBindTarget::None;
+                                            s_layoutBindIndex = -1;
+                                            eraseRebindIndex(eraseIdx);
+                                        } else {
+                                            s_layoutBindTarget = LayoutBindTarget::None;
+                                            s_layoutBindIndex = -1;
+                                            (void)capturedLParam;
+                                            (void)capturedIsMouse;
+                                        }
                                     }
                                 }
                             }
@@ -2499,6 +2618,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                         const std::string typesValue = typesValueFor(rbPtr, s_layoutContextVk);
                         const std::string typesShiftValue = typesShiftValueFor(rbPtr, s_layoutContextVk);
                         const std::string triggersValue = triggersValueFor(rbPtr, s_layoutContextVk);
+                        const bool disableTypeControls = cannotTypeFor(rbPtr, s_layoutContextVk);
 
 #ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
                         auto recordPopupInteractionRect = [&](const char* id, const ImVec2& fallbackMin, const ImVec2& fallbackMax) {
@@ -2649,8 +2769,13 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                         ImGui::Separator();
 
                         auto drawPopupRowLabel = [&](const char* tooltip, const char* label) {
+                            const float rowBaseY = ImGui::GetCursorPosY();
+                            const float markerYOffset = 2.0f;
+                            const float labelYOffset = -1.0f;
+                            ImGui::SetCursorPosY(rowBaseY + markerYOffset);
                             HelpMarker(tooltip);
                             ImGui::SameLine(0.0f, popupInlineGap);
+                            ImGui::SetCursorPosY(rowBaseY + labelYOffset);
                             ImGui::AlignTextToFramePadding();
                             ImGui::TextUnformatted(label);
                         };
@@ -2696,6 +2821,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                 drawPopupRowLabel(trc("inputs.tooltip.rebind_types"), trc("inputs.types_label"));
                                 ImGui::TableSetColumnIndex(1);
                                 {
+                                    ImGui::BeginDisabled(disableTypeControls);
                                     std::string label = (s_layoutBindTarget == LayoutBindTarget::TypesVk)
                                         ? std::string(trc("hotkeys.press_keys"))
                                         : typesValue;
@@ -2751,6 +2877,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                     recordPopupInteractionRect("inputs.keyboard_layout.popup.types_uppercase", typesUppercaseRectMin,
                                                                popupToggleFallbackMax(trc("inputs.uppercase_label"), typesUppercaseRectMin));
 #endif
+                                    ImGui::EndDisabled();
                                 }
 
                                 rbPtr = (idx >= 0 && idx < (int)g_config.keyRebinds.rebinds.size()) ? &g_config.keyRebinds.rebinds[idx] : nullptr;
@@ -2760,6 +2887,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                 drawPopupRowLabel(trc("inputs.tooltip.rebind_types_shift"), trc("inputs.types_shift_label"));
                                 ImGui::TableSetColumnIndex(1);
                                 {
+                                    ImGui::BeginDisabled(disableTypeControls);
                                     std::string label = (s_layoutBindTarget == LayoutBindTarget::TypesVkShift)
                                         ? std::string(trc("hotkeys.press_keys"))
                                         : typesShiftValue;
@@ -2824,6 +2952,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                     recordPopupInteractionRect("inputs.keyboard_layout.popup.types_shift_uppercase", typesShiftUppercaseRectMin,
                                                                popupToggleFallbackMax(trc("inputs.uppercase_label"), typesShiftUppercaseRectMin));
 #endif
+                                    ImGui::EndDisabled();
                                 }
 
                                 rbPtr = (idx >= 0 && idx < (int)g_config.keyRebinds.rebinds.size()) ? &g_config.keyRebinds.rebinds[idx] : nullptr;
@@ -2833,6 +2962,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                 drawPopupRowLabel(trc("inputs.tooltip.rebind_types_shift_caps_lock"), trc("inputs.shift_layer_label"));
                                 ImGui::TableSetColumnIndex(1);
                                 {
+                                    ImGui::BeginDisabled(disableTypeControls);
                                     bool shiftLayerUsesCapsLock = rbPtr ? rbPtr->shiftLayerUsesCapsLock : false;
                                     const ImVec2 shiftCapsLockRectMin = ImGui::GetCursorScreenPos();
                                     if (ImGui::Checkbox(trc("inputs.shift_layer_caps_lock_label"), &shiftLayerUsesCapsLock)) {
@@ -2859,6 +2989,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                     recordPopupInteractionRect("inputs.keyboard_layout.popup.shift_caps_lock", shiftCapsLockRectMin,
                                                                popupToggleFallbackMax(trc("inputs.shift_layer_caps_lock_label"), shiftCapsLockRectMin));
 #endif
+                                    ImGui::EndDisabled();
                                 }
 
                                 ImGui::TableNextRow();
