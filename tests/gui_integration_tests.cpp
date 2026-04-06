@@ -1664,6 +1664,7 @@ void PopulateRichConfigFixture() {
     rebind.toKey = 'K';
     rebind.enabled = true;
     rebind.useCustomOutput = true;
+    rebind.cursorState = kKeyRebindCursorStateCursorGrabbed;
     rebind.customOutputVK = 'L';
     rebind.customOutputUnicode = 0x00F8;
     rebind.customOutputScanCode = 0x26;
@@ -2378,6 +2379,8 @@ void VerifyRichKeyRebindsAndAppearance() {
     Expect(rebind.fromKey == 'J' && rebind.toKey == 'K', "Expected key rebind source/target to roundtrip.");
     Expect(rebind.enabled, "Expected key rebind enabled flag to roundtrip.");
     Expect(rebind.useCustomOutput, "Expected key rebind useCustomOutput to roundtrip.");
+        Expect(rebind.cursorState == kKeyRebindCursorStateCursorGrabbed,
+            "Expected key rebind cursorState to roundtrip.");
     Expect(rebind.customOutputVK == 'L', "Expected key rebind customOutputVK to roundtrip.");
     Expect(rebind.customOutputUnicode == 0x00F8, "Expected key rebind customOutputUnicode to roundtrip.");
     Expect(rebind.customOutputScanCode == 0x26, "Expected key rebind customOutputScanCode to roundtrip.");

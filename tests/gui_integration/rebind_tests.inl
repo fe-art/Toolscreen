@@ -71,6 +71,27 @@ class ScopedKeyboardStateOverride {
     bool m_valid = false;
 };
 
+class ScopedCursorVisibilityOverride {
+    public:
+        explicit ScopedCursorVisibilityOverride(bool visible) : m_originalVisible(IsCursorVisible()) {
+                SetVisible(visible);
+        }
+
+        ~ScopedCursorVisibilityOverride() { SetVisible(m_originalVisible); }
+
+    private:
+        static void SetVisible(bool visible) {
+                for (int attempt = 0; attempt < 32 && IsCursorVisible() != visible; ++attempt) {
+                        ShowCursor(visible ? TRUE : FALSE);
+                }
+
+                Expect(IsCursorVisible() == visible,
+                             std::string("Failed to set cursor visibility to ") + (visible ? "visible" : "hidden") + " for rebind integration test.");
+        }
+
+        bool m_originalVisible = false;
+};
+
 class ScopedRebindMessageCapture {
   public:
     explicit ScopedRebindMessageCapture(HWND hwnd) : m_hwnd(hwnd) {
@@ -377,6 +398,33 @@ shiftLayerOutputVK = 80
                       runMode);
 }
 
+void RunConfigLoadKeyRebindCursorStateDefaultedTest(TestRunMode runMode = TestRunMode::Automated) {
+    RunConfigLoadCase("config_load_key_rebind_cursor_state_defaulted",
+                      []() {
+                          WriteRawConfigTomlToDisk(R"(configVersion = 4
+defaultMode = "Fullscreen"
+
+[keyRebinds]
+enabled = true
+resolveRebindTargetsForHotkeys = false
+toggleHotkey = []
+
+[[keyRebinds.rebinds]]
+fromKey = 74
+toKey = 75
+enabled = true
+)");
+                      },
+                      []() {
+                          ExpectConfigLoadSucceeded("config-load-key-rebind-cursor-state-defaulted");
+                          Expect(g_config.keyRebinds.rebinds.size() == 1, "Expected exactly one key rebind fixture to load.");
+                          const KeyRebind& rebind = g_config.keyRebinds.rebinds.front();
+                          Expect(rebind.cursorState == kKeyRebindCursorStateAny,
+                                 "Expected key rebind cursorState to default to any when omitted from config.");
+                      },
+                      runMode);
+}
+
 void RunKeyRebindRuntimeFullForwardingTest(TestRunMode runMode = TestRunMode::Automated) {
     DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
     KeyRebind rebind = MakeEnabledRebind('A', 'B');
@@ -608,6 +656,72 @@ void RunKeyRebindRuntimeDisabledRebindIgnoredTest(TestRunMode runMode = TestRunM
     Expect(capture.messages.empty(), "Expected disabled rebinds to avoid forwarding WM_CHAR.");
 }
 
+void RunKeyRebindRuntimeCursorStatePriorityAndFallbackTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+
+    KeyRebind anyRebind = MakeEnabledRebind('A', 'B');
+    anyRebind.useCustomOutput = true;
+    anyRebind.customOutputVK = 'B';
+    anyRebind.cursorState = kKeyRebindCursorStateAny;
+
+    KeyRebind cursorFreeRebind = MakeEnabledRebind('A', 'C');
+    cursorFreeRebind.useCustomOutput = true;
+    cursorFreeRebind.customOutputVK = 'C';
+    cursorFreeRebind.cursorState = kKeyRebindCursorStateCursorFree;
+
+    KeyRebind cursorGrabbedRebind = MakeEnabledRebind('A', 'D');
+    cursorGrabbedRebind.useCustomOutput = true;
+    cursorGrabbedRebind.customOutputVK = 'D';
+    cursorGrabbedRebind.cursorState = kKeyRebindCursorStateCursorGrabbed;
+
+    PrepareRebindRuntimeCase("key_rebind_runtime_cursor_state_priority_and_fallback",
+                             { anyRebind, cursorFreeRebind, cursorGrabbedRebind });
+    ScopedRebindMessageCapture capture(window.hwnd());
+
+    ScopedKeyboardStateOverride keyboardState;
+    keyboardState.SetKeyDown(VK_SHIFT, false);
+    keyboardState.SetToggle(VK_CAPITAL, false);
+    keyboardState.Apply();
+
+    const LPARAM keyDownLParam = BuildTestKeyboardMessageLParam('A', true);
+
+    {
+        ScopedCursorVisibilityOverride cursorVisible(true);
+
+        const InputHandlerResult keyDownResult = HandleKeyRebinding(window.hwnd(), WM_KEYDOWN, 'A', keyDownLParam);
+        Expect(keyDownResult.consumed, "Expected cursor-free rebind to consume WM_KEYDOWN when the cursor is visible.");
+        Expect(capture.messages.size() == 1, "Expected visible-cursor rebind to forward exactly one WM_KEYDOWN message.");
+        ExpectCapturedMessage(capture, 0, WM_KEYDOWN, 'C', "Cursor-free priority WM_KEYDOWN");
+
+        capture.Clear();
+        const InputHandlerResult charResult = HandleCharRebinding(window.hwnd(), WM_CHAR, static_cast<WPARAM>('a'), keyDownLParam);
+        Expect(charResult.consumed, "Expected cursor-free rebind to consume WM_CHAR when the cursor is visible.");
+        Expect(capture.messages.size() == 1, "Expected visible-cursor rebind to forward exactly one WM_CHAR message.");
+        ExpectCapturedMessage(capture, 0, WM_CHAR, 'c', "Cursor-free priority WM_CHAR");
+    }
+
+    capture.Clear();
+    g_config.keyRebinds.rebinds = { anyRebind, cursorGrabbedRebind };
+    PublishConfigSnapshot();
+
+    {
+        ScopedCursorVisibilityOverride cursorVisible(true);
+
+        const InputHandlerResult keyDownResult = HandleKeyRebinding(window.hwnd(), WM_KEYDOWN, 'A', keyDownLParam);
+        Expect(keyDownResult.consumed,
+               "Expected Any rebind to consume WM_KEYDOWN when only a non-matching grabbed-specific rebind exists.");
+        Expect(capture.messages.size() == 1, "Expected visible-cursor fallback to forward exactly one WM_KEYDOWN message.");
+        ExpectCapturedMessage(capture, 0, WM_KEYDOWN, 'B', "Cursor-state fallback WM_KEYDOWN");
+
+        capture.Clear();
+        const InputHandlerResult charResult = HandleCharRebinding(window.hwnd(), WM_CHAR, static_cast<WPARAM>('a'), keyDownLParam);
+        Expect(charResult.consumed,
+               "Expected Any rebind to consume WM_CHAR when only a non-matching grabbed-specific rebind exists.");
+        Expect(capture.messages.size() == 1, "Expected visible-cursor fallback to forward exactly one WM_CHAR message.");
+        ExpectCapturedMessage(capture, 0, WM_CHAR, 'b', "Cursor-state fallback WM_CHAR");
+    }
+}
+
 void RunKeyRebindGuiKeyboardLayoutFullBindAndTriggerTest(TestRunMode runMode = TestRunMode::Automated) {
     DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
     if (SkipIfNoModernGuiTestGL(window)) { return; }
@@ -766,6 +880,50 @@ void RunKeyRebindGuiKeyboardLayoutMouseSourceBindAndTriggerTest(TestRunMode runM
     Expect(mouseUpResult.consumed, "Expected the GUI-created mouse-source rebind to consume WM_LBUTTONUP.");
     Expect(capture.messages.size() == 1, "Expected the GUI-created mouse-source rebind to forward exactly one WM_KEYUP message.");
     ExpectCapturedMessage(capture, 0, WM_KEYUP, 'Q', "GUI mouse-source rebind WM_KEYUP");
+}
+
+void RunKeyRebindGuiKeyboardLayoutCursorStateOverrideTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    if (SkipIfNoModernGuiTestGL(window)) { return; }
+    PrepareRebindGuiCase("key_rebind_gui_keyboard_layout_cursor_state_override");
+
+    OpenKeyboardLayoutContext(window, 'A');
+    BindKeyboardLayoutTarget(window, false, 'B');
+
+    Expect(g_config.keyRebinds.rebinds.size() == 1, "Expected the Any layout bind flow to create exactly one key rebind.");
+    Expect(g_config.keyRebinds.rebinds.front().cursorState == kKeyRebindCursorStateAny,
+           "Expected the initial keyboard layout bind to target the Any cursor-state layout.");
+
+    RequestGuiTestKeyboardLayoutSetCursorStateView(GuiTestKeyboardLayoutCursorStateView::CursorFree);
+    RenderKeyboardInputsFrame(window);
+    RequestGuiTestOpenKeyboardLayoutContext('A');
+    RenderKeyboardInputsFrame(window);
+    RequestGuiTestKeyboardLayoutBeginBind(GuiTestKeyboardLayoutBindTarget::FullOutputVk);
+    RenderKeyboardInputsFrame(window);
+    SubmitKeyboardBindingEvent('C');
+    RenderKeyboardInputsFrame(window);
+
+    Expect(g_config.keyRebinds.rebinds.size() == 2,
+           "Expected creating a cursor-free layout override to keep the Any rebind and add a second rebind.");
+
+    const KeyRebind* anyLayoutRebind = nullptr;
+    const KeyRebind* cursorFreeLayoutRebind = nullptr;
+    for (const KeyRebind& rebind : g_config.keyRebinds.rebinds) {
+        if (rebind.fromKey != 'A') continue;
+        if (rebind.cursorState == kKeyRebindCursorStateAny) {
+            anyLayoutRebind = &rebind;
+        } else if (rebind.cursorState == kKeyRebindCursorStateCursorFree) {
+            cursorFreeLayoutRebind = &rebind;
+        }
+    }
+
+    Expect(anyLayoutRebind != nullptr, "Expected the Any keyboard layout rebind to remain after creating a cursor-free override.");
+    Expect(cursorFreeLayoutRebind != nullptr,
+           "Expected the keyboard layout cursor-free view to create a cursor-free override rebind.");
+    Expect(anyLayoutRebind->toKey == 'B' && anyLayoutRebind->customOutputVK == 'B',
+           "Expected the Any keyboard layout rebind to preserve its original target.");
+    Expect(cursorFreeLayoutRebind->toKey == 'C' && cursorFreeLayoutRebind->customOutputVK == 'C',
+           "Expected the cursor-free keyboard layout override to store its own output target.");
 }
 
     void RunKeyRebindGuiKeyboardLayoutFullBindScanPickerRuntimeTest(TestRunMode runMode = TestRunMode::Automated) {

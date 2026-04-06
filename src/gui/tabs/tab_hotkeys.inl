@@ -333,6 +333,8 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                         } else {
                             hotkey.conditions.gameState.clear();
                             hotkey.conditions.gameState.push_back("wall");
+                            hotkey.conditions.gameState.push_back("any,cursor_free");
+                            hotkey.conditions.gameState.push_back("any,cursor_grabbed");
                             hotkey.conditions.gameState.push_back("inworld,cursor_free");
                             hotkey.conditions.gameState.push_back("inworld,cursor_grabbed");
                             hotkey.conditions.gameState.push_back("title");
@@ -566,6 +568,8 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                         } else {
                             sensHotkey.conditions.gameState.clear();
                             sensHotkey.conditions.gameState.push_back("wall");
+                            sensHotkey.conditions.gameState.push_back("any,cursor_free");
+                            sensHotkey.conditions.gameState.push_back("any,cursor_grabbed");
                             sensHotkey.conditions.gameState.push_back("inworld,cursor_free");
                             sensHotkey.conditions.gameState.push_back("inworld,cursor_grabbed");
                             sensHotkey.conditions.gameState.push_back("title");

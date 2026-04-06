@@ -78,6 +78,69 @@ static bool SendMenuMaskKeyTap();
 static bool HotkeyUsesWindowsKey(const std::vector<DWORD>& keys);
 static bool ShouldMaskWindowsKeyForHotkey(const std::vector<DWORD>& keys, bool isKeyDown, bool isAutoRepeatKeyDown);
 
+static bool MatchesConfiguredGameStateCondition(const std::vector<std::string>& configuredStates, const std::string& gameState) {
+    if (configuredStates.empty()) {
+        return true;
+    }
+
+    const bool cursorVisible = IsCursorVisible();
+    for (const std::string& configuredState : configuredStates) {
+        if (configuredState == gameState) {
+            return true;
+        }
+        if (configuredState == "any,cursor_free" && cursorVisible) {
+            return true;
+        }
+        if (configuredState == "any,cursor_grabbed" && !cursorVisible) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+enum class KeyRebindCursorStateMatchPriority {
+    None = 0,
+    Any = 1,
+    Exact = 2,
+};
+
+static KeyRebindCursorStateMatchPriority GetKeyRebindCursorStateMatchPriority(const KeyRebind& rebind, bool cursorVisible) {
+    if (rebind.cursorState == kKeyRebindCursorStateCursorFree) {
+        return cursorVisible ? KeyRebindCursorStateMatchPriority::Exact : KeyRebindCursorStateMatchPriority::None;
+    }
+    if (rebind.cursorState == kKeyRebindCursorStateCursorGrabbed) {
+        return cursorVisible ? KeyRebindCursorStateMatchPriority::None : KeyRebindCursorStateMatchPriority::Exact;
+    }
+    return KeyRebindCursorStateMatchPriority::Any;
+}
+
+template <typename Predicate>
+static const KeyRebind* FindPreferredEnabledKeyRebind(const std::vector<KeyRebind>& rebinds,
+                                                      bool cursorVisible,
+                                                      Predicate predicate) {
+    const KeyRebind* anyMatch = nullptr;
+
+    for (const auto& rebind : rebinds) {
+        if (!rebind.enabled || rebind.fromKey == 0 || rebind.toKey == 0) {
+            continue;
+        }
+        if (!predicate(rebind)) {
+            continue;
+        }
+
+        const KeyRebindCursorStateMatchPriority matchPriority = GetKeyRebindCursorStateMatchPriority(rebind, cursorVisible);
+        if (matchPriority == KeyRebindCursorStateMatchPriority::Exact) {
+            return &rebind;
+        }
+        if (matchPriority == KeyRebindCursorStateMatchPriority::Any && anyMatch == nullptr) {
+            anyMatch = &rebind;
+        }
+    }
+
+    return anyMatch;
+}
+
 static UINT GetScanCodeWithExtendedFlagFromLParam(LPARAM lParam) {
     UINT scanCodeWithFlags = static_cast<UINT>((lParam >> 16) & 0xFF);
     if ((lParam & (1LL << 24)) != 0) {
@@ -1432,15 +1495,16 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
     const Config& cfg = *cfgSnap;
 
     DWORD rebindTargetVk = 0;
+    const bool cursorVisible = (cfg.keyRebinds.enabled && cfg.keyRebinds.resolveRebindTargetsForHotkeys) ? IsCursorVisible() : false;
     if (cfg.keyRebinds.enabled && cfg.keyRebinds.resolveRebindTargetsForHotkeys) {
-        for (const auto& rebind : cfg.keyRebinds.rebinds) {
-            if (rebind.enabled && rebind.fromKey != 0 && rebind.toKey != 0 &&
-                (vkCode == rebind.fromKey || rawVkCode == rebind.fromKey)) {
-                const bool shiftLayerActive = IsShiftLayerActiveForRebind(rebind, vkCode, rawVkCode, isKeyDown);
-                const DWORD effectiveCustomOutputVk = ResolveEffectiveCustomOutputVk(rebind, shiftLayerActive);
-                rebindTargetVk = (effectiveCustomOutputVk != 0) ? effectiveCustomOutputVk : rebind.toKey;
-                break;
-            }
+        const KeyRebind* matchedRebind = FindPreferredEnabledKeyRebind(
+            cfg.keyRebinds.rebinds,
+            cursorVisible,
+            [&](const KeyRebind& rebind) { return MatchesRebindSourceKey(vkCode, rawVkCode, rebind.fromKey); });
+        if (matchedRebind != nullptr) {
+            const bool shiftLayerActive = IsShiftLayerActiveForRebind(*matchedRebind, vkCode, rawVkCode, isKeyDown);
+            const DWORD effectiveCustomOutputVk = ResolveEffectiveCustomOutputVk(*matchedRebind, shiftLayerActive);
+            rebindTargetVk = (effectiveCustomOutputVk != 0) ? effectiveCustomOutputVk : matchedRebind->toKey;
         }
     }
 
@@ -1462,9 +1526,7 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                 ")");
         }
 
-        bool conditionsMet = hotkey.conditions.gameState.empty() ||
-                             std::find(hotkey.conditions.gameState.begin(), hotkey.conditions.gameState.end(), gameState) !=
-                                 hotkey.conditions.gameState.end();
+        bool conditionsMet = MatchesConfiguredGameStateCondition(hotkey.conditions.gameState, gameState);
 
         std::string currentSecMode;
         bool wouldExitToFullscreen = false;
@@ -1697,9 +1759,7 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                 " -> sens=" + std::to_string(sensHotkey.sensitivity));
         }
 
-        bool conditionsMet = sensHotkey.conditions.gameState.empty() ||
-                             std::find(sensHotkey.conditions.gameState.begin(), sensHotkey.conditions.gameState.end(), gameState) !=
-                                 sensHotkey.conditions.gameState.end();
+        bool conditionsMet = MatchesConfiguredGameStateCondition(sensHotkey.conditions.gameState, gameState);
         if (!conditionsMet) {
             if (s_enableHotkeyDebug) { Log("[Hotkey] SKIP sensitivity: Game state conditions not met"); }
             continue;
@@ -2231,14 +2291,22 @@ static bool ShouldSuppressLowLevelMenuModifierKey(DWORD rawVk) {
     const auto cfg = GetConfigSnapshot();
     if (!cfg || !cfg->keyRebinds.enabled) return false;
 
-    for (const auto& rebind : cfg->keyRebinds.rebinds) {
-        if (!rebind.enabled || rebind.fromKey == 0 || rebind.toKey == 0) continue;
-        if (!IsDeepSuppressionEligibleSourceVk(rebind.fromKey)) continue;
-        if (!MatchesRebindSourceKey(rawVk, rawVk, rebind.fromKey)) continue;
-        if ((cfg->keyRebinds.allowSystemAltTab || cfg->keyRebinds.allowSystemAltF4) && IsAltVk(rawVk) && IsAltVk(rebind.fromKey)) continue;
-
-        const DWORD triggerVk = NormalizeModifierVkFromConfig(rebind.toKey, (rebind.useCustomOutput ? rebind.customOutputScanCode : 0));
-        if (ShouldMaskMenuModifierForRebind(rebind, rawVk, rawVk, true, false, triggerVk)) {
+    const bool cursorVisible = IsCursorVisible();
+    const KeyRebind* matchedRebind = FindPreferredEnabledKeyRebind(
+        cfg->keyRebinds.rebinds,
+        cursorVisible,
+        [&](const KeyRebind& rebind) {
+            if (!IsDeepSuppressionEligibleSourceVk(rebind.fromKey)) return false;
+            if (!MatchesRebindSourceKey(rawVk, rawVk, rebind.fromKey)) return false;
+            if ((cfg->keyRebinds.allowSystemAltTab || cfg->keyRebinds.allowSystemAltF4) && IsAltVk(rawVk) && IsAltVk(rebind.fromKey)) {
+                return false;
+            }
+            return true;
+        });
+    if (matchedRebind != nullptr) {
+        const DWORD triggerVk = NormalizeModifierVkFromConfig(matchedRebind->toKey,
+                                                              (matchedRebind->useCustomOutput ? matchedRebind->customOutputScanCode : 0));
+        if (ShouldMaskMenuModifierForRebind(*matchedRebind, rawVk, rawVk, true, false, triggerVk)) {
             return true;
         }
     }
@@ -2816,6 +2884,7 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
     // Use config snapshot for thread-safe access to key rebinds
     auto rebindCfg = GetConfigSnapshot();
     if (!rebindCfg || !rebindCfg->keyRebinds.enabled) { return { false, 0 }; }
+    const bool cursorVisible = IsCursorVisible();
 
     const bool allowSystemAltTab = !isMouseButton && rebindCfg->keyRebinds.allowSystemAltTab;
     const bool currentIsAlt = !isMouseButton && (IsAltVk(vkCode) || IsAltVk(rawVkCode));
@@ -2832,13 +2901,13 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
         return { false, 0 };
     }
 
-    for (size_t i = 0; i < rebindCfg->keyRebinds.rebinds.size(); ++i) {
-        const auto& rebind = rebindCfg->keyRebinds.rebinds[i];
-
-        if (rebind.enabled && rebind.fromKey != 0 && rebind.toKey != 0 && MatchesRebindSourceKey(vkCode, rawVkCode, rebind.fromKey)) {
-            return ExecuteMatchedKeyRebind(hWnd, uMsg, wParam, lParam, rawVkCode, vkCode, isMouseButton, isKeyDown,
-                                           isAutoRepeatKeyDown, rebind);
-        }
+    const KeyRebind* matchedRebind = FindPreferredEnabledKeyRebind(
+        rebindCfg->keyRebinds.rebinds,
+        cursorVisible,
+        [&](const KeyRebind& rebind) { return MatchesRebindSourceKey(vkCode, rawVkCode, rebind.fromKey); });
+    if (matchedRebind != nullptr) {
+        return ExecuteMatchedKeyRebind(hWnd, uMsg, wParam, lParam, rawVkCode, vkCode, isMouseButton, isKeyDown,
+                                       isAutoRepeatKeyDown, *matchedRebind);
     }
 
     if (allowSystemAltTab && !isKeyDown && (currentIsAlt || currentIsTab)) {
@@ -2884,82 +2953,89 @@ InputHandlerResult HandleCharRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 
     auto charRebindCfg = GetConfigSnapshot();
     if (!charRebindCfg || !charRebindCfg->keyRebinds.enabled) { return { false, 0 }; }
+    const bool cursorVisible = IsCursorVisible();
 
     WCHAR inputChar = static_cast<WCHAR>(wParam);
 
-    for (const auto& rebind : charRebindCfg->keyRebinds.rebinds) {
-        if (!rebind.enabled || rebind.fromKey == 0 || rebind.toKey == 0) continue;
+    for (int pass = 0; pass < 2; ++pass) {
+        const KeyRebindCursorStateMatchPriority passPriority =
+            (pass == 0) ? KeyRebindCursorStateMatchPriority::Exact : KeyRebindCursorStateMatchPriority::Any;
 
-        WCHAR fromUnshifted = 0;
-        WCHAR fromShifted = 0;
-        bool hasFromUnshifted = TryTranslateVkToChar(rebind.fromKey, false, fromUnshifted);
-        bool hasFromShifted = TryTranslateVkToChar(rebind.fromKey, true, fromShifted);
+        for (const auto& rebind : charRebindCfg->keyRebinds.rebinds) {
+            if (!rebind.enabled || rebind.fromKey == 0 || rebind.toKey == 0) continue;
+            if (GetKeyRebindCursorStateMatchPriority(rebind, cursorVisible) != passPriority) continue;
 
-        bool matched = false;
+            WCHAR fromUnshifted = 0;
+            WCHAR fromShifted = 0;
+            bool hasFromUnshifted = TryTranslateVkToChar(rebind.fromKey, false, fromUnshifted);
+            bool hasFromShifted = TryTranslateVkToChar(rebind.fromKey, true, fromShifted);
 
-        if (hasFromUnshifted && inputChar == fromUnshifted) {
-            matched = true;
-        } else if (hasFromShifted && inputChar == fromShifted) {
-            matched = true;
-        }
+            bool matched = false;
 
-        if (matched) {
-            const bool shiftDown = IsShiftCurrentlyDown();
-            const bool shiftLayerActive = IsShiftLayerActive(rebind, shiftDown, IsCapsLockCurrentlyOn());
-            const bool preferShiftedText = ResolvePreferredOutputShiftState(rebind, shiftLayerActive, shiftDown);
-
-            if (shiftLayerActive && HasShiftLayerOutputUnicode(rebind)) {
-                LRESULT r = SendUnicodeScalarAsCharMessage(hWnd, uMsg, (uint32_t)rebind.shiftLayerOutputUnicode, lParam);
-                return { true, r };
+            if (hasFromUnshifted && inputChar == fromUnshifted) {
+                matched = true;
+            } else if (hasFromShifted && inputChar == fromShifted) {
+                matched = true;
             }
 
-            if (!shiftLayerActive && rebind.useCustomOutput && rebind.customOutputUnicode != 0) {
-                LRESULT r = SendUnicodeScalarAsCharMessage(hWnd, uMsg, (uint32_t)rebind.customOutputUnicode, lParam);
-                return { true, r };
-            }
+            if (matched) {
+                const bool shiftDown = IsShiftCurrentlyDown();
+                const bool shiftLayerActive = IsShiftLayerActive(rebind, shiftDown, IsCapsLockCurrentlyOn());
+                const bool preferShiftedText = ResolvePreferredOutputShiftState(rebind, shiftLayerActive, shiftDown);
 
-            DWORD outputVK = ResolveEffectiveCustomOutputVk(rebind, shiftLayerActive);
-
-            if (outputVK == 0) {
-                if (RebindCannotType(rebind)) {
-                    Log("[REBIND WM_CHAR] Consuming char code " + std::to_string(static_cast<unsigned int>(inputChar)) +
-                        " (trigger cannot type)");
-                    return { true, 0 };
+                if (shiftLayerActive && HasShiftLayerOutputUnicode(rebind)) {
+                    LRESULT r = SendUnicodeScalarAsCharMessage(hWnd, uMsg, (uint32_t)rebind.shiftLayerOutputUnicode, lParam);
+                    return { true, r };
                 }
-                return { false, 0 };
-            }
 
-            outputVK = NormalizeModifierVkFromConfig(outputVK);
+                if (!shiftLayerActive && rebind.useCustomOutput && rebind.customOutputUnicode != 0) {
+                    LRESULT r = SendUnicodeScalarAsCharMessage(hWnd, uMsg, (uint32_t)rebind.customOutputUnicode, lParam);
+                    return { true, r };
+                }
 
-            WCHAR outputChar = 0;
-            if (outputVK == VK_RETURN) {
-                outputChar = L'\r';
-            } else if (outputVK == VK_TAB) {
-                outputChar = L'\t';
-            } else if (outputVK == VK_BACK) {
-                outputChar = L'\b';
-            } else {
-                BYTE ks[256] = {};
-                if (GetKeyboardState(ks)) {
-                    ApplyPreferredOutputShiftState(rebind, shiftLayerActive, ks);
-                    (void)TryTranslateVkToCharWithKeyboardState(outputVK, ks, outputChar);
+                DWORD outputVK = ResolveEffectiveCustomOutputVk(rebind, shiftLayerActive);
+
+                if (outputVK == 0) {
+                    if (RebindCannotType(rebind)) {
+                        Log("[REBIND WM_CHAR] Consuming char code " + std::to_string(static_cast<unsigned int>(inputChar)) +
+                            " (trigger cannot type)");
+                        return { true, 0 };
+                    }
+                    return { false, 0 };
+                }
+
+                outputVK = NormalizeModifierVkFromConfig(outputVK);
+
+                WCHAR outputChar = 0;
+                if (outputVK == VK_RETURN) {
+                    outputChar = L'\r';
+                } else if (outputVK == VK_TAB) {
+                    outputChar = L'\t';
+                } else if (outputVK == VK_BACK) {
+                    outputChar = L'\b';
+                } else {
+                    BYTE ks[256] = {};
+                    if (GetKeyboardState(ks)) {
+                        ApplyPreferredOutputShiftState(rebind, shiftLayerActive, ks);
+                        (void)TryTranslateVkToCharWithKeyboardState(outputVK, ks, outputChar);
+                    }
+
+                    if (outputChar == 0) {
+                        (void)TryTranslateVkToCharPreferShiftState(outputVK, preferShiftedText, outputChar);
+                    }
                 }
 
                 if (outputChar == 0) {
-                    (void)TryTranslateVkToCharPreferShiftState(outputVK, preferShiftedText, outputChar);
+                    Log("[REBIND WM_CHAR] Consuming char code " + std::to_string(static_cast<unsigned int>(inputChar)) +
+                        " (output VK has no WM_CHAR)");
+                    return { true, 0 };
                 }
+
+                Log("[REBIND WM_CHAR] Remapping char code " + std::to_string(static_cast<unsigned int>(inputChar)) + " -> " +
+                    std::to_string(static_cast<unsigned int>(outputChar)));
+
+                return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, outputChar, lParam) };
             }
-
-            if (outputChar == 0) {
-                Log("[REBIND WM_CHAR] Consuming char code " + std::to_string(static_cast<unsigned int>(inputChar)) +
-                    " (output VK has no WM_CHAR)");
-                return { true, 0 };
-            }
-
-            Log("[REBIND WM_CHAR] Remapping char code " + std::to_string(static_cast<unsigned int>(inputChar)) + " -> " +
-                std::to_string(static_cast<unsigned int>(outputChar)));
-
-            return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, outputChar, lParam) };
         }
     }
     return { false, 0 };

@@ -1840,6 +1840,10 @@ void KeyRebindToToml(const KeyRebind& cfg, toml::table& out) {
     out.insert("fromKey", static_cast<int64_t>(cfg.fromKey));
     out.insert("toKey", static_cast<int64_t>(cfg.toKey));
     out.insert("enabled", cfg.enabled);
+    const std::string cursorState = NormalizeKeyRebindCursorStateId(cfg.cursorState);
+    if (cursorState != kKeyRebindCursorStateAny) {
+        out.insert("cursorState", cursorState);
+    }
     out.insert("useCustomOutput", cfg.useCustomOutput);
     out.insert("customOutputVK", static_cast<int64_t>(cfg.customOutputVK));
     out.insert("customOutputUnicode", static_cast<int64_t>(cfg.customOutputUnicode));
@@ -1934,6 +1938,7 @@ void KeyRebindFromToml(const toml::table& tbl, KeyRebind& cfg) {
     cfg.fromKey = static_cast<DWORD>(GetOr<int64_t>(tbl, "fromKey", 0));
     cfg.toKey = static_cast<DWORD>(GetOr<int64_t>(tbl, "toKey", 0));
     cfg.enabled = GetOr(tbl, "enabled", ConfigDefaults::KEY_REBIND_ENABLED);
+    cfg.cursorState = NormalizeKeyRebindCursorStateId(GetStringOr(tbl, "cursorState", kKeyRebindCursorStateAny));
     cfg.useCustomOutput = GetOr(tbl, "useCustomOutput", ConfigDefaults::KEY_REBIND_USE_CUSTOM_OUTPUT);
     cfg.customOutputVK = static_cast<DWORD>(GetOr<int64_t>(tbl, "customOutputVK", ConfigDefaults::KEY_REBIND_CUSTOM_OUTPUT_VK));
     cfg.customOutputUnicode = ConfigDefaults::KEY_REBIND_CUSTOM_OUTPUT_UNICODE;

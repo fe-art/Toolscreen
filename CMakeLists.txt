@@ -972,6 +972,7 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     config-load-key-rebind-legacy-show-indicator-migrated
     config-load-key-rebind-shift-layer-caps-lock-parsed
     config-load-key-rebind-shift-layer-caps-lock-defaulted
+    config-load-key-rebind-cursor-state-defaulted
     key-rebind-runtime-full-forwarding
     key-rebind-runtime-split-vk-output
     key-rebind-runtime-split-unicode-output
@@ -982,9 +983,11 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     key-rebind-runtime-non-typable-trigger-consumes-char
     key-rebind-runtime-mouse-source-emits-key-and-char
     key-rebind-runtime-disabled-rebind-ignored
+    key-rebind-runtime-cursor-state-priority-and-fallback
     key-rebind-gui-keyboard-layout-full-bind-and-trigger
     key-rebind-gui-keyboard-layout-split-bind-and-trigger
     key-rebind-gui-keyboard-layout-mouse-source-bind-and-trigger
+    key-rebind-gui-keyboard-layout-cursor-state-override
     key-rebind-gui-keyboard-layout-full-bind-scan-picker-runtime
     key-rebind-gui-keyboard-layout-scan-picker-filter
     key-rebind-gui-keyboard-layout-scan-picker-reset-to-default

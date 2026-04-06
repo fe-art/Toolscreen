@@ -3,6 +3,7 @@
 #include <Windows.h>
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <map>
@@ -94,12 +95,19 @@ enum class GuiTestKeyboardLayoutScanFilterGroup {
     Other,
 };
 
+enum class GuiTestKeyboardLayoutCursorStateView {
+    Any = 0,
+    CursorFree,
+    CursorGrabbed,
+};
+
 void ResetGuiTestInteractionRects();
 bool GetGuiTestInteractionRect(const char* id, GuiTestInteractionRect& outRect);
 void RequestGuiTestOpenKeyboardLayout();
 void RequestGuiTestOpenKeyboardLayoutContext(DWORD vk);
 void RequestGuiTestSetConfigSearchQuery(const std::string& query);
 void RequestGuiTestKeyboardLayoutSetSplitMode(bool splitMode);
+void RequestGuiTestKeyboardLayoutSetCursorStateView(GuiTestKeyboardLayoutCursorStateView view);
 void RequestGuiTestKeyboardLayoutBeginBind(GuiTestKeyboardLayoutBindTarget target);
 void RequestGuiTestKeyboardLayoutSetShiftLayerUppercase(bool enabled);
 void RequestGuiTestKeyboardLayoutSetShiftLayerUsesCapsLock(bool enabled);
@@ -528,10 +536,28 @@ struct AppearanceConfig {
 inline constexpr DWORD VK_TOOLSCREEN_SCROLL_UP = 0x1000;
 inline constexpr DWORD VK_TOOLSCREEN_SCROLL_DOWN = 0x1001;
 
+inline constexpr const char* kKeyRebindCursorStateAny = "any";
+inline constexpr const char* kKeyRebindCursorStateCursorFree = "cursor_free";
+inline constexpr const char* kKeyRebindCursorStateCursorGrabbed = "cursor_grabbed";
+
+inline std::string NormalizeKeyRebindCursorStateId(std::string cursorState) {
+    std::transform(cursorState.begin(), cursorState.end(), cursorState.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+
+    if (cursorState == kKeyRebindCursorStateCursorFree) {
+        return kKeyRebindCursorStateCursorFree;
+    }
+    if (cursorState == kKeyRebindCursorStateCursorGrabbed) {
+        return kKeyRebindCursorStateCursorGrabbed;
+    }
+    return kKeyRebindCursorStateAny;
+}
+
 struct KeyRebind {
     DWORD fromKey = 0;
     DWORD toKey = 0;
     bool enabled = true;
+    std::string cursorState = kKeyRebindCursorStateAny;
 
     bool useCustomOutput = false;
     DWORD customOutputVK = 0;

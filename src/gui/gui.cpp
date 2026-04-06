@@ -1902,6 +1902,7 @@ DWORD s_guiTestOpenKeyboardLayoutContextVk = 0;
 bool s_guiTestConfigSearchQueryRequested = false;
 std::string s_guiTestConfigSearchQuery;
 int s_guiTestKeyboardLayoutSplitModeRequest = -1;
+int s_guiTestKeyboardLayoutCursorStateViewRequest = -1;
 GuiTestKeyboardLayoutBindTarget s_guiTestKeyboardLayoutBindTargetRequest = GuiTestKeyboardLayoutBindTarget::None;
 int s_guiTestKeyboardLayoutShiftUppercaseRequest = -1;
 int s_guiTestKeyboardLayoutShiftCapsLockRequest = -1;
@@ -1954,6 +1955,12 @@ bool ConsumeGuiTestConfigSearchQueryRequest(std::string& outQuery) {
 int ConsumeGuiTestKeyboardLayoutSplitModeRequest() {
     const int request = s_guiTestKeyboardLayoutSplitModeRequest;
     s_guiTestKeyboardLayoutSplitModeRequest = -1;
+    return request;
+}
+
+int ConsumeGuiTestKeyboardLayoutCursorStateViewRequest() {
+    const int request = s_guiTestKeyboardLayoutCursorStateViewRequest;
+    s_guiTestKeyboardLayoutCursorStateViewRequest = -1;
     return request;
 }
 
@@ -2135,6 +2142,8 @@ const std::vector<std::pair<const char*, const char*>>& GetSettingsGameStateDisp
     if (cachedGeneration != generation) {
         names = {
             {"wall", trc("game_state.wall")},
+            {"any,cursor_free", trc("game_state.any_free")},
+            {"any,cursor_grabbed", trc("game_state.any_grabbed")},
             {"inworld,cursor_free", trc("game_state.inworld_free")},
             {"inworld,cursor_grabbed", trc("game_state.inworld_grabbed")},
             {"title", trc("game_state.title")},
@@ -2240,6 +2249,10 @@ void RequestGuiTestSetConfigSearchQuery(const std::string& query) {
 
 void RequestGuiTestKeyboardLayoutSetSplitMode(bool splitMode) {
     s_guiTestKeyboardLayoutSplitModeRequest = splitMode ? 1 : 0;
+}
+
+void RequestGuiTestKeyboardLayoutSetCursorStateView(GuiTestKeyboardLayoutCursorStateView view) {
+    s_guiTestKeyboardLayoutCursorStateViewRequest = static_cast<int>(view);
 }
 
 void RequestGuiTestKeyboardLayoutBeginBind(GuiTestKeyboardLayoutBindTarget target) {
@@ -2368,10 +2381,21 @@ void RenderSettingsGUI() {
     static std::set<DWORD> s_preHeldKeys;
     static bool s_bindingInitialized = false;
 
-    static const std::vector<const char*> validGameStates = { "wall",    "inworld,cursor_free", "inworld,cursor_grabbed", "title",
-                                                              "waiting", "generating" };
+    static const std::vector<const char*> validGameStates = { "wall",
+                                                              "any,cursor_free",
+                                                              "any,cursor_grabbed",
+                                                              "inworld,cursor_free",
+                                                              "inworld,cursor_grabbed",
+                                                              "title",
+                                                              "waiting",
+                                                              "generating" };
 
-    static const std::vector<const char*> guiGameStates = { "wall", "inworld,cursor_free", "inworld,cursor_grabbed", "title",
+    static const std::vector<const char*> guiGameStates = { "wall",
+                                                            "any,cursor_free",
+                                                            "any,cursor_grabbed",
+                                                            "inworld,cursor_free",
+                                                            "inworld,cursor_grabbed",
+                                                            "title",
                                                             "generating" };
 
     auto getGameStateFriendlyName = [](const std::string& gameState) {

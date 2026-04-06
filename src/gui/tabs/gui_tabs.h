@@ -90,14 +90,25 @@ inline const char* GetFriendlyName(const std::string& key, const std::vector<std
 }
 
 inline const std::vector<const char*>& GetValidGameStates() {
-    static const std::vector<const char*> states = { "wall",  "inworld,cursor_free", "inworld,cursor_grabbed",
-                                                     "title", "waiting",             "generating" };
+    static const std::vector<const char*> states = { "wall",
+                                                     "any,cursor_free",
+                                                     "any,cursor_grabbed",
+                                                     "inworld,cursor_free",
+                                                     "inworld,cursor_grabbed",
+                                                     "title",
+                                                     "waiting",
+                                                     "generating" };
     return states;
 }
 
 inline const std::vector<const char*>& GetGuiGameStates() {
-    static const std::vector<const char*> states = { "wall",  "inworld,cursor_free", "inworld,cursor_grabbed",
-                                                     "title", "generating" };
+    static const std::vector<const char*> states = { "wall",
+                                                     "any,cursor_free",
+                                                     "any,cursor_grabbed",
+                                                     "inworld,cursor_free",
+                                                     "inworld,cursor_grabbed",
+                                                     "title",
+                                                     "generating" };
     return states;
 }
 
@@ -108,6 +119,8 @@ inline const std::vector<std::pair<const char*, const char*>>& GetGameStateDispl
     const uint64_t generation = GetTranslationGeneration();
     if (cachedGeneration != generation) {
         names = { { "wall", trc("game_state.wall") },
+                  { "any,cursor_free", trc("game_state.any_free") },
+                  { "any,cursor_grabbed", trc("game_state.any_grabbed") },
                   { "inworld,cursor_free", trc("game_state.inworld_free") },
                   { "inworld,cursor_grabbed", trc("game_state.inworld_grabbed") },
                   { "title", trc("game_state.title") },

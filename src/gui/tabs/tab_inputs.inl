@@ -624,10 +624,14 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                 };
 
                 constexpr float kDefaultKeyboardLayoutScale = 1.35f;
+                constexpr int kKeyboardLayoutCursorStateViewAny = 0;
+                constexpr int kKeyboardLayoutCursorStateViewCursorFree = 1;
+                constexpr int kKeyboardLayoutCursorStateViewCursorGrabbed = 2;
                 static bool s_keyboardLayoutOpen = false;
                 static float s_keyboardLayoutScale = kDefaultKeyboardLayoutScale;
                 static int s_physicalLayout = 0;
                 static int s_keyLabelLayout = 0;
+                static int s_keyboardLayoutCursorStateView = kKeyboardLayoutCursorStateViewAny;
                 static bool s_layoutEscapeRequiresRelease = false;
                 static bool s_layoutContextSplitMode = false;
                 static bool s_layoutContextPopupWasOpenLastFrame = false;
@@ -735,6 +739,57 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                     return std::string(tr("inputs.keyboard_layout_unknown"));
                 };
 
+                auto getKeyboardLayoutCursorStateViewId = [&]() -> const char* {
+                    switch (s_keyboardLayoutCursorStateView) {
+                    case kKeyboardLayoutCursorStateViewCursorFree:
+                        return kKeyRebindCursorStateCursorFree;
+                    case kKeyboardLayoutCursorStateViewCursorGrabbed:
+                        return kKeyRebindCursorStateCursorGrabbed;
+                    case kKeyboardLayoutCursorStateViewAny:
+                    default:
+                        return kKeyRebindCursorStateAny;
+                    }
+                };
+
+                auto getKeyboardLayoutCursorStateViewLabel = [&](const char* cursorStateId) -> const char* {
+                    if (cursorStateId == nullptr) {
+                        return trc("inputs.rebind_layout_any");
+                    }
+                    if (strcmp(cursorStateId, kKeyRebindCursorStateCursorFree) == 0) {
+                        return trc("inputs.rebind_layout_cursor_free");
+                    }
+                    if (strcmp(cursorStateId, kKeyRebindCursorStateCursorGrabbed) == 0) {
+                        return trc("inputs.rebind_layout_cursor_grabbed");
+                    }
+                    return trc("inputs.rebind_layout_any");
+                };
+
+                auto findBestRebindIndexForCursorState = [&](DWORD fromVk, const char* cursorStateId) -> int {
+                    int first = -1;
+                    int enabledAny = -1;
+                    int enabledConfigured = -1;
+                    int configuredAny = -1;
+
+                    for (int ri = 0; ri < (int)g_config.keyRebinds.rebinds.size(); ++ri) {
+                        const auto& r = g_config.keyRebinds.rebinds[ri];
+                        if (r.fromKey != fromVk || r.cursorState != cursorStateId) continue;
+                        if (first == -1) first = ri;
+
+                        const bool configured = (r.fromKey != 0 && r.toKey != 0);
+                        if (configured && configuredAny == -1) configuredAny = ri;
+                        if (r.enabled && enabledAny == -1) enabledAny = ri;
+                        if (r.enabled && configured) {
+                            enabledConfigured = ri;
+                            break;
+                        }
+                    }
+
+                    if (enabledConfigured != -1) return enabledConfigured;
+                    if (configuredAny != -1) return configuredAny;
+                    if (enabledAny != -1) return enabledAny;
+                    return first;
+                };
+
                 ImGui::SetNextWindowBgAlpha(1.0f);
                 if (s_keyboardLayoutOpen) {
                     ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(18, 19, 22, 255));
@@ -803,6 +858,30 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                         ImGui::SameLine();
                         HelpMarker(trc("inputs.tooltip.key_labels"));
 
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                        if (const int requestedCursorStateView = ConsumeGuiTestKeyboardLayoutCursorStateViewRequest();
+                            requestedCursorStateView >= kKeyboardLayoutCursorStateViewAny &&
+                            requestedCursorStateView <= kKeyboardLayoutCursorStateViewCursorGrabbed) {
+                            s_keyboardLayoutCursorStateView = requestedCursorStateView;
+                        }
+#endif
+
+                        ImGui::TextUnformatted(trc("inputs.rebind_layout_state"));
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(170.0f);
+                        {
+                            const char* rebindLayoutItems[] = {
+                                trc("inputs.rebind_layout_any"),
+                                trc("inputs.rebind_layout_cursor_free"),
+                                trc("inputs.rebind_layout_cursor_grabbed")
+                            };
+                            ImGui::Combo("##rebindLayoutCursorState", &s_keyboardLayoutCursorStateView, rebindLayoutItems,
+                                         IM_ARRAYSIZE(rebindLayoutItems));
+                        }
+                        ImGui::SameLine();
+                        HelpMarker(trc("inputs.tooltip.rebind_layout_state"));
+
+                        ImGui::TextDisabled(trc("inputs.keyboard_layout_state_note"));
                         ImGui::TextDisabled(trc("inputs.keyboard_layout_tip"));
                         ImGui::TextDisabled(trc("label.not_all_rebinds_supported"));
 
@@ -941,28 +1020,11 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                     };
 
                     auto findRebindForKey = [&](DWORD fromVk) -> const KeyRebind* {
-                        const KeyRebind* first = nullptr;
-                        const KeyRebind* enabledAny = nullptr;
-                        const KeyRebind* enabledConfigured = nullptr;
-                        const KeyRebind* configuredAny = nullptr;
-
-                        for (const auto& r : g_config.keyRebinds.rebinds) {
-                            if (r.fromKey != fromVk) continue;
-                            if (!first) first = &r;
-
-                            const bool configured = (r.fromKey != 0 && r.toKey != 0);
-                            if (configured && !configuredAny) configuredAny = &r;
-                            if (r.enabled && !enabledAny) enabledAny = &r;
-                            if (r.enabled && configured) {
-                                enabledConfigured = &r;
-                                break;
-                            }
+                        const int idx = findBestRebindIndexForCursorState(fromVk, getKeyboardLayoutCursorStateViewId());
+                        if (idx < 0 || idx >= (int)g_config.keyRebinds.rebinds.size()) {
+                            return nullptr;
                         }
-
-                        if (enabledConfigured) return enabledConfigured;
-                        if (configuredAny) return configuredAny;
-                        if (enabledAny) return enabledAny;
-                        return first;
+                        return &g_config.keyRebinds.rebinds[idx];
                     };
 
                     auto roundPx = [](float v) -> float { return (float)(int)(v + 0.5f); };
@@ -2055,45 +2117,37 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                         };
 
                         auto findBestRebindIndexForKey = [&](DWORD fromVk) -> int {
-                            int first = -1;
-                            int enabledAny = -1;
-                            int enabledConfigured = -1;
-                            int configuredAny = -1;
-
-                            for (int ri = 0; ri < (int)g_config.keyRebinds.rebinds.size(); ++ri) {
-                                const auto& r = g_config.keyRebinds.rebinds[ri];
-                                if (r.fromKey != fromVk) continue;
-                                if (first == -1) first = ri;
-
-                                const bool configured = (r.fromKey != 0 && r.toKey != 0);
-                                if (configured && configuredAny == -1) configuredAny = ri;
-                                if (r.enabled && enabledAny == -1) enabledAny = ri;
-                                if (r.enabled && configured) {
-                                    enabledConfigured = ri;
-                                    break;
-                                }
-                            }
-
-                            if (enabledConfigured != -1) return enabledConfigured;
-                            if (configuredAny != -1) return configuredAny;
-                            if (enabledAny != -1) return enabledAny;
-                            return first;
+                            return findBestRebindIndexForCursorState(fromVk, getKeyboardLayoutCursorStateViewId());
                         };
 
                         // Do not create a rebind on right-click.
                         int idx = s_layoutContextPreferredIndex;
-                        if (idx < 0 || idx >= (int)g_config.keyRebinds.rebinds.size() || g_config.keyRebinds.rebinds[idx].fromKey != s_layoutContextVk) {
+                        const char* currentCursorStateId = getKeyboardLayoutCursorStateViewId();
+                        if (idx < 0 || idx >= (int)g_config.keyRebinds.rebinds.size() || g_config.keyRebinds.rebinds[idx].fromKey != s_layoutContextVk ||
+                            g_config.keyRebinds.rebinds[idx].cursorState != currentCursorStateId) {
                             idx = findBestRebindIndexForKey(s_layoutContextVk);
                             s_layoutContextPreferredIndex = idx;
                         }
 
                         auto createRebindForKeyIfMissing = [&](DWORD fromVk) -> int {
-                            int e = findBestRebindIndexForKey(fromVk);
+                            const char* cursorStateId = getKeyboardLayoutCursorStateViewId();
+                            int e = findBestRebindIndexForCursorState(fromVk, cursorStateId);
                             if (e >= 0) return e;
+
                             KeyRebind r;
+                            if (strcmp(cursorStateId, kKeyRebindCursorStateAny) != 0) {
+                                const int anyIdx = findBestRebindIndexForCursorState(fromVk, kKeyRebindCursorStateAny);
+                                if (anyIdx >= 0 && anyIdx < (int)g_config.keyRebinds.rebinds.size()) {
+                                    r = g_config.keyRebinds.rebinds[anyIdx];
+                                }
+                            }
+                            if (r.fromKey == 0) {
+                                r.fromKey = fromVk;
+                                r.toKey = fromVk;
+                                r.enabled = true;
+                            }
                             r.fromKey = fromVk;
-                            r.toKey = fromVk;
-                            r.enabled = true;
+                            r.cursorState = cursorStateId;
                             g_config.keyRebinds.rebinds.push_back(r);
                             g_configIsDirty = true;
                             std::lock_guard<std::mutex> hotkeyLock(g_hotkeyMainKeysMutex);
@@ -2612,6 +2666,10 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                         if (ImGui::IsWindowAppearing()) {
                             s_layoutContextSplitMode = isSplitRebindUiMode(rbPtr, s_layoutContextVk);
                         }
+
+                        ImGui::TextDisabled("%s %s", trc("inputs.rebind_applies_when"),
+                                            getKeyboardLayoutCursorStateViewLabel(getKeyboardLayoutCursorStateViewId()));
+                        ImGui::Separator();
 
                         const float bindButtonW = 132.0f * popupUiScale;
                         const float auxButtonW = 82.0f * popupUiScale;
