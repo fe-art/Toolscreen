@@ -2914,8 +2914,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                 renderModeBrowserOverlayAssignments(mode, mode.id);
 
                 if (ImGui::TreeNode("Stretch Properties")) {
-                    ImGui::TextDisabled("Fullscreen stretch is always enabled and fills the game window.");
-                    ImGui::BeginDisabled();
+                    ImGui::TextDisabled("Override the game viewport placement and size inside the window.");
                     if (ImGui::Checkbox("Enable Stretch", &mode.stretch.enabled)) g_configIsDirty = true;
                     ImGui::Columns(2, "stretch_cols", false);
                     ImGui::SetColumnWidth(0, 150);
@@ -2945,7 +2944,6 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                     ImGui::NextColumn();
                     if (Spinner("##StretchH", &mode.stretch.height, 1, 1)) g_configIsDirty = true;
                     ImGui::Columns(1);
-                    ImGui::EndDisabled();
                     ImGui::TreePop();
                 }
 
