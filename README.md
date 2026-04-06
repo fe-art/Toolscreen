@@ -37,6 +37,7 @@ You can download either the `.exe` or the `.jar` installer — both do the same 
 ## Installing
 
 > Prefer video? Check out the [video guide](https://www.youtube.com/watch?v=YqS-fxPx_jo)
+> If you're starting speedrunning from scratch, try the [full comprehensive setup guide](https://www.youtube.com/watch?v=l-q-_4R8_6M)
 
 1. Download the [latest release](https://github.com/jojoe77777/Toolscreen/releases/latest)
 2. Locate your instance folder:
