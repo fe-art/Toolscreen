@@ -1901,6 +1901,12 @@ bool s_guiTestOpenKeyboardLayoutRequested = false;
 DWORD s_guiTestOpenKeyboardLayoutContextVk = 0;
 bool s_guiTestConfigSearchQueryRequested = false;
 std::string s_guiTestConfigSearchQuery;
+bool s_guiTestKeyboardLayoutBeginAddCustomBindRequested = false;
+bool s_guiTestKeyboardLayoutBeginCustomInputCaptureRequested = false;
+DWORD s_guiTestKeyboardLayoutRemoveCustomKeyVk = 0;
+bool s_guiTestKeyboardLayoutConfirmRemoveCustomKeyRequested = false;
+bool s_guiTestKeyboardLayoutOpenCustomInputPickerRequested = false;
+DWORD s_guiTestKeyboardLayoutSelectCustomInputScanRequest = 0;
 int s_guiTestKeyboardLayoutSplitModeRequest = -1;
 int s_guiTestKeyboardLayoutCursorStateViewRequest = -1;
 GuiTestKeyboardLayoutBindTarget s_guiTestKeyboardLayoutBindTargetRequest = GuiTestKeyboardLayoutBindTarget::None;
@@ -1950,6 +1956,42 @@ bool ConsumeGuiTestConfigSearchQueryRequest(std::string& outQuery) {
     outQuery = std::move(s_guiTestConfigSearchQuery);
     s_guiTestConfigSearchQuery.clear();
     return true;
+}
+
+bool ConsumeGuiTestKeyboardLayoutBeginAddCustomBindRequest() {
+    const bool requested = s_guiTestKeyboardLayoutBeginAddCustomBindRequested;
+    s_guiTestKeyboardLayoutBeginAddCustomBindRequested = false;
+    return requested;
+}
+
+bool ConsumeGuiTestKeyboardLayoutBeginCustomInputCaptureRequest() {
+    const bool requested = s_guiTestKeyboardLayoutBeginCustomInputCaptureRequested;
+    s_guiTestKeyboardLayoutBeginCustomInputCaptureRequested = false;
+    return requested;
+}
+
+DWORD ConsumeGuiTestKeyboardLayoutRemoveCustomKeyRequest() {
+    const DWORD requestedVk = s_guiTestKeyboardLayoutRemoveCustomKeyVk;
+    s_guiTestKeyboardLayoutRemoveCustomKeyVk = 0;
+    return requestedVk;
+}
+
+bool ConsumeGuiTestKeyboardLayoutConfirmRemoveCustomKeyRequest() {
+    const bool requested = s_guiTestKeyboardLayoutConfirmRemoveCustomKeyRequested;
+    s_guiTestKeyboardLayoutConfirmRemoveCustomKeyRequested = false;
+    return requested;
+}
+
+bool ConsumeGuiTestKeyboardLayoutOpenCustomInputPickerRequest() {
+    const bool requested = s_guiTestKeyboardLayoutOpenCustomInputPickerRequested;
+    s_guiTestKeyboardLayoutOpenCustomInputPickerRequested = false;
+    return requested;
+}
+
+DWORD ConsumeGuiTestKeyboardLayoutSelectCustomInputScanRequest() {
+    const DWORD request = s_guiTestKeyboardLayoutSelectCustomInputScanRequest;
+    s_guiTestKeyboardLayoutSelectCustomInputScanRequest = 0;
+    return request;
 }
 
 int ConsumeGuiTestKeyboardLayoutSplitModeRequest() {
@@ -2245,6 +2287,30 @@ void RequestGuiTestOpenKeyboardLayoutContext(DWORD vk) {
 void RequestGuiTestSetConfigSearchQuery(const std::string& query) {
     s_guiTestConfigSearchQuery = query;
     s_guiTestConfigSearchQueryRequested = true;
+}
+
+void RequestGuiTestKeyboardLayoutBeginAddCustomBind() {
+    s_guiTestKeyboardLayoutBeginAddCustomBindRequested = true;
+}
+
+void RequestGuiTestKeyboardLayoutBeginCustomInputCapture() {
+    s_guiTestKeyboardLayoutBeginCustomInputCaptureRequested = true;
+}
+
+void RequestGuiTestKeyboardLayoutRemoveCustomKey(DWORD vk) {
+    s_guiTestKeyboardLayoutRemoveCustomKeyVk = vk;
+}
+
+void RequestGuiTestKeyboardLayoutConfirmRemoveCustomKey() {
+    s_guiTestKeyboardLayoutConfirmRemoveCustomKeyRequested = true;
+}
+
+void RequestGuiTestKeyboardLayoutOpenCustomInputPicker() {
+    s_guiTestKeyboardLayoutOpenCustomInputPickerRequested = true;
+}
+
+void RequestGuiTestKeyboardLayoutSelectCustomInputScan(DWORD scan) {
+    s_guiTestKeyboardLayoutSelectCustomInputScanRequest = scan;
 }
 
 void RequestGuiTestKeyboardLayoutSetSplitMode(bool splitMode) {

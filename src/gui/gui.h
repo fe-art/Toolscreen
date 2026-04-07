@@ -106,6 +106,12 @@ bool GetGuiTestInteractionRect(const char* id, GuiTestInteractionRect& outRect);
 void RequestGuiTestOpenKeyboardLayout();
 void RequestGuiTestOpenKeyboardLayoutContext(DWORD vk);
 void RequestGuiTestSetConfigSearchQuery(const std::string& query);
+void RequestGuiTestKeyboardLayoutBeginAddCustomBind();
+void RequestGuiTestKeyboardLayoutBeginCustomInputCapture();
+void RequestGuiTestKeyboardLayoutRemoveCustomKey(DWORD vk);
+void RequestGuiTestKeyboardLayoutConfirmRemoveCustomKey();
+void RequestGuiTestKeyboardLayoutOpenCustomInputPicker();
+void RequestGuiTestKeyboardLayoutSelectCustomInputScan(DWORD scan);
 void RequestGuiTestKeyboardLayoutSetSplitMode(bool splitMode);
 void RequestGuiTestKeyboardLayoutSetCursorStateView(GuiTestKeyboardLayoutCursorStateView view);
 void RequestGuiTestKeyboardLayoutBeginBind(GuiTestKeyboardLayoutBindTarget target);
@@ -580,6 +586,7 @@ struct KeyRebindsConfig {
     std::string indicatorImageDisabled;
     bool allowSystemAltF4 = ConfigDefaults::KEY_REBINDS_ALLOW_SYSTEM_ALT_F4;
     std::vector<DWORD> toggleHotkey = {};
+    std::vector<DWORD> layoutExtraKeys;
     std::vector<KeyRebind> rebinds;
 };
 

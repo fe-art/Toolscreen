@@ -632,12 +632,21 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                 static int s_physicalLayout = 0;
                 static int s_keyLabelLayout = 0;
                 static int s_keyboardLayoutCursorStateView = kKeyboardLayoutCursorStateViewAny;
+                static bool s_layoutAddCustomKeyPending = false;
+                static uint64_t s_layoutAddCustomKeyLastSeq = 0;
+                static bool s_layoutCustomInputCapturePending = false;
+                static uint64_t s_layoutCustomInputCaptureLastSeq = 0;
+                static DWORD s_layoutPendingCustomKeyRemovalVk = 0;
+                static int s_layoutPendingCustomKeyRemovalRebindCount = 0;
                 static bool s_layoutEscapeRequiresRelease = false;
                 static bool s_layoutContextSplitMode = false;
                 static bool s_layoutContextPopupWasOpenLastFrame = false;
                 static bool s_keyboardLayoutWasOpenLastFrame = false;
                 static ImVec2 s_lastKeyboardLayoutWindowSize = ImVec2(-1.0f, -1.0f);
                 static float s_lastKeyboardLayoutGuiScaleFactor = -1.0f;
+                static DWORD s_layoutContextVk = 0;
+                static int s_layoutContextPreferredIndex = -1;
+                static bool s_layoutContextOpenedFromCustomKey = false;
 #ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
                 if (ConsumeGuiTestOpenKeyboardLayoutRequest()) {
                     s_keyboardLayoutOpen = true;
@@ -1137,12 +1146,153 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                                     Spacer(0.5f), Key(VK_NUMPAD0, 2.5f, "NUM0"), Key(VK_DECIMAL, 1.25f, "NUM."), Spacer(1.25f) },
                     };
 
+                    auto containsLayoutSourceKey = [](const std::vector<DWORD>& keys, DWORD vk) {
+                        return std::find(keys.begin(), keys.end(), vk) != keys.end();
+                    };
+
+                    std::vector<DWORD> builtInLayoutKeys;
+                    builtInLayoutKeys.reserve(96);
+                    auto appendBuiltInLayoutKey = [&](DWORD sourceVk) {
+                        if (sourceVk == 0 || containsLayoutSourceKey(builtInLayoutKeys, sourceVk)) return;
+                        builtInLayoutKeys.push_back(sourceVk);
+                    };
+
+                    for (const auto& row : rows) {
+                        for (const KeyCell& cell : row) {
+                            if (cell.vk == 0) continue;
+                            DWORD displayVk = cell.vk;
+                            if (auto it = vkSwap.find(cell.vk); it != vkSwap.end()) {
+                                displayVk = it->second;
+                            }
+                            appendBuiltInLayoutKey(displayVk);
+                        }
+                    }
+                    appendBuiltInLayoutKey(VK_LBUTTON);
+                    appendBuiltInLayoutKey(VK_RBUTTON);
+                    appendBuiltInLayoutKey(VK_MBUTTON);
+                    appendBuiltInLayoutKey(VK_XBUTTON1);
+                    appendBuiltInLayoutKey(VK_XBUTTON2);
+                    appendBuiltInLayoutKey(VK_TOOLSCREEN_SCROLL_UP);
+                    appendBuiltInLayoutKey(VK_TOOLSCREEN_SCROLL_DOWN);
+
+                    auto collectCustomLayoutKeys = [&]() {
+                        std::vector<DWORD> customLayoutKeys;
+                        customLayoutKeys.reserve(g_config.keyRebinds.layoutExtraKeys.size() + g_config.keyRebinds.rebinds.size());
+
+                        auto appendStoredCustomLayoutKey = [&](DWORD vk) {
+                            if (vk == 0 || containsLayoutSourceKey(customLayoutKeys, vk)) return;
+                            customLayoutKeys.push_back(vk);
+                        };
+
+                        auto appendFallbackCustomLayoutKey = [&](DWORD vk) {
+                            if (vk == 0 || containsLayoutSourceKey(builtInLayoutKeys, vk) || containsLayoutSourceKey(customLayoutKeys, vk)) return;
+                            customLayoutKeys.push_back(vk);
+                        };
+
+                        for (DWORD vk : g_config.keyRebinds.layoutExtraKeys) {
+                            appendStoredCustomLayoutKey(vk);
+                        }
+
+                        for (const auto& rebind : g_config.keyRebinds.rebinds) {
+                            appendFallbackCustomLayoutKey(rebind.fromKey);
+                        }
+
+                        return customLayoutKeys;
+                    };
+
                     auto findRebindForKey = [&](DWORD fromVk) -> const KeyRebind* {
                         const int idx = findBestRebindIndexForCursorState(fromVk, getKeyboardLayoutCursorStateViewId());
                         if (idx < 0 || idx >= (int)g_config.keyRebinds.rebinds.size()) {
                             return nullptr;
                         }
                         return &g_config.keyRebinds.rebinds[idx];
+                    };
+
+                    auto adjustTrackedRebindIndicesAfterErase = [&](int eraseIdx) {
+                        auto decIfAfter = [&](int& value) {
+                            if (value == -1) return;
+                            if (value == eraseIdx) {
+                                value = -1;
+                            } else if (value > eraseIdx) {
+                                value -= 1;
+                            }
+                        };
+
+                        decIfAfter(s_rebindFromKeyToBind);
+                        decIfAfter(s_rebindOutputVKToBind);
+                        decIfAfter(s_rebindTextOverrideVKToBind);
+                        decIfAfter(s_rebindOutputScanToBind);
+                        decIfAfter(s_layoutBindIndex);
+                        decIfAfter(s_layoutContextPreferredIndex);
+                        decIfAfter(s_layoutUnicodeEditIndex);
+
+                        if (s_layoutBindIndex == -1) {
+                            s_layoutBindTarget = LayoutBindTarget::None;
+                        }
+                        if (s_layoutUnicodeEditIndex == -1) {
+                            s_layoutUnicodeEditTarget = LayoutUnicodeEditTarget::None;
+                            s_layoutUnicodeEditText.clear();
+                        }
+                    };
+
+                    auto countRebindsForSourceKey = [&](DWORD sourceVk) -> int {
+                        int count = 0;
+                        for (const auto& rebind : g_config.keyRebinds.rebinds) {
+                            if (rebind.fromKey == sourceVk) {
+                                ++count;
+                            }
+                        }
+                        return count;
+                    };
+
+                    auto removeCustomLayoutKeyOnly = [&](DWORD sourceVk) {
+                        bool removedLayoutKey = false;
+                        auto layoutExtraKeyIt = std::remove(g_config.keyRebinds.layoutExtraKeys.begin(),
+                                                            g_config.keyRebinds.layoutExtraKeys.end(), sourceVk);
+                        if (layoutExtraKeyIt != g_config.keyRebinds.layoutExtraKeys.end()) {
+                            g_config.keyRebinds.layoutExtraKeys.erase(layoutExtraKeyIt, g_config.keyRebinds.layoutExtraKeys.end());
+                            removedLayoutKey = true;
+                        }
+
+                        if (removedLayoutKey) {
+                            g_configIsDirty = true;
+                        }
+
+                        return removedLayoutKey;
+                    };
+
+                    auto removeCustomLayoutKeyAndRebinds = [&](DWORD sourceVk) {
+                        bool removedLayoutKey = removeCustomLayoutKeyOnly(sourceVk);
+
+                        int removedRebindCount = 0;
+                        for (int rebindIndex = (int)g_config.keyRebinds.rebinds.size() - 1; rebindIndex >= 0; --rebindIndex) {
+                            if (g_config.keyRebinds.rebinds[rebindIndex].fromKey != sourceVk) continue;
+                            g_config.keyRebinds.rebinds.erase(g_config.keyRebinds.rebinds.begin() + rebindIndex);
+                            adjustTrackedRebindIndicesAfterErase(rebindIndex);
+                            ++removedRebindCount;
+                        }
+
+                        if (!removedLayoutKey && removedRebindCount == 0) {
+                            return;
+                        }
+
+                        if (s_layoutContextVk == sourceVk) {
+                            s_layoutContextVk = 0;
+                            s_layoutContextPreferredIndex = -1;
+                            s_layoutContextOpenedFromCustomKey = false;
+                        }
+
+                        if (s_layoutPendingCustomKeyRemovalVk == sourceVk) {
+                            s_layoutPendingCustomKeyRemovalVk = 0;
+                            s_layoutPendingCustomKeyRemovalRebindCount = 0;
+                        }
+
+                        syncUnicodeEditBuffers();
+                        g_configIsDirty = true;
+                        if (removedRebindCount > 0) {
+                            std::lock_guard<std::mutex> hotkeyLock(g_hotkeyMainKeysMutex);
+                            RebuildHotkeyMainKeys_Internal();
+                        }
                     };
 
                     auto roundPx = [](float v) -> float { return (float)(int)(v + 0.5f); };
@@ -1245,14 +1395,13 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                         dl->AddLine(ImVec2(plateMin.x + 6, plateMin.y + 6), ImVec2(plateMax.x - 6, plateMin.y + 6), IM_COL32(255, 255, 255, 25),
                                     1.0f);
                     }
-
-                    static DWORD s_layoutContextVk = 0;
-                    static int s_layoutContextPreferredIndex = -1;
+                    bool openRemoveCustomKeyConfirmPopup = false;
 
                     const ImGuiID rebindPopupId = ImGui::GetID(trc("inputs.rebind_config"));
-                    auto openRebindContextFor = [&](DWORD vk) {
+                    auto openRebindContextFor = [&](DWORD vk, bool openedFromCustomKey) {
                         s_layoutContextVk = vk;
                         s_layoutContextPreferredIndex = -1;
+                        s_layoutContextOpenedFromCustomKey = openedFromCustomKey;
                         ImGui::OpenPopup(rebindPopupId);
                     };
 
@@ -1272,6 +1421,133 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
 
                     auto isMouseButtonVk = [](DWORD vk) -> bool {
                         return vk == VK_LBUTTON || vk == VK_RBUTTON || vk == VK_MBUTTON || vk == VK_XBUTTON1 || vk == VK_XBUTTON2;
+                    };
+
+                    auto normalizeCapturedLayoutSourceVk = [&](DWORD vk, LPARAM lParam) -> DWORD {
+                        if (isMouseButtonVk(vk) || isScrollWheelVk(vk)) return vk;
+
+                        uint64_t rawLParam = static_cast<uint64_t>(lParam);
+                        DWORD scanWithFlags = static_cast<DWORD>((rawLParam >> 16) & 0xFFu);
+                        if ((rawLParam & (1ull << 24)) != 0) {
+                            scanWithFlags |= 0xE000u;
+                        }
+                        return normalizeModifierVkForDisplay(vk, scanWithFlags);
+                    };
+
+                    auto getLayoutSourceButtonLabel = [&](DWORD vk) -> std::string {
+                        if (isMouseButtonVk(vk) || isScrollWheelVk(vk)) {
+                            return normalizeMouseButtonLabel(VkToString(vk));
+                        }
+
+                        const DWORD displayScan = getScanCodeWithExtendedFlag(vk);
+                        return normalizeMouseButtonLabel(scanCodeToDisplayName(displayScan, vk));
+                    };
+
+                    auto getCompactLayoutSourceButtonLabel = [&](DWORD vk) -> std::string {
+                        if (vk == VK_TOOLSCREEN_SCROLL_UP) return "UP";
+                        if (vk == VK_TOOLSCREEN_SCROLL_DOWN) return "DN";
+                        return getLayoutSourceButtonLabel(vk);
+                    };
+
+                    auto customLayoutSourceVkFromScan = [&](DWORD scan) -> DWORD {
+                        DWORD vkFromScan = MapVirtualKey(scan, MAPVK_VSC_TO_VK_EX);
+                        if ((scan & 0xFF00) == 0) {
+                            switch (scan) {
+                            case 0x47: vkFromScan = VK_NUMPAD7; break;
+                            case 0x48: vkFromScan = VK_NUMPAD8; break;
+                            case 0x49: vkFromScan = VK_NUMPAD9; break;
+                            case 0x4B: vkFromScan = VK_NUMPAD4; break;
+                            case 0x4C: vkFromScan = VK_NUMPAD5; break;
+                            case 0x4D: vkFromScan = VK_NUMPAD6; break;
+                            case 0x4F: vkFromScan = VK_NUMPAD1; break;
+                            case 0x50: vkFromScan = VK_NUMPAD2; break;
+                            case 0x51: vkFromScan = VK_NUMPAD3; break;
+                            case 0x4A: vkFromScan = VK_SUBTRACT; break;
+                            case 0x4E: vkFromScan = VK_ADD; break;
+                            case 0x52: vkFromScan = VK_NUMPAD0; break;
+                            case 0x53: vkFromScan = VK_DECIMAL; break;
+                            default: break;
+                            }
+                        }
+                        return normalizeModifierVkForDisplay(vkFromScan, scan);
+                    };
+
+                    auto canMoveCustomLayoutSourceKey = [&](DWORD sourceVk, DWORD newSourceVk) {
+                        if (sourceVk == 0 || newSourceVk == 0) return false;
+                        if (sourceVk == newSourceVk) return true;
+                        if (containsLayoutSourceKey(g_config.keyRebinds.layoutExtraKeys, newSourceVk)) return false;
+                        return countRebindsForSourceKey(newSourceVk) == 0;
+                    };
+
+                    auto moveCustomLayoutSourceKey = [&](DWORD sourceVk, DWORD newSourceVk) {
+                        if (!canMoveCustomLayoutSourceKey(sourceVk, newSourceVk)) return false;
+                        if (sourceVk == newSourceVk) return true;
+
+                        bool changed = false;
+                        bool movedStoredCustomKey = false;
+                        for (DWORD& storedVk : g_config.keyRebinds.layoutExtraKeys) {
+                            if (storedVk != sourceVk) continue;
+                            storedVk = newSourceVk;
+                            movedStoredCustomKey = true;
+                            changed = true;
+                        }
+
+                        if (!movedStoredCustomKey && !containsLayoutSourceKey(g_config.keyRebinds.layoutExtraKeys, newSourceVk)) {
+                            g_config.keyRebinds.layoutExtraKeys.push_back(newSourceVk);
+                            changed = true;
+                        }
+
+                        int movedRebindCount = 0;
+                        for (auto& rebind : g_config.keyRebinds.rebinds) {
+                            if (rebind.fromKey != sourceVk) continue;
+                            rebind.fromKey = newSourceVk;
+                            ++movedRebindCount;
+                            changed = true;
+                        }
+
+                        if (!changed) return false;
+
+                        if (s_layoutContextVk == sourceVk) {
+                            s_layoutContextVk = newSourceVk;
+                            s_layoutContextPreferredIndex = -1;
+                        }
+
+                        if (s_layoutPendingCustomKeyRemovalVk == sourceVk) {
+                            s_layoutPendingCustomKeyRemovalVk = newSourceVk;
+                        }
+
+                        s_layoutContextOpenedFromCustomKey = true;
+                        syncUnicodeEditBuffers();
+                        g_configIsDirty = true;
+                        if (movedRebindCount > 0) {
+                            std::lock_guard<std::mutex> hotkeyLock(g_hotkeyMainKeysMutex);
+                            RebuildHotkeyMainKeys_Internal();
+                        }
+                        return true;
+                    };
+
+                    auto queueCustomLayoutKeyRemoval = [&](DWORD sourceVk) {
+                        const bool builtInSourceKey = containsLayoutSourceKey(builtInLayoutKeys, sourceVk);
+                        const bool isStoredCustomKey = containsLayoutSourceKey(g_config.keyRebinds.layoutExtraKeys, sourceVk);
+                        const bool isFallbackOnlyCustomKey = !builtInSourceKey && countRebindsForSourceKey(sourceVk) > 0;
+                        if (sourceVk == 0 || (!isStoredCustomKey && !isFallbackOnlyCustomKey)) {
+                            return;
+                        }
+
+                        const int savedRebindCount = countRebindsForSourceKey(sourceVk);
+                        if (builtInSourceKey) {
+                            (void)removeCustomLayoutKeyOnly(sourceVk);
+                            return;
+                        }
+
+                        if (savedRebindCount <= 0) {
+                            removeCustomLayoutKeyAndRebinds(sourceVk);
+                            return;
+                        }
+
+                        s_layoutPendingCustomKeyRemovalVk = sourceVk;
+                        s_layoutPendingCustomKeyRemovalRebindCount = savedRebindCount;
+                        openRemoveCustomKeyConfirmPopup = true;
                     };
 
                     auto isNonTypableTextVk = [&](DWORD vk) -> bool {
@@ -1792,13 +2068,16 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                         }
 
                         if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
-                            openRebindContextFor(vk);
+                            openRebindContextFor(vk, false);
                         }
                     };
 
 #ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
                     if (const DWORD requestedContextVk = ConsumeGuiTestOpenKeyboardLayoutContextRequest(); requestedContextVk != 0) {
-                        openRebindContextFor(requestedContextVk);
+                        const bool requestOpenedFromCustomKey =
+                            containsLayoutSourceKey(g_config.keyRebinds.layoutExtraKeys, requestedContextVk) ||
+                            !containsLayoutSourceKey(builtInLayoutKeys, requestedContextVk);
+                        openRebindContextFor(requestedContextVk, requestOpenedFromCustomKey);
                     }
 #endif
 
@@ -1954,7 +2233,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                         }
 
                         if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
-                            openRebindContextFor(vk);
+                            openRebindContextFor(vk, false);
                         }
 
                         ImGui::PopID();
@@ -2069,7 +2348,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                 ImGui::EndTooltip();
                             }
                             if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
-                                openRebindContextFor(vk);
+                                openRebindContextFor(vk, false);
                             }
                         };
 
@@ -2182,8 +2461,15 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(7.0f * popupUiScale, 6.0f * popupUiScale));
                         ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(4.0f * popupUiScale, 3.0f * popupUiScale));
 
-                        const bool nestedLayoutPopupOpen = ImGui::IsPopupOpen(trc("inputs.triggers_custom")) || ImGui::IsPopupOpen(trc("inputs.custom_unicode"));
+                        const bool nestedLayoutPopupOpen = ImGui::IsPopupOpen(trc("inputs.triggers_custom")) ||
+                                                           ImGui::IsPopupOpen(trc("inputs.custom_key_input_picker")) ||
+                                                           ImGui::IsPopupOpen(trc("inputs.custom_unicode"));
                         if (ImGui::IsKeyPressed(ImGuiKey_Escape) && !nestedLayoutPopupOpen) {
+                            if (s_layoutCustomInputCapturePending) {
+                                s_layoutEscapeRequiresRelease = true;
+                                layoutEscapeConsumedThisFrame = true;
+                                s_layoutCustomInputCapturePending = false;
+                            } else {
                             s_layoutEscapeRequiresRelease = true;
                             layoutEscapeConsumedThisFrame = true;
                             s_layoutBindTarget = LayoutBindTarget::None;
@@ -2192,6 +2478,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                             s_layoutUnicodeEditTarget = LayoutUnicodeEditTarget::None;
                             s_layoutUnicodeEditText.clear();
                             ImGui::CloseCurrentPopup();
+                            }
                         }
 
                         syncUnicodeEditBuffers();
@@ -2799,6 +3086,35 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                         const std::string typesShiftValue = typesShiftValueFor(rbPtr, s_layoutContextVk);
                         const std::string triggersValue = triggersValueFor(rbPtr, s_layoutContextVk);
                         const bool disableTypeControls = cannotTypeFor(rbPtr, s_layoutContextVk);
+                        const bool layoutContextKeyIsCustom = containsLayoutSourceKey(g_config.keyRebinds.layoutExtraKeys, s_layoutContextVk) ||
+                                                              (!containsLayoutSourceKey(builtInLayoutKeys, s_layoutContextVk) &&
+                                                               countRebindsForSourceKey(s_layoutContextVk) > 0);
+                        const bool allowCustomLayoutInputPicker = layoutContextKeyIsCustom && s_layoutContextOpenedFromCustomKey;
+                        bool openCustomInputPickerPopup = false;
+                        ImVec2 customInputPickerPopupAnchor = ImVec2(0.0f, 0.0f);
+                        auto beginCustomInputCapture = [&]() {
+                            s_layoutCustomInputCapturePending = true;
+                            s_layoutCustomInputCaptureLastSeq = GetLatestBindingInputSequence();
+                            MarkRebindBindingActive();
+                        };
+
+                        if (allowCustomLayoutInputPicker && s_layoutCustomInputCapturePending) {
+                            MarkRebindBindingActive();
+
+                            DWORD capturedVk = 0;
+                            LPARAM capturedLParam = 0;
+                            bool capturedIsMouse = false;
+                            if (ConsumeBindingInputEventSince(s_layoutCustomInputCaptureLastSeq, capturedVk, capturedLParam, capturedIsMouse)) {
+                                (void)capturedIsMouse;
+                                if (capturedVk == VK_ESCAPE) {
+                                    s_layoutCustomInputCapturePending = false;
+                                } else {
+                                    const DWORD sourceVk = normalizeCapturedLayoutSourceVk(capturedVk, capturedLParam);
+                                    s_layoutCustomInputCapturePending = false;
+                                    (void)moveCustomLayoutSourceKey(s_layoutContextVk, sourceVk);
+                                }
+                            }
+                        }
 
 #ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
                         auto recordPopupInteractionRect = [&](const char* id, const ImVec2& fallbackMin, const ImVec2& fallbackMax) {
@@ -2963,6 +3279,46 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                         if (ImGui::BeginTable("##rebind_config_rows", 2, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoPadOuterX)) {
                             ImGui::TableSetupColumn("##rebind_label", ImGuiTableColumnFlags_WidthFixed, labelColumnW);
                             ImGui::TableSetupColumn("##rebind_value", ImGuiTableColumnFlags_WidthStretch);
+
+                            if (allowCustomLayoutInputPicker) {
+                                ImGui::TableNextRow();
+                                ImGui::TableSetColumnIndex(0);
+                                drawPopupRowLabel(trc("inputs.tooltip.custom_key_input"), trc("inputs.input_label"));
+                                ImGui::TableSetColumnIndex(1);
+                                {
+                                    const std::string customInputValue = s_layoutCustomInputCapturePending
+                                        ? std::string(trc("hotkeys.press_keys"))
+                                        : getLayoutSourceButtonLabel(s_layoutContextVk);
+                                    const ImVec2 customInputRectMin = ImGui::GetCursorScreenPos();
+                                    if (ImGui::Button((customInputValue + "##custom_input_source").c_str(), ImVec2(bindButtonW, 0))) {
+                                        beginCustomInputCapture();
+                                    }
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                                    recordPopupInteractionRect("inputs.keyboard_layout.popup.custom_input", customInputRectMin,
+                                                               popupButtonFallbackMax(customInputRectMin, bindButtonW));
+                                    if (ConsumeGuiTestKeyboardLayoutBeginCustomInputCaptureRequest()) {
+                                        beginCustomInputCapture();
+                                    }
+#endif
+                                    ImGui::SameLine(0.0f, popupInlineGap);
+                                    const ImVec2 customInputPickRectMin = ImGui::GetCursorScreenPos();
+                                    if (ImGui::Button((tr("label.pick") + "##custom_input_pick").c_str(), ImVec2(auxButtonW, 0))) {
+                                        s_layoutCustomInputCapturePending = false;
+                                        openCustomInputPickerPopup = true;
+                                        customInputPickerPopupAnchor =
+                                            ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y + 4.0f * popupUiScale);
+                                    }
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                                    recordPopupInteractionRect("inputs.keyboard_layout.popup.custom_input_pick", customInputPickRectMin,
+                                                               popupButtonFallbackMax(customInputPickRectMin, auxButtonW));
+                                    if (ConsumeGuiTestKeyboardLayoutOpenCustomInputPickerRequest()) {
+                                        openCustomInputPickerPopup = true;
+                                        customInputPickerPopupAnchor =
+                                            ImVec2(ImGui::GetItemRectMin().x, ImGui::GetItemRectMax().y + 4.0f * popupUiScale);
+                                    }
+#endif
+                                }
+                            }
 
                             if (!s_layoutContextSplitMode) {
                                 ImGui::TableNextRow();
@@ -3207,6 +3563,92 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                             ImGui::EndTable();
                         }
 
+                        if (openCustomInputPickerPopup) {
+                            ImGui::SetNextWindowPos(customInputPickerPopupAnchor, ImGuiCond_Appearing);
+                            ImGui::OpenPopup(trc("inputs.custom_key_input_picker"));
+                        }
+                        ImGui::SetNextWindowSizeConstraints(ImVec2(340.0f * popupUiScale, 220.0f * popupUiScale),
+                                                            ImVec2(520.0f * popupUiScale, 460.0f * popupUiScale));
+
+                        if (ImGui::BeginPopup(trc("inputs.custom_key_input_picker"))) {
+                                MarkRebindBindingActive();
+                                ImGui::SetWindowFontScale(popupUiScale);
+                                if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+                                    s_layoutEscapeRequiresRelease = true;
+                                    layoutEscapeConsumedThisFrame = true;
+                                    ImGui::CloseCurrentPopup();
+                                }
+
+                                const std::string currentSourceText = tr("inputs.current_format", getLayoutSourceButtonLabel(s_layoutContextVk).c_str());
+                                ImGui::TextUnformatted(currentSourceText.c_str());
+                                ImGui::Separator();
+
+                                static int s_customInputFilterGroup = -1;
+                                if (ImGui::IsWindowAppearing()) s_customInputFilterGroup = -1;
+
+                                const char* groupLabels[SG_COUNT + 1] = {
+                                    trc("inputs.scan_group_all"), trc("inputs.scan_group_alpha"), trc("inputs.scan_group_digit"),
+                                    trc("inputs.scan_group_function"), trc("inputs.scan_group_nav"), trc("inputs.scan_group_numpad"),
+                                    trc("inputs.scan_group_modifier"), trc("inputs.scan_group_other")
+                                };
+                                for (int g = -1; g < SG_Raw; ++g) {
+                                    if (g > -1) ImGui::SameLine();
+                                    bool active = (s_customInputFilterGroup == g);
+                                    if (active) {
+                                        ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+                                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+                                    }
+                                    if (ImGui::Button(groupLabels[g + 1])) { s_customInputFilterGroup = g; }
+                                    if (active) { ImGui::PopStyleColor(2); }
+                                }
+                                ImGui::Spacing();
+
+                                auto tryApplyCustomInputSource = [&](DWORD requestedVk) -> bool {
+                                    if (!moveCustomLayoutSourceKey(s_layoutContextVk, requestedVk)) return false;
+                                    ImGui::CloseCurrentPopup();
+                                    return true;
+                                };
+
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                                if (const DWORD requestedScan = ConsumeGuiTestKeyboardLayoutSelectCustomInputScanRequest(); requestedScan != 0) {
+                                    (void)tryApplyCustomInputSource(customLayoutSourceVkFromScan(requestedScan));
+                                }
+#endif
+
+                                ImGui::BeginChild("##custom_input_source_list", ImVec2(0.0f, 260.0f * popupUiScale), true);
+                                std::unordered_set<DWORD> shownCustomInputVks;
+                                auto appendCustomInputOption = [&](DWORD optionVk, const std::string& optionLabel, int optionGroup) {
+                                    if (optionVk == 0) return;
+                                    if (s_customInputFilterGroup >= 0 && optionGroup != s_customInputFilterGroup) return;
+                                    if (!shownCustomInputVks.insert(optionVk).second) return;
+                                    if (optionVk != s_layoutContextVk && !canMoveCustomLayoutSourceKey(s_layoutContextVk, optionVk)) return;
+
+                                    const bool selected = optionVk == s_layoutContextVk;
+                                    const std::string itemLabel = optionLabel + "##custom_input_option_" + std::to_string((unsigned)optionVk);
+                                    if (ImGui::Selectable(itemLabel.c_str(), selected)) {
+                                        (void)tryApplyCustomInputSource(optionVk);
+                                    }
+                                };
+
+                                for (const auto& it : s_knownScanCodes) {
+                                    if (it.group == SG_Raw) continue;
+                                    const DWORD optionVk = customLayoutSourceVkFromScan(it.scan);
+                                    if (optionVk == 0) continue;
+                                    appendCustomInputOption(optionVk, getLayoutSourceButtonLabel(optionVk), it.group);
+                                }
+
+                                appendCustomInputOption(VK_LBUTTON, getLayoutSourceButtonLabel(VK_LBUTTON), SG_Other);
+                                appendCustomInputOption(VK_RBUTTON, getLayoutSourceButtonLabel(VK_RBUTTON), SG_Other);
+                                appendCustomInputOption(VK_MBUTTON, getLayoutSourceButtonLabel(VK_MBUTTON), SG_Other);
+                                appendCustomInputOption(VK_XBUTTON1, getLayoutSourceButtonLabel(VK_XBUTTON1), SG_Other);
+                                appendCustomInputOption(VK_XBUTTON2, getLayoutSourceButtonLabel(VK_XBUTTON2), SG_Other);
+                                appendCustomInputOption(VK_TOOLSCREEN_SCROLL_UP, getLayoutSourceButtonLabel(VK_TOOLSCREEN_SCROLL_UP), SG_Other);
+                                appendCustomInputOption(VK_TOOLSCREEN_SCROLL_DOWN, getLayoutSourceButtonLabel(VK_TOOLSCREEN_SCROLL_DOWN), SG_Other);
+                                ImGui::EndChild();
+
+                                ImGui::EndPopup();
+                        }
+
                         idx = (idx >= 0) ? idx : findBestRebindIndexForKey(s_layoutContextVk);
                         KeyRebind* r = (idx >= 0 && idx < (int)g_config.keyRebinds.rebinds.size()) ? &g_config.keyRebinds.rebinds[idx] : nullptr;
 
@@ -3378,12 +3820,241 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                             }
                         }
 
+                        if (layoutContextKeyIsCustom) {
+                            ImGui::SameLine();
+                            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.36f, 0.14f, 0.14f, 0.90f));
+                            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.50f, 0.16f, 0.16f, 0.95f));
+                            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.28f, 0.10f, 0.10f, 1.00f));
+                            if (ImGui::Button((tr("inputs.remove_custom_bind") + "##layout_remove_custom_key").c_str(),
+                                              ImVec2(194.0f * popupUiScale, 0))) {
+                                queueCustomLayoutKeyRemoval(s_layoutContextVk);
+                                ImGui::CloseCurrentPopup();
+                            }
+                            if (ImGui::IsItemHovered()) {
+                                ImGui::SetTooltip("%s", trc("inputs.tooltip.remove_custom_bind"));
+                            }
+                            ImGui::PopStyleColor(3);
+                        }
+
                         ImGui::PopStyleVar(3);
                         ImGui::EndPopup();
                     }
 
                     const float totalH = (keyboardTotalH > mouseDiagramTotalH) ? keyboardTotalH : mouseDiagramTotalH;
+
+                    auto hasCustomLayoutSourceKey = [&](DWORD vk) {
+                        if (containsLayoutSourceKey(g_config.keyRebinds.layoutExtraKeys, vk)) return true;
+                        for (const auto& rebind : g_config.keyRebinds.rebinds) {
+                            if (rebind.fromKey == vk && !containsLayoutSourceKey(builtInLayoutKeys, vk)) {
+                                return true;
+                            }
+                        }
+                        return false;
+                    };
+
+                    if (s_layoutAddCustomKeyPending) {
+                        MarkRebindBindingActive();
+
+                        DWORD capturedVk = 0;
+                        LPARAM capturedLParam = 0;
+                        bool capturedIsMouse = false;
+                        if (ConsumeBindingInputEventSince(s_layoutAddCustomKeyLastSeq, capturedVk, capturedLParam, capturedIsMouse)) {
+                            (void)capturedIsMouse;
+                            const DWORD sourceVk = normalizeCapturedLayoutSourceVk(capturedVk, capturedLParam);
+                            const bool existingCustomSourceKey = hasCustomLayoutSourceKey(sourceVk);
+
+                            s_layoutAddCustomKeyPending = false;
+                            if (sourceVk != 0 && !existingCustomSourceKey) {
+                                g_config.keyRebinds.layoutExtraKeys.push_back(sourceVk);
+                                g_configIsDirty = true;
+                            }
+
+                            if (sourceVk != 0) {
+                                openRebindContextFor(sourceVk, true);
+                            }
+                        }
+                    }
+
+                    const std::vector<DWORD> customLayoutKeys = collectCustomLayoutKeys();
+
                     ImGui::SetCursorPos(ImVec2(layoutStart.x, layoutStart.y + totalH + gap));
+
+                    ImGui::Spacing();
+                    ImGui::SeparatorText(trc("inputs.custom_layout_keys"));
+                    auto beginAddCustomBindCapture = [&]() {
+                        s_layoutAddCustomKeyPending = true;
+                        s_layoutAddCustomKeyLastSeq = GetLatestBindingInputSequence();
+                        MarkRebindBindingActive();
+                    };
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                    if (ConsumeGuiTestKeyboardLayoutBeginAddCustomBindRequest()) {
+                        beginAddCustomBindCapture();
+                    }
+#endif
+                    const char* addCustomBindLabel = s_layoutAddCustomKeyPending ? trc("hotkeys.press_keys") : trc("inputs.add_custom_bind");
+                    if (ImGui::Button(addCustomBindLabel, ImVec2(190.0f * popupUiScale, 0.0f))) {
+                        beginAddCustomBindCapture();
+                    }
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                    RecordGuiTestInteractionRect("inputs.keyboard_layout_add_custom_bind", ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+#endif
+                    ImGui::SameLine();
+                    HelpMarker(trc("inputs.tooltip.add_custom_bind"));
+                    if (s_layoutAddCustomKeyPending) {
+                        ImGui::SameLine();
+                        if (ImGui::Button((tr("label.cancel") + "##layoutAddCustomBindCancel").c_str())) {
+                            s_layoutAddCustomKeyPending = false;
+                        }
+                    }
+
+                    if (!customLayoutKeys.empty()) {
+                        float customKeyX = layoutStart.x;
+                        float customKeyY = ImGui::GetCursorPosY() + gap * 0.5f;
+                        const float customKeyWrapWidth =
+                            (std::max)(keyboardMaxRowW + unit * 4.5f, ImGui::GetContentRegionAvail().x);
+                        const float customKeyWrapX = layoutStart.x + customKeyWrapWidth;
+                        float customKeyBottomY = customKeyY;
+
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                        if (const DWORD requestedRemoveCustomKey = ConsumeGuiTestKeyboardLayoutRemoveCustomKeyRequest(); requestedRemoveCustomKey != 0) {
+                            queueCustomLayoutKeyRemoval(requestedRemoveCustomKey);
+                        }
+#endif
+
+                        for (DWORD vk : customLayoutKeys) {
+                            const std::string keyLabel = getCompactLayoutSourceButtonLabel(vk);
+                            const float keyW = unit;
+                            const float customKeyGroupW = keyW;
+
+                            if (customKeyX > layoutStart.x && customKeyX + customKeyGroupW > customKeyWrapX) {
+                                customKeyX = layoutStart.x;
+                                customKeyY += keyH + gap;
+                            }
+
+                            ImGui::SetCursorPos(ImVec2(customKeyX, customKeyY));
+                            ImGui::PushID(static_cast<int>(vk));
+                            ImGui::InvisibleButton("##customLayoutKey", ImVec2(keyW, keyH),
+                                                  ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+
+                            const ImVec2 pMin = ImGui::GetItemRectMin();
+                            const ImVec2 pMax = ImGui::GetItemRectMax();
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                            RecordGuiTestInteractionRect(std::string("inputs.keyboard_layout.custom_key.") + std::to_string(static_cast<unsigned>(vk)),
+                                                         pMin, pMax);
+#endif
+
+                            const KeyRebind* rb = findRebindForKey(vk);
+                            ImVec2 capMin = ImVec2(pMin.x + keyPadX, pMin.y + keyPadY);
+                            ImVec2 capMax = ImVec2(pMax.x - keyPadX, pMax.y - keyPadY);
+                            if (capMax.x <= capMin.x + 2.0f) {
+                                capMin.x = pMin.x;
+                                capMax.x = pMax.x;
+                            }
+                            if (capMax.y <= capMin.y + 2.0f) {
+                                capMin.y = pMin.y;
+                                capMax.y = pMax.y;
+                            }
+                            drawKeyCell(vk, keyLabel.c_str(), capMin, capMax, rb);
+
+                            if (ImGui::IsItemHovered()) {
+                                ImGui::BeginTooltip();
+                                if (rb && rb->fromKey != 0 && rb->toKey != 0) {
+                                    DWORD triggerVkTip = resolveTriggerVkFor(rb, vk);
+                                    DWORD triggerScanTip = resolveTriggerScanFor(rb, vk);
+                                    const std::string typesTip = typesValueForDisplay(rb, vk);
+                                    const std::string triggersTip = normalizeMouseButtonLabel(scanCodeToDisplayName(triggerScanTip, triggerVkTip));
+                                    const std::string typesText = tr("inputs.types_format", typesTip.c_str());
+                                    ImGui::TextUnformatted(typesText.c_str());
+                                    if (hasShiftLayerOverride(rb, vk)) {
+                                        const std::string typesShiftTip = typesShiftValueForDisplay(rb, vk);
+                                        const std::string typesShiftText = tr("inputs.types_shift_format", typesShiftTip.c_str());
+                                        ImGui::TextUnformatted(typesShiftText.c_str());
+                                    }
+                                    const std::string triggersText = tr("inputs.triggers_format", triggersTip.c_str());
+                                    ImGui::TextUnformatted(triggersText.c_str());
+                                } else {
+                                    ImGui::Text("%s (%u)", keyLabel.c_str(), static_cast<unsigned>(vk));
+                                    ImGui::TextUnformatted(trc("inputs.tooltip.custom_layout_key"));
+                                }
+                                ImGui::EndTooltip();
+                            }
+
+                            if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+                                openRebindContextFor(vk, true);
+                            }
+
+                            ImGui::PopID();
+                            customKeyBottomY = (std::max)(customKeyBottomY, customKeyY + keyH);
+                            customKeyX += customKeyGroupW + gap;
+                        }
+
+                        ImGui::SetCursorPos(ImVec2(layoutStart.x, customKeyBottomY + gap));
+                    } else {
+                        ImGui::Spacing();
+                    }
+
+                    if (openRemoveCustomKeyConfirmPopup) {
+                        ImGui::OpenPopup(trc("inputs.remove_custom_bind_confirm"));
+                    }
+
+                    if (s_layoutPendingCustomKeyRemovalVk != 0) {
+                        MarkRebindBindingActive();
+                    }
+
+                    if (ImGui::BeginPopupModal(trc("inputs.remove_custom_bind_confirm"), NULL,
+                                               ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
+                        MarkRebindBindingActive();
+                        if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+                            s_layoutEscapeRequiresRelease = true;
+                            layoutEscapeConsumedThisFrame = true;
+                            s_layoutPendingCustomKeyRemovalVk = 0;
+                            s_layoutPendingCustomKeyRemovalRebindCount = 0;
+                            ImGui::CloseCurrentPopup();
+                        }
+
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                        const bool confirmRemovalRequested = ConsumeGuiTestKeyboardLayoutConfirmRemoveCustomKeyRequest();
+#else
+                        const bool confirmRemovalRequested = false;
+#endif
+
+                        const std::string pendingRemovalLabel =
+                            (s_layoutPendingCustomKeyRemovalVk != 0) ? getLayoutSourceButtonLabel(s_layoutPendingCustomKeyRemovalVk)
+                                                                      : std::string();
+                        ImGui::TextColored(ImVec4(1.0f, 0.72f, 0.20f, 1.0f), "%s", trc("label.warning"));
+                        ImGui::TextUnformatted(trc("inputs.remove_custom_bind_description"));
+                        if (!pendingRemovalLabel.empty()) {
+                            ImGui::Text("%s", pendingRemovalLabel.c_str());
+                        }
+                        if (s_layoutPendingCustomKeyRemovalRebindCount > 0) {
+                            const std::string warningText =
+                                tr("inputs.remove_custom_bind_rebinds_warning", s_layoutPendingCustomKeyRemovalRebindCount);
+                            ImGui::TextWrapped("%s", warningText.c_str());
+                        }
+                        ImGui::TextUnformatted(trc("label.action_cannot_be_undone"));
+                        ImGui::Separator();
+
+                        const bool confirmClicked =
+                            ImGui::Button(trc("inputs.remove_custom_bind"), ImVec2(190.0f * popupUiScale, 0.0f));
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+                        RecordGuiTestInteractionRect("inputs.keyboard_layout.remove_custom_key_confirm", ImGui::GetItemRectMin(),
+                                                     ImGui::GetItemRectMax());
+#endif
+                        if (confirmClicked || confirmRemovalRequested) {
+                            removeCustomLayoutKeyAndRebinds(s_layoutPendingCustomKeyRemovalVk);
+                            s_layoutPendingCustomKeyRemovalVk = 0;
+                            s_layoutPendingCustomKeyRemovalRebindCount = 0;
+                            ImGui::CloseCurrentPopup();
+                        }
+                        ImGui::SameLine();
+                        if (ImGui::Button(trc("label.cancel"), ImVec2(120.0f * popupUiScale, 0.0f))) {
+                            s_layoutPendingCustomKeyRemovalVk = 0;
+                            s_layoutPendingCustomKeyRemovalRebindCount = 0;
+                            ImGui::CloseCurrentPopup();
+                        }
+
+                        ImGui::EndPopup();
+                    }
 
                     {
                         ImGui::Spacing();
@@ -3464,9 +4135,14 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
 
                     const bool anyRebindBindUiActiveAfter = (s_rebindFromKeyToBind != -1) || (s_rebindOutputVKToBind != -1) ||
                                                             (s_rebindTextOverrideVKToBind != -1) || (s_rebindOutputScanToBind != -1) ||
+                                                            s_layoutAddCustomKeyPending ||
+                                                            s_layoutCustomInputCapturePending ||
+                                                            (s_layoutPendingCustomKeyRemovalVk != 0) ||
                                                             (s_layoutBindTarget != LayoutBindTarget::None) || (s_layoutUnicodeEditIndex != -1) ||
                                                             ImGui::IsPopupOpen(trc("inputs.rebind_config")) || ImGui::IsPopupOpen(trc("inputs.triggers_custom")) ||
-                                                            ImGui::IsPopupOpen(trc("inputs.custom_unicode"));
+                                                            ImGui::IsPopupOpen(trc("inputs.custom_key_input_picker")) ||
+                                                            ImGui::IsPopupOpen(trc("inputs.custom_unicode")) ||
+                                                            ImGui::IsPopupOpen(trc("inputs.remove_custom_bind_confirm"));
                     if (!blockLayoutEscapeThisFrame && !layoutEscapeConsumedThisFrame && escapePressedThisFrame && !anyRebindBindUiActiveAfter) {
                         s_keyboardLayoutOpen = false;
                     }
@@ -3476,6 +4152,11 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                     } else {
                         s_layoutContextPopupWasOpenLastFrame = false;
                         s_keyboardLayoutWasOpenLastFrame = false;
+                        s_layoutAddCustomKeyPending = false;
+                        s_layoutCustomInputCapturePending = false;
+                        s_layoutPendingCustomKeyRemovalVk = 0;
+                        s_layoutPendingCustomKeyRemovalRebindCount = 0;
+                        s_layoutContextOpenedFromCustomKey = false;
                         s_lastKeyboardLayoutWindowSize = ImVec2(-1.0f, -1.0f);
                         s_lastKeyboardLayoutGuiScaleFactor = -1.0f;
                     }
@@ -3484,6 +4165,11 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                 } else {
                     s_layoutContextPopupWasOpenLastFrame = false;
                     s_keyboardLayoutWasOpenLastFrame = false;
+                    s_layoutAddCustomKeyPending = false;
+                    s_layoutCustomInputCapturePending = false;
+                    s_layoutPendingCustomKeyRemovalVk = 0;
+                    s_layoutPendingCustomKeyRemovalRebindCount = 0;
+                    s_layoutContextOpenedFromCustomKey = false;
                     s_lastKeyboardLayoutWindowSize = ImVec2(-1.0f, -1.0f);
                     s_lastKeyboardLayoutGuiScaleFactor = -1.0f;
                 }

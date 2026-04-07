@@ -88,6 +88,7 @@ allowSystemAltTab = false
 allowSystemAltF4 = false
 indicatorMode = 0
 toggleHotkey = [ ]
+layoutExtraKeys = [ ]
 rebinds = []
 
 [[hotkey]]

@@ -1995,6 +1995,10 @@ void KeyRebindsConfigToToml(const KeyRebindsConfig& cfg, toml::table& out) {
     for (const auto& key : cfg.toggleHotkey) { toggleHotkeyArr.push_back(static_cast<int64_t>(key)); }
     out.insert("toggleHotkey", toggleHotkeyArr);
 
+    toml::array layoutExtraKeysArr;
+    for (const auto& key : cfg.layoutExtraKeys) { layoutExtraKeysArr.push_back(static_cast<int64_t>(key)); }
+    out.insert("layoutExtraKeys", layoutExtraKeysArr);
+
     toml::array rebindsArr;
     for (const auto& rebind : cfg.rebinds) {
         toml::table rebindTbl;
@@ -2029,6 +2033,18 @@ void KeyRebindsConfigFromToml(const toml::table& tbl, KeyRebindsConfig& cfg) {
         }
     }
     if (!hasToggleHotkey) { cfg.toggleHotkey = ConfigDefaults::GetDefaultKeyRebindsToggleHotkey(); }
+
+    cfg.layoutExtraKeys.clear();
+    if (auto arr = GetArray(tbl, "layoutExtraKeys")) {
+        for (const auto& elem : *arr) {
+            if (auto val = elem.value<int64_t>()) {
+                const DWORD vk = static_cast<DWORD>(*val);
+                if (vk == 0) continue;
+                if (std::find(cfg.layoutExtraKeys.begin(), cfg.layoutExtraKeys.end(), vk) != cfg.layoutExtraKeys.end()) continue;
+                cfg.layoutExtraKeys.push_back(vk);
+            }
+        }
+    }
 
     cfg.rebinds.clear();
     if (auto arr = GetArray(tbl, "rebinds")) {

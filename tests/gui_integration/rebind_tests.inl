@@ -926,6 +926,267 @@ void RunKeyRebindGuiKeyboardLayoutCursorStateOverrideTest(TestRunMode runMode = 
            "Expected the cursor-free keyboard layout override to store its own output target.");
 }
 
+    void RunKeyRebindGuiKeyboardLayoutAddCustomBindButtonTest(TestRunMode runMode = TestRunMode::Automated) {
+        constexpr DWORD kCustomLayoutSourceVk = VK_F13;
+
+        DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+        if (SkipIfNoModernGuiTestGL(window)) { return; }
+        PrepareRebindGuiCase("key_rebind_gui_keyboard_layout_add_custom_bind_button");
+
+        RenderKeyboardInputsFrame(window);
+        RenderKeyboardInputsFrame(window);
+        RequestGuiTestOpenKeyboardLayout();
+        RenderKeyboardInputsFrame(window);
+            RequestGuiTestKeyboardLayoutBeginAddCustomBind();
+            RenderKeyboardInputsFrame(window);
+        SubmitKeyboardBindingEvent(kCustomLayoutSourceVk);
+        RenderKeyboardInputsFrame(window);
+
+        Expect(g_config.keyRebinds.layoutExtraKeys.size() == 1,
+            "Expected the Add Custom Bind flow to store exactly one extra layout source key.");
+        Expect(g_config.keyRebinds.layoutExtraKeys.front() == kCustomLayoutSourceVk,
+            "Expected the Add Custom Bind flow to store F13 as the extra layout source key.");
+
+        const std::string customKeyRectId =
+         std::string("inputs.keyboard_layout.custom_key.") + std::to_string(static_cast<unsigned>(kCustomLayoutSourceVk));
+            (void)ExpectGuiInteractionRect(customKeyRectId.c_str(),
+                            "Expected the custom layout key button to be rendered below the keyboard layout.");
+            RequestGuiTestOpenKeyboardLayoutContext(kCustomLayoutSourceVk);
+            RenderKeyboardInputsFrame(window);
+
+        RequestGuiTestKeyboardLayoutBeginBind(GuiTestKeyboardLayoutBindTarget::FullOutputVk);
+        RenderKeyboardInputsFrame(window);
+        SubmitKeyboardBindingEvent('B');
+        RenderKeyboardInputsFrame(window);
+
+        Expect(g_config.keyRebinds.rebinds.size() == 1,
+            "Expected configuring the custom layout key to create exactly one key rebind.");
+        const KeyRebind& rebind = g_config.keyRebinds.rebinds.front();
+        Expect(rebind.fromKey == kCustomLayoutSourceVk,
+            "Expected the custom layout key rebind to bind from F13.");
+        Expect(rebind.toKey == 'B', "Expected the custom layout key rebind to bind B as the target key.");
+        Expect(rebind.useCustomOutput,
+            "Expected the custom layout key full-bind flow to enable mirrored output binding state.");
+        Expect(rebind.customOutputVK == 'B',
+            "Expected the custom layout key full-bind flow to store B as the custom output VK.");
+    }
+
+    void RunKeyRebindGuiKeyboardLayoutRemoveCustomBindButtonTest(TestRunMode runMode = TestRunMode::Automated) {
+        constexpr DWORD kCustomLayoutSourceVk = VK_F13;
+
+        DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+        if (SkipIfNoModernGuiTestGL(window)) { return; }
+        PrepareRebindGuiCase("key_rebind_gui_keyboard_layout_remove_custom_bind_button");
+
+        RenderKeyboardInputsFrame(window);
+        RenderKeyboardInputsFrame(window);
+        RequestGuiTestOpenKeyboardLayout();
+        RenderKeyboardInputsFrame(window);
+        RequestGuiTestKeyboardLayoutBeginAddCustomBind();
+        RenderKeyboardInputsFrame(window);
+        SubmitKeyboardBindingEvent(kCustomLayoutSourceVk);
+        RenderKeyboardInputsFrame(window);
+
+        RequestGuiTestOpenKeyboardLayoutContext(kCustomLayoutSourceVk);
+        RenderKeyboardInputsFrame(window);
+        RequestGuiTestKeyboardLayoutBeginBind(GuiTestKeyboardLayoutBindTarget::FullOutputVk);
+        RenderKeyboardInputsFrame(window);
+        SubmitKeyboardBindingEvent('B');
+        RenderKeyboardInputsFrame(window);
+
+        Expect(g_config.keyRebinds.layoutExtraKeys.size() == 1,
+               "Expected the remove custom bind fixture to start with one extra layout source key.");
+        Expect(g_config.keyRebinds.rebinds.size() == 1,
+               "Expected the remove custom bind fixture to start with one configured rebind.");
+
+        RequestGuiTestKeyboardLayoutRemoveCustomKey(kCustomLayoutSourceVk);
+        RenderKeyboardInputsFrame(window);
+        RequestGuiTestKeyboardLayoutConfirmRemoveCustomKey();
+        RenderKeyboardInputsFrame(window);
+
+        Expect(g_config.keyRebinds.layoutExtraKeys.empty(),
+               "Expected removing a custom layout key to clear the stored extra layout keys.");
+        Expect(g_config.keyRebinds.rebinds.empty(),
+               "Expected removing a custom layout key to also delete its saved rebinds.");
+
+        ResetGuiTestInteractionRects();
+        RenderKeyboardInputsFrame(window);
+        GuiTestInteractionRect removedKeyRect;
+        const std::string customKeyRectId =
+            std::string("inputs.keyboard_layout.custom_key.") + std::to_string(static_cast<unsigned>(kCustomLayoutSourceVk));
+        Expect(!GetGuiTestInteractionRect(customKeyRectId.c_str(), removedKeyRect),
+               "Expected the removed custom layout key button to disappear from the keyboard layout.");
+    }
+
+        void RunKeyRebindGuiKeyboardLayoutAddBuiltInCustomBindButtonTest(TestRunMode runMode = TestRunMode::Automated) {
+            constexpr DWORD kBuiltInLayoutSourceVk = VK_F1;
+
+            DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+            if (SkipIfNoModernGuiTestGL(window)) { return; }
+            PrepareRebindGuiCase("key_rebind_gui_keyboard_layout_add_built_in_custom_bind_button");
+
+            RenderKeyboardInputsFrame(window);
+            RenderKeyboardInputsFrame(window);
+            RequestGuiTestOpenKeyboardLayout();
+            RenderKeyboardInputsFrame(window);
+            RequestGuiTestKeyboardLayoutBeginAddCustomBind();
+            RenderKeyboardInputsFrame(window);
+            SubmitKeyboardBindingEvent(kBuiltInLayoutSourceVk);
+            RenderKeyboardInputsFrame(window);
+
+            Expect(g_config.keyRebinds.layoutExtraKeys.size() == 1,
+                "Expected adding a built-in key through Add Custom Bind to store one explicit custom layout key.");
+            Expect(g_config.keyRebinds.layoutExtraKeys.front() == kBuiltInLayoutSourceVk,
+                "Expected Add Custom Bind to store F1 as an explicit custom layout key.");
+
+            const std::string customKeyRectId =
+             std::string("inputs.keyboard_layout.custom_key.") + std::to_string(static_cast<unsigned>(kBuiltInLayoutSourceVk));
+            (void)ExpectGuiInteractionRect(customKeyRectId.c_str(),
+                            "Expected Add Custom Bind to render a duplicate custom key square for F1.");
+
+            RequestGuiTestOpenKeyboardLayoutContext(kBuiltInLayoutSourceVk);
+            RenderKeyboardInputsFrame(window);
+            RequestGuiTestKeyboardLayoutBeginBind(GuiTestKeyboardLayoutBindTarget::FullOutputVk);
+            RenderKeyboardInputsFrame(window);
+            SubmitKeyboardBindingEvent('B');
+            RenderKeyboardInputsFrame(window);
+
+            Expect(g_config.keyRebinds.rebinds.size() == 1,
+                "Expected configuring the built-in custom key square to create one rebind.");
+            Expect(g_config.keyRebinds.rebinds.front().fromKey == kBuiltInLayoutSourceVk,
+                "Expected the built-in custom key square to edit the F1 rebind.");
+
+            RequestGuiTestKeyboardLayoutRemoveCustomKey(kBuiltInLayoutSourceVk);
+            RenderKeyboardInputsFrame(window);
+
+            Expect(g_config.keyRebinds.layoutExtraKeys.empty(),
+                "Expected removing a built-in custom square to clear only the explicit custom layout key entry.");
+            Expect(g_config.keyRebinds.rebinds.size() == 1,
+                "Expected removing a built-in custom square to preserve the underlying rebind.");
+
+            ResetGuiTestInteractionRects();
+            RenderKeyboardInputsFrame(window);
+            GuiTestInteractionRect removedKeyRect;
+            Expect(!GetGuiTestInteractionRect(customKeyRectId.c_str(), removedKeyRect),
+                "Expected the duplicate built-in custom key square to disappear after removal.");
+        }
+
+    void RunKeyRebindGuiKeyboardLayoutChangeCustomInputPickerTest(TestRunMode runMode = TestRunMode::Automated) {
+        constexpr DWORD kOriginalCustomLayoutSourceVk = VK_F13;
+        constexpr DWORD kRetargetedCustomLayoutSourceVk = 'G';
+        constexpr DWORD kRetargetedCustomLayoutSourceScan = 0x22;
+
+        DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+        if (SkipIfNoModernGuiTestGL(window)) { return; }
+        PrepareRebindGuiCase("key_rebind_gui_keyboard_layout_change_custom_input_picker");
+
+        RenderKeyboardInputsFrame(window);
+        RenderKeyboardInputsFrame(window);
+        RequestGuiTestOpenKeyboardLayout();
+        RenderKeyboardInputsFrame(window);
+        RequestGuiTestKeyboardLayoutBeginAddCustomBind();
+        RenderKeyboardInputsFrame(window);
+        SubmitKeyboardBindingEvent(kOriginalCustomLayoutSourceVk);
+        RenderKeyboardInputsFrame(window);
+
+        RequestGuiTestOpenKeyboardLayoutContext(kOriginalCustomLayoutSourceVk);
+        RenderKeyboardInputsFrame(window);
+        RequestGuiTestKeyboardLayoutBeginBind(GuiTestKeyboardLayoutBindTarget::FullOutputVk);
+        RenderKeyboardInputsFrame(window);
+        SubmitKeyboardBindingEvent('B');
+        RenderKeyboardInputsFrame(window);
+
+        Expect(g_config.keyRebinds.layoutExtraKeys.size() == 1,
+            "Expected the custom input picker fixture to start with one explicit custom layout key.");
+        Expect(g_config.keyRebinds.layoutExtraKeys.front() == kOriginalCustomLayoutSourceVk,
+            "Expected the custom input picker fixture to start from F13.");
+        Expect(g_config.keyRebinds.rebinds.size() == 1,
+            "Expected the custom input picker fixture to start with one configured rebind.");
+
+        RequestGuiTestKeyboardLayoutOpenCustomInputPicker();
+        RenderKeyboardInputsFrame(window);
+        RequestGuiTestKeyboardLayoutSelectCustomInputScan(kRetargetedCustomLayoutSourceScan);
+        RenderKeyboardInputsFrame(window);
+
+        Expect(g_config.keyRebinds.layoutExtraKeys.size() == 1,
+            "Expected retargeting a custom key input to keep exactly one explicit custom layout key.");
+        Expect(g_config.keyRebinds.layoutExtraKeys.front() == kRetargetedCustomLayoutSourceVk,
+            "Expected retargeting a custom key input to store G as the new custom layout source key.");
+        Expect(g_config.keyRebinds.rebinds.size() == 1,
+            "Expected retargeting a custom key input to preserve the existing rebind entry.");
+        Expect(g_config.keyRebinds.rebinds.front().fromKey == kRetargetedCustomLayoutSourceVk,
+            "Expected retargeting a custom key input to migrate the rebind source to G.");
+        Expect(g_config.keyRebinds.rebinds.front().toKey == 'B',
+            "Expected retargeting a custom key input to preserve the configured output key.");
+
+        ResetGuiTestInteractionRects();
+        RenderKeyboardInputsFrame(window);
+
+        GuiTestInteractionRect customKeyRect;
+        const std::string oldCustomKeyRectId =
+            std::string("inputs.keyboard_layout.custom_key.") + std::to_string(static_cast<unsigned>(kOriginalCustomLayoutSourceVk));
+        const std::string newCustomKeyRectId =
+            std::string("inputs.keyboard_layout.custom_key.") + std::to_string(static_cast<unsigned>(kRetargetedCustomLayoutSourceVk));
+        Expect(!GetGuiTestInteractionRect(oldCustomKeyRectId.c_str(), customKeyRect),
+            "Expected the original F13 custom key square to disappear after retargeting its input.");
+        Expect(GetGuiTestInteractionRect(newCustomKeyRectId.c_str(), customKeyRect),
+            "Expected the retargeted G custom key square to appear after changing the custom input key.");
+    }
+
+    void RunKeyRebindGuiKeyboardLayoutChangeCustomInputCaptureTest(TestRunMode runMode = TestRunMode::Automated) {
+        constexpr DWORD kOriginalCustomLayoutSourceVk = VK_F13;
+        constexpr DWORD kRetargetedCustomLayoutSourceVk = 'G';
+
+        DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+        if (SkipIfNoModernGuiTestGL(window)) { return; }
+        PrepareRebindGuiCase("key_rebind_gui_keyboard_layout_change_custom_input_capture");
+
+        RenderKeyboardInputsFrame(window);
+        RenderKeyboardInputsFrame(window);
+        RequestGuiTestOpenKeyboardLayout();
+        RenderKeyboardInputsFrame(window);
+        RequestGuiTestKeyboardLayoutBeginAddCustomBind();
+        RenderKeyboardInputsFrame(window);
+        SubmitKeyboardBindingEvent(kOriginalCustomLayoutSourceVk);
+        RenderKeyboardInputsFrame(window);
+
+        RequestGuiTestOpenKeyboardLayoutContext(kOriginalCustomLayoutSourceVk);
+        RenderKeyboardInputsFrame(window);
+        RequestGuiTestKeyboardLayoutBeginBind(GuiTestKeyboardLayoutBindTarget::FullOutputVk);
+        RenderKeyboardInputsFrame(window);
+        SubmitKeyboardBindingEvent('B');
+        RenderKeyboardInputsFrame(window);
+
+        RequestGuiTestKeyboardLayoutBeginCustomInputCapture();
+        RenderKeyboardInputsFrame(window);
+        SubmitKeyboardBindingEvent(kRetargetedCustomLayoutSourceVk);
+        RenderKeyboardInputsFrame(window);
+
+        Expect(g_config.keyRebinds.layoutExtraKeys.size() == 1,
+            "Expected live-capturing a custom key input to keep exactly one explicit custom layout key.");
+        Expect(g_config.keyRebinds.layoutExtraKeys.front() == kRetargetedCustomLayoutSourceVk,
+            "Expected live-capturing a custom key input to store G as the new custom layout source key.");
+        Expect(g_config.keyRebinds.rebinds.size() == 1,
+            "Expected live-capturing a custom key input to preserve the existing rebind entry.");
+        Expect(g_config.keyRebinds.rebinds.front().fromKey == kRetargetedCustomLayoutSourceVk,
+            "Expected live-capturing a custom key input to migrate the rebind source to G.");
+        Expect(g_config.keyRebinds.rebinds.front().toKey == 'B',
+            "Expected live-capturing a custom key input to preserve the configured output key.");
+
+        ResetGuiTestInteractionRects();
+        RenderKeyboardInputsFrame(window);
+
+        GuiTestInteractionRect customKeyRect;
+        const std::string oldCustomKeyRectId =
+            std::string("inputs.keyboard_layout.custom_key.") + std::to_string(static_cast<unsigned>(kOriginalCustomLayoutSourceVk));
+        const std::string newCustomKeyRectId =
+            std::string("inputs.keyboard_layout.custom_key.") + std::to_string(static_cast<unsigned>(kRetargetedCustomLayoutSourceVk));
+        Expect(!GetGuiTestInteractionRect(oldCustomKeyRectId.c_str(), customKeyRect),
+            "Expected the original F13 custom key square to disappear after live-capturing a new input key.");
+        Expect(GetGuiTestInteractionRect(newCustomKeyRectId.c_str(), customKeyRect),
+            "Expected the retargeted G custom key square to appear after live-capturing a new input key.");
+    }
+
     void RunKeyRebindGuiKeyboardLayoutFullBindScanPickerRuntimeTest(TestRunMode runMode = TestRunMode::Automated) {
         constexpr DWORD kNumpadEnterScan = 0xE01C;
 
