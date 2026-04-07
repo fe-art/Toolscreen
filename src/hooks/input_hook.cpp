@@ -21,6 +21,7 @@
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 #include <windowsx.h>
 
 extern std::atomic<bool> g_showGui;
@@ -63,6 +64,7 @@ static std::unordered_map<DWORD, size_t> s_bestMatchKeyCountByMainVk;
 static HHOOK s_lowLevelKeyboardHook = NULL;
 static std::mutex s_lowLevelKeyboardHookMutex;
 static std::atomic<bool> s_deferredFocusRegainWmSizePending{ false };
+static void UpdateLowLevelKeyboardHookInstalledState();
 
 struct LowLevelSuppressedKeyState {
     DWORD rawVk = 0;
@@ -73,10 +75,27 @@ struct LowLevelSuppressedKeyState {
 static std::unordered_map<DWORD, LowLevelSuppressedKeyState> s_lowLevelSuppressedKeys;
 static std::mutex s_lowLevelSuppressedKeysMutex;
 static bool s_systemAltTabPassthroughActive = false;
+static std::unordered_map<uint64_t, UINT> s_activeSyntheticRebindOutputsBySource;
+static std::unordered_map<UINT, size_t> s_activeSyntheticRebindOutputRefCounts;
+static std::mutex s_activeSyntheticRebindOutputsMutex;
+
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+struct SyntheticRebindKeyEventForTest {
+    UINT scanCodeWithFlags = 0;
+    bool keyDown = false;
+};
+
+static std::vector<SyntheticRebindKeyEventForTest> s_syntheticRebindKeyEventsForTests;
+#endif
 
 static bool SendMenuMaskKeyTap();
+static bool SendSynthKeyByScanCode(UINT scanCodeWithFlags, bool keyDown);
 static bool HotkeyUsesWindowsKey(const std::vector<DWORD>& keys);
 static bool ShouldMaskWindowsKeyForHotkey(const std::vector<DWORD>& keys, bool isKeyDown, bool isAutoRepeatKeyDown);
+static uint64_t BuildSyntheticRebindOutputSourceId(DWORD vkCode, DWORD rawVkCode, bool isMouseButton);
+static void TrackSyntheticRebindOutputHold(uint64_t sourceId, UINT outputScanCode);
+static bool ReleaseTrackedSyntheticRebindOutputHold(uint64_t sourceId);
+static void ReleaseAllTrackedSyntheticRebindOutputHolds();
 
 static bool MatchesConfiguredGameStateCondition(const std::vector<std::string>& configuredStates, const std::string& gameState) {
     if (configuredStates.empty()) {
@@ -263,6 +282,11 @@ static void UpdateSystemAltTabPassthroughState() {
     }
 
     s_systemAltTabPassthroughActive = false;
+}
+
+static bool DoesSubclassedWindowOwnForegroundInput() {
+    const HWND targetHwnd = g_subclassedHwnd.load(std::memory_order_acquire);
+    return IsWindowInForegroundTree(targetHwnd);
 }
 
 static bool IsShiftCurrentlyDown() {
@@ -677,6 +701,7 @@ InputHandlerResult HandleDestroy(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
 
     extern GameVersion g_gameVersion;
     if (g_gameVersion >= GameVersion(1, 13, 0)) { g_isShuttingDown = true; }
+    UpdateLowLevelKeyboardHookInstalledState();
     return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
 }
 
@@ -1320,6 +1345,8 @@ InputHandlerResult HandleActivate(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
     PROFILE_SCOPE("HandleActivate");
     (void)lParam;
 
+    const bool ownsForeground = becameActive && IsWindowInForegroundTree(hWnd);
+
     if (becameInactive) {
         ImGuiInputQueue_EnqueueFocus(false);
 
@@ -1332,21 +1359,31 @@ InputHandlerResult HandleActivate(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
         g_isGameFocused.store(false);
         g_gameWindowActive.store(false);
 
+        if (g_config.confineCursor) {
+            ClipCursorDirect(NULL);
+        }
         RestoreWindowsMouseSpeed();
         RestoreKeyRepeatSettings();
+        UpdateLowLevelKeyboardHookInstalledState();
     } else {
-        ImGuiInputQueue_EnqueueFocus(true);
+        ImGuiInputQueue_EnqueueFocus(ownsForeground);
 
         if (auto cs = GetConfigSnapshot(); cs && cs->debug.showHotkeyDebug) {
             Log(std::string("[WINDOW] Window became active via ") + focusSource + ".");
         }
         extern std::atomic<bool> g_isGameFocused;
-        g_isGameFocused.store(true);
-        g_gameWindowActive.store(true);
+        g_isGameFocused.store(ownsForeground);
+        g_gameWindowActive.store(ownsForeground);
+
+        if (!ownsForeground) {
+            UpdateLowLevelKeyboardHookInstalledState();
+            return { false, 0 };
+        }
 
         ApplyWindowsMouseSpeed();
         ApplyKeyRepeatSettings();
         ApplyConfineCursorToGameWindow();
+        UpdateLowLevelKeyboardHookInstalledState();
 
         int clientW = 0;
         int clientH = 0;
@@ -2285,6 +2322,7 @@ static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM w
 static bool ShouldSuppressLowLevelMenuModifierKey(DWORD rawVk) {
     if (!IsDeepSuppressionEligibleSourceVk(rawVk)) return false;
     if (g_isShuttingDown.load(std::memory_order_acquire)) return false;
+    if (!DoesSubclassedWindowOwnForegroundInput()) return false;
     if (!g_gameWindowActive.load(std::memory_order_acquire)) return false;
     if (IsHotkeyBindingActive() || IsRebindBindingActive()) return false;
 
@@ -2347,6 +2385,9 @@ static LRESULT CALLBACK LowLevelKeyboardProc(int code, WPARAM wParam, LPARAM lPa
     if (!targetHwnd) {
         return CallNextHookEx(s_lowLevelKeyboardHook, code, wParam, lParam);
     }
+    if (!IsWindowInForegroundTree(targetHwnd) || !g_gameWindowActive.load(std::memory_order_acquire)) {
+        return CallNextHookEx(s_lowLevelKeyboardHook, code, wParam, lParam);
+    }
 
     LowLevelSuppressedKeyState existingState{};
     bool hasExistingState = false;
@@ -2406,16 +2447,168 @@ static void EnsureLowLevelKeyboardHookInstalled() {
     LogCategory("init", "Installed low-level keyboard hook for deep key rebind suppression.");
 }
 
+static bool HasDeepSuppressionEligibleEnabledRebind() {
+    if (!DoesSubclassedWindowOwnForegroundInput()) return false;
+    if (!g_gameWindowActive.load(std::memory_order_acquire)) return false;
+    if (IsHotkeyBindingActive() || IsRebindBindingActive()) return false;
+
+    const auto cfg = GetConfigSnapshot();
+    if (!cfg || !cfg->keyRebinds.enabled) return false;
+
+    for (const auto& rebind : cfg->keyRebinds.rebinds) {
+        if (!rebind.enabled) continue;
+        if (!IsDeepSuppressionEligibleSourceVk(rebind.fromKey)) continue;
+        if ((cfg->keyRebinds.allowSystemAltTab || cfg->keyRebinds.allowSystemAltF4) && IsAltVk(rebind.fromKey)) {
+            continue;
+        }
+
+        const DWORD triggerVk = NormalizeModifierVkFromConfig(rebind.toKey,
+                                                              (rebind.useCustomOutput ? rebind.customOutputScanCode : 0));
+        if (ShouldMaskMenuModifierForRebind(rebind, rebind.fromKey, rebind.fromKey, true, false, triggerVk)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void UninstallLowLevelKeyboardHook() {
+    std::lock_guard<std::mutex> lock(s_lowLevelKeyboardHookMutex);
+    if (s_lowLevelKeyboardHook == NULL) return;
+
+    HHOOK hook = s_lowLevelKeyboardHook;
+    s_lowLevelKeyboardHook = NULL;
+
+    if (UnhookWindowsHookEx(hook) == FALSE) {
+        Log("WARNING: Failed to uninstall low-level keyboard hook for deep key rebind suppression.");
+        return;
+    }
+
+    LogCategory("init", "Uninstalled low-level keyboard hook for deep key rebind suppression.");
+}
+
+static void UpdateLowLevelKeyboardHookInstalledState() {
+    if (g_isShuttingDown.load(std::memory_order_acquire) || !HasDeepSuppressionEligibleEnabledRebind()) {
+        const HWND targetHwnd = g_subclassedHwnd.load(std::memory_order_acquire);
+        ReleaseActiveLowLevelRebindKeys(targetHwnd);
+        UninstallLowLevelKeyboardHook();
+        return;
+    }
+
+    EnsureLowLevelKeyboardHookInstalled();
+}
+
+static uint64_t BuildSyntheticRebindOutputSourceId(DWORD vkCode, DWORD rawVkCode, bool isMouseButton) {
+    const uint64_t sourceKindBit = isMouseButton ? (1ull << 32) : 0ull;
+    const DWORD sourceVk = isMouseButton ? rawVkCode : (vkCode != 0 ? vkCode : rawVkCode);
+    return sourceKindBit | static_cast<uint64_t>(sourceVk);
+}
+
+static void TrackSyntheticRebindOutputHold(uint64_t sourceId, UINT outputScanCode) {
+    if (sourceId == 0 || outputScanCode == 0) return;
+
+    UINT releaseScanCode = 0;
+    bool sendKeyDown = false;
+    {
+        std::lock_guard<std::mutex> lock(s_activeSyntheticRebindOutputsMutex);
+
+        auto existing = s_activeSyntheticRebindOutputsBySource.find(sourceId);
+        if (existing != s_activeSyntheticRebindOutputsBySource.end()) {
+            if (existing->second == outputScanCode) {
+                return;
+            }
+
+            auto oldRef = s_activeSyntheticRebindOutputRefCounts.find(existing->second);
+            if (oldRef != s_activeSyntheticRebindOutputRefCounts.end()) {
+                if (oldRef->second <= 1) {
+                    releaseScanCode = existing->second;
+                    s_activeSyntheticRebindOutputRefCounts.erase(oldRef);
+                } else {
+                    --oldRef->second;
+                }
+            }
+
+            existing->second = outputScanCode;
+        } else {
+            s_activeSyntheticRebindOutputsBySource[sourceId] = outputScanCode;
+        }
+
+        size_t& refCount = s_activeSyntheticRebindOutputRefCounts[outputScanCode];
+        sendKeyDown = (refCount == 0);
+        ++refCount;
+    }
+
+    if (releaseScanCode != 0) {
+        (void)SendSynthKeyByScanCode(releaseScanCode, false);
+    }
+    if (sendKeyDown) {
+        (void)SendSynthKeyByScanCode(outputScanCode, true);
+    }
+}
+
+static bool ReleaseTrackedSyntheticRebindOutputHold(uint64_t sourceId) {
+    if (sourceId == 0) return false;
+
+    UINT releaseScanCode = 0;
+    {
+        std::lock_guard<std::mutex> lock(s_activeSyntheticRebindOutputsMutex);
+
+        const auto existing = s_activeSyntheticRebindOutputsBySource.find(sourceId);
+        if (existing == s_activeSyntheticRebindOutputsBySource.end()) {
+            return false;
+        }
+
+        releaseScanCode = existing->second;
+        s_activeSyntheticRebindOutputsBySource.erase(existing);
+
+        auto refCount = s_activeSyntheticRebindOutputRefCounts.find(releaseScanCode);
+        if (refCount == s_activeSyntheticRebindOutputRefCounts.end()) {
+            releaseScanCode = 0;
+        } else if (refCount->second <= 1) {
+            s_activeSyntheticRebindOutputRefCounts.erase(refCount);
+        } else {
+            --refCount->second;
+            releaseScanCode = 0;
+        }
+    }
+
+    if (releaseScanCode != 0) {
+        (void)SendSynthKeyByScanCode(releaseScanCode, false);
+    }
+    return true;
+}
+
+static void ReleaseAllTrackedSyntheticRebindOutputHolds() {
+    std::vector<UINT> scanCodesToRelease;
+    {
+        std::lock_guard<std::mutex> lock(s_activeSyntheticRebindOutputsMutex);
+        if (s_activeSyntheticRebindOutputRefCounts.empty()) {
+            s_activeSyntheticRebindOutputsBySource.clear();
+            return;
+        }
+
+        scanCodesToRelease.reserve(s_activeSyntheticRebindOutputRefCounts.size());
+        for (const auto& [scanCodeWithFlags, refCount] : s_activeSyntheticRebindOutputRefCounts) {
+            if (refCount != 0) {
+                scanCodesToRelease.push_back(scanCodeWithFlags);
+            }
+        }
+
+        s_activeSyntheticRebindOutputsBySource.clear();
+        s_activeSyntheticRebindOutputRefCounts.clear();
+    }
+
+    for (const UINT scanCodeWithFlags : scanCodesToRelease) {
+        (void)SendSynthKeyByScanCode(scanCodeWithFlags, false);
+    }
+}
+
 void ReleaseActiveLowLevelRebindKeys(HWND hWnd) {
     s_systemAltTabPassthroughActive = false;
-
-    if (!hWnd) return;
 
     std::vector<LowLevelSuppressedKeyState> activeKeys;
     {
         std::lock_guard<std::mutex> lock(s_lowLevelSuppressedKeysMutex);
-        if (s_lowLevelSuppressedKeys.empty()) return;
-
         activeKeys.reserve(s_lowLevelSuppressedKeys.size());
         for (const auto& [vk, state] : s_lowLevelSuppressedKeys) {
             (void)vk;
@@ -2424,14 +2617,22 @@ void ReleaseActiveLowLevelRebindKeys(HWND hWnd) {
         s_lowLevelSuppressedKeys.clear();
     }
 
-    for (const auto& state : activeKeys) {
-        const UINT msg = state.isSystemKey ? WM_SYSKEYUP : WM_KEYUP;
-        const LPARAM msgLParam = BuildKeyboardMessageLParam(state.scanCodeWithFlags, false, state.isSystemKey, 1, true, true);
-        (void)HandleKeyRebinding(hWnd, msg, static_cast<WPARAM>(state.rawVk), msgLParam);
+    if (hWnd) {
+        for (const auto& state : activeKeys) {
+            const UINT msg = state.isSystemKey ? WM_SYSKEYUP : WM_KEYUP;
+            const LPARAM msgLParam = BuildKeyboardMessageLParam(state.scanCodeWithFlags, false, state.isSystemKey, 1, true, true);
+            (void)HandleKeyRebinding(hWnd, msg, static_cast<WPARAM>(state.rawVk), msgLParam);
+        }
     }
+
+    ReleaseAllTrackedSyntheticRebindOutputHolds();
 }
 
 static bool SendSynthKeyByScanCode(UINT scanCodeWithFlags, bool keyDown) {
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+    s_syntheticRebindKeyEventsForTests.push_back(SyntheticRebindKeyEventForTest{ scanCodeWithFlags, keyDown });
+#endif
+
     INPUT in{};
     in.type = INPUT_KEYBOARD;
     in.ki.wVk = 0;
@@ -2444,6 +2645,28 @@ static bool SendSynthKeyByScanCode(UINT scanCodeWithFlags, bool keyDown) {
     in.ki.dwExtraInfo = kToolscreenInjectedExtraInfo;
     return ::SendInput(1, &in, sizeof(INPUT)) == 1;
 }
+
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+void ResetSyntheticRebindKeyEventsForTest() { s_syntheticRebindKeyEventsForTests.clear(); }
+
+size_t GetSyntheticRebindKeyEventCountForTest() { return s_syntheticRebindKeyEventsForTests.size(); }
+
+bool GetSyntheticRebindKeyEventForTest(size_t index, UINT& outScanCodeWithFlags, bool& outKeyDown) {
+    if (index >= s_syntheticRebindKeyEventsForTests.size()) {
+        return false;
+    }
+
+    const SyntheticRebindKeyEventForTest& event = s_syntheticRebindKeyEventsForTests[index];
+    outScanCodeWithFlags = event.scanCodeWithFlags;
+    outKeyDown = event.keyDown;
+    return true;
+}
+
+size_t GetActiveSyntheticRebindOutputCountForTest() {
+    std::lock_guard<std::mutex> lock(s_activeSyntheticRebindOutputsMutex);
+    return s_activeSyntheticRebindOutputsBySource.size();
+}
+#endif
 
 InputHandlerResult HandleInjectedMenuMaskKey(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
@@ -2657,8 +2880,8 @@ static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM w
     const bool sourceIsAlt = IsAltVk(vkCode) || IsAltVk(rawVkCode);
     const bool altContextActive = isSystemKeyMsg && !sourceIsAlt;
     const bool outputIsAlt = IsAltVk(triggerVK);
-    const bool outputUsesSystemMessage = outputIsAlt;
     const bool outputHasAltContext = altContextActive || outputIsAlt;
+    const bool outputUsesSystemMessage = outputHasAltContext;
     UINT outputMsg = isKeyDown ? (outputUsesSystemMessage ? WM_SYSKEYDOWN : WM_KEYDOWN)
                                : (outputUsesSystemMessage ? WM_SYSKEYUP : WM_KEYUP);
 
@@ -2733,6 +2956,7 @@ static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM w
     };
 
     if (IsModifierVk(triggerVK) || outputScanIsModifier) {
+        const uint64_t syntheticOutputSourceId = BuildSyntheticRebindOutputSourceId(vkCode, rawVkCode, isMouseButton);
         const bool sourceIsModifier = IsModifierVk(rebind.fromKey) || IsModifierVk(vkCode) || IsModifierVk(rawVkCode);
         if (isAutoRepeatKeyDown && !sourceIsModifier) {
             return { true, 0 };
@@ -2742,7 +2966,11 @@ static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM w
             (void)SendSynthKeyByScanCode(outputScanCode, true);
             (void)SendSynthKeyByScanCode(outputScanCode, false);
         } else {
-            (void)SendSynthKeyByScanCode(outputScanCode, isKeyDown);
+            if (isKeyDown) {
+                TrackSyntheticRebindOutputHold(syntheticOutputSourceId, outputScanCode);
+            } else if (!ReleaseTrackedSyntheticRebindOutputHold(syntheticOutputSourceId)) {
+                (void)SendSynthKeyByScanCode(outputScanCode, false);
+            }
         }
 
         if (isKeyDown && fromKeyIsNonChar && !outputScanIsModifier) {
@@ -2871,13 +3099,18 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
         return { false, 0 };
     }
 
-    if (isMouseButton && g_showGui.load(std::memory_order_acquire)) { return { false, 0 }; }
-
     vkCode = rawVkCode;
     if (!isMouseButton && (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN || uMsg == WM_KEYUP || uMsg == WM_SYSKEYUP)) {
         vkCode = NormalizeModifierVkFromKeyMessage(rawVkCode, lParam);
         if (vkCode == 0) vkCode = rawVkCode;
     }
+
+    const uint64_t syntheticOutputSourceId = BuildSyntheticRebindOutputSourceId(vkCode, rawVkCode, isMouseButton);
+    if (!isKeyDown && ReleaseTrackedSyntheticRebindOutputHold(syntheticOutputSourceId)) {
+        return { true, 0 };
+    }
+
+    if (isMouseButton && g_showGui.load(std::memory_order_acquire)) { return { false, 0 }; }
 
     const bool isAutoRepeatKeyDown = (!isMouseButton && isKeyDown && (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) && ((lParam & (1LL << 30)) != 0));
 
@@ -3159,7 +3392,7 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         s_forcedShowCursor = false;
     }
 
-    EnsureLowLevelKeyboardHookInstalled();
+    UpdateLowLevelKeyboardHookInstalledState();
 
     RegisterBindingInputEvent(uMsg, wParam, lParam);
 

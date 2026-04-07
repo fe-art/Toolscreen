@@ -369,6 +369,7 @@ struct ModeViewportInfo {
 bool GetMonitorRectForWindow(HWND hwnd, RECT& outRect);
 bool GetMonitorSizeForWindow(HWND hwnd, int& outW, int& outH);
 bool GetWindowClientRectInScreen(HWND hwnd, RECT& outRect);
+bool IsWindowInForegroundTree(HWND hwnd);
 BOOL ClipCursorDirect(const RECT* lpRect);
 bool ApplyConfineCursorToGameWindow();
 

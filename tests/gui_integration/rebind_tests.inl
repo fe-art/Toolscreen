@@ -217,6 +217,19 @@ static void ExpectCapturedScanCode(const ScopedRebindMessageCapture& capture, si
            label + " expected scan code " + std::to_string(expectedScanCode) + ", got " + std::to_string(actualScanCode) + ".");
 }
 
+static void ExpectSyntheticRebindKeyEvent(size_t index, UINT expectedScanCodeWithFlags, bool expectedKeyDown, const std::string& label) {
+    UINT actualScanCodeWithFlags = 0;
+    bool actualKeyDown = false;
+    Expect(GetSyntheticRebindKeyEventForTest(index, actualScanCodeWithFlags, actualKeyDown),
+        label + " missing synthetic rebind key event at index " + std::to_string(index) + ".");
+    Expect(actualScanCodeWithFlags == expectedScanCodeWithFlags,
+        label + " expected scan code " + std::to_string(expectedScanCodeWithFlags) + ", got " +
+         std::to_string(actualScanCodeWithFlags) + ".");
+    Expect(actualKeyDown == expectedKeyDown,
+        label + " expected keyDown=" + std::string(expectedKeyDown ? "true" : "false") + ", got " +
+         (actualKeyDown ? "true" : "false") + ".");
+}
+
 static void PrepareRebindGuiCase(std::string_view caseName, const std::vector<KeyRebind>& rebinds = {}) {
     const std::filesystem::path root = PrepareCaseDirectory(caseName);
     ResetGlobalTestState(root);
@@ -638,6 +651,36 @@ void RunKeyRebindRuntimeMouseSourceEmitsKeyAndCharTest(TestRunMode runMode = Tes
     Expect(capture.messages.size() == 1, "Expected a mouse-source rebind WM_LBUTTONUP to forward exactly one key-up message.");
     ExpectCapturedMessage(capture, 0, WM_KEYUP, 'B', "Mouse-source rebind WM_KEYUP");
 }
+
+    void RunKeyRebindRuntimeModifierOutputReleasedOnDeactivateTest(TestRunMode runMode = TestRunMode::Automated) {
+        DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+        PrepareRebindRuntimeCase("key_rebind_runtime_modifier_output_released_on_deactivate",
+                     { MakeEnabledRebind('A', VK_LCONTROL) });
+
+        ResetSyntheticRebindKeyEventsForTest();
+        Expect(GetSyntheticRebindKeyEventCountForTest() == 0,
+            "Expected the synthetic rebind key event log to start empty.");
+        Expect(GetActiveSyntheticRebindOutputCountForTest() == 0,
+            "Expected no held synthetic rebind outputs before the modifier rebind test runs.");
+
+        const UINT expectedScanCodeWithFlags = static_cast<UINT>(MapVirtualKeyW(VK_LCONTROL, MAPVK_VK_TO_VSC_EX));
+        const InputHandlerResult keyDownResult =
+         HandleKeyRebinding(window.hwnd(), WM_KEYDOWN, 'A', BuildTestKeyboardMessageLParam('A', true));
+        Expect(keyDownResult.consumed, "Expected the modifier-output rebind to consume WM_KEYDOWN.");
+        Expect(GetSyntheticRebindKeyEventCountForTest() == 1,
+            "Expected the modifier-output rebind to synthesize exactly one key-down event.");
+        ExpectSyntheticRebindKeyEvent(0, expectedScanCodeWithFlags, true, "Modifier-output rebind WM_KEYDOWN");
+        Expect(GetActiveSyntheticRebindOutputCountForTest() == 1,
+            "Expected the modifier-output rebind to track one held synthetic output after key down.");
+
+        (void)HandleActivate(window.hwnd(), WM_KILLFOCUS, 0, 0);
+
+        Expect(GetSyntheticRebindKeyEventCountForTest() == 2,
+            "Expected the modifier-output rebind to synthesize a matching key-up event on focus loss.");
+        ExpectSyntheticRebindKeyEvent(1, expectedScanCodeWithFlags, false, "Modifier-output rebind focus-loss release");
+        Expect(GetActiveSyntheticRebindOutputCountForTest() == 0,
+            "Expected focus loss to clear all held synthetic rebind outputs.");
+    }
 
 void RunKeyRebindRuntimeDisabledRebindIgnoredTest(TestRunMode runMode = TestRunMode::Automated) {
     DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);

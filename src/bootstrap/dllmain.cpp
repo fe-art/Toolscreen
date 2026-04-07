@@ -267,6 +267,8 @@ void LoadConfig();
 void SaveConfig();
 void RenderSettingsGUI();
 void AttemptAggressiveGlViewportHook();
+void ApplyWindowsMouseSpeed();
+void ApplyKeyRepeatSettings();
 
 void InvalidateTrackedGameTextureId(bool clearSwapThread) {
     g_cachedGameTextureId.store(UINT_MAX, std::memory_order_release);
@@ -430,6 +432,12 @@ bool SubclassGameWindow(HWND hwnd) {
     if (oldProc) {
         g_originalWndProc = oldProc;
         g_subclassedHwnd.store(hwnd);
+        if (IsWindowInForegroundTree(hwnd)) {
+            g_gameWindowActive.store(true, std::memory_order_release);
+            ApplyWindowsMouseSpeed();
+            ApplyKeyRepeatSettings();
+            ApplyConfineCursorToGameWindow();
+        }
         Log("Successfully subclassed window: " + std::to_string(reinterpret_cast<uintptr_t>(hwnd)));
         return true;
     } else {
@@ -553,8 +561,21 @@ void SaveOriginalWindowsMouseSpeed() {
     }
 }
 
+void RestoreWindowsMouseSpeed();
+void RestoreKeyRepeatSettings();
+
+static bool ShouldOwnGlobalInputState() {
+    const HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
+    return IsWindowInForegroundTree(hwnd);
+}
+
 // Apply the configured Windows mouse speed (if enabled)
 void ApplyWindowsMouseSpeed() {
+    if (!ShouldOwnGlobalInputState()) {
+        RestoreWindowsMouseSpeed();
+        return;
+    }
+
     int targetSpeed = g_config.windowsMouseSpeed;
 
     if (targetSpeed == 0) {
@@ -608,6 +629,11 @@ void SaveOriginalKeyRepeatSettings() {
 }
 
 void ApplyKeyRepeatSettings() {
+    if (!ShouldOwnGlobalInputState()) {
+        RestoreKeyRepeatSettings();
+        return;
+    }
+
     if (!g_originalFilterKeysCaptured.load(std::memory_order_acquire)) { SaveOriginalKeyRepeatSettings(); }
 
     int startDelay = g_config.keyRepeatStartDelay;
@@ -1034,7 +1060,7 @@ std::atomic<void*> g_getRawInputDataThirdPartyHookTarget{ nullptr };
 static const RECT* ResolveClipCursorRect(const RECT* lpRect, RECT& resolvedRect) {
     if (g_config.confineCursor) {
         HWND hwnd = g_minecraftHwnd.load();
-        if (GetWindowClientRectInScreen(hwnd, resolvedRect)) { return &resolvedRect; }
+        if (IsWindowInForegroundTree(hwnd) && GetWindowClientRectInScreen(hwnd, resolvedRect)) { return &resolvedRect; }
     }
 
     if (g_showGui.load()) { return NULL; }
@@ -1055,6 +1081,7 @@ bool ApplyConfineCursorToGameWindow() {
 
     RECT clipRect{};
     HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
+    if (!IsWindowInForegroundTree(hwnd)) { return false; }
     if (!GetWindowClientRectInScreen(hwnd, clipRect)) { return false; }
 
     return ClipCursorDirect(&clipRect) != FALSE;
@@ -2871,8 +2898,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         SaveOriginalWindowsMouseSpeed();
 
         SaveOriginalKeyRepeatSettings();
-
-        ApplyKeyRepeatSettings();
 
     } else if (ul_reason_for_call == DLL_PROCESS_DETACH) {
         // We should do MINIMAL cleanup here. Windows will automatically clean up:

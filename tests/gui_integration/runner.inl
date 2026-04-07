@@ -65,6 +65,7 @@ const auto& GetTestCaseDefinitions() {
         {"key-rebind-runtime-split-caps-lock-ignored", &RunKeyRebindRuntimeSplitCapsLockIgnoredWithoutOptInTest},
         {"key-rebind-runtime-non-typable-trigger-consumes-char", &RunKeyRebindRuntimeNonTypableTriggerConsumesCharTest},
         {"key-rebind-runtime-mouse-source-emits-key-and-char", &RunKeyRebindRuntimeMouseSourceEmitsKeyAndCharTest},
+        {"key-rebind-runtime-modifier-output-released-on-deactivate", &RunKeyRebindRuntimeModifierOutputReleasedOnDeactivateTest},
         {"key-rebind-runtime-disabled-rebind-ignored", &RunKeyRebindRuntimeDisabledRebindIgnoredTest},
         {"key-rebind-runtime-cursor-state-priority-and-fallback", &RunKeyRebindRuntimeCursorStatePriorityAndFallbackTest},
         {"key-rebind-gui-keyboard-layout-full-bind-and-trigger", &RunKeyRebindGuiKeyboardLayoutFullBindAndTriggerTest},

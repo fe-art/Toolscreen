@@ -72,6 +72,13 @@ InputHandlerResult HandleCharRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 
 void ReleaseActiveLowLevelRebindKeys(HWND hWnd);
 
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+void ResetSyntheticRebindKeyEventsForTest();
+size_t GetSyntheticRebindKeyEventCountForTest();
+bool GetSyntheticRebindKeyEventForTest(size_t index, UINT& outScanCodeWithFlags, bool& outKeyDown);
+size_t GetActiveSyntheticRebindOutputCountForTest();
+#endif
+
 LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
 

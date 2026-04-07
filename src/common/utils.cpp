@@ -213,6 +213,21 @@ std::string GetTimestamp() {
     return ss.str();
 }
 
+bool IsWindowInForegroundTree(HWND hwnd) {
+    if (hwnd == NULL || !IsWindow(hwnd)) { return false; }
+
+    HWND foreground = GetForegroundWindow();
+    if (foreground == NULL || !IsWindow(foreground)) { return false; }
+
+    HWND hwndRootOwner = GetAncestor(hwnd, GA_ROOTOWNER);
+    if (hwndRootOwner == NULL) { hwndRootOwner = hwnd; }
+
+    HWND foregroundRootOwner = GetAncestor(foreground, GA_ROOTOWNER);
+    if (foregroundRootOwner == NULL) { foregroundRootOwner = foreground; }
+
+    return hwndRootOwner == foregroundRootOwner;
+}
+
 
 static uint32_t g_crc32Table[256];
 static std::once_flag g_crc32InitFlag;
