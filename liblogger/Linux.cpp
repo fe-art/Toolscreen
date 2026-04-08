@@ -50,7 +50,7 @@ using PtrJNI_GetCreatedJavaVMs = jint(JNICALL*)(JavaVM**, jsize, jsize*);
 
 static constexpr std::string_view kFairplayClassSignature = "Lexersolver/mcsrfairplay/natives/NativeCallback;";
 #ifndef LIBLOGGER_VERSION_STR
-#define LIBLOGGER_VERSION_STR "1.0.0"
+#define LIBLOGGER_VERSION_STR "1.0.1"
 #endif
 static constexpr std::string_view kLibLoggerVersion = LIBLOGGER_VERSION_STR;
 

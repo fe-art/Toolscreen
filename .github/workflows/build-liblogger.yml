@@ -34,17 +34,17 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Resolve SignPath artifact version
+      - name: Resolve liblogger SignPath version
         id: signpath_version
         if: ${{ matrix.sign_with_signpath }}
         shell: pwsh
         run: |
-          $versionFile = Join-Path $env:GITHUB_WORKSPACE 'ToolscreenVersion.cmake'
+          $versionFile = Join-Path $env:GITHUB_WORKSPACE 'liblogger/LibLoggerVersion.cmake'
           $versionContent = Get-Content $versionFile -Raw
 
-          $majorMatch = [regex]::Match($versionContent, 'set\(TOOLSCREEN_VERSION_MAJOR\s+(\d+)\)')
-          $minorMatch = [regex]::Match($versionContent, 'set\(TOOLSCREEN_VERSION_MINOR\s+(\d+)\)')
-          $patchMatch = [regex]::Match($versionContent, 'set\(TOOLSCREEN_VERSION_PATCH\s+(\d+)\)')
+          $majorMatch = [regex]::Match($versionContent, 'set\(LIBLOGGER_VERSION_MAJOR\s+(\d+)\)')
+          $minorMatch = [regex]::Match($versionContent, 'set\(LIBLOGGER_VERSION_MINOR\s+(\d+)\)')
+          $patchMatch = [regex]::Match($versionContent, 'set\(LIBLOGGER_VERSION_PATCH\s+(\d+)\)')
 
           if (-not $majorMatch.Success -or -not $minorMatch.Success -or -not $patchMatch.Success) {
             throw "Failed to parse version from $versionFile"

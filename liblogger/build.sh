@@ -8,24 +8,24 @@ PKG_CONFIG_BIN="${PKG_CONFIG_BIN:-pkg-config}"
 READELF_BIN="${READELF_BIN:-readelf}"
 
 detect_liblogger_version() {
-  local version_file="${SCRIPT_DIR}/../ToolscreenVersion.cmake"
+  local version_file="${SCRIPT_DIR}/LibLoggerVersion.cmake"
   local major
   local minor
   local patch
 
   if [[ ! -f "${version_file}" ]]; then
-    echo "1.0.0"
+    echo "1.0.1"
     return 0
   fi
 
-  major="$(sed -nE 's/^set\(TOOLSCREEN_VERSION_MAJOR[[:space:]]+([0-9]+)\)$/\1/p' "${version_file}" | head -n 1)"
-  minor="$(sed -nE 's/^set\(TOOLSCREEN_VERSION_MINOR[[:space:]]+([0-9]+)\)$/\1/p' "${version_file}" | head -n 1)"
-  patch="$(sed -nE 's/^set\(TOOLSCREEN_VERSION_PATCH[[:space:]]+([0-9]+)\)$/\1/p' "${version_file}" | head -n 1)"
+  major="$(sed -nE 's/^set\(LIBLOGGER_VERSION_MAJOR[[:space:]]+([0-9]+)\)$/\1/p' "${version_file}" | head -n 1)"
+  minor="$(sed -nE 's/^set\(LIBLOGGER_VERSION_MINOR[[:space:]]+([0-9]+)\)$/\1/p' "${version_file}" | head -n 1)"
+  patch="$(sed -nE 's/^set\(LIBLOGGER_VERSION_PATCH[[:space:]]+([0-9]+)\)$/\1/p' "${version_file}" | head -n 1)"
 
   if [[ -n "${major}" && -n "${minor}" && -n "${patch}" ]]; then
     echo "${major}.${minor}.${patch}"
   else
-    echo "1.0.0"
+    echo "1.0.1"
   fi
 }
 
