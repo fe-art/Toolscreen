@@ -5,7 +5,32 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-function Normalize-VersionString {
+function Get-CMakeVersionString {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Prefix
+    )
+
+    if (-not (Test-Path -LiteralPath $FilePath)) {
+        throw "Missing version file '$FilePath'."
+    }
+
+    $content = Get-Content -LiteralPath $FilePath -Raw
+    $majorMatch = [regex]::Match($content, "set\($Prefix`_VERSION_MAJOR\s+(\d+)\)")
+    $minorMatch = [regex]::Match($content, "set\($Prefix`_VERSION_MINOR\s+(\d+)\)")
+    $patchMatch = [regex]::Match($content, "set\($Prefix`_VERSION_PATCH\s+(\d+)\)")
+
+    if (-not $majorMatch.Success -or -not $minorMatch.Success -or -not $patchMatch.Success) {
+        throw "Failed to parse $Prefix version from '$FilePath'."
+    }
+
+    return '{0}.{1}.{2}' -f $majorMatch.Groups[1].Value, $minorMatch.Groups[1].Value, $patchMatch.Groups[1].Value
+}
+
+function Get-NormalizedVersionString {
     param(
         [string]$Value
     )
@@ -33,27 +58,28 @@ function Get-SingleArtifact {
         [string]$Label
     )
 
-    $matches = Get-ChildItem -Path $Root -File -Filter $Pattern -ErrorAction Stop
-    if ($matches.Count -ne 1) {
-        throw "Expected exactly one $Label matching '$Pattern' in '$Root', found $($matches.Count)."
+    $artifactMatches = Get-ChildItem -Path $Root -File -Filter $Pattern -ErrorAction Stop
+    if ($artifactMatches.Count -ne 1) {
+        throw "Expected exactly one $Label matching '$Pattern' in '$Root', found $($artifactMatches.Count)."
     }
 
-    return $matches[0]
+    return $artifactMatches[0]
 }
 
 function Assert-Metadata {
     param(
         [System.IO.FileInfo]$File,
+        [string]$ExpectedProductName,
         [string]$ExpectedDescription,
         [string]$ExpectedOriginalFilename,
         [string]$ExpectedVersion
     )
 
     $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($File.FullName)
-    $normalizedFileVersion = Normalize-VersionString $info.FileVersion
-    $normalizedProductVersion = Normalize-VersionString $info.ProductVersion
+    $normalizedFileVersion = Get-NormalizedVersionString $info.FileVersion
+    $normalizedProductVersion = Get-NormalizedVersionString $info.ProductVersion
 
-    if ($info.ProductName -ne 'Toolscreen') {
+    if ($info.ProductName -ne $ExpectedProductName) {
         throw "Unexpected ProductName for '$($File.Name)': '$($info.ProductName)'"
     }
 
@@ -90,21 +116,19 @@ function Assert-Metadata {
     }
 }
 
+$repoRoot = Split-Path -Path $PSScriptRoot -Parent
+$expectedToolscreenVersion = Get-CMakeVersionString -FilePath (Join-Path $repoRoot 'ToolscreenVersion.cmake') -Prefix 'TOOLSCREEN'
+$expectedLibloggerVersion = Get-CMakeVersionString -FilePath (Join-Path $repoRoot 'liblogger\LibLoggerVersion.cmake') -Prefix 'LIBLOGGER'
+
 $artifactRoot = (Resolve-Path $ArtifactDirectory).Path
 $dll = Get-SingleArtifact -Root $artifactRoot -Pattern 'Toolscreen.dll' -Label 'Toolscreen DLL'
 $loggerDll = Get-SingleArtifact -Root $artifactRoot -Pattern 'liblogger_x64.dll' -Label 'liblogger DLL'
 $installer = Get-SingleArtifact -Root $artifactRoot -Pattern 'Toolscreen-*-double-click-me.exe' -Label 'Toolscreen installer EXE'
 $downloader = Get-SingleArtifact -Root $artifactRoot -Pattern 'toolscreen-downloader.exe' -Label 'Toolscreen downloader EXE'
 
-$dllInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($dll.FullName)
-$expectedVersion = Normalize-VersionString $dllInfo.ProductVersion
-if (-not $expectedVersion) {
-    throw "Unable to determine expected version from '$($dll.Name)'"
-}
-
-Assert-Metadata -File $dll -ExpectedDescription 'Toolscreen hook DLL' -ExpectedOriginalFilename 'Toolscreen.dll' -ExpectedVersion $expectedVersion
-Assert-Metadata -File $loggerDll -ExpectedDescription 'Toolscreen liblogger' -ExpectedOriginalFilename 'liblogger_x64.dll' -ExpectedVersion $expectedVersion
-Assert-Metadata -File $installer -ExpectedDescription 'Toolscreen installer' -ExpectedOriginalFilename $installer.Name -ExpectedVersion $expectedVersion
-Assert-Metadata -File $downloader -ExpectedDescription 'Toolscreen downloader' -ExpectedOriginalFilename 'toolscreen-downloader.exe' -ExpectedVersion $expectedVersion
+Assert-Metadata -File $dll -ExpectedProductName 'Toolscreen' -ExpectedDescription 'Toolscreen hook DLL' -ExpectedOriginalFilename 'Toolscreen.dll' -ExpectedVersion $expectedToolscreenVersion
+Assert-Metadata -File $loggerDll -ExpectedProductName 'liblogger' -ExpectedDescription 'LibLogger' -ExpectedOriginalFilename 'liblogger_x64.dll' -ExpectedVersion $expectedLibloggerVersion
+Assert-Metadata -File $installer -ExpectedProductName 'Toolscreen' -ExpectedDescription 'Toolscreen installer' -ExpectedOriginalFilename $installer.Name -ExpectedVersion $expectedToolscreenVersion
+Assert-Metadata -File $downloader -ExpectedProductName 'Toolscreen' -ExpectedDescription 'Toolscreen downloader' -ExpectedOriginalFilename 'toolscreen-downloader.exe' -ExpectedVersion $expectedToolscreenVersion
 
 Write-Host "Verified PE metadata for Toolscreen signing artifacts in '$artifactRoot'."
