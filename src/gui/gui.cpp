@@ -1908,6 +1908,9 @@ DWORD s_guiTestKeyboardLayoutRemoveCustomKeyVk = 0;
 bool s_guiTestKeyboardLayoutConfirmRemoveCustomKeyRequested = false;
 bool s_guiTestKeyboardLayoutOpenCustomInputPickerRequested = false;
 DWORD s_guiTestKeyboardLayoutSelectCustomInputScanRequest = 0;
+GuiTestKeyboardLayoutDisableTarget s_guiTestKeyboardLayoutDisableTargetRequest = GuiTestKeyboardLayoutDisableTarget::None;
+int s_guiTestKeyboardLayoutDisableTargetEnabledRequest = -1;
+int s_guiTestKeyboardLayoutOutputDisabledRequest = -1;
 int s_guiTestKeyboardLayoutSplitModeRequest = -1;
 int s_guiTestKeyboardLayoutScrollWheelEnabledRequest = -1;
 int s_guiTestKeyboardLayoutCursorStateViewRequest = -1;
@@ -1998,6 +2001,25 @@ bool ConsumeGuiTestKeyboardLayoutOpenCustomInputPickerRequest() {
 DWORD ConsumeGuiTestKeyboardLayoutSelectCustomInputScanRequest() {
     const DWORD request = s_guiTestKeyboardLayoutSelectCustomInputScanRequest;
     s_guiTestKeyboardLayoutSelectCustomInputScanRequest = 0;
+    return request;
+}
+
+bool ConsumeGuiTestKeyboardLayoutDisableTargetRequest(GuiTestKeyboardLayoutDisableTarget& outTarget, bool& outDisabled) {
+    if (s_guiTestKeyboardLayoutDisableTargetRequest == GuiTestKeyboardLayoutDisableTarget::None ||
+        s_guiTestKeyboardLayoutDisableTargetEnabledRequest == -1) {
+        return false;
+    }
+
+    outTarget = s_guiTestKeyboardLayoutDisableTargetRequest;
+    outDisabled = s_guiTestKeyboardLayoutDisableTargetEnabledRequest != 0;
+    s_guiTestKeyboardLayoutDisableTargetRequest = GuiTestKeyboardLayoutDisableTarget::None;
+    s_guiTestKeyboardLayoutDisableTargetEnabledRequest = -1;
+    return true;
+}
+
+int ConsumeGuiTestKeyboardLayoutOutputDisabledRequest() {
+    const int request = s_guiTestKeyboardLayoutOutputDisabledRequest;
+    s_guiTestKeyboardLayoutOutputDisabledRequest = -1;
     return request;
 }
 
@@ -2335,6 +2357,15 @@ void RequestGuiTestKeyboardLayoutOpenCustomInputPicker() {
 
 void RequestGuiTestKeyboardLayoutSelectCustomInputScan(DWORD scan) {
     s_guiTestKeyboardLayoutSelectCustomInputScanRequest = scan;
+}
+
+void RequestGuiTestKeyboardLayoutSetDisabledTarget(GuiTestKeyboardLayoutDisableTarget target, bool disabled) {
+    s_guiTestKeyboardLayoutDisableTargetRequest = target;
+    s_guiTestKeyboardLayoutDisableTargetEnabledRequest = disabled ? 1 : 0;
+}
+
+void RequestGuiTestKeyboardLayoutSetOutputDisabled(bool disabled) {
+    RequestGuiTestKeyboardLayoutSetDisabledTarget(GuiTestKeyboardLayoutDisableTarget::All, disabled);
 }
 
 void RequestGuiTestKeyboardLayoutSetSplitMode(bool splitMode) {

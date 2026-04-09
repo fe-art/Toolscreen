@@ -82,6 +82,14 @@ struct GuiTestKeyboardLayoutKeyLabels {
     std::string shiftLayerText;
 };
 
+enum class GuiTestKeyboardLayoutDisableTarget {
+    None,
+    All,
+    Types,
+    TypesVkShift,
+    Triggers,
+};
+
 enum class GuiTestKeyboardLayoutBindTarget {
     None,
     FullOutputVk,
@@ -121,6 +129,8 @@ void RequestGuiTestKeyboardLayoutRemoveCustomKey(DWORD vk);
 void RequestGuiTestKeyboardLayoutConfirmRemoveCustomKey();
 void RequestGuiTestKeyboardLayoutOpenCustomInputPicker();
 void RequestGuiTestKeyboardLayoutSelectCustomInputScan(DWORD scan);
+void RequestGuiTestKeyboardLayoutSetDisabledTarget(GuiTestKeyboardLayoutDisableTarget target, bool disabled);
+void RequestGuiTestKeyboardLayoutSetOutputDisabled(bool disabled);
 void RequestGuiTestKeyboardLayoutSetSplitMode(bool splitMode);
 void RequestGuiTestKeyboardLayoutSetScrollWheelEnabled(bool enabled);
 void RequestGuiTestKeyboardLayoutSetCursorStateView(GuiTestKeyboardLayoutCursorStateView view);
@@ -579,13 +589,16 @@ struct KeyRebind {
     bool enabled = true;
     std::string cursorState = kKeyRebindCursorStateAny;
 
+    bool triggerOutputDisabled = false;
     bool useCustomOutput = false;
+    bool baseOutputDisabled = false;
     DWORD customOutputVK = 0;
     DWORD customOutputUnicode = 0;
     DWORD customOutputScanCode = 0;
     bool baseOutputShifted = false;
     bool shiftLayerEnabled = false;
     bool shiftLayerUsesCapsLock = false;
+    bool shiftLayerOutputDisabled = false;
     DWORD shiftLayerOutputVK = 0;
     DWORD shiftLayerOutputUnicode = 0;
     bool shiftLayerOutputShifted = false;

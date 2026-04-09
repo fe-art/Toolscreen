@@ -981,12 +981,17 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     key-rebind-runtime-full-caps-lock-honored
     key-rebind-runtime-split-caps-lock-ignored
     key-rebind-runtime-non-typable-trigger-consumes-char
+    key-rebind-runtime-trigger-disabled-still-types
+    key-rebind-runtime-types-disabled-still-triggers
+    key-rebind-runtime-shift-types-disabled-still-triggers
     key-rebind-runtime-mouse-source-emits-key-and-char
     key-rebind-runtime-modifier-output-released-on-deactivate
     key-rebind-runtime-disabled-rebind-ignored
     key-rebind-runtime-cursor-state-priority-and-fallback
     key-rebind-gui-keyboard-layout-full-bind-and-trigger
     key-rebind-gui-keyboard-layout-split-bind-and-trigger
+    key-rebind-gui-keyboard-layout-disabled-output
+    key-rebind-gui-keyboard-layout-split-disabled-targets
     key-rebind-gui-keyboard-layout-mouse-source-bind-and-trigger
     key-rebind-gui-keyboard-layout-mouse-trigger-label-mapping
     key-rebind-gui-keyboard-layout-xbutton-trigger-label-mapping

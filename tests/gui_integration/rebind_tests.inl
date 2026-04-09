@@ -666,6 +666,96 @@ void RunKeyRebindRuntimeNonTypableTriggerConsumesCharTest(TestRunMode runMode = 
     Expect(capture.messages.empty(), "Expected a rebind that cannot type to avoid forwarding WM_CHAR.");
 }
 
+void RunKeyRebindRuntimeTriggerDisabledStillTypesTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    KeyRebind rebind = MakeEnabledRebind('A', 'B');
+    rebind.triggerOutputDisabled = true;
+    rebind.useCustomOutput = true;
+    rebind.customOutputVK = 'C';
+    PrepareRebindRuntimeCase("key_rebind_runtime_trigger_disabled_still_types", { rebind });
+    ScopedRebindMessageCapture capture(window.hwnd());
+
+    ScopedKeyboardStateOverride keyboardState;
+    keyboardState.SetKeyDown(VK_SHIFT, false);
+    keyboardState.SetToggle(VK_CAPITAL, false);
+    keyboardState.Apply();
+
+    const LPARAM sourceLParam = BuildTestKeyboardMessageLParam('A', true);
+    const InputHandlerResult keyDownResult = HandleKeyRebinding(window.hwnd(), WM_KEYDOWN, 'A', sourceLParam);
+    Expect(keyDownResult.consumed, "Expected a trigger-disabled rebind to consume WM_KEYDOWN.");
+    Expect(capture.messages.empty(), "Expected a trigger-disabled rebind to avoid forwarding WM_KEYDOWN.");
+
+    const InputHandlerResult charResult = HandleCharRebinding(window.hwnd(), WM_CHAR, static_cast<WPARAM>('a'), sourceLParam);
+    Expect(charResult.consumed, "Expected a trigger-disabled rebind to consume WM_CHAR.");
+    Expect(capture.messages.size() == 1, "Expected a trigger-disabled rebind to still emit one WM_CHAR message.");
+    ExpectCapturedMessage(capture, 0, WM_CHAR, 'c', "Trigger-disabled rebind WM_CHAR");
+}
+
+void RunKeyRebindRuntimeTypesDisabledStillTriggersTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    KeyRebind rebind = MakeEnabledRebind('A', 'B');
+    rebind.baseOutputDisabled = true;
+    rebind.useCustomOutput = true;
+    rebind.customOutputVK = 'C';
+    PrepareRebindRuntimeCase("key_rebind_runtime_types_disabled_still_triggers", { rebind });
+    ScopedRebindMessageCapture capture(window.hwnd());
+
+    ScopedKeyboardStateOverride keyboardState;
+    keyboardState.SetKeyDown(VK_SHIFT, false);
+    keyboardState.SetToggle(VK_CAPITAL, false);
+    keyboardState.Apply();
+
+    const LPARAM sourceLParam = BuildTestKeyboardMessageLParam('A', true);
+    const InputHandlerResult keyDownResult = HandleKeyRebinding(window.hwnd(), WM_KEYDOWN, 'A', sourceLParam);
+    Expect(keyDownResult.consumed, "Expected a types-disabled rebind to consume WM_KEYDOWN.");
+    Expect(capture.messages.size() == 1, "Expected a types-disabled rebind to still forward one trigger WM_KEYDOWN message.");
+    ExpectCapturedMessage(capture, 0, WM_KEYDOWN, 'B', "Types-disabled rebind trigger WM_KEYDOWN");
+
+    capture.Clear();
+    const InputHandlerResult charResult = HandleCharRebinding(window.hwnd(), WM_CHAR, static_cast<WPARAM>('a'), sourceLParam);
+    Expect(charResult.consumed, "Expected a types-disabled rebind to consume WM_CHAR.");
+    Expect(capture.messages.empty(), "Expected a types-disabled rebind to avoid forwarding WM_CHAR.");
+}
+
+void RunKeyRebindRuntimeShiftTypesDisabledStillTriggersTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    KeyRebind rebind = MakeEnabledRebind('A', 'B');
+    rebind.useCustomOutput = true;
+    rebind.customOutputVK = 'C';
+    rebind.shiftLayerEnabled = true;
+    rebind.shiftLayerOutputDisabled = true;
+    rebind.shiftLayerOutputVK = 'D';
+    PrepareRebindRuntimeCase("key_rebind_runtime_shift_types_disabled_still_triggers", { rebind });
+    ScopedRebindMessageCapture capture(window.hwnd());
+
+    ScopedKeyboardStateOverride keyboardState;
+    keyboardState.SetKeyDown(VK_SHIFT, false);
+    keyboardState.SetToggle(VK_CAPITAL, false);
+    keyboardState.Apply();
+
+    const LPARAM sourceLParam = BuildTestKeyboardMessageLParam('A', true);
+    const InputHandlerResult baseCharResult =
+        HandleCharRebinding(window.hwnd(), WM_CHAR, static_cast<WPARAM>('a'), sourceLParam);
+    Expect(baseCharResult.consumed, "Expected the base split rebind WM_CHAR to be consumed before Shift-layer disable activates.");
+    Expect(capture.messages.size() == 1, "Expected the base split rebind to emit one WM_CHAR message before Shift-layer disable activates.");
+    ExpectCapturedMessage(capture, 0, WM_CHAR, 'c', "Base split rebind WM_CHAR before Shift-layer disable");
+
+    capture.Clear();
+    keyboardState.SetKeyDown(VK_SHIFT, true);
+    keyboardState.Apply();
+
+    const InputHandlerResult keyDownResult = HandleKeyRebinding(window.hwnd(), WM_KEYDOWN, 'A', sourceLParam);
+    Expect(keyDownResult.consumed, "Expected a Shift-layer-types-disabled rebind to consume WM_KEYDOWN.");
+    Expect(capture.messages.size() == 1, "Expected a Shift-layer-types-disabled rebind to still forward one trigger WM_KEYDOWN message.");
+    ExpectCapturedMessage(capture, 0, WM_KEYDOWN, 'B', "Shift-layer-types-disabled rebind trigger WM_KEYDOWN");
+
+    capture.Clear();
+    const InputHandlerResult shiftCharResult =
+        HandleCharRebinding(window.hwnd(), WM_CHAR, static_cast<WPARAM>('A'), sourceLParam);
+    Expect(shiftCharResult.consumed, "Expected a Shift-layer-types-disabled rebind to consume WM_CHAR while Shift is down.");
+    Expect(capture.messages.empty(), "Expected a Shift-layer-types-disabled rebind to avoid forwarding WM_CHAR while Shift is down.");
+}
+
 void RunKeyRebindRuntimeMouseSourceEmitsKeyAndCharTest(TestRunMode runMode = TestRunMode::Automated) {
     DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
     KeyRebind rebind = MakeEnabledRebind(VK_LBUTTON, 'B');
@@ -920,6 +1010,146 @@ void RunKeyRebindGuiKeyboardLayoutSplitBindAndTriggerTest(TestRunMode runMode = 
     Expect(capture.messages.size() == 1, "Expected the GUI-created split rebind to forward exactly one WM_CHAR message.");
     ExpectCapturedMessage(capture, 0, WM_CHAR, 'D', "GUI split rebind WM_CHAR");
 }
+
+    void RunKeyRebindGuiKeyboardLayoutDisabledOutputTest(TestRunMode runMode = TestRunMode::Automated) {
+        DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+        if (SkipIfNoModernGuiTestGL(window)) { return; }
+        PrepareRebindGuiCase("key_rebind_gui_keyboard_layout_disabled_output");
+
+        OpenKeyboardLayoutContext(window, 'A');
+        ResetGuiTestInteractionRects();
+        RenderKeyboardInputsFrame(window);
+
+        GuiTestInteractionRect popupRect;
+        Expect(GetGuiTestInteractionRect("inputs.keyboard_layout.popup.full_rebind", popupRect),
+            "Expected the keyboard-layout popup to expose the full rebind option.");
+        Expect(GetGuiTestInteractionRect("inputs.keyboard_layout.popup.split_rebind", popupRect),
+            "Expected the keyboard-layout popup to expose the split rebind option.");
+        Expect(GetGuiTestInteractionRect("inputs.keyboard_layout.popup.output_disabled", popupRect),
+            "Expected the keyboard-layout popup to expose the disabled output option.");
+
+        RequestGuiTestKeyboardLayoutSetOutputDisabled(true);
+        RenderKeyboardInputsFrame(window);
+        RenderKeyboardInputsFrame(window);
+
+        ResetGuiTestInteractionRects();
+        RenderKeyboardInputsFrame(window);
+
+        Expect(!GetGuiTestInteractionRect("inputs.keyboard_layout.popup.output", popupRect),
+            "Expected the keyboard-layout Disable key mode to hide the full output binding row.");
+        Expect(!GetGuiTestInteractionRect("inputs.keyboard_layout.popup.types", popupRect),
+            "Expected the keyboard-layout Disable key mode to hide the types binding row.");
+        Expect(!GetGuiTestInteractionRect("inputs.keyboard_layout.popup.types_shift", popupRect),
+            "Expected the keyboard-layout Disable key mode to hide the Shift-layer types binding row.");
+        Expect(!GetGuiTestInteractionRect("inputs.keyboard_layout.popup.triggers", popupRect),
+            "Expected the keyboard-layout Disable key mode to hide the triggers binding row.");
+        Expect(!GetGuiTestInteractionRect("inputs.keyboard_layout.popup.custom_input", popupRect),
+            "Expected the keyboard-layout Disable key mode to hide the custom-input row.");
+
+        Expect(g_config.keyRebinds.rebinds.size() == 1,
+            "Expected the keyboard-layout disabled-output flow to create exactly one key rebind.");
+        const KeyRebind& rebind = g_config.keyRebinds.rebinds.front();
+        Expect(rebind.fromKey == 'A', "Expected the keyboard-layout disabled-output flow to bind from A.");
+        Expect(rebind.toKey == 0, "Expected the keyboard-layout disabled-output flow to store a consume-only output.");
+        Expect(rebind.enabled, "Expected the keyboard-layout disabled-output flow to keep the consume-only output active.");
+
+        const GuiTestKeyboardLayoutKeyLabels labels =
+         ExpectKeyboardLayoutKeyLabels('A', "Expected disabled-output keyboard-layout labels for A.");
+        Expect(labels.primaryText == trc("label.none"),
+            "Expected the disabled-output keyboard-layout key to render None as the primary label.");
+        Expect(labels.secondaryText.empty(),
+            "Expected the disabled-output keyboard-layout key to hide the trigger label.");
+
+        g_showGui.store(false, std::memory_order_release);
+        PublishConfigSnapshot();
+
+        ScopedRebindMessageCapture capture(window.hwnd());
+        const LPARAM keyDownLParam = BuildTestKeyboardMessageLParam('A', true);
+        const InputHandlerResult keyDownResult = HandleKeyRebinding(window.hwnd(), WM_KEYDOWN, 'A', keyDownLParam);
+        Expect(keyDownResult.consumed, "Expected the GUI-created disabled-output rebind to consume WM_KEYDOWN.");
+        Expect(capture.messages.empty(), "Expected the GUI-created disabled-output rebind to avoid forwarding WM_KEYDOWN.");
+
+        const InputHandlerResult charResult = HandleCharRebinding(window.hwnd(), WM_CHAR, static_cast<WPARAM>('a'), keyDownLParam);
+        Expect(charResult.consumed, "Expected the GUI-created disabled-output rebind to consume WM_CHAR.");
+        Expect(capture.messages.empty(), "Expected the GUI-created disabled-output rebind to avoid forwarding WM_CHAR.");
+
+        g_showGui.store(true, std::memory_order_release);
+        RequestGuiTestOpenKeyboardLayoutContext('A');
+        RenderKeyboardInputsFrame(window);
+        RequestGuiTestKeyboardLayoutSetOutputDisabled(false);
+        RenderKeyboardInputsFrame(window);
+
+        Expect(g_config.keyRebinds.rebinds.empty(),
+            "Expected clearing the keyboard-layout disabled-output option to remove the consume-only override.");
+    }
+
+        void RunKeyRebindGuiKeyboardLayoutSplitDisabledTargetsTest(TestRunMode runMode = TestRunMode::Automated) {
+            DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+            if (SkipIfNoModernGuiTestGL(window)) { return; }
+            PrepareRebindGuiCase("key_rebind_gui_keyboard_layout_split_disabled_targets");
+
+            OpenKeyboardLayoutContext(window, 'A');
+            RequestGuiTestKeyboardLayoutSetSplitMode(true);
+            ResetGuiTestInteractionRects();
+            RenderKeyboardInputsFrame(window);
+
+            GuiTestInteractionRect popupRect;
+            Expect(GetGuiTestInteractionRect("inputs.keyboard_layout.popup.types_disabled", popupRect),
+                "Expected the keyboard-layout split popup to expose the disabled toggle for Types.");
+            Expect(GetGuiTestInteractionRect("inputs.keyboard_layout.popup.types_shift_disabled", popupRect),
+                "Expected the keyboard-layout split popup to expose the disabled toggle for Types (Shift).");
+            Expect(GetGuiTestInteractionRect("inputs.keyboard_layout.popup.triggers_disabled", popupRect),
+                "Expected the keyboard-layout split popup to expose the disabled toggle for Triggers.");
+
+            RequestGuiTestKeyboardLayoutSetDisabledTarget(GuiTestKeyboardLayoutDisableTarget::Types, true);
+            RenderKeyboardInputsFrame(window);
+            RenderKeyboardInputsFrame(window);
+
+            Expect(g_config.keyRebinds.rebinds.size() == 1,
+                "Expected the keyboard-layout split disabled-target flow to create exactly one rebind.");
+            const KeyRebind& typesDisabledRebind = g_config.keyRebinds.rebinds.front();
+            Expect(typesDisabledRebind.baseOutputDisabled,
+                "Expected the keyboard-layout split disabled-target flow to mark Types as disabled.");
+            GuiTestKeyboardLayoutKeyLabels labels =
+             ExpectKeyboardLayoutKeyLabels('A', "Expected split disabled-target keyboard-layout labels after disabling Types.");
+            Expect(labels.primaryText == trc("label.none"),
+                "Expected the split disabled-target keyboard-layout key to render None as the primary label when Types is disabled.");
+
+            RequestGuiTestKeyboardLayoutSetDisabledTarget(GuiTestKeyboardLayoutDisableTarget::TypesVkShift, true);
+            RenderKeyboardInputsFrame(window);
+            RenderKeyboardInputsFrame(window);
+
+            const KeyRebind& shiftDisabledRebind = g_config.keyRebinds.rebinds.front();
+            Expect(shiftDisabledRebind.shiftLayerEnabled,
+                "Expected the keyboard-layout split disabled-target flow to keep the Shift layer enabled when disabling Types (Shift).");
+            Expect(shiftDisabledRebind.shiftLayerOutputDisabled,
+                "Expected the keyboard-layout split disabled-target flow to mark Types (Shift) as disabled.");
+            labels = ExpectKeyboardLayoutKeyLabels('A', "Expected split disabled-target keyboard-layout labels after disabling Types (Shift).");
+                Expect(labels.shiftLayerText == trc("label.none"),
+                    "Expected the split disabled-target keyboard-layout key to render None for the Shift-layer label.");
+
+                RequestGuiTestKeyboardLayoutSetShiftLayerUsesCapsLock(true);
+                RenderKeyboardInputsFrame(window);
+                RenderKeyboardInputsFrame(window);
+
+                const KeyRebind& shiftDisabledAfterCapsLockRebind = g_config.keyRebinds.rebinds.front();
+                Expect(shiftDisabledAfterCapsLockRebind.shiftLayerOutputDisabled,
+                    "Expected toggling the Caps Lock shift-layer checkbox to preserve a disabled Types (Shift) state.");
+                labels = ExpectKeyboardLayoutKeyLabels('A', "Expected split disabled-target keyboard-layout labels after toggling Caps Lock activation.");
+                Expect(labels.shiftLayerText == trc("label.none"),
+                    "Expected the split disabled-target keyboard-layout key to keep rendering None for the Shift-layer label after toggling Caps Lock activation.");
+
+            RequestGuiTestKeyboardLayoutSetDisabledTarget(GuiTestKeyboardLayoutDisableTarget::Triggers, true);
+            RenderKeyboardInputsFrame(window);
+            RenderKeyboardInputsFrame(window);
+
+            const KeyRebind& triggersDisabledRebind = g_config.keyRebinds.rebinds.front();
+            Expect(triggersDisabledRebind.triggerOutputDisabled,
+                "Expected the keyboard-layout split disabled-target flow to mark Triggers as disabled.");
+            labels = ExpectKeyboardLayoutKeyLabels('A', "Expected split disabled-target keyboard-layout labels after disabling Triggers.");
+                Expect(labels.secondaryText == trc("label.none"),
+                    "Expected the split disabled-target keyboard-layout key to render None as the trigger label.");
+        }
 
 void RunKeyRebindGuiKeyboardLayoutMouseSourceBindAndTriggerTest(TestRunMode runMode = TestRunMode::Automated) {
     DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);

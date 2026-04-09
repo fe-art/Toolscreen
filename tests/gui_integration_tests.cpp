@@ -1663,7 +1663,9 @@ void PopulateRichConfigFixture() {
     rebind.fromKey = 'J';
     rebind.toKey = 'K';
     rebind.enabled = true;
+    rebind.triggerOutputDisabled = true;
     rebind.useCustomOutput = true;
+    rebind.baseOutputDisabled = true;
     rebind.cursorState = kKeyRebindCursorStateCursorGrabbed;
     rebind.customOutputVK = 'L';
     rebind.customOutputUnicode = 0x00F8;
@@ -1671,6 +1673,7 @@ void PopulateRichConfigFixture() {
     rebind.baseOutputShifted = true;
     rebind.shiftLayerEnabled = true;
     rebind.shiftLayerUsesCapsLock = true;
+    rebind.shiftLayerOutputDisabled = true;
     rebind.shiftLayerOutputVK = 'P';
     rebind.shiftLayerOutputUnicode = 0x00D8;
     rebind.shiftLayerOutputShifted = true;
@@ -2378,7 +2381,9 @@ void VerifyRichKeyRebindsAndAppearance() {
     const KeyRebind& rebind = g_config.keyRebinds.rebinds.front();
     Expect(rebind.fromKey == 'J' && rebind.toKey == 'K', "Expected key rebind source/target to roundtrip.");
     Expect(rebind.enabled, "Expected key rebind enabled flag to roundtrip.");
+    Expect(rebind.triggerOutputDisabled, "Expected key rebind triggerOutputDisabled to roundtrip.");
     Expect(rebind.useCustomOutput, "Expected key rebind useCustomOutput to roundtrip.");
+    Expect(rebind.baseOutputDisabled, "Expected key rebind baseOutputDisabled to roundtrip.");
         Expect(rebind.cursorState == kKeyRebindCursorStateCursorGrabbed,
             "Expected key rebind cursorState to roundtrip.");
     Expect(rebind.customOutputVK == 'L', "Expected key rebind customOutputVK to roundtrip.");
@@ -2387,6 +2392,7 @@ void VerifyRichKeyRebindsAndAppearance() {
     Expect(rebind.baseOutputShifted, "Expected key rebind baseOutputShifted to roundtrip.");
     Expect(rebind.shiftLayerEnabled, "Expected key rebind shiftLayerEnabled to roundtrip.");
     Expect(rebind.shiftLayerUsesCapsLock, "Expected key rebind shiftLayerUsesCapsLock to roundtrip.");
+    Expect(rebind.shiftLayerOutputDisabled, "Expected key rebind shiftLayerOutputDisabled to roundtrip.");
     Expect(rebind.shiftLayerOutputVK == 'P', "Expected key rebind shiftLayerOutputVK to roundtrip.");
     Expect(rebind.shiftLayerOutputUnicode == 0x00D8, "Expected key rebind shiftLayerOutputUnicode to roundtrip.");
     Expect(rebind.shiftLayerOutputShifted, "Expected key rebind shiftLayerOutputShifted to roundtrip.");

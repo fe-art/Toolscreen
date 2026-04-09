@@ -124,9 +124,24 @@ enum class KeyRebindCursorStateMatchPriority {
     Exact = 2,
 };
 
-static bool IsConsumeOnlyScrollWheelRebind(const KeyRebind& rebind) {
-    const bool sourceIsScrollWheel = (rebind.fromKey == VK_TOOLSCREEN_SCROLL_UP || rebind.fromKey == VK_TOOLSCREEN_SCROLL_DOWN);
-    return sourceIsScrollWheel && rebind.enabled && rebind.toKey == 0;
+static bool IsConsumeOnlyKeyRebind(const KeyRebind& rebind) {
+    return rebind.enabled && rebind.fromKey != 0 && rebind.toKey == 0;
+}
+
+static bool IsTriggerOutputDisabled(const KeyRebind& rebind) {
+    return !IsConsumeOnlyKeyRebind(rebind) && rebind.triggerOutputDisabled;
+}
+
+static bool IsBaseTypedOutputDisabled(const KeyRebind& rebind) {
+    return rebind.baseOutputDisabled;
+}
+
+static bool IsShiftLayerTypedOutputDisabled(const KeyRebind& rebind) {
+    return rebind.shiftLayerEnabled && rebind.shiftLayerOutputDisabled;
+}
+
+static bool IsEffectiveTypedOutputDisabled(const KeyRebind& rebind, bool shiftLayerActive) {
+    return shiftLayerActive ? IsShiftLayerTypedOutputDisabled(rebind) : IsBaseTypedOutputDisabled(rebind);
 }
 
 static KeyRebindCursorStateMatchPriority GetKeyRebindCursorStateMatchPriority(const KeyRebind& rebind, bool cursorVisible) {
@@ -149,7 +164,7 @@ static const KeyRebind* FindPreferredEnabledKeyRebind(const std::vector<KeyRebin
         if (!rebind.enabled || rebind.fromKey == 0) {
             continue;
         }
-        if (rebind.toKey == 0 && !IsConsumeOnlyScrollWheelRebind(rebind)) {
+        if (rebind.toKey == 0 && !IsConsumeOnlyKeyRebind(rebind)) {
             continue;
         }
         if (!predicate(rebind)) {
@@ -313,18 +328,21 @@ static bool IsShiftDownForIncomingEvent(DWORD incomingVk, DWORD incomingRawVk, b
 }
 
 static bool HasShiftLayerOutputVk(const KeyRebind& rebind) {
-    return rebind.shiftLayerEnabled && rebind.shiftLayerOutputVK != 0;
+    return rebind.shiftLayerEnabled && !rebind.shiftLayerOutputDisabled && rebind.shiftLayerOutputVK != 0;
 }
 
 static bool HasShiftLayerOutputUnicode(const KeyRebind& rebind) {
-    return rebind.shiftLayerEnabled && rebind.shiftLayerOutputUnicode != 0;
+    return rebind.shiftLayerEnabled && !rebind.shiftLayerOutputDisabled && rebind.shiftLayerOutputUnicode != 0;
 }
 
 static bool HasShiftLayerOutputOverride(const KeyRebind& rebind) {
-    return HasShiftLayerOutputVk(rebind) || HasShiftLayerOutputUnicode(rebind);
+    return IsShiftLayerTypedOutputDisabled(rebind) || HasShiftLayerOutputVk(rebind) || HasShiftLayerOutputUnicode(rebind);
 }
 
 static bool IsSplitRebindTextMode(const KeyRebind& rebind) {
+    if (rebind.triggerOutputDisabled) return true;
+    if (rebind.baseOutputDisabled) return true;
+    if (rebind.shiftLayerOutputDisabled) return true;
     if (rebind.customOutputUnicode != 0) return true;
     if (rebind.baseOutputShifted) return true;
     if (rebind.shiftLayerUsesCapsLock) return true;
@@ -354,6 +372,12 @@ static bool IsShiftLayerActiveForRebind(const KeyRebind& rebind, DWORD incomingV
 }
 
 static DWORD ResolveEffectiveCustomOutputVk(const KeyRebind& rebind, bool shiftLayerActive) {
+    if (shiftLayerActive && IsShiftLayerTypedOutputDisabled(rebind)) {
+        return 0;
+    }
+    if (!shiftLayerActive && IsBaseTypedOutputDisabled(rebind)) {
+        return 0;
+    }
     if (shiftLayerActive && HasShiftLayerOutputVk(rebind)) {
         return rebind.shiftLayerOutputVK;
     }
@@ -2107,6 +2131,10 @@ static bool IsNonCharKeyVk(DWORD vk) {
 }
 
 static bool RebindCannotType(const KeyRebind& rebind) {
+    if (IsTriggerOutputDisabled(rebind)) {
+        return false;
+    }
+
     DWORD triggerVk = rebind.toKey;
     if (triggerVk == 0) triggerVk = rebind.fromKey;
     if (triggerVk == 0) return false;
@@ -2184,6 +2212,9 @@ static bool TryTranslateVkToCharWithKeyboardState(DWORD vkCode, const BYTE keybo
     return false;
 }
 
+static bool TryTranslateVkToCharPreferShiftState(DWORD vkCode, bool preferShifted, WCHAR& outChar);
+static LRESULT SendUnicodeScalarAsCharMessage(HWND hWnd, UINT charMsg, uint32_t cp, LPARAM lParam);
+
 static bool ResolvePreferredOutputShiftState(const KeyRebind& rebind, bool shiftLayerActive, bool fallbackShifted) {
     if (shiftLayerActive && HasShiftLayerOutputOverride(rebind)) {
         return rebind.shiftLayerOutputShifted;
@@ -2215,6 +2246,67 @@ static void ApplyPreferredOutputShiftState(const KeyRebind& rebind, bool shiftLa
     keyboardState[VK_SHIFT] = shiftState;
     keyboardState[VK_LSHIFT] = shiftState;
     keyboardState[VK_RSHIFT] = shiftState;
+}
+
+static void EmitRebindTypedChar(HWND hWnd, const KeyRebind& rebind, bool shiftLayerActive, DWORD textVK,
+                                bool preferShiftedText, LPARAM charLParam) {
+    const uint32_t configuredUnicodeText =
+        (shiftLayerActive && HasShiftLayerOutputUnicode(rebind))
+            ? static_cast<uint32_t>(rebind.shiftLayerOutputUnicode)
+            : ((!shiftLayerActive && rebind.useCustomOutput && rebind.customOutputUnicode != 0)
+                   ? static_cast<uint32_t>(rebind.customOutputUnicode)
+                   : 0u);
+
+    if (configuredUnicodeText != 0) {
+        if (configuredUnicodeText <= 0xFFFFu) {
+            SendMessage(hWnd, WM_TOOLSCREEN_CHAR_NO_REBIND, static_cast<WPARAM>(static_cast<WCHAR>(configuredUnicodeText)), charLParam);
+        } else {
+            SendUnicodeScalarAsCharMessage(hWnd, WM_CHAR, configuredUnicodeText, charLParam);
+        }
+        return;
+    }
+
+    if (textVK == 0) {
+        return;
+    }
+
+    WCHAR outChar = 0;
+
+    if (textVK == VK_RETURN) {
+        outChar = L'\r';
+    } else if (textVK == VK_TAB) {
+        outChar = L'\t';
+    } else if (textVK == VK_BACK) {
+        outChar = L'\b';
+    } else {
+        BYTE ks[256] = {};
+        if (GetKeyboardState(ks)) {
+            if (rebind.fromKey == VK_SHIFT || rebind.fromKey == VK_LSHIFT || rebind.fromKey == VK_RSHIFT) {
+                ks[VK_SHIFT] = 0;
+                ks[VK_LSHIFT] = 0;
+                ks[VK_RSHIFT] = 0;
+            } else if (rebind.fromKey == VK_CONTROL || rebind.fromKey == VK_LCONTROL || rebind.fromKey == VK_RCONTROL) {
+                ks[VK_CONTROL] = 0;
+                ks[VK_LCONTROL] = 0;
+                ks[VK_RCONTROL] = 0;
+            } else if (rebind.fromKey == VK_MENU || rebind.fromKey == VK_LMENU || rebind.fromKey == VK_RMENU) {
+                ks[VK_MENU] = 0;
+                ks[VK_LMENU] = 0;
+                ks[VK_RMENU] = 0;
+            }
+
+            ApplyPreferredOutputShiftState(rebind, shiftLayerActive, ks);
+            (void)TryTranslateVkToCharWithKeyboardState(textVK, ks, outChar);
+        }
+
+        if (outChar == 0) {
+            (void)TryTranslateVkToCharPreferShiftState(textVK, preferShiftedText, outChar);
+        }
+    }
+
+    if (outChar != 0) {
+        SendMessage(hWnd, WM_TOOLSCREEN_CHAR_NO_REBIND, static_cast<WPARAM>(outChar), charLParam);
+    }
 }
 
 static bool TryTranslateVkToCharPreferShiftState(DWORD vkCode, bool preferShifted, WCHAR& outChar) {
@@ -2699,7 +2791,7 @@ InputHandlerResult HandleInjectedMenuMaskKey(HWND hWnd, UINT uMsg, WPARAM wParam
 static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, DWORD rawVkCode, DWORD vkCode,
                                                   bool isMouseButton, bool isKeyDown, bool isAutoRepeatKeyDown,
                                                   const KeyRebind& rebind) {
-    if (IsConsumeOnlyScrollWheelRebind(rebind)) {
+    if (IsConsumeOnlyKeyRebind(rebind)) {
         return { true, 0 };
     }
 
@@ -2711,12 +2803,15 @@ static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM w
             ? NormalizeModifierVkFromConfig(effectiveCustomOutputVk, (rebind.useCustomOutput ? rebind.customOutputScanCode : 0))
             : 0;
     const DWORD textVK = NormalizeModifierVkFromConfig((effectiveCustomOutputVk != 0) ? effectiveCustomOutputVk : defaultTextVK);
+    const bool typedOutputDisabled = IsEffectiveTypedOutputDisabled(rebind, shiftLayerActive);
     const bool preferShiftedText =
         ResolvePreferredOutputShiftState(rebind, shiftLayerActive, IsShiftDownForIncomingEvent(vkCode, rawVkCode, isKeyDown));
     const bool sourceIsScrollWheel =
         IsMouseWheelPseudoVk(rebind.fromKey) || IsMouseWheelPseudoVk(vkCode) || IsMouseWheelPseudoVk(rawVkCode);
 
-    DWORD triggerVK = NormalizeModifierVkFromConfig(rebind.toKey, (rebind.useCustomOutput ? rebind.customOutputScanCode : 0));
+    DWORD triggerVK = IsTriggerOutputDisabled(rebind)
+                          ? 0
+                          : NormalizeModifierVkFromConfig(rebind.toKey, (rebind.useCustomOutput ? rebind.customOutputScanCode : 0));
     if (isMouseButton && normalizedCustomOutputVk != 0 && IsNonCharKeyVk(normalizedCustomOutputVk)) {
         triggerVK = normalizedCustomOutputVk;
     }
@@ -2789,9 +2884,26 @@ static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM w
         return lParam;
     };
 
+    const bool fromKeyIsNonChar = isMouseButton || IsNonCharKeyVk(rebind.fromKey);
+    auto emitTypedCharForSource = [&](LPARAM charLParam) {
+        if (typedOutputDisabled) {
+            return;
+        }
+        EmitRebindTypedChar(hWnd, rebind, shiftLayerActive, textVK, preferShiftedText, charLParam);
+    };
+
+    if (triggerVK == 0) {
+        if (isKeyDown && fromKeyIsNonChar) {
+            const UINT textScanCode = GetScanCodeWithExtendedFlag((effectiveCustomOutputVk != 0) ? textVK : defaultTextVK);
+            const LPARAM charLParam = BuildKeyboardMessageLParam(textScanCode, true, false, 1, false, false);
+            emitTypedCharForSource(charLParam);
+        }
+        return { true, 0 };
+    }
+
     if (IsMouseLikeVk(triggerVK)) {
         LRESULT mouseResult = 0;
-        const bool fromKeyIsNonCharMouse = isMouseButton || IsNonCharKeyVk(rebind.fromKey);
+        const bool fromKeyIsNonCharMouse = fromKeyIsNonChar;
 
         if (IsMouseWheelPseudoVk(triggerVK)) {
             const WORD mkState = buildMouseKeyState(0, false);
@@ -2832,57 +2944,9 @@ static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM w
         }
 
         if (isKeyDown && fromKeyIsNonCharMouse) {
-            const uint32_t configuredUnicodeText =
-                (shiftLayerActive && HasShiftLayerOutputUnicode(rebind))
-                    ? (uint32_t)rebind.shiftLayerOutputUnicode
-                    : ((!shiftLayerActive && rebind.useCustomOutput && rebind.customOutputUnicode != 0)
-                           ? (uint32_t)rebind.customOutputUnicode
-                           : 0u);
-
             const UINT textScanCode = GetScanCodeWithExtendedFlag(textVK);
             LPARAM charLParam = BuildKeyboardMessageLParam(textScanCode, true, false, 1, false, false);
-
-            if (configuredUnicodeText != 0) {
-                SendMessage(hWnd, WM_TOOLSCREEN_CHAR_NO_REBIND, (WPARAM)(WCHAR)configuredUnicodeText, charLParam);
-            } else {
-                WCHAR outChar = 0;
-                if (textVK == VK_RETURN) {
-                    outChar = L'\r';
-                } else if (textVK == VK_TAB) {
-                    outChar = L'\t';
-                } else if (textVK == VK_BACK) {
-                    outChar = L'\b';
-                } else {
-                    BYTE ks[256] = {};
-                    if (GetKeyboardState(ks)) {
-                        if (rebind.fromKey == VK_SHIFT || rebind.fromKey == VK_LSHIFT || rebind.fromKey == VK_RSHIFT) {
-                            ks[VK_SHIFT] = 0;
-                            ks[VK_LSHIFT] = 0;
-                            ks[VK_RSHIFT] = 0;
-                        } else if (rebind.fromKey == VK_CONTROL || rebind.fromKey == VK_LCONTROL || rebind.fromKey == VK_RCONTROL) {
-                            ks[VK_CONTROL] = 0;
-                            ks[VK_LCONTROL] = 0;
-                            ks[VK_RCONTROL] = 0;
-                        } else if (rebind.fromKey == VK_MENU || rebind.fromKey == VK_LMENU || rebind.fromKey == VK_RMENU) {
-                            ks[VK_MENU] = 0;
-                            ks[VK_LMENU] = 0;
-                            ks[VK_RMENU] = 0;
-                        }
-
-                        ApplyPreferredOutputShiftState(rebind, shiftLayerActive, ks);
-
-                        (void)TryTranslateVkToCharWithKeyboardState(textVK, ks, outChar);
-                    }
-
-                    if (outChar == 0) {
-                        (void)TryTranslateVkToCharPreferShiftState(textVK, preferShiftedText, outChar);
-                    }
-                }
-
-                if (outChar != 0) {
-                    SendMessage(hWnd, WM_TOOLSCREEN_CHAR_NO_REBIND, static_cast<WPARAM>(outChar), charLParam);
-                }
-            }
+            emitTypedCharForSource(charLParam);
         }
 
         return { true, mouseResult };
@@ -2897,8 +2961,6 @@ static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM w
     UINT outputMsg = isKeyDown ? (outputUsesSystemMessage ? WM_SYSKEYDOWN : WM_KEYDOWN)
                                : (outputUsesSystemMessage ? WM_SYSKEYUP : WM_KEYUP);
 
-    const bool fromKeyIsNonChar = isMouseButton || IsNonCharKeyVk(rebind.fromKey);
-
     UINT repeatCount = 1;
     bool previousState = !isKeyDown;
     bool transitionState = !isKeyDown;
@@ -2909,63 +2971,6 @@ static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM w
         previousState = ((lParam & (1LL << 30)) != 0);
         transitionState = ((lParam & (1LL << 31)) != 0);
     }
-
-    auto emitTypedChar = [&](LPARAM charLParam) {
-        const uint32_t configuredUnicodeText =
-            (shiftLayerActive && HasShiftLayerOutputUnicode(rebind))
-                ? (uint32_t)rebind.shiftLayerOutputUnicode
-                : ((!shiftLayerActive && rebind.useCustomOutput && rebind.customOutputUnicode != 0)
-                       ? (uint32_t)rebind.customOutputUnicode
-                       : 0u);
-
-        if (configuredUnicodeText != 0) {
-            if (configuredUnicodeText <= 0xFFFFu) {
-                SendMessage(hWnd, WM_TOOLSCREEN_CHAR_NO_REBIND, (WPARAM)(WCHAR)configuredUnicodeText, charLParam);
-            } else {
-                SendUnicodeScalarAsCharMessage(hWnd, WM_CHAR, configuredUnicodeText, charLParam);
-            }
-            return;
-        }
-
-        WCHAR outChar = 0;
-
-        if (textVK == VK_RETURN) {
-            outChar = L'\r';
-        } else if (textVK == VK_TAB) {
-            outChar = L'\t';
-        } else if (textVK == VK_BACK) {
-            outChar = L'\b';
-        } else {
-            BYTE ks[256] = {};
-            if (GetKeyboardState(ks)) {
-                if (rebind.fromKey == VK_SHIFT || rebind.fromKey == VK_LSHIFT || rebind.fromKey == VK_RSHIFT) {
-                    ks[VK_SHIFT] = 0;
-                    ks[VK_LSHIFT] = 0;
-                    ks[VK_RSHIFT] = 0;
-                } else if (rebind.fromKey == VK_CONTROL || rebind.fromKey == VK_LCONTROL || rebind.fromKey == VK_RCONTROL) {
-                    ks[VK_CONTROL] = 0;
-                    ks[VK_LCONTROL] = 0;
-                    ks[VK_RCONTROL] = 0;
-                } else if (rebind.fromKey == VK_MENU || rebind.fromKey == VK_LMENU || rebind.fromKey == VK_RMENU) {
-                    ks[VK_MENU] = 0;
-                    ks[VK_LMENU] = 0;
-                    ks[VK_RMENU] = 0;
-                }
-
-                ApplyPreferredOutputShiftState(rebind, shiftLayerActive, ks);
-
-                (void)TryTranslateVkToCharWithKeyboardState(textVK, ks, outChar);
-            }
-
-            if (outChar == 0) {
-                (void)TryTranslateVkToCharPreferShiftState(textVK, preferShiftedText, outChar);
-            }
-        }
-
-        if (outChar != 0) {
-            SendMessage(hWnd, WM_TOOLSCREEN_CHAR_NO_REBIND, static_cast<WPARAM>(outChar), charLParam);
-        }
-    };
 
     if (IsModifierVk(triggerVK) || outputScanIsModifier) {
         const uint64_t syntheticOutputSourceId = BuildSyntheticRebindOutputSourceId(vkCode, rawVkCode, isMouseButton);
@@ -2989,7 +2994,7 @@ static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM w
             const UINT textScanCode = GetScanCodeWithExtendedFlag(textVK);
             LPARAM charLParam =
                 BuildKeyboardMessageLParam(textScanCode, true, outputHasAltContext, repeatCount, previousState, transitionState);
-            emitTypedChar(charLParam);
+            emitTypedCharForSource(charLParam);
         }
 
         return { true, 0 };
@@ -3011,7 +3016,7 @@ static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM w
         keyResult = CallWindowProc(g_originalWndProc, hWnd, keyUpMsg, msgVk, keyUpLParam);
 
         if (fromKeyIsNonChar) {
-            emitTypedChar(keyDownLParam);
+            emitTypedCharForSource(keyDownLParam);
         }
 
         return { true, keyResult };
@@ -3023,7 +3028,7 @@ static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM w
     LRESULT keyResult = CallWindowProc(g_originalWndProc, hWnd, outputMsg, msgVk, newLParam);
 
     if (isKeyDown && fromKeyIsNonChar) {
-        emitTypedChar(newLParam);
+        emitTypedCharForSource(newLParam);
     }
 
     return { true, keyResult };
@@ -3207,7 +3212,8 @@ InputHandlerResult HandleCharRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
             (pass == 0) ? KeyRebindCursorStateMatchPriority::Exact : KeyRebindCursorStateMatchPriority::Any;
 
         for (const auto& rebind : charRebindCfg->keyRebinds.rebinds) {
-            if (!rebind.enabled || rebind.fromKey == 0 || rebind.toKey == 0) continue;
+            if (!rebind.enabled || rebind.fromKey == 0) continue;
+            if (rebind.toKey == 0 && !IsConsumeOnlyKeyRebind(rebind)) continue;
             if (GetKeyRebindCursorStateMatchPriority(rebind, cursorVisible) != passPriority) continue;
 
             WCHAR fromUnshifted = 0;
@@ -3224,9 +3230,18 @@ InputHandlerResult HandleCharRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
             }
 
             if (matched) {
+                if (IsConsumeOnlyKeyRebind(rebind)) {
+                    return { true, 0 };
+                }
+
                 const bool shiftDown = IsShiftCurrentlyDown();
                 const bool shiftLayerActive = IsShiftLayerActive(rebind, shiftDown, IsCapsLockCurrentlyOn());
+                const bool typedOutputDisabled = IsEffectiveTypedOutputDisabled(rebind, shiftLayerActive);
                 const bool preferShiftedText = ResolvePreferredOutputShiftState(rebind, shiftLayerActive, shiftDown);
+
+                if (typedOutputDisabled) {
+                    return { true, 0 };
+                }
 
                 if (shiftLayerActive && HasShiftLayerOutputUnicode(rebind)) {
                     LRESULT r = SendUnicodeScalarAsCharMessage(hWnd, uMsg, (uint32_t)rebind.shiftLayerOutputUnicode, lParam);
