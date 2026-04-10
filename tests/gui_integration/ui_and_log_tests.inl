@@ -451,6 +451,7 @@ void RunProfileApplyFieldsRoundtripTest(TestRunMode runMode = TestRunMode::Autom
     g_config.windowsMouseSpeed = 7;
     g_config.allowCursorEscape = true;
     g_config.confineCursor = true;
+    g_config.useSystemKeyRepeat = true;
     g_config.keyRepeatStartDelay = 42;
     g_config.keyRepeatDelay = 24;
     g_config.autoBorderless = true;
@@ -486,6 +487,7 @@ void RunProfileApplyFieldsRoundtripTest(TestRunMode runMode = TestRunMode::Autom
     Expect(dst.windowsMouseSpeed == 7, "windowsMouseSpeed should roundtrip.");
     Expect(dst.allowCursorEscape, "allowCursorEscape should roundtrip.");
     Expect(dst.confineCursor, "confineCursor should roundtrip.");
+    Expect(dst.useSystemKeyRepeat, "useSystemKeyRepeat should roundtrip.");
     Expect(dst.keyRepeatStartDelay == 42, "keyRepeatStartDelay should roundtrip.");
     Expect(dst.keyRepeatDelay == 24, "keyRepeatDelay should roundtrip.");
     Expect(dst.autoBorderless == true, "autoBorderless should roundtrip.");

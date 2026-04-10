@@ -973,6 +973,12 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     config-load-key-rebind-shift-layer-caps-lock-parsed
     config-load-key-rebind-shift-layer-caps-lock-defaulted
     config-load-key-rebind-cursor-state-defaulted
+    key-repeat-runtime-last-pressed-only
+    key-repeat-runtime-local-repeat-uses-rebind
+    key-repeat-runtime-autohotkey-duplicate-keydown
+    key-repeat-runtime-autohotkey-retained-numpad-scan
+    key-repeat-runtime-autohotkey-numpadclear-char-override
+    key-repeat-runtime-autohotkey-typing-then-clear-alias
     key-rebind-runtime-full-forwarding
     key-rebind-runtime-split-vk-output
     key-rebind-runtime-split-unicode-output

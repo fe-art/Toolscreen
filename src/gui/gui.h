@@ -790,6 +790,7 @@ struct Config {
     int obsFramerate = ConfigDefaults::CONFIG_OBS_FRAMERATE;
     KeyRebindsConfig keyRebinds;
     AppearanceConfig appearance;
+    bool useSystemKeyRepeat = ConfigDefaults::CONFIG_USE_SYSTEM_KEY_REPEAT;
     int keyRepeatStartDelay = ConfigDefaults::CONFIG_KEY_REPEAT_START_DELAY;
     int keyRepeatDelay = ConfigDefaults::CONFIG_KEY_REPEAT_DELAY;
     bool basicModeEnabled = false;

@@ -628,8 +628,61 @@ void SaveOriginalKeyRepeatSettings() {
     }
 }
 
+static int GetFallbackKeyboardDelayMs() {
+    UINT keyboardDelay = 0;
+    if (SystemParametersInfo(SPI_GETKEYBOARDDELAY, 0, &keyboardDelay, 0)) {
+        keyboardDelay = (std::min)(keyboardDelay, 3u);
+        return static_cast<int>((keyboardDelay + 1u) * 250u);
+    }
+    return 250;
+}
+
+static int GetFallbackKeyboardRepeatMs() {
+    UINT keyboardSpeed = 31;
+    if (SystemParametersInfo(SPI_GETKEYBOARDSPEED, 0, &keyboardSpeed, 0)) {
+        keyboardSpeed = (std::min)(keyboardSpeed, 31u);
+        const double repeatsPerSecond = 2.5 + (27.5 * (static_cast<double>(keyboardSpeed) / 31.0));
+        if (repeatsPerSecond > 0.0) {
+            return (std::max)(1, static_cast<int>(std::lround(1000.0 / repeatsPerSecond)));
+        }
+    }
+    return 33;
+}
+
+bool GetEffectiveKeyRepeatTimings(int& outStartDelayMs, int& outRepeatDelayMs) {
+    if (!g_originalFilterKeysCaptured.load(std::memory_order_acquire)) {
+        SaveOriginalKeyRepeatSettings();
+    }
+
+    int configuredStartDelay = g_config.keyRepeatStartDelay;
+    int configuredRepeatDelay = g_config.keyRepeatDelay;
+
+    if (configuredStartDelay < -1) configuredStartDelay = -1;
+    if (configuredStartDelay > 300) configuredStartDelay = 300;
+    if (configuredRepeatDelay < -1) configuredRepeatDelay = -1;
+    if (configuredRepeatDelay > 300) configuredRepeatDelay = 300;
+
+    int systemStartDelay = g_originalFilterKeys.iDelayMSec;
+    if (systemStartDelay <= 0) {
+        systemStartDelay = GetFallbackKeyboardDelayMs();
+    }
+
+    int systemRepeatDelay = g_originalFilterKeys.iRepeatMSec;
+    if (systemRepeatDelay <= 0) {
+        systemRepeatDelay = GetFallbackKeyboardRepeatMs();
+    }
+
+    outStartDelayMs = (configuredStartDelay >= 0) ? (configuredStartDelay == 0 ? 1 : configuredStartDelay) : systemStartDelay;
+    outRepeatDelayMs = (configuredRepeatDelay >= 0) ? (configuredRepeatDelay == 0 ? 1 : configuredRepeatDelay) : systemRepeatDelay;
+    outStartDelayMs = (std::max)(outStartDelayMs, 1);
+    outRepeatDelayMs = (std::max)(outRepeatDelayMs, 1);
+    return true;
+}
+
 void ApplyKeyRepeatSettings() {
-    if (!ShouldOwnGlobalInputState()) {
+    ResetLocalKeyRepeatState(g_subclassedHwnd.load(std::memory_order_acquire));
+
+    if (!ShouldOwnGlobalInputState() || !g_config.useSystemKeyRepeat) {
         RestoreKeyRepeatSettings();
         return;
     }

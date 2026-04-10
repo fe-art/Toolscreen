@@ -216,6 +216,7 @@ constexpr int CONFIG_WINDOWS_MOUSE_SPEED = 0;
 constexpr bool CONFIG_HIDE_ANIMATIONS_IN_GAME = false;
 constexpr bool CONFIG_LIMIT_CAPTURE_FRAMERATE = false;
 constexpr int CONFIG_OBS_FRAMERATE = 60;
+constexpr bool CONFIG_USE_SYSTEM_KEY_REPEAT = false;
 constexpr int CONFIG_KEY_REPEAT_START_DELAY = -1;
 constexpr int CONFIG_KEY_REPEAT_DELAY = -1;
 constexpr bool CONFIG_BASIC_MODE_ENABLED = false;
