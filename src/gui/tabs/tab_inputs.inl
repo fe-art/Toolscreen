@@ -281,9 +281,11 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                 const bool showKeyRepeatRateSection = ShouldRenderConfigSearchSection(showAllKeyboardSections, {
                     trc("inputs.key_repeat_rate"),
                     trc("inputs.use_system_key_repeat"),
+                    trc("inputs.modifiers_interrupt_key_repeat"),
                     trc("inputs.key_repeat_start_delay"),
                     trc("inputs.key_repeat_delay"),
                     "key repeat",
+                    "modifiers interrupt key repeat",
                     "system key repeat",
                     "repeat delay"
                 });
@@ -311,6 +313,15 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                     }
                     ImGui::SameLine();
                     HelpMarker(trc("inputs.tooltip.use_system_key_repeat"));
+
+                    if (!g_config.useSystemKeyRepeat) {
+                        if (ImGui::Checkbox(trc("inputs.modifiers_interrupt_key_repeat"), &g_config.modifiersInterruptKeyRepeat)) {
+                            g_configIsDirty = true;
+                            ApplyKeyRepeatSettings();
+                        }
+                        ImGui::SameLine();
+                        HelpMarker(trc("inputs.tooltip.modifiers_interrupt_key_repeat"));
+                    }
 
                     ImGui::Text(trc("inputs.key_repeat_start_delay"));
                     ImGui::SetNextItemWidth(600);

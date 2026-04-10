@@ -2240,6 +2240,9 @@ static bool RetargetLocalKeyRepeatAliasSource(DWORD rawVk, UINT scanCodeWithFlag
     if (!IsNonCharKeyVk(rawVk)) {
         return false;
     }
+    if (IsModifierVk(rawVk)) {
+        return false;
+    }
     if (s_localKeyRepeatHeldKeys.size() != 1) {
         return false;
     }
@@ -2436,6 +2439,13 @@ static InputHandlerResult HandleLocalKeyRepeat(HWND hWnd, UINT uMsg, WPARAM wPar
         }
 
         if (RetargetLocalKeyRepeatAliasSource(rawVk, GetScanCodeWithExtendedFlagFromLParam(lParam), uMsg == WM_SYSKEYDOWN, lParam)) {
+            return { false, 0 };
+        }
+
+        if (IsModifierVk(rawVk) && !g_config.modifiersInterruptKeyRepeat) {
+            if (IsLocalRepeatDebugEnabled()) {
+                Log("[LocalRepeat] allow modifier keydown without taking repeat ownership rawVk=" + std::to_string(rawVk));
+            }
             return { false, 0 };
         }
 

@@ -62,6 +62,8 @@ const auto& GetTestCaseDefinitions() {
         {"key-repeat-runtime-autohotkey-retained-numpad-scan", &RunKeyRepeatRuntimeAutohotkeyRetainedNumpadScanTest},
         {"key-repeat-runtime-autohotkey-numpadclear-char-override", &RunKeyRepeatRuntimeAutohotkeyNumpadClearCharOverrideTest},
         {"key-repeat-runtime-autohotkey-typing-then-clear-alias", &RunKeyRepeatRuntimeAutohotkeyTypingThenClearAliasTest},
+        {"key-repeat-runtime-modifiers-do-not-interrupt-by-default", &RunKeyRepeatRuntimeModifiersDoNotInterruptByDefaultTest},
+        {"key-repeat-runtime-modifiers-interrupt-when-enabled", &RunKeyRepeatRuntimeModifiersInterruptWhenEnabledTest},
         {"key-rebind-runtime-full-forwarding", &RunKeyRebindRuntimeFullForwardingTest},
         {"key-rebind-runtime-split-vk-output", &RunKeyRebindRuntimeSplitVkOutputTest},
         {"key-rebind-runtime-split-unicode-output", &RunKeyRebindRuntimeSplitUnicodeOutputTest},

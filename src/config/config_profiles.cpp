@@ -502,6 +502,7 @@ void ApplyProfileFields(const Config& src, Config& dst, const ProfileSectionSele
         dst.mouseSensitivity = src.mouseSensitivity;
         dst.windowsMouseSpeed = src.windowsMouseSpeed;
         dst.useSystemKeyRepeat = src.useSystemKeyRepeat;
+        dst.modifiersInterruptKeyRepeat = src.modifiersInterruptKeyRepeat;
         dst.keyRepeatStartDelay = src.keyRepeatStartDelay;
         dst.keyRepeatDelay = src.keyRepeatDelay;
     }

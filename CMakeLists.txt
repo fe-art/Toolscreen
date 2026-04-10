@@ -979,6 +979,8 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     key-repeat-runtime-autohotkey-retained-numpad-scan
     key-repeat-runtime-autohotkey-numpadclear-char-override
     key-repeat-runtime-autohotkey-typing-then-clear-alias
+    key-repeat-runtime-modifiers-do-not-interrupt-by-default
+    key-repeat-runtime-modifiers-interrupt-when-enabled
     key-rebind-runtime-full-forwarding
     key-rebind-runtime-split-vk-output
     key-rebind-runtime-split-unicode-output

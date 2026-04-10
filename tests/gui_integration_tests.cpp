@@ -1583,6 +1583,7 @@ void PopulateRichConfigFixture() {
     g_config.limitCaptureFramerate = false;
     g_config.obsFramerate = 73;
     g_config.useSystemKeyRepeat = true;
+    g_config.modifiersInterruptKeyRepeat = true;
     g_config.keyRepeatStartDelay = 275;
     g_config.keyRepeatDelay = 42;
     g_config.basicModeEnabled = false;
@@ -2020,6 +2021,7 @@ void VerifyRichGlobalSettings() {
     Expect(!g_config.limitCaptureFramerate, "Expected limitCaptureFramerate to roundtrip.");
     Expect(g_config.obsFramerate == 73, "Expected obsFramerate to roundtrip.");
     Expect(g_config.useSystemKeyRepeat, "Expected useSystemKeyRepeat to roundtrip.");
+    Expect(g_config.modifiersInterruptKeyRepeat, "Expected modifiersInterruptKeyRepeat to roundtrip.");
     Expect(g_config.keyRepeatStartDelay == 275, "Expected keyRepeatStartDelay to roundtrip.");
     Expect(g_config.keyRepeatDelay == 42, "Expected keyRepeatDelay to roundtrip.");
     Expect(!g_config.basicModeEnabled, "Expected basicModeEnabled to roundtrip.");

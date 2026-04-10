@@ -16,6 +16,7 @@ restoreWindowedModeOnFullscreenExit = true
 disableFullscreenPrompt = false
 disableConfigurePrompt = false
 useSystemKeyRepeat = false
+modifiersInterruptKeyRepeat = false
 keyRepeatDelay = -1
 keyRepeatStartDelay = -1
 mouseSensitivity = 1.0

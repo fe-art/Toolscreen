@@ -2133,6 +2133,7 @@ void ConfigToToml(const Config& config, toml::table& out) {
     out.insert("limitCaptureFramerate", config.limitCaptureFramerate);
     out.insert("obsFramerate", config.obsFramerate);
     out.insert("useSystemKeyRepeat", config.useSystemKeyRepeat);
+    out.insert("modifiersInterruptKeyRepeat", config.modifiersInterruptKeyRepeat);
     out.insert("keyRepeatStartDelay", config.keyRepeatStartDelay);
     out.insert("keyRepeatDelay", config.keyRepeatDelay);
     out.insert("basicModeEnabled", config.basicModeEnabled);
@@ -2401,6 +2402,8 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
     config.limitCaptureFramerate = GetOr(tbl, "limitCaptureFramerate", ConfigDefaults::CONFIG_LIMIT_CAPTURE_FRAMERATE);
     config.obsFramerate = ClampObsFramerateConfigValue(GetOr(tbl, "obsFramerate", ConfigDefaults::CONFIG_OBS_FRAMERATE));
     config.useSystemKeyRepeat = GetOr(tbl, "useSystemKeyRepeat", ConfigDefaults::CONFIG_USE_SYSTEM_KEY_REPEAT);
+    config.modifiersInterruptKeyRepeat =
+        GetOr(tbl, "modifiersInterruptKeyRepeat", ConfigDefaults::CONFIG_MODIFIERS_INTERRUPT_KEY_REPEAT);
     config.keyRepeatStartDelay = ClampKeyRepeatConfigValue(GetOr(tbl, "keyRepeatStartDelay", ConfigDefaults::CONFIG_KEY_REPEAT_START_DELAY));
     config.keyRepeatDelay = ClampKeyRepeatConfigValue(GetOr(tbl, "keyRepeatDelay", ConfigDefaults::CONFIG_KEY_REPEAT_DELAY));
     if (originalConfigVersion < ConfigDefaults::DEFAULT_CONFIG_VERSION) {
@@ -2856,6 +2859,8 @@ const std::vector<std::string>& GetConfigTomlOrderedKeys() {
         "hideAnimationsInGame",
         "limitCaptureFramerate",
         "obsFramerate",
+        "useSystemKeyRepeat",
+        "modifiersInterruptKeyRepeat",
         "keyRepeatStartDelay",
         "keyRepeatDelay",
         "basicModeEnabled",
