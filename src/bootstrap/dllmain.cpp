@@ -654,13 +654,27 @@ bool GetEffectiveKeyRepeatTimings(int& outStartDelayMs, int& outRepeatDelayMs) {
         SaveOriginalKeyRepeatSettings();
     }
 
-    int configuredStartDelay = g_config.keyRepeatStartDelay;
-    int configuredRepeatDelay = g_config.keyRepeatDelay;
+    auto clampKeyRepeatStartDelayValue = [](int value) {
+        if (value < 0) {
+            return -1;
+        }
+        if (value < 100) {
+            return 100;
+        }
 
-    if (configuredStartDelay < -1) configuredStartDelay = -1;
-    if (configuredStartDelay > 300) configuredStartDelay = 300;
-    if (configuredRepeatDelay < -1) configuredRepeatDelay = -1;
-    if (configuredRepeatDelay > 300) configuredRepeatDelay = 300;
+        value = (std::min)(value, 300);
+        return 100 + (((value - 100) + 2) / 5) * 5;
+    };
+
+    auto clampKeyRepeatDelayValue = [](int value) {
+        if (value < 0) {
+            return -1;
+        }
+        return (std::min)(value, 50);
+    };
+
+    int configuredStartDelay = clampKeyRepeatStartDelayValue(g_config.keyRepeatStartDelay);
+    int configuredRepeatDelay = clampKeyRepeatDelayValue(g_config.keyRepeatDelay);
 
     int systemStartDelay = g_originalFilterKeys.iDelayMSec;
     if (systemStartDelay <= 0) {
@@ -689,8 +703,27 @@ void ApplyKeyRepeatSettings() {
 
     if (!g_originalFilterKeysCaptured.load(std::memory_order_acquire)) { SaveOriginalKeyRepeatSettings(); }
 
-    int startDelay = g_config.keyRepeatStartDelay;
-    int repeatDelay = g_config.keyRepeatDelay;
+    auto clampKeyRepeatStartDelayValue = [](int value) {
+        if (value < 0) {
+            return -1;
+        }
+        if (value < 100) {
+            return 100;
+        }
+
+        value = (std::min)(value, 300);
+        return 100 + (((value - 100) + 2) / 5) * 5;
+    };
+
+    auto clampKeyRepeatDelayValue = [](int value) {
+        if (value < 0) {
+            return -1;
+        }
+        return (std::min)(value, 50);
+    };
+
+    int startDelay = clampKeyRepeatStartDelayValue(g_config.keyRepeatStartDelay);
+    int repeatDelay = clampKeyRepeatDelayValue(g_config.keyRepeatDelay);
 
     if (startDelay == -1 && repeatDelay == -1) {
         if (g_filterKeysApplied.load()) {
@@ -701,11 +734,6 @@ void ApplyKeyRepeatSettings() {
         }
         return;
     }
-
-    if (startDelay < -1) startDelay = -1;
-    if (startDelay > 300) startDelay = 300;
-    if (repeatDelay < -1) repeatDelay = -1;
-    if (repeatDelay > 300) repeatDelay = 300;
 
     FILTERKEYS fk = { sizeof(FILTERKEYS) };
     fk.dwFlags = FKF_FILTERKEYSON;

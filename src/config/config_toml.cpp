@@ -2112,8 +2112,23 @@ static int ClampObsFramerateConfigValue(int value) {
     return value;
 }
 
-static int ClampKeyRepeatConfigValue(int value) {
-    return std::clamp(value, -1, 300);
+static int ClampKeyRepeatStartDelayConfigValue(int value) {
+    if (value < 0) {
+        return -1;
+    }
+    if (value < 100) {
+        return 100;
+    }
+
+    value = (std::min)(value, 300);
+    return 100 + (((value - 100) + 2) / 5) * 5;
+}
+
+static int ClampKeyRepeatDelayConfigValue(int value) {
+    if (value < 0) {
+        return -1;
+    }
+    return (std::min)(value, 50);
 }
 
 void ConfigToToml(const Config& config, toml::table& out) {
@@ -2134,8 +2149,8 @@ void ConfigToToml(const Config& config, toml::table& out) {
     out.insert("obsFramerate", config.obsFramerate);
     out.insert("useSystemKeyRepeat", config.useSystemKeyRepeat);
     out.insert("modifiersInterruptKeyRepeat", config.modifiersInterruptKeyRepeat);
-    out.insert("keyRepeatStartDelay", config.keyRepeatStartDelay);
-    out.insert("keyRepeatDelay", config.keyRepeatDelay);
+    out.insert("keyRepeatStartDelay", ClampKeyRepeatStartDelayConfigValue(config.keyRepeatStartDelay));
+    out.insert("keyRepeatDelay", ClampKeyRepeatDelayConfigValue(config.keyRepeatDelay));
     out.insert("basicModeEnabled", config.basicModeEnabled);
     out.insert("restoreWindowedModeOnFullscreenExit", config.restoreWindowedModeOnFullscreenExit);
     out.insert("disableFullscreenPrompt", config.disableFullscreenPrompt);
@@ -2404,12 +2419,14 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
     config.useSystemKeyRepeat = GetOr(tbl, "useSystemKeyRepeat", ConfigDefaults::CONFIG_USE_SYSTEM_KEY_REPEAT);
     config.modifiersInterruptKeyRepeat =
         GetOr(tbl, "modifiersInterruptKeyRepeat", ConfigDefaults::CONFIG_MODIFIERS_INTERRUPT_KEY_REPEAT);
-    config.keyRepeatStartDelay = ClampKeyRepeatConfigValue(GetOr(tbl, "keyRepeatStartDelay", ConfigDefaults::CONFIG_KEY_REPEAT_START_DELAY));
-    config.keyRepeatDelay = ClampKeyRepeatConfigValue(GetOr(tbl, "keyRepeatDelay", ConfigDefaults::CONFIG_KEY_REPEAT_DELAY));
+    int keyRepeatStartDelay = GetOr(tbl, "keyRepeatStartDelay", ConfigDefaults::CONFIG_KEY_REPEAT_START_DELAY);
+    int keyRepeatDelay = GetOr(tbl, "keyRepeatDelay", ConfigDefaults::CONFIG_KEY_REPEAT_DELAY);
     if (originalConfigVersion < ConfigDefaults::DEFAULT_CONFIG_VERSION) {
-        if (config.keyRepeatStartDelay == 0) { config.keyRepeatStartDelay = ConfigDefaults::CONFIG_KEY_REPEAT_START_DELAY; }
-        if (config.keyRepeatDelay == 0) { config.keyRepeatDelay = ConfigDefaults::CONFIG_KEY_REPEAT_DELAY; }
+        if (keyRepeatStartDelay == 0) { keyRepeatStartDelay = ConfigDefaults::CONFIG_KEY_REPEAT_START_DELAY; }
+        if (keyRepeatDelay == 0) { keyRepeatDelay = ConfigDefaults::CONFIG_KEY_REPEAT_DELAY; }
     }
+    config.keyRepeatStartDelay = ClampKeyRepeatStartDelayConfigValue(keyRepeatStartDelay);
+    config.keyRepeatDelay = ClampKeyRepeatDelayConfigValue(keyRepeatDelay);
     config.basicModeEnabled = GetOr(tbl, "basicModeEnabled", ConfigDefaults::CONFIG_BASIC_MODE_ENABLED);
     config.restoreWindowedModeOnFullscreenExit =
         GetOr(tbl, "restoreWindowedModeOnFullscreenExit", ConfigDefaults::CONFIG_RESTORE_WINDOWED_MODE_ON_FULLSCREEN_EXIT);

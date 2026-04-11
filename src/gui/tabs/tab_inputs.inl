@@ -323,10 +323,32 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                         HelpMarker(trc("inputs.tooltip.modifiers_interrupt_key_repeat"));
                     }
 
+                    auto clampKeyRepeatStartDelayValue = [](int value) {
+                        if (value < 0) {
+                            return -1;
+                        }
+                        if (value < 100) {
+                            return 100;
+                        }
+
+                        value = (std::min)(value, 300);
+                        return 100 + (((value - 100) + 2) / 5) * 5;
+                    };
+
+                    auto clampKeyRepeatDelayValue = [](int value) {
+                        if (value < 0) {
+                            return -1;
+                        }
+                        return (std::min)(value, 50);
+                    };
+
                     ImGui::Text(trc("inputs.key_repeat_start_delay"));
                     ImGui::SetNextItemWidth(600);
-                    int startDelayValue = g_config.keyRepeatStartDelay;
-                    if (ImGui::SliderInt("##keyRepeatStartDelay", &startDelayValue, -1, 300, startDelayValue == -1 ? trc("label.auto") : "%d ms")) {
+                    int startDelayValue = clampKeyRepeatStartDelayValue(g_config.keyRepeatStartDelay);
+                    if (ImGui::SliderIntDoubleClickInput("##keyRepeatStartDelay", &startDelayValue, -1, 300,
+                                                         startDelayValue == -1 ? trc("label.auto") : "%d ms",
+                                                         ImGuiSliderFlags_AlwaysClamp)) {
+                        startDelayValue = clampKeyRepeatStartDelayValue(startDelayValue);
                         g_config.keyRepeatStartDelay = startDelayValue;
                         g_configIsDirty = true;
                         ApplyKeyRepeatSettings();
@@ -336,8 +358,11 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
 
                     ImGui::Text(trc("inputs.key_repeat_delay"));
                     ImGui::SetNextItemWidth(600);
-                    int repeatDelayValue = g_config.keyRepeatDelay;
-                    if (ImGui::SliderInt("##keyRepeatDelay", &repeatDelayValue, -1, 300, repeatDelayValue == -1 ? trc("label.auto") : "%d ms")) {
+                    int repeatDelayValue = clampKeyRepeatDelayValue(g_config.keyRepeatDelay);
+                    if (ImGui::SliderIntDoubleClickInput("##keyRepeatDelay", &repeatDelayValue, -1, 50,
+                                                         repeatDelayValue == -1 ? trc("label.auto") : "%d ms",
+                                                         ImGuiSliderFlags_AlwaysClamp)) {
+                        repeatDelayValue = clampKeyRepeatDelayValue(repeatDelayValue);
                         g_config.keyRepeatDelay = repeatDelayValue;
                         g_configIsDirty = true;
                         ApplyKeyRepeatSettings();
@@ -1860,16 +1885,14 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                             return true;
                         }();
                         const bool showRebindInfo = hasConfigured && !isNoOp;
-
                         DWORD triggerVK = (showRebindInfo && !disabledOutput) ? resolveTriggerVkFor(rb, vk) : vk;
                         DWORD outScan = (showRebindInfo && !disabledOutput) ? resolveTriggerScanFor(rb, vk) : 0;
-
                         const std::string primaryText = disabledOutput
-                                                                                                                        ? std::string(layoutNoneLabel)
+                                                            ? std::string(layoutNoneLabel)
                                                             : (showRebindInfo ? keyboardLayoutIndicatorText(typesValueForDisplay(rb, vk))
                                                                               : std::string(label));
                         const std::string secondaryText = (showRebindInfo && !disabledOutput)
-                                                                                                                            ? ((triggerVK == 0) ? std::string(layoutNoneLabel)
+                                                              ? ((triggerVK == 0) ? std::string(layoutNoneLabel)
                                                                                   : normalizeMouseButtonLabel(scanCodeToDisplayName(outScan, triggerVK)))
                                                               : std::string();
                         const bool showShiftLayerText = showRebindInfo && !disabledOutput && hasShiftLayerOverride(rb, vk);
