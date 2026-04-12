@@ -149,7 +149,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: toolscreen-signpath-dll-input
-          compression-level: 0
+          compression-level: 6
           if-no-files-found: error
           retention-days: 1
           path: ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/Toolscreen.dll
@@ -250,7 +250,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: toolscreen-signpath-main-installer-jar-input
-          compression-level: 0
+          compression-level: 6
           if-no-files-found: error
           retention-days: 1
           path: ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/Toolscreen-*-double-click-me.jar
@@ -291,7 +291,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: toolscreen-signpath-installer-exe-input
-          compression-level: 0
+          compression-level: 6
           if-no-files-found: error
           retention-days: 1
           path: ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/Toolscreen-*-double-click-me.exe
@@ -332,7 +332,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: toolscreen-signpath-downloader-exe-input
-          compression-level: 0
+          compression-level: 6
           if-no-files-found: error
           retention-days: 1
           path: ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/toolscreen-downloader.exe
@@ -427,7 +427,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: toolscreen-signed-release-artifacts
-          compression-level: 0
+          compression-level: 6
           if-no-files-found: error
           retention-days: 14
           path: |
@@ -444,7 +444,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: toolscreen-final-signed-jar
-          compression-level: 0
+          compression-level: 6
           if-no-files-found: error
           retention-days: 14
           path: ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/Toolscreen-*-double-click-me-not-legal-for-speedruns.jar

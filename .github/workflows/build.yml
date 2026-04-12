@@ -128,10 +128,9 @@ jobs:
         shell: pwsh
         run: |
           $prebuiltLoggerDllPath = (Resolve-Path 'out/prebuilt-liblogger/liblogger_x64.dll').Path
-          $prebuiltLoggerPdbPath = (Resolve-Path 'out/prebuilt-liblogger/liblogger_x64.pdb').Path
           $packagingEnabled = if ($env:TOOLSCREEN_FULL_BUILD -eq 'true') { 'ON' } else { 'OFF' }
 
-          cmake --preset ci-ninja-x64 -DTOOLSCREEN_ENABLE_JAR_PACKAGING="$packagingEnabled" -DTOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH="$prebuiltLoggerDllPath" -DTOOLSCREEN_PREBUILT_LIBLOGGER_PDB_PATH="$prebuiltLoggerPdbPath"
+          cmake --preset ci-ninja-x64 -DTOOLSCREEN_ENABLE_JAR_PACKAGING="$packagingEnabled" -DTOOLSCREEN_ENABLE_EXE_PACKAGING=OFF -DTOOLSCREEN_BUILD_DOWNLOADER_ARTIFACTS=OFF -DTOOLSCREEN_STAGE_LIBLOGGER_PDB=OFF -DTOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH="$prebuiltLoggerDllPath"
 
       - name: Build DLLs and CLI integration test runner
         shell: pwsh
@@ -144,20 +143,6 @@ jobs:
       - name: Run fast CTest smoke tests
         shell: pwsh
         run: ctest --preset ci-release --tests-regex "^(toolscreen_artifact_exists|liblogger_artifact_exists)$"
-
-      - name: Prepare EXE packaging inputs
-        if: ${{ env.TOOLSCREEN_FULL_BUILD == 'true' }}
-        shell: pwsh
-        run: cmake --build --preset ci-release --parallel --target toolscreen_prepare_easyinject_exe_inputs
-
-      - name: Reconfigure packaging preset
-        if: ${{ env.TOOLSCREEN_FULL_BUILD == 'true' }}
-        shell: pwsh
-        run: |
-          $prebuiltLoggerDllPath = (Resolve-Path 'out/prebuilt-liblogger/liblogger_x64.dll').Path
-          $prebuiltLoggerPdbPath = (Resolve-Path 'out/prebuilt-liblogger/liblogger_x64.pdb').Path
-
-          cmake --preset ci-ninja-x64 -DTOOLSCREEN_ENABLE_JAR_PACKAGING=ON -DTOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH="$prebuiltLoggerDllPath" -DTOOLSCREEN_PREBUILT_LIBLOGGER_PDB_PATH="$prebuiltLoggerPdbPath"
 
       - name: Remove stale packaged artifacts
         if: ${{ env.TOOLSCREEN_FULL_BUILD == 'true' }}
@@ -177,20 +162,52 @@ jobs:
             Get-ChildItem -Path $outputDir -File -Filter $pattern -ErrorAction SilentlyContinue | Remove-Item -Force
           }
 
-      - name: Build installer EXE package
-        if: ${{ env.TOOLSCREEN_FULL_BUILD == 'true' }}
-        shell: pwsh
-        run: cmake --build --preset ci-release --parallel --target installer_exe
-
-      - name: Build downloader EXE package
-        if: ${{ env.TOOLSCREEN_FULL_BUILD == 'true' }}
-        shell: pwsh
-        run: cmake --build --preset ci-release --parallel --target downloader_exe
-
       - name: Build JAR package
         if: ${{ env.TOOLSCREEN_FULL_BUILD == 'true' }}
         shell: pwsh
         run: cmake --build --preset ci-release --parallel --target jar
+
+      - name: Strip private symbols from unsigned PDB
+        if: ${{ env.TOOLSCREEN_FULL_BUILD == 'true' }}
+        shell: pwsh
+        run: |
+          $artifactDir = Join-Path $env:GITHUB_WORKSPACE $env:TOOLSCREEN_ARTIFACT_DIR
+          $pdbPath = Join-Path $artifactDir 'Toolscreen.pdb'
+
+          if (-not (Test-Path $pdbPath)) {
+            throw "Expected unsigned Toolscreen PDB not found: $pdbPath"
+          }
+
+          $pdbCopyCommand = Get-Command pdbcopy.exe -ErrorAction SilentlyContinue
+          $pdbCopyPath = if ($pdbCopyCommand) {
+            $pdbCopyCommand.Path
+          } else {
+            Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits" -Recurse -Filter pdbcopy.exe -ErrorAction SilentlyContinue |
+              Select-Object -First 1 -ExpandProperty FullName
+          }
+
+          if (-not $pdbCopyPath) {
+            Write-Warning 'pdbcopy.exe not found; keeping the full Toolscreen.pdb for this unsigned build.'
+            return
+          }
+
+          $temporaryDirectory = Join-Path $env:RUNNER_TEMP 'toolscreen-pdbcopy'
+          $strippedPdbPath = Join-Path $temporaryDirectory 'Toolscreen.pdb'
+          New-Item -ItemType Directory -Force -Path $temporaryDirectory | Out-Null
+          Remove-Item -Path $strippedPdbPath -Force -ErrorAction SilentlyContinue
+
+          $beforeSizeBytes = (Get-Item $pdbPath).Length
+          & $pdbCopyPath $pdbPath $strippedPdbPath -p
+
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $strippedPdbPath)) {
+            throw "Failed to strip private symbols from $pdbPath using $pdbCopyPath"
+          }
+
+          Remove-Item -Path $pdbPath -Force
+          Move-Item -Path $strippedPdbPath -Destination $pdbPath
+
+          $afterSizeBytes = (Get-Item $pdbPath).Length
+          Write-Host ('Reduced Toolscreen.pdb from {0} MiB to {1} MiB using PDBCopy.' -f [math]::Round($beforeSizeBytes / 1MB, 2), [math]::Round($afterSizeBytes / 1MB, 2))
 
       - name: Validate PE metadata
         if: ${{ env.TOOLSCREEN_FULL_BUILD == 'true' }}
@@ -231,11 +248,7 @@ jobs:
             Join-Path $outputDir 'Toolscreen.dll'
             Join-Path $outputDir 'Toolscreen.pdb'
             Join-Path $outputDir 'liblogger_x64.dll'
-            Join-Path $outputDir 'liblogger_x64.pdb'
             Get-SingleArtifactPath 'Toolscreen-*-double-click-me.jar' 'main installer jar'
-            Get-SingleArtifactPath 'Toolscreen-*-double-click-me.exe' 'main installer exe'
-            Join-Path $outputDir 'toolscreen-downloader.jar'
-            Join-Path $outputDir 'toolscreen-downloader.exe'
           )
 
           foreach ($filePath in $filesToRename) {
@@ -253,18 +266,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: toolscreen-unsigned-artifacts
-          compression-level: 0
+          compression-level: 6
           if-no-files-found: error
           retention-days: 7
           path: |
             ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/Toolscreen-not-legal-for-speedruns.dll
             ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/Toolscreen-not-legal-for-speedruns.pdb
             ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/liblogger_x64-not-legal-for-speedruns.dll
-            ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/liblogger_x64-not-legal-for-speedruns.pdb
             ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/Toolscreen-*-double-click-me-not-legal-for-speedruns.jar
-            ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/Toolscreen-*-double-click-me-not-legal-for-speedruns.exe
-            ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/toolscreen-downloader-not-legal-for-speedruns.jar
-            ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/toolscreen-downloader-not-legal-for-speedruns.exe
 
       - name: Publish unsigned artifacts to GitHub release
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
@@ -299,16 +308,10 @@ jobs:
           $assets = @(
             (Join-Path $artifactDir 'Toolscreen-not-legal-for-speedruns.dll'),
             (Join-Path $artifactDir 'Toolscreen-not-legal-for-speedruns.pdb'),
-            (Join-Path $artifactDir 'liblogger_x64-not-legal-for-speedruns.dll'),
-            (Join-Path $artifactDir 'liblogger_x64-not-legal-for-speedruns.pdb')
+            (Join-Path $artifactDir 'liblogger_x64-not-legal-for-speedruns.dll')
           )
 
           $assets += (Get-ChildItem $artifactDir -File -Filter 'Toolscreen-*-double-click-me-not-legal-for-speedruns.jar').FullName
-          $assets += (Get-ChildItem $artifactDir -File -Filter 'Toolscreen-*-double-click-me-not-legal-for-speedruns.exe').FullName
-          $assets += @(
-            (Join-Path $artifactDir 'toolscreen-downloader-not-legal-for-speedruns.jar'),
-            (Join-Path $artifactDir 'toolscreen-downloader-not-legal-for-speedruns.exe')
-          )
 
           gh release upload $tag -R $repo --clobber $assets
 

@@ -42,8 +42,11 @@ if(NOT WIN32)
 endif()
 
 option(TOOLSCREEN_ENABLE_JAR_PACKAGING "Enable the EasyInjectBundled jar packaging target." ON)
+option(TOOLSCREEN_ENABLE_EXE_PACKAGING "Enable the EasyInjectBundled EXE packaging targets." ON)
+option(TOOLSCREEN_BUILD_DOWNLOADER_ARTIFACTS "Build the downloader jar and downloader EXE artifacts." ON)
 option(TOOLSCREEN_ENABLE_NINJABRAIN_API_MANUAL_TESTS "Enable the manual-only Ninjabrain API integration test target." OFF)
 option(TOOLSCREEN_USE_SCCACHE_FRIENDLY_DEBUG_INFO "Use /Z7 instead of /Zi for MSVC release-style builds so compiler launcher caches can hit." OFF)
+option(TOOLSCREEN_STAGE_LIBLOGGER_PDB "Stage the liblogger PDB into the build output directory." ON)
 set(TOOLSCREEN_PACKAGING_DLL_PATH "" CACHE FILEPATH "Optional override DLL path used for jar and EXE packaging inputs")
 set(TOOLSCREEN_PACKAGING_LIBLOGGER_PATH "" CACHE FILEPATH "Optional override liblogger DLL path used for jar and EXE packaging inputs")
 set(TOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH "" CACHE FILEPATH "Path to the signed prebuilt liblogger DLL to stage into build outputs")
@@ -427,7 +430,7 @@ else()
 
     file(GENERATE
         OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/cmake/stage_prebuilt_liblogger_$<CONFIG>.cmake"
-        CONTENT "set(SOURCE_DLL \"${TOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH}\")\nset(SOURCE_PDB \"${TOOLSCREEN_PREBUILT_LIBLOGGER_PDB_PATH}\")\nset(SOURCE_DIR \"${TOOLSCREEN_PREBUILT_LIBLOGGER_DIR}\")\nset(FETCH_SCRIPT \"${TOOLSCREEN_FETCH_LIBLOGGER_SCRIPT_PATH}\")\nset(DEST_DLL \"${TOOLSCREEN_LIBLOGGER_ARTIFACT_DLL_PATH}\")\nset(DEST_PDB \"${TOOLSCREEN_LIBLOGGER_ARTIFACT_PDB_PATH}\")\nget_filename_component(DEST_DIR \"\${DEST_DLL}\" DIRECTORY)\nfile(MAKE_DIRECTORY \"\${DEST_DIR}\")\nif((NOT EXISTS \"\${SOURCE_DLL}\") OR (NOT EXISTS \"\${SOURCE_PDB}\"))\n  if(NOT EXISTS \"\${FETCH_SCRIPT}\")\n    message(FATAL_ERROR \"Missing liblogger fetch script at '\${FETCH_SCRIPT}'\")\n  endif()\n  execute_process(COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File \"\${FETCH_SCRIPT}\" -DestinationDirectory \"\${SOURCE_DIR}\" RESULT_VARIABLE FETCH_RESULT)\n  if(NOT FETCH_RESULT EQUAL 0)\n    message(FATAL_ERROR \"Failed to download signed liblogger artifacts into '\${SOURCE_DIR}'\")\n  endif()\nendif()\nif(NOT EXISTS \"\${SOURCE_DLL}\")\n  message(FATAL_ERROR \"Expected prebuilt liblogger DLL at '\${SOURCE_DLL}'\")\nendif()\nif(NOT EXISTS \"\${SOURCE_PDB}\")\n  message(FATAL_ERROR \"Expected prebuilt liblogger PDB at '\${SOURCE_PDB}'\")\nendif()\nexecute_process(COMMAND \"${CMAKE_COMMAND}\" -E copy_if_different \"\${SOURCE_DLL}\" \"\${DEST_DLL}\" RESULT_VARIABLE COPY_DLL_RESULT)\nif(NOT COPY_DLL_RESULT EQUAL 0)\n  message(FATAL_ERROR \"Failed to stage prebuilt liblogger DLL from '\${SOURCE_DLL}' to '\${DEST_DLL}'\")\nendif()\nexecute_process(COMMAND \"${CMAKE_COMMAND}\" -E copy_if_different \"\${SOURCE_PDB}\" \"\${DEST_PDB}\" RESULT_VARIABLE COPY_PDB_RESULT)\nif(NOT COPY_PDB_RESULT EQUAL 0)\n  message(FATAL_ERROR \"Failed to stage prebuilt liblogger PDB from '\${SOURCE_PDB}' to '\${DEST_PDB}'\")\nendif()\n"
+        CONTENT "set(SOURCE_DLL \"${TOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH}\")\nset(SOURCE_PDB \"${TOOLSCREEN_PREBUILT_LIBLOGGER_PDB_PATH}\")\nset(SOURCE_DIR \"${TOOLSCREEN_PREBUILT_LIBLOGGER_DIR}\")\nset(FETCH_SCRIPT \"${TOOLSCREEN_FETCH_LIBLOGGER_SCRIPT_PATH}\")\nset(DEST_DLL \"${TOOLSCREEN_LIBLOGGER_ARTIFACT_DLL_PATH}\")\nset(DEST_PDB \"${TOOLSCREEN_LIBLOGGER_ARTIFACT_PDB_PATH}\")\nset(STAGE_PDB \"${TOOLSCREEN_STAGE_LIBLOGGER_PDB}\")\nget_filename_component(DEST_DIR \"\${DEST_DLL}\" DIRECTORY)\nfile(MAKE_DIRECTORY \"\${DEST_DIR}\")\nif((NOT EXISTS \"\${SOURCE_DLL}\") OR (STAGE_PDB AND NOT EXISTS \"\${SOURCE_PDB}\"))\n  if(NOT EXISTS \"\${FETCH_SCRIPT}\")\n    message(FATAL_ERROR \"Missing liblogger fetch script at '\${FETCH_SCRIPT}'\")\n  endif()\n  execute_process(COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File \"\${FETCH_SCRIPT}\" -DestinationDirectory \"\${SOURCE_DIR}\" RESULT_VARIABLE FETCH_RESULT)\n  if(NOT FETCH_RESULT EQUAL 0)\n    message(FATAL_ERROR \"Failed to download signed liblogger artifacts into '\${SOURCE_DIR}'\")\n  endif()\nendif()\nif(NOT EXISTS \"\${SOURCE_DLL}\")\n  message(FATAL_ERROR \"Expected prebuilt liblogger DLL at '\${SOURCE_DLL}'\")\nendif()\nexecute_process(COMMAND \"${CMAKE_COMMAND}\" -E copy_if_different \"\${SOURCE_DLL}\" \"\${DEST_DLL}\" RESULT_VARIABLE COPY_DLL_RESULT)\nif(NOT COPY_DLL_RESULT EQUAL 0)\n  message(FATAL_ERROR \"Failed to stage prebuilt liblogger DLL from '\${SOURCE_DLL}' to '\${DEST_DLL}'\")\nendif()\nif(STAGE_PDB)\n  if(NOT EXISTS \"\${SOURCE_PDB}\")\n    message(FATAL_ERROR \"Expected prebuilt liblogger PDB at '\${SOURCE_PDB}'\")\n  endif()\n  execute_process(COMMAND \"${CMAKE_COMMAND}\" -E copy_if_different \"\${SOURCE_PDB}\" \"\${DEST_PDB}\" RESULT_VARIABLE COPY_PDB_RESULT)\n  if(NOT COPY_PDB_RESULT EQUAL 0)\n    message(FATAL_ERROR \"Failed to stage prebuilt liblogger PDB from '\${SOURCE_PDB}' to '\${DEST_PDB}'\")\n  endif()\nendif()\n"
     )
 
     add_custom_target(toolscreen_stage_liblogger_artifacts
@@ -456,7 +459,7 @@ file(GENERATE
 
 file(GENERATE
     OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/cmake/check_liblogger_artifact_$<CONFIG>.cmake"
-    CONTENT "if(NOT EXISTS \"${TOOLSCREEN_LIBLOGGER_ARTIFACT_DLL_PATH}\")\n  message(FATAL_ERROR \"Expected liblogger DLL at '${TOOLSCREEN_LIBLOGGER_ARTIFACT_DLL_PATH}'\")\nendif()\nif(NOT EXISTS \"${TOOLSCREEN_LIBLOGGER_ARTIFACT_PDB_PATH}\")\n  message(FATAL_ERROR \"Expected liblogger PDB at '${TOOLSCREEN_LIBLOGGER_ARTIFACT_PDB_PATH}'\")\nendif()\n"
+    CONTENT "set(EXPECT_PDB \"${TOOLSCREEN_STAGE_LIBLOGGER_PDB}\")\nif(NOT EXISTS \"${TOOLSCREEN_LIBLOGGER_ARTIFACT_DLL_PATH}\")\n  message(FATAL_ERROR \"Expected liblogger DLL at '${TOOLSCREEN_LIBLOGGER_ARTIFACT_DLL_PATH}'\")\nendif()\nif(EXPECT_PDB AND NOT EXISTS \"${TOOLSCREEN_LIBLOGGER_ARTIFACT_PDB_PATH}\")\n  message(FATAL_ERROR \"Expected liblogger PDB at '${TOOLSCREEN_LIBLOGGER_ARTIFACT_PDB_PATH}'\")\nendif()\n"
 )
 
 add_test(
@@ -572,24 +575,26 @@ if(BUILD_TESTING AND TOOLSCREEN_ENABLE_NINJABRAIN_API_MANUAL_TESTS)
     endforeach()
 endif()
 
-if(TOOLSCREEN_ENABLE_JAR_PACKAGING)
-    find_package(Java COMPONENTS Development REQUIRED)
+if(TOOLSCREEN_ENABLE_JAR_PACKAGING OR TOOLSCREEN_ENABLE_EXE_PACKAGING)
+    if(TOOLSCREEN_ENABLE_JAR_PACKAGING)
+        find_package(Java COMPONENTS Development REQUIRED)
 
-    find_program(TOOLSCREEN_MAVEN_EXECUTABLE NAMES mvn.cmd mvn)
+        find_program(TOOLSCREEN_MAVEN_EXECUTABLE NAMES mvn.cmd mvn)
 
-    if(NOT TOOLSCREEN_MAVEN_EXECUTABLE)
-        FetchContent_Declare(
-            maven
-            URL https://archive.apache.org/dist/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.zip
-            URL_HASH SHA512=8beac8d11ef208f1e2a8df0682b9448a9a363d2ad13ca74af43705549e72e74c9378823bf689287801cbbfc2f6ea9596201d19ccacfdfb682ee8a2ff4c4418ba
-        )
+        if(NOT TOOLSCREEN_MAVEN_EXECUTABLE)
+            FetchContent_Declare(
+                maven
+                URL https://archive.apache.org/dist/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.zip
+                URL_HASH SHA512=8beac8d11ef208f1e2a8df0682b9448a9a363d2ad13ca74af43705549e72e74c9378823bf689287801cbbfc2f6ea9596201d19ccacfdfb682ee8a2ff4c4418ba
+            )
 
-        FetchContent_GetProperties(maven)
-        if(NOT maven_POPULATED)
-            FetchContent_Populate(maven)
+            FetchContent_GetProperties(maven)
+            if(NOT maven_POPULATED)
+                FetchContent_Populate(maven)
+            endif()
+
+            set(TOOLSCREEN_MAVEN_EXECUTABLE "${maven_SOURCE_DIR}/bin/mvn.cmd")
         endif()
-
-        set(TOOLSCREEN_MAVEN_EXECUTABLE "${maven_SOURCE_DIR}/bin/mvn.cmd")
     endif()
 
     FetchContent_Declare(
@@ -609,25 +614,84 @@ if(TOOLSCREEN_ENABLE_JAR_PACKAGING)
     set(TOOLSCREEN_EASYINJECT_BRANDING_PROPERTIES "${easyinjectbundled_SOURCE_DIR}/branding.properties")
     toolscreen_set_brand_version("${TOOLSCREEN_EASYINJECT_BRANDING_PROPERTIES}" "${PROJECT_VERSION}")
 
-    FetchContent_Declare(
-        easyinjectbundled_exe
-        GIT_REPOSITORY https://github.com/jojoe77777/EasyInjectBundled.git
-        GIT_TAG exe
-        GIT_SHALLOW TRUE
-    )
+    set(JAR_NAME "Toolscreen-${PROJECT_VERSION}-double-click-me.jar")
+    set(JAR_OUTPUT "${TOOLSCREEN_ARTIFACT_ROOT}/$<CONFIG>/${JAR_NAME}")
+    set(DOWNLOADER_JAR_NAME "toolscreen-downloader.jar")
+    set(DOWNLOADER_JAR_OUTPUT "${TOOLSCREEN_ARTIFACT_ROOT}/$<CONFIG>/${DOWNLOADER_JAR_NAME}")
+    set(EXE_NAME "Toolscreen-${PROJECT_VERSION}-double-click-me.exe")
+    set(EXE_OUTPUT "${TOOLSCREEN_ARTIFACT_ROOT}/$<CONFIG>/${EXE_NAME}")
+    set(DOWNLOADER_EXE_NAME "toolscreen-downloader.exe")
+    set(DOWNLOADER_EXE_OUTPUT "${TOOLSCREEN_ARTIFACT_ROOT}/$<CONFIG>/${DOWNLOADER_EXE_NAME}")
 
-    FetchContent_GetProperties(easyinjectbundled_exe)
-    if(NOT easyinjectbundled_exe_POPULATED)
-        FetchContent_Populate(easyinjectbundled_exe)
+    set(TOOLSCREEN_PACKAGING_DLL_SOURCE "$<TARGET_FILE:${PROJECT_NAME}>")
+    if(TOOLSCREEN_PACKAGING_DLL_PATH)
+        set(TOOLSCREEN_PACKAGING_DLL_SOURCE "${TOOLSCREEN_PACKAGING_DLL_PATH}")
     endif()
 
-    file(REMOVE "${easyinjectbundled_exe_SOURCE_DIR}/custom-dlls/WebView2Loader.dll")
+    set(TOOLSCREEN_PACKAGING_LOGGER_SOURCE "${TOOLSCREEN_LIBLOGGER_ARTIFACT_DLL_PATH}")
+    if(TOOLSCREEN_PACKAGING_LIBLOGGER_PATH)
+        set(TOOLSCREEN_PACKAGING_LOGGER_SOURCE "${TOOLSCREEN_PACKAGING_LIBLOGGER_PATH}")
+    endif()
 
-    set(TOOLSCREEN_EASYINJECT_EXE_BRANDING_PROPERTIES "${easyinjectbundled_exe_SOURCE_DIR}/branding.properties")
-    toolscreen_set_brand_version("${TOOLSCREEN_EASYINJECT_EXE_BRANDING_PROPERTIES}" "${PROJECT_VERSION}")
-    toolscreen_write_text_file_if_different(
-        "${easyinjectbundled_exe_SOURCE_DIR}/exe/src/embedded_resources.rc.in"
-        [=[#include <winres.h>
+    set(TOOLSCREEN_PACKAGING_DEPENDENCIES ${PROJECT_NAME})
+    if(TOOLSCREEN_LIBLOGGER_BUILD_DEPENDENCY)
+        list(APPEND TOOLSCREEN_PACKAGING_DEPENDENCIES ${TOOLSCREEN_LIBLOGGER_BUILD_DEPENDENCY})
+    endif()
+
+    if(TOOLSCREEN_ENABLE_JAR_PACKAGING)
+        set(TOOLSCREEN_JAR_TARGET_COMMANDS
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${easyinjectbundled_SOURCE_DIR}/custom-dlls"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${easyinjectbundled_SOURCE_DIR}/src/main/resources/dlls"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${TOOLSCREEN_ARTIFACT_ROOT}/$<CONFIG>"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TOOLSCREEN_PACKAGING_DLL_SOURCE}" "${easyinjectbundled_SOURCE_DIR}/custom-dlls/Toolscreen.dll"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TOOLSCREEN_PACKAGING_LOGGER_SOURCE}" "${easyinjectbundled_SOURCE_DIR}/src/main/resources/dlls/liblogger_x64.dll"
+            COMMAND ${CMAKE_COMMAND} -E rm -f "${easyinjectbundled_SOURCE_DIR}/custom-dlls/WebView2Loader.dll"
+            COMMAND ${TOOLSCREEN_MAVEN_EXECUTABLE} -f "${easyinjectbundled_SOURCE_DIR}/pom.xml" clean package -q
+                    -Dbrand.name=Toolscreen
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${easyinjectbundled_SOURCE_DIR}/target/${JAR_NAME}" "${JAR_OUTPUT}"
+        )
+        set(TOOLSCREEN_JAR_TARGET_COMMENT "Building ${JAR_NAME}")
+
+        if(TOOLSCREEN_BUILD_DOWNLOADER_ARTIFACTS)
+            file(GENERATE
+                OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/cmake/copy_toolscreen_downloader_jar_$<CONFIG>.cmake"
+                CONTENT "set(NEW_DOWNLOADER_JAR \"${easyinjectbundled_SOURCE_DIR}/target/${DOWNLOADER_JAR_NAME}\")\nset(TYPO_DOWNLOADER_JAR \"${easyinjectbundled_SOURCE_DIR}/target/tioolscrteen-downloader.jar\")\nset(LEGACY_INSTALLER_JAR \"${easyinjectbundled_SOURCE_DIR}/target/toolscreen-installer.jar\")\nset(DOWNLOADER_JAR_OUTPUT \"${DOWNLOADER_JAR_OUTPUT}\")\nif(EXISTS \"${easyinjectbundled_SOURCE_DIR}/target/${DOWNLOADER_JAR_NAME}\")\n  set(DOWNLOADER_JAR_SOURCE \"${easyinjectbundled_SOURCE_DIR}/target/${DOWNLOADER_JAR_NAME}\")\nelseif(EXISTS \"${easyinjectbundled_SOURCE_DIR}/target/tioolscrteen-downloader.jar\")\n  set(DOWNLOADER_JAR_SOURCE \"${easyinjectbundled_SOURCE_DIR}/target/tioolscrteen-downloader.jar\")\nelseif(EXISTS \"${easyinjectbundled_SOURCE_DIR}/target/toolscreen-installer.jar\")\n  set(DOWNLOADER_JAR_SOURCE \"${easyinjectbundled_SOURCE_DIR}/target/toolscreen-installer.jar\")\nelse()\n  message(FATAL_ERROR \"Expected downloader jar at '${easyinjectbundled_SOURCE_DIR}/target/${DOWNLOADER_JAR_NAME}', typo downloader jar at '${easyinjectbundled_SOURCE_DIR}/target/tioolscrteen-downloader.jar', or legacy installer jar at '${easyinjectbundled_SOURCE_DIR}/target/toolscreen-installer.jar'\")\nendif()\nexecute_process(COMMAND \"${CMAKE_COMMAND}\" -E copy_if_different \"\${DOWNLOADER_JAR_SOURCE}\" \"\${DOWNLOADER_JAR_OUTPUT}\" RESULT_VARIABLE COPY_RESULT)\nif(NOT COPY_RESULT EQUAL 0)\n  message(FATAL_ERROR \"Failed to copy downloader jar from '\${DOWNLOADER_JAR_SOURCE}' to '\${DOWNLOADER_JAR_OUTPUT}'\")\nendif()\n"
+            )
+
+            list(APPEND TOOLSCREEN_JAR_TARGET_COMMANDS
+                COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_BINARY_DIR}/cmake/copy_toolscreen_downloader_jar_$<CONFIG>.cmake"
+            )
+            set(TOOLSCREEN_JAR_TARGET_COMMENT "Building ${JAR_NAME} and ${DOWNLOADER_JAR_NAME}")
+        endif()
+
+        add_custom_target(jar ALL
+            ${TOOLSCREEN_JAR_TARGET_COMMANDS}
+            DEPENDS ${TOOLSCREEN_PACKAGING_DEPENDENCIES}
+            COMMENT "${TOOLSCREEN_JAR_TARGET_COMMENT}"
+            VERBATIM
+        )
+    endif()
+
+    if(TOOLSCREEN_ENABLE_EXE_PACKAGING)
+        FetchContent_Declare(
+            easyinjectbundled_exe
+            GIT_REPOSITORY https://github.com/jojoe77777/EasyInjectBundled.git
+            GIT_TAG exe
+            GIT_SHALLOW TRUE
+        )
+
+        FetchContent_GetProperties(easyinjectbundled_exe)
+        if(NOT easyinjectbundled_exe_POPULATED)
+            FetchContent_Populate(easyinjectbundled_exe)
+        endif()
+
+        file(REMOVE "${easyinjectbundled_exe_SOURCE_DIR}/custom-dlls/WebView2Loader.dll")
+
+        set(TOOLSCREEN_EASYINJECT_EXE_BRANDING_PROPERTIES "${easyinjectbundled_exe_SOURCE_DIR}/branding.properties")
+        toolscreen_set_brand_version("${TOOLSCREEN_EASYINJECT_EXE_BRANDING_PROPERTIES}" "${PROJECT_VERSION}")
+        toolscreen_write_text_file_if_different(
+            "${easyinjectbundled_exe_SOURCE_DIR}/exe/src/embedded_resources.rc.in"
+            [=[#include <winres.h>
 
 1 ICON "@APP_ICON_FILE_RC@"
 
@@ -668,67 +732,61 @@ END
 @DLL_INDEX_RESOURCE_ID@ RCDATA "@EMBED_DLL_INDEX_FILE_RC@"
 @EMBED_DLL_RESOURCE_LINES@
 ]=]
-    )
+        )
 
-    set(JAR_NAME "Toolscreen-${PROJECT_VERSION}-double-click-me.jar")
-    set(JAR_OUTPUT "${TOOLSCREEN_ARTIFACT_ROOT}/$<CONFIG>/${JAR_NAME}")
-    set(DOWNLOADER_JAR_NAME "toolscreen-downloader.jar")
-    set(DOWNLOADER_JAR_OUTPUT "${TOOLSCREEN_ARTIFACT_ROOT}/$<CONFIG>/${DOWNLOADER_JAR_NAME}")
-    set(EXE_NAME "Toolscreen-${PROJECT_VERSION}-double-click-me.exe")
-    set(EXE_OUTPUT "${TOOLSCREEN_ARTIFACT_ROOT}/$<CONFIG>/${EXE_NAME}")
-    set(DOWNLOADER_EXE_NAME "toolscreen-downloader.exe")
-    set(DOWNLOADER_EXE_OUTPUT "${TOOLSCREEN_ARTIFACT_ROOT}/$<CONFIG>/${DOWNLOADER_EXE_NAME}")
+        file(MAKE_DIRECTORY "${easyinjectbundled_exe_SOURCE_DIR}/custom-dlls")
+        add_subdirectory("${easyinjectbundled_exe_SOURCE_DIR}/exe" "${CMAKE_CURRENT_BINARY_DIR}/easyinjectbundled-exe")
+        toolscreen_configure_target_outputs(EasyInjectExe)
 
-    set(TOOLSCREEN_PACKAGING_DLL_SOURCE "$<TARGET_FILE:${PROJECT_NAME}>")
-    if(TOOLSCREEN_PACKAGING_DLL_PATH)
-        set(TOOLSCREEN_PACKAGING_DLL_SOURCE "${TOOLSCREEN_PACKAGING_DLL_PATH}")
-    endif()
+        add_custom_target(toolscreen_prepare_easyinject_exe_inputs
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${easyinjectbundled_exe_SOURCE_DIR}/custom-dlls"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${easyinjectbundled_exe_SOURCE_DIR}/src/main/resources/dlls"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TOOLSCREEN_PACKAGING_DLL_SOURCE}" "${easyinjectbundled_exe_SOURCE_DIR}/custom-dlls/Toolscreen.dll"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TOOLSCREEN_PACKAGING_LOGGER_SOURCE}" "${easyinjectbundled_exe_SOURCE_DIR}/src/main/resources/dlls/liblogger_x64.dll"
+            COMMAND ${CMAKE_COMMAND} -E rm -f "${easyinjectbundled_exe_SOURCE_DIR}/custom-dlls/WebView2Loader.dll"
+            DEPENDS ${TOOLSCREEN_PACKAGING_DEPENDENCIES}
+            COMMENT "Preparing EasyInject exe packaging inputs"
+            VERBATIM
+        )
 
-    set(TOOLSCREEN_PACKAGING_LOGGER_SOURCE "${TOOLSCREEN_LIBLOGGER_ARTIFACT_DLL_PATH}")
-    if(TOOLSCREEN_PACKAGING_LIBLOGGER_PATH)
-        set(TOOLSCREEN_PACKAGING_LOGGER_SOURCE "${TOOLSCREEN_PACKAGING_LIBLOGGER_PATH}")
-    endif()
+        add_dependencies(EasyInjectExe toolscreen_prepare_easyinject_exe_inputs)
 
-    set(TOOLSCREEN_PACKAGING_DEPENDENCIES ${PROJECT_NAME})
-    if(TOOLSCREEN_LIBLOGGER_BUILD_DEPENDENCY)
-        list(APPEND TOOLSCREEN_PACKAGING_DEPENDENCIES ${TOOLSCREEN_LIBLOGGER_BUILD_DEPENDENCY})
-    endif()
+        add_custom_target(installer_exe ALL
+            DEPENDS EasyInjectExe
+            COMMENT "Building ${EXE_NAME}"
+        )
 
-    file(GENERATE
-        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/cmake/copy_toolscreen_downloader_jar_$<CONFIG>.cmake"
-        CONTENT "set(NEW_DOWNLOADER_JAR \"${easyinjectbundled_SOURCE_DIR}/target/${DOWNLOADER_JAR_NAME}\")\nset(TYPO_DOWNLOADER_JAR \"${easyinjectbundled_SOURCE_DIR}/target/tioolscrteen-downloader.jar\")\nset(LEGACY_INSTALLER_JAR \"${easyinjectbundled_SOURCE_DIR}/target/toolscreen-installer.jar\")\nset(DOWNLOADER_JAR_OUTPUT \"${DOWNLOADER_JAR_OUTPUT}\")\nif(EXISTS \"${easyinjectbundled_SOURCE_DIR}/target/${DOWNLOADER_JAR_NAME}\")\n  set(DOWNLOADER_JAR_SOURCE \"${easyinjectbundled_SOURCE_DIR}/target/${DOWNLOADER_JAR_NAME}\")\nelseif(EXISTS \"${easyinjectbundled_SOURCE_DIR}/target/tioolscrteen-downloader.jar\")\n  set(DOWNLOADER_JAR_SOURCE \"${easyinjectbundled_SOURCE_DIR}/target/tioolscrteen-downloader.jar\")\nelseif(EXISTS \"${easyinjectbundled_SOURCE_DIR}/target/toolscreen-installer.jar\")\n  set(DOWNLOADER_JAR_SOURCE \"${easyinjectbundled_SOURCE_DIR}/target/toolscreen-installer.jar\")\nelse()\n  message(FATAL_ERROR \"Expected downloader jar at '${easyinjectbundled_SOURCE_DIR}/target/${DOWNLOADER_JAR_NAME}', typo downloader jar at '${easyinjectbundled_SOURCE_DIR}/target/tioolscrteen-downloader.jar', or legacy installer jar at '${easyinjectbundled_SOURCE_DIR}/target/toolscreen-installer.jar'\")\nendif()\nexecute_process(COMMAND \"${CMAKE_COMMAND}\" -E copy_if_different \"\${DOWNLOADER_JAR_SOURCE}\" \"\${DOWNLOADER_JAR_OUTPUT}\" RESULT_VARIABLE COPY_RESULT)\nif(NOT COPY_RESULT EQUAL 0)\n  message(FATAL_ERROR \"Failed to copy downloader jar from '\${DOWNLOADER_JAR_SOURCE}' to '\${DOWNLOADER_JAR_OUTPUT}'\")\nendif()\n"
-    )
+        file(GENERATE
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/cmake/check_toolscreen_exe_$<CONFIG>.cmake"
+            CONTENT "if(NOT EXISTS \"${EXE_OUTPUT}\")\n  message(FATAL_ERROR \"Expected Toolscreen exe at '${EXE_OUTPUT}'\")\nendif()\n"
+        )
 
-    add_custom_target(jar ALL
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${easyinjectbundled_SOURCE_DIR}/custom-dlls"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${easyinjectbundled_SOURCE_DIR}/src/main/resources/dlls"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${TOOLSCREEN_ARTIFACT_ROOT}/$<CONFIG>"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TOOLSCREEN_PACKAGING_DLL_SOURCE}" "${easyinjectbundled_SOURCE_DIR}/custom-dlls/Toolscreen.dll"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TOOLSCREEN_PACKAGING_LOGGER_SOURCE}" "${easyinjectbundled_SOURCE_DIR}/src/main/resources/dlls/liblogger_x64.dll"
-        COMMAND ${CMAKE_COMMAND} -E rm -f "${easyinjectbundled_SOURCE_DIR}/custom-dlls/WebView2Loader.dll"
-        COMMAND "${TOOLSCREEN_MAVEN_EXECUTABLE}" -f "${easyinjectbundled_SOURCE_DIR}/pom.xml" clean package -q
-                -Dbrand.name=Toolscreen
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${easyinjectbundled_SOURCE_DIR}/target/${JAR_NAME}" "${JAR_OUTPUT}"
-        COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_BINARY_DIR}/cmake/copy_toolscreen_downloader_jar_$<CONFIG>.cmake"
-        DEPENDS ${TOOLSCREEN_PACKAGING_DEPENDENCIES}
-        COMMENT "Building ${JAR_NAME} and ${DOWNLOADER_JAR_NAME}"
-        VERBATIM
-    )
+        file(GENERATE
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/cmake/check_toolscreen_exe_embeds_dll_$<CONFIG>.cmake"
+            CONTENT "set(EMBED_DLL_INDEX_FILE \"${CMAKE_CURRENT_BINARY_DIR}/easyinjectbundled-exe/embedded_dll_index.txt\")\nif(NOT EXISTS \"${CMAKE_CURRENT_BINARY_DIR}/easyinjectbundled-exe/embedded_dll_index.txt\")\n  message(FATAL_ERROR \"Expected EasyInject embedded DLL index at '${CMAKE_CURRENT_BINARY_DIR}/easyinjectbundled-exe/embedded_dll_index.txt'\")\nendif()\nfile(READ \"${CMAKE_CURRENT_BINARY_DIR}/easyinjectbundled-exe/embedded_dll_index.txt\" EMBED_DLL_INDEX_CONTENT)\nif(NOT EMBED_DLL_INDEX_CONTENT MATCHES \"Toolscreen[.]dll\")\n  message(FATAL_ERROR \"Expected EasyInject EXE packaging metadata to embed Toolscreen.dll\")\nendif()\n"
+        )
 
-    file(MAKE_DIRECTORY "${easyinjectbundled_exe_SOURCE_DIR}/custom-dlls")
-    add_subdirectory("${easyinjectbundled_exe_SOURCE_DIR}/exe" "${CMAKE_CURRENT_BINARY_DIR}/easyinjectbundled-exe")
-    toolscreen_configure_target_outputs(EasyInjectExe)
+        add_test(
+            NAME toolscreen_exe_exists
+            COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_BINARY_DIR}/cmake/check_toolscreen_exe_$<CONFIG>.cmake"
+        )
 
-    set(TOOLSCREEN_DOWNLOADER_SOURCE_DIR "${easyinjectbundled_SOURCE_DIR}/toolscreen-installer-exe")
-    if(EXISTS "${easyinjectbundled_SOURCE_DIR}/toolscreen-downloader-exe/CMakeLists.txt")
-        set(TOOLSCREEN_DOWNLOADER_SOURCE_DIR "${easyinjectbundled_SOURCE_DIR}/toolscreen-downloader-exe")
-    elseif(EXISTS "${easyinjectbundled_SOURCE_DIR}/tioolscrteen-downloader-exe/CMakeLists.txt")
-        set(TOOLSCREEN_DOWNLOADER_SOURCE_DIR "${easyinjectbundled_SOURCE_DIR}/tioolscrteen-downloader-exe")
-    endif()
+        add_test(
+            NAME toolscreen_exe_embeds_dll
+            COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_BINARY_DIR}/cmake/check_toolscreen_exe_embeds_dll_$<CONFIG>.cmake"
+        )
 
-    toolscreen_write_text_file_if_different(
-        "${TOOLSCREEN_DOWNLOADER_SOURCE_DIR}/src/app.rc.in"
-        [=[#include <winres.h>
+        if(TOOLSCREEN_BUILD_DOWNLOADER_ARTIFACTS)
+            set(TOOLSCREEN_DOWNLOADER_SOURCE_DIR "${easyinjectbundled_SOURCE_DIR}/toolscreen-installer-exe")
+            if(EXISTS "${easyinjectbundled_SOURCE_DIR}/toolscreen-downloader-exe/CMakeLists.txt")
+                set(TOOLSCREEN_DOWNLOADER_SOURCE_DIR "${easyinjectbundled_SOURCE_DIR}/toolscreen-downloader-exe")
+            elseif(EXISTS "${easyinjectbundled_SOURCE_DIR}/tioolscrteen-downloader-exe/CMakeLists.txt")
+                set(TOOLSCREEN_DOWNLOADER_SOURCE_DIR "${easyinjectbundled_SOURCE_DIR}/tioolscrteen-downloader-exe")
+            endif()
+
+            toolscreen_write_text_file_if_different(
+                "${TOOLSCREEN_DOWNLOADER_SOURCE_DIR}/src/app.rc.in"
+                [=[#include <winres.h>
 
 1 ICON "@APP_ICON_FILE_RC@"
 
@@ -765,95 +823,63 @@ BEGIN
     END
 END
 ]=]
-    )
+            )
 
-    add_subdirectory("${TOOLSCREEN_DOWNLOADER_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/easyinjectbundled-toolscreen-downloader-exe")
+            add_subdirectory("${TOOLSCREEN_DOWNLOADER_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/easyinjectbundled-toolscreen-downloader-exe")
 
-    if(TARGET ToolscreenDownloaderExe)
-        set(TOOLSCREEN_DOWNLOADER_TARGET ToolscreenDownloaderExe)
-    elseif(TARGET TioolscrteenDownloaderExe)
-        set(TOOLSCREEN_DOWNLOADER_TARGET TioolscrteenDownloaderExe)
-    elseif(TARGET ToolscreenInstallerExe)
-        set(TOOLSCREEN_DOWNLOADER_TARGET ToolscreenInstallerExe)
-    else()
-        message(FATAL_ERROR "Could not find the EasyInject downloader executable target after adding ${TOOLSCREEN_DOWNLOADER_SOURCE_DIR}")
+            if(TARGET ToolscreenDownloaderExe)
+                set(TOOLSCREEN_DOWNLOADER_TARGET ToolscreenDownloaderExe)
+            elseif(TARGET TioolscrteenDownloaderExe)
+                set(TOOLSCREEN_DOWNLOADER_TARGET TioolscrteenDownloaderExe)
+            elseif(TARGET ToolscreenInstallerExe)
+                set(TOOLSCREEN_DOWNLOADER_TARGET ToolscreenInstallerExe)
+            else()
+                message(FATAL_ERROR "Could not find the EasyInject downloader executable target after adding ${TOOLSCREEN_DOWNLOADER_SOURCE_DIR}")
+            endif()
+
+            set_target_properties(${TOOLSCREEN_DOWNLOADER_TARGET} PROPERTIES OUTPUT_NAME "toolscreen-downloader")
+            toolscreen_configure_target_outputs(${TOOLSCREEN_DOWNLOADER_TARGET})
+
+            add_custom_target(downloader_exe ALL
+                DEPENDS ${TOOLSCREEN_DOWNLOADER_TARGET}
+                COMMENT "Building ${DOWNLOADER_EXE_NAME}"
+            )
+
+            file(GENERATE
+                OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/cmake/check_toolscreen_downloader_exe_$<CONFIG>.cmake"
+                CONTENT "if(NOT EXISTS \"${DOWNLOADER_EXE_OUTPUT}\")\n  message(FATAL_ERROR \"Expected Toolscreen downloader exe at '${DOWNLOADER_EXE_OUTPUT}'\")\nendif()\n"
+            )
+
+            add_test(
+                NAME toolscreen_downloader_exe_exists
+                COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_BINARY_DIR}/cmake/check_toolscreen_downloader_exe_$<CONFIG>.cmake"
+            )
+        endif()
     endif()
 
-    set_target_properties(${TOOLSCREEN_DOWNLOADER_TARGET} PROPERTIES OUTPUT_NAME "toolscreen-downloader")
-    toolscreen_configure_target_outputs(${TOOLSCREEN_DOWNLOADER_TARGET})
+    if(TOOLSCREEN_ENABLE_JAR_PACKAGING)
+        file(GENERATE
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/cmake/check_toolscreen_jar_$<CONFIG>.cmake"
+            CONTENT "if(NOT EXISTS \"${JAR_OUTPUT}\")\n  message(FATAL_ERROR \"Expected Toolscreen jar at '${JAR_OUTPUT}'\")\nendif()\n"
+        )
 
-    add_custom_target(toolscreen_prepare_easyinject_exe_inputs
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${easyinjectbundled_exe_SOURCE_DIR}/custom-dlls"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${easyinjectbundled_exe_SOURCE_DIR}/src/main/resources/dlls"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TOOLSCREEN_PACKAGING_DLL_SOURCE}" "${easyinjectbundled_exe_SOURCE_DIR}/custom-dlls/Toolscreen.dll"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TOOLSCREEN_PACKAGING_LOGGER_SOURCE}" "${easyinjectbundled_exe_SOURCE_DIR}/src/main/resources/dlls/liblogger_x64.dll"
-        COMMAND ${CMAKE_COMMAND} -E rm -f "${easyinjectbundled_exe_SOURCE_DIR}/custom-dlls/WebView2Loader.dll"
-        DEPENDS ${TOOLSCREEN_PACKAGING_DEPENDENCIES}
-        COMMENT "Preparing EasyInject exe packaging inputs"
-        VERBATIM
-    )
+        add_test(
+            NAME toolscreen_jar_exists
+            COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_BINARY_DIR}/cmake/check_toolscreen_jar_$<CONFIG>.cmake"
+        )
 
-    add_dependencies(EasyInjectExe toolscreen_prepare_easyinject_exe_inputs)
+        if(TOOLSCREEN_BUILD_DOWNLOADER_ARTIFACTS)
+            file(GENERATE
+                OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/cmake/check_toolscreen_downloader_jar_$<CONFIG>.cmake"
+                CONTENT "if(NOT EXISTS \"${DOWNLOADER_JAR_OUTPUT}\")\n  message(FATAL_ERROR \"Expected Toolscreen downloader jar at '${DOWNLOADER_JAR_OUTPUT}'\")\nendif()\n"
+            )
 
-    add_custom_target(installer_exe ALL
-        DEPENDS EasyInjectExe
-        COMMENT "Building ${EXE_NAME}"
-    )
-
-    add_custom_target(downloader_exe ALL
-        DEPENDS ${TOOLSCREEN_DOWNLOADER_TARGET}
-        COMMENT "Building ${DOWNLOADER_EXE_NAME}"
-    )
-
-    file(GENERATE
-        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/cmake/check_toolscreen_jar_$<CONFIG>.cmake"
-        CONTENT "if(NOT EXISTS \"${JAR_OUTPUT}\")\n  message(FATAL_ERROR \"Expected Toolscreen jar at '${JAR_OUTPUT}'\")\nendif()\n"
-    )
-
-    file(GENERATE
-        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/cmake/check_toolscreen_downloader_jar_$<CONFIG>.cmake"
-        CONTENT "if(NOT EXISTS \"${DOWNLOADER_JAR_OUTPUT}\")\n  message(FATAL_ERROR \"Expected Toolscreen downloader jar at '${DOWNLOADER_JAR_OUTPUT}'\")\nendif()\n"
-    )
-
-    file(GENERATE
-        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/cmake/check_toolscreen_exe_$<CONFIG>.cmake"
-        CONTENT "if(NOT EXISTS \"${EXE_OUTPUT}\")\n  message(FATAL_ERROR \"Expected Toolscreen exe at '${EXE_OUTPUT}'\")\nendif()\n"
-    )
-
-    file(GENERATE
-        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/cmake/check_toolscreen_downloader_exe_$<CONFIG>.cmake"
-        CONTENT "if(NOT EXISTS \"${DOWNLOADER_EXE_OUTPUT}\")\n  message(FATAL_ERROR \"Expected Toolscreen downloader exe at '${DOWNLOADER_EXE_OUTPUT}'\")\nendif()\n"
-    )
-
-    file(GENERATE
-        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/cmake/check_toolscreen_exe_embeds_dll_$<CONFIG>.cmake"
-        CONTENT "set(EMBED_DLL_INDEX_FILE \"${CMAKE_CURRENT_BINARY_DIR}/easyinjectbundled-exe/embedded_dll_index.txt\")\nif(NOT EXISTS \"${CMAKE_CURRENT_BINARY_DIR}/easyinjectbundled-exe/embedded_dll_index.txt\")\n  message(FATAL_ERROR \"Expected EasyInject embedded DLL index at '${CMAKE_CURRENT_BINARY_DIR}/easyinjectbundled-exe/embedded_dll_index.txt'\")\nendif()\nfile(READ \"${CMAKE_CURRENT_BINARY_DIR}/easyinjectbundled-exe/embedded_dll_index.txt\" EMBED_DLL_INDEX_CONTENT)\nif(NOT EMBED_DLL_INDEX_CONTENT MATCHES \"Toolscreen[.]dll\")\n  message(FATAL_ERROR \"Expected EasyInject EXE packaging metadata to embed Toolscreen.dll\")\nendif()\n"
-    )
-
-    add_test(
-        NAME toolscreen_jar_exists
-        COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_BINARY_DIR}/cmake/check_toolscreen_jar_$<CONFIG>.cmake"
-    )
-
-    add_test(
-        NAME toolscreen_downloader_jar_exists
-        COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_BINARY_DIR}/cmake/check_toolscreen_downloader_jar_$<CONFIG>.cmake"
-    )
-
-    add_test(
-        NAME toolscreen_exe_exists
-        COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_BINARY_DIR}/cmake/check_toolscreen_exe_$<CONFIG>.cmake"
-    )
-
-    add_test(
-        NAME toolscreen_downloader_exe_exists
-        COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_BINARY_DIR}/cmake/check_toolscreen_downloader_exe_$<CONFIG>.cmake"
-    )
-
-    add_test(
-        NAME toolscreen_exe_embeds_dll
-        COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_BINARY_DIR}/cmake/check_toolscreen_exe_embeds_dll_$<CONFIG>.cmake"
-    )
+            add_test(
+                NAME toolscreen_downloader_jar_exists
+                COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_BINARY_DIR}/cmake/check_toolscreen_downloader_jar_$<CONFIG>.cmake"
+            )
+        endif()
+    endif()
 endif()
 
 set(TOOLSCREEN_GUI_INTEGRATION_SUITE_FILES
