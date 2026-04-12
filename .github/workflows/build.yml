@@ -96,14 +96,10 @@ jobs:
         shell: pwsh
         run: ctest --preset ci-release --tests-regex "^(toolscreen_artifact_exists|liblogger_artifact_exists)$"
 
-      - name: Upload GUI integration test runner
-        uses: actions/upload-artifact@v4
-        with:
-          name: toolscreen-gui-test-runner
-          compression-level: 0
-          if-no-files-found: error
-          retention-days: 1
-          path: ${{ env.TOOLSCREEN_ARTIFACT_DIR }}/toolscreen_gui_integration_tests.exe
+      - name: Run GUI integration tests in parallel
+        shell: pwsh
+        run: |
+          & "$env:GITHUB_WORKSPACE\$env:TOOLSCREEN_ARTIFACT_DIR\toolscreen_gui_integration_tests.exe" --run-groups-parallel
 
       - name: Upload unsigned core artifacts
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
@@ -122,33 +118,6 @@ jobs:
         if: ${{ always() }}
         shell: pwsh
         run: sccache --show-stats
-
-  integration_tests:
-    name: GUI Integration (${{ matrix.test_group }})
-    runs-on: windows-latest
-    needs: build_core
-    strategy:
-      fail-fast: false
-      matrix:
-        test_group:
-          - config
-          - rebind
-          - render
-          - settings-and-ui
-          - logs-and-profiles
-
-    steps:
-      - name: Download GUI integration test runner
-        uses: actions/download-artifact@v4
-        with:
-          name: toolscreen-gui-test-runner
-          path: out/gui-test-runner
-
-      - name: Run GUI integration test group
-        shell: pwsh
-        run: |
-          $runnerPath = (Resolve-Path 'out/gui-test-runner/toolscreen_gui_integration_tests.exe').Path
-          & $runnerPath --run-group '${{ matrix.test_group }}'
 
   package_unsigned_jar:
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
@@ -234,7 +203,6 @@ jobs:
     runs-on: windows-latest
     needs:
       - build_core
-      - integration_tests
       - package_unsigned_jar
     permissions:
       contents: write

@@ -14,6 +14,14 @@ struct ResolvedTestGroupDefinition {
     std::vector<const TestCaseDefinition*> testCases;
 };
 
+struct ParallelTestGroupResult {
+    std::string groupName;
+    DWORD exitCode = 1;
+    std::string stdoutText;
+    std::string stderrText;
+    std::string failureMessage;
+};
+
 const auto& GetTestCaseDefinitions() {
     static const std::vector<TestCaseDefinition> testCases = {
         {"config-default-load", &RunConfigDefaultLoadTest},
@@ -280,8 +288,158 @@ const ResolvedTestGroupDefinition* FindTestGroupDefinition(std::string_view test
     return nullptr;
 }
 
+std::string DescribeWindowsError(const DWORD errorCode) {
+    LPSTR messageBuffer = nullptr;
+    const DWORD messageLength = FormatMessageA(
+        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+        nullptr,
+        errorCode,
+        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+        reinterpret_cast<LPSTR>(&messageBuffer),
+        0,
+        nullptr);
+
+    std::string message;
+    if (messageLength == 0 || messageBuffer == nullptr) {
+        message = "Windows error " + std::to_string(errorCode);
+    } else {
+        message.assign(messageBuffer, messageLength);
+        while (!message.empty() && (message.back() == '\r' || message.back() == '\n')) {
+            message.pop_back();
+        }
+    }
+
+    if (messageBuffer != nullptr) {
+        LocalFree(messageBuffer);
+    }
+
+    return message;
+}
+
+std::wstring GetCurrentExecutablePath() {
+    std::wstring executablePath(MAX_PATH, L'\0');
+
+    while (true) {
+        const DWORD copiedLength = GetModuleFileNameW(nullptr, executablePath.data(), static_cast<DWORD>(executablePath.size()));
+        if (copiedLength == 0) {
+            throw std::runtime_error("Failed to query current executable path: " + DescribeWindowsError(GetLastError()));
+        }
+
+        if (copiedLength < executablePath.size() - 1) {
+            executablePath.resize(copiedLength);
+            return executablePath;
+        }
+
+        executablePath.resize(executablePath.size() * 2);
+    }
+}
+
+std::string ReadTextFileIfExists(const std::filesystem::path& filePath) {
+    std::ifstream stream(filePath, std::ios::binary);
+    if (!stream.is_open()) {
+        return {};
+    }
+
+    return std::string(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
+}
+
+ParallelTestGroupResult RunTestGroupInChildProcess(std::string_view testGroupName, const std::filesystem::path& logDirectory) {
+    ParallelTestGroupResult result;
+    result.groupName = std::string(testGroupName);
+
+    SECURITY_ATTRIBUTES securityAttributes{};
+    securityAttributes.nLength = sizeof(securityAttributes);
+    securityAttributes.bInheritHandle = TRUE;
+
+    const std::filesystem::path stdoutPath = logDirectory / (result.groupName + ".stdout.log");
+    const std::filesystem::path stderrPath = logDirectory / (result.groupName + ".stderr.log");
+
+    HANDLE stdoutHandle = CreateFileW(stdoutPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_DELETE, &securityAttributes,
+                                      CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (stdoutHandle == INVALID_HANDLE_VALUE) {
+        throw std::runtime_error("Failed to open stdout log for group '" + result.groupName + "': " +
+                                 DescribeWindowsError(GetLastError()));
+    }
+
+    HANDLE stderrHandle = CreateFileW(stderrPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_DELETE, &securityAttributes,
+                                      CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (stderrHandle == INVALID_HANDLE_VALUE) {
+        CloseHandle(stdoutHandle);
+        throw std::runtime_error("Failed to open stderr log for group '" + result.groupName + "': " +
+                                 DescribeWindowsError(GetLastError()));
+    }
+
+    STARTUPINFOW startupInfo{};
+    startupInfo.cb = sizeof(startupInfo);
+    startupInfo.dwFlags = STARTF_USESTDHANDLES;
+    startupInfo.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    startupInfo.hStdOutput = stdoutHandle;
+    startupInfo.hStdError = stderrHandle;
+
+    PROCESS_INFORMATION processInfo{};
+    const std::wstring executablePath = GetCurrentExecutablePath();
+    const std::wstring workingDirectory = std::filesystem::current_path().wstring();
+    std::wstring commandLine = L"toolscreen_gui_integration_tests.exe --run-group ";
+    commandLine += Utf8ToWide(result.groupName);
+
+    std::vector<wchar_t> commandLineBuffer(commandLine.begin(), commandLine.end());
+    commandLineBuffer.push_back(L'\0');
+
+    const BOOL created = CreateProcessW(executablePath.c_str(), commandLineBuffer.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
+                                        nullptr, workingDirectory.c_str(), &startupInfo, &processInfo);
+
+    CloseHandle(stdoutHandle);
+    CloseHandle(stderrHandle);
+
+    if (!created) {
+        throw std::runtime_error("Failed to launch GUI integration group '" + result.groupName + "': " +
+                                 DescribeWindowsError(GetLastError()));
+    }
+
+    CloseHandle(processInfo.hThread);
+
+    WaitForSingleObject(processInfo.hProcess, INFINITE);
+    if (GetExitCodeProcess(processInfo.hProcess, &result.exitCode) == FALSE) {
+        const DWORD errorCode = GetLastError();
+        CloseHandle(processInfo.hProcess);
+        throw std::runtime_error("Failed to query exit code for GUI integration group '" + result.groupName + "': " +
+                                 DescribeWindowsError(errorCode));
+    }
+
+    CloseHandle(processInfo.hProcess);
+
+    result.stdoutText = ReadTextFileIfExists(stdoutPath);
+    result.stderrText = ReadTextFileIfExists(stderrPath);
+    return result;
+}
+
+void PrintParallelTestGroupResult(const ParallelTestGroupResult& result) {
+    std::cout << "===== BEGIN GROUP " << result.groupName << " =====" << std::endl;
+
+    if (!result.stdoutText.empty()) {
+        std::cout << result.stdoutText;
+        if (!result.stdoutText.ends_with('\n')) {
+            std::cout << std::endl;
+        }
+    }
+
+    if (!result.stderrText.empty()) {
+        std::cerr << result.stderrText;
+        if (!result.stderrText.ends_with('\n')) {
+            std::cerr << std::endl;
+        }
+    }
+
+    if (!result.failureMessage.empty()) {
+        std::cerr << "FAIL: " << result.failureMessage << std::endl;
+    }
+
+    std::cout << "===== END GROUP " << result.groupName << " =====" << std::endl;
+}
+
 void RunTestCaseByName(std::string_view testCaseName, TestRunMode runMode = TestRunMode::Automated);
 void RunTestGroupByName(std::string_view testGroupName);
+void RunAllTestGroupsInParallel();
 void RunAllTestCases();
 
 void PrintTestCaseList(std::ostream& stream) {
@@ -461,6 +619,7 @@ void PrintUsage(std::ostream& stream) {
     stream << "  toolscreen_gui_integration_tests" << std::endl;
     stream << "  toolscreen_gui_integration_tests --run-all" << std::endl;
     stream << "  toolscreen_gui_integration_tests --run-group <group-name>" << std::endl;
+    stream << "  toolscreen_gui_integration_tests --run-groups-parallel" << std::endl;
     stream << "  toolscreen_gui_integration_tests <test-case>" << std::endl;
     stream << "  toolscreen_gui_integration_tests --visual [<test-case>]" << std::endl;
     stream << "  toolscreen_gui_integration_tests --list" << std::endl;
@@ -470,6 +629,7 @@ void PrintUsage(std::ostream& stream) {
     stream << "No arguments opens a launcher GUI where you can choose which test mode to run." << std::endl;
     stream << "Use --run-all for pure CLI pass/fail execution of every test case." << std::endl;
     stream << "Use --run-group to execute one CI-oriented batch of test cases in declaration order." << std::endl;
+    stream << "Use --run-groups-parallel to execute all CI groups concurrently from one parent runner process." << std::endl;
     stream << "Visual mode keeps the dummy Win32/WGL window open so the GUI can be inspected interactively." << std::endl;
     stream << "If no visual test case is provided, it defaults to " << kDefaultVisualTestCase << "." << std::endl;
     stream << std::endl;
@@ -484,6 +644,7 @@ struct CommandLineOptions {
     bool listOnly = false;
     bool listGroupsOnly = false;
     bool runAll = false;
+    bool runGroupsParallel = false;
     TestRunMode runMode = TestRunMode::Automated;
     std::string groupName;
     std::string testCaseName;
@@ -538,6 +699,16 @@ CommandLineOptions ParseCommandLine(int argc, char** argv) {
 
         CommandLineOptions options;
         options.runAll = true;
+        return options;
+    }
+
+    if (firstArg == "--run-groups-parallel") {
+        if (argc != 2) {
+            throw std::runtime_error("--run-groups-parallel does not accept additional arguments.");
+        }
+
+        CommandLineOptions options;
+        options.runGroupsParallel = true;
         return options;
     }
 
@@ -613,6 +784,70 @@ void RunTestGroupByName(std::string_view testGroupName) {
     std::cout << "PASS group " << testGroup->name << std::endl;
 }
 
+void RunAllTestGroupsInParallel() {
+    const auto& testGroups = GetResolvedTestGroupDefinitions();
+
+    std::cout << "Running all GUI integration test groups in parallel." << std::endl;
+    PrintTestGroupList(std::cout);
+
+    const std::filesystem::path logDirectory = std::filesystem::temp_directory_path() /
+                                              "toolscreen_gui_integration_parallel" /
+                                              std::filesystem::path(std::to_string(GetCurrentProcessId()));
+    std::error_code directoryError;
+    std::filesystem::remove_all(logDirectory, directoryError);
+    directoryError.clear();
+    std::filesystem::create_directories(logDirectory, directoryError);
+    if (directoryError) {
+        throw std::runtime_error("Failed to create parallel GUI integration log directory: " + Narrow(logDirectory.wstring()));
+    }
+
+    std::vector<ParallelTestGroupResult> results(testGroups.size());
+    std::vector<std::thread> workers;
+    workers.reserve(testGroups.size());
+
+    for (size_t index = 0; index < testGroups.size(); ++index) {
+        workers.emplace_back([&, index]() {
+            results[index].groupName = testGroups[index].name;
+            try {
+                results[index] = RunTestGroupInChildProcess(testGroups[index].name, logDirectory);
+            } catch (const std::exception& ex) {
+                results[index].failureMessage = ex.what();
+                results[index].exitCode = 1;
+            }
+        });
+    }
+
+    for (std::thread& worker : workers) {
+        worker.join();
+    }
+
+    std::vector<std::string> failedGroups;
+    for (const ParallelTestGroupResult& result : results) {
+        PrintParallelTestGroupResult(result);
+
+        if (!result.failureMessage.empty() || result.exitCode != 0) {
+            failedGroups.push_back(result.groupName);
+        }
+    }
+
+    std::error_code cleanupError;
+    std::filesystem::remove_all(logDirectory, cleanupError);
+
+    if (!failedGroups.empty()) {
+        std::string failureSummary;
+        for (size_t index = 0; index < failedGroups.size(); ++index) {
+            if (index > 0) {
+                failureSummary += ", ";
+            }
+            failureSummary += failedGroups[index];
+        }
+
+        throw std::runtime_error("Parallel GUI integration groups failed: " + failureSummary);
+    }
+
+    std::cout << "PASS all GUI integration test groups [parallel]" << std::endl;
+}
+
 void RunAllTestCases() {
     for (const TestCaseDefinition& testCase : GetTestCaseDefinitions()) {
         RunTestCaseByName(testCase.name);
@@ -665,6 +900,11 @@ int main(int argc, char** argv) {
             std::cout << "Running all GUI integration tests." << std::endl;
             PrintTestCaseList(std::cout);
             RunAllTestCases();
+            return 0;
+        }
+
+        if (options.runGroupsParallel) {
+            RunAllTestGroupsInParallel();
             return 0;
         }
 
