@@ -735,7 +735,6 @@ struct TextureBindingCacheEntry {
     bool valid = false;
 };
 
-thread_local TextureBindingCacheEntry g_textureBindingCache;
 
 std::atomic<int> g_glViewportHookCount{ 0 };
 std::atomic<bool> g_glViewportHookedViaGLEW{ false };
@@ -919,34 +918,8 @@ void APIENTRY BindTextureDirect(GLenum target, GLuint texture) {
     glBindTexture(target, texture);
 }
 
-static inline void UpdateTrackedTextureBinding(GLenum target, GLuint texture) {
-    if (target != GL_TEXTURE_2D) {
-        return;
-    }
-
-    const HGLRC currentContext = wglGetCurrentContext();
-    g_textureBindingCache.context = currentContext;
-    g_textureBindingCache.texture2D = texture;
-    g_textureBindingCache.valid = (currentContext != nullptr);
-}
-
-static inline GLuint GetTrackedTextureBindingForViewportHook() {
-    const HGLRC currentContext = wglGetCurrentContext();
-    if (currentContext != nullptr && g_textureBindingCache.valid && g_textureBindingCache.context == currentContext) {
-        return g_textureBindingCache.texture2D;
-    }
-
-    GLint currentTexture = 0;
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &currentTexture);
-
-    g_textureBindingCache.context = currentContext;
-    g_textureBindingCache.texture2D = static_cast<GLuint>(currentTexture);
-    g_textureBindingCache.valid = (currentContext != nullptr);
-    return static_cast<GLuint>(currentTexture);
-}
 
 static inline void BindTextureHook_Impl(GLBINDTEXTUREPROC next, GLenum target, GLuint texture) {
-    UpdateTrackedTextureBinding(target, texture);
 
     // only track valid 2D binds from the swapbuffers thread
     if (target == GL_TEXTURE_2D && texture != 0) {
@@ -1411,9 +1384,11 @@ static inline void ViewportHook_Impl(GLVIEWPORTPROC next, GLint x, GLint y, GLsi
     }
 
     GLint drawFBO = 0;
+    GLint currentTextureBinding = 0;
 
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &drawFBO);
-    const GLuint currentTexture = GetTrackedTextureBindingForViewportHook();
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &currentTextureBinding);
+    const GLuint currentTexture = static_cast<GLuint>(currentTextureBinding);
 
     if (g_gameVersion >= GameVersion(1, 17, 0) && g_gameVersion < GameVersion(1, 20, 0)) {
         if (currentTexture != 0 || drawFBO != 0) {
