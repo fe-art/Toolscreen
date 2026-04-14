@@ -10,8 +10,6 @@
 #include <thread>
 #include <vector>
 
-#include "MinHook.h"
-
 std::atomic<bool> g_obsOverrideEnabled{ false };
 std::atomic<GLuint> g_obsOverrideTexture{ 0 };
 std::atomic<int> g_obsOverrideWidth{ 0 };
@@ -25,10 +23,6 @@ std::atomic<int> g_obsPre113ContentH{ 0 };
 
 static std::atomic<bool> g_obsHookInitialized{ false };
 static std::atomic<bool> g_obsHookActive{ false };
-
-typedef void(APIENTRY* PFN_glBlitFramebuffer)(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1,
-                                              GLint dstY1, GLbitfield mask, GLenum filter);
-static PFN_glBlitFramebuffer Real_glBlitFramebuffer = nullptr;
 
 static GLuint g_obsRedirectFBO = 0;
 static std::mutex g_obsHookMutex;
@@ -48,10 +42,6 @@ static size_t g_obsRedirectValidationCacheNext = 0;
 static std::atomic<uint64_t> g_obsNextTextureUpdateTickUs{ 0 };
 static std::atomic<uint64_t> g_obsLastGameCaptureSampleTickUs{ 0 };
 static std::atomic<uint64_t> g_obsSmoothedGameCaptureIntervalUs{ 0 };
-
-static bool ShouldRetargetMinecraftBlitFramebuffer(GLint readFBO, GLint drawFBO) {
-    return drawFBO == 0 && readFBO != 0 && IsVersionInRange(g_gameVersion, GameVersion(1, 21, 2), GameVersion(1, 21, 4));
-}
 
 static constexpr int OBS_TARGET_DEFAULT_FPS = 60;
 static constexpr int OBS_TARGET_MIN_FPS = 15;
@@ -192,128 +182,104 @@ static GLuint SelectObsRedirectTexture(GLsync& outFence, bool& outNeedsFenceWait
     return 0;
 }
 
-static void APIENTRY Hook_glBlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1,
-                                            GLint dstY1, GLbitfield mask, GLenum filter) {
-    GLint readFBO = 0;
-    GLint drawFBO = 0;
-    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &readFBO);
-    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &drawFBO);
-
-    if (ShouldRetargetMinecraftBlitFramebuffer(readFBO, drawFBO) && filter == GL_NEAREST) {
-        int resolvedDstX0 = 0;
-        int resolvedDstY0 = 0;
-        int resolvedDstX1 = 0;
-        int resolvedDstY1 = 0;
-        Log("1");
-        if (ResolvePresentedGameBlitRect(resolvedDstX0, resolvedDstY0, resolvedDstX1, resolvedDstY1)) {
-            Log("2");
-            Log("Got a Minecraft blit with readFBO=0 and drawFBO=" + std::to_string(drawFBO) + ", remapping to presented game rect: " +
-                std::to_string(resolvedDstX0) + "," + std::to_string(resolvedDstY0) + " - " + std::to_string(resolvedDstX1) +
-                "," + std::to_string(resolvedDstY1) + " (original dst rect: " + std::to_string(dstX0) + "," + std::to_string(dstY0) + " - " + std::to_string(dstX1) +
-                "," + std::to_string(dstY1) + "), src rect: " + std::to_string(srcX0) + "," + std::to_string(srcY0) + " - " + std::to_string(srcX1) + "," + std::to_string(srcY1));
-            Real_glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, resolvedDstX0, resolvedDstY0, resolvedDstX1, resolvedDstY1, mask,
-                                    filter);
-            return;
-        }
+bool TryObsBlitFramebufferRedirect(GLint readFBO,
+                                   GLint srcX0,
+                                   GLint srcY0,
+                                   GLint srcX1,
+                                   GLint srcY1,
+                                   GLint dstX0,
+                                   GLint dstY0,
+                                   GLint dstX1,
+                                   GLint dstY1,
+                                   GLbitfield mask,
+                                   GLenum filter) {
+    if (!g_obsOverrideEnabled.load(std::memory_order_acquire)) {
+        return false;
     }
 
-    if (g_obsOverrideEnabled.load(std::memory_order_acquire)) {
-        if (readFBO == 0) {
-            RecordObsGameCaptureSample();
+    if (readFBO != 0) {
+        return false;
+    }
 
-            GLsync obsFence = nullptr;
-            bool needsFenceWait = false;
-            GLuint obsTexture = SelectObsRedirectTexture(obsFence, needsFenceWait);
-            const GLuint overrideTexture = g_obsOverrideTexture.load(std::memory_order_acquire);
-            const bool usingOverrideTexture = (overrideTexture != 0 && obsTexture == overrideTexture);
-            const int overrideWidth = usingOverrideTexture ? g_obsOverrideWidth.load(std::memory_order_acquire) : 0;
-            const int overrideHeight = usingOverrideTexture ? g_obsOverrideHeight.load(std::memory_order_acquire) : 0;
-            const bool mustReattachOverride =
-                usingOverrideTexture &&
-                (g_obsRedirectAttachedTexture != obsTexture || g_obsRedirectAttachedWidth != overrideWidth ||
-                 g_obsRedirectAttachedHeight != overrideHeight);
+    RecordObsGameCaptureSample();
 
-            if (obsTexture != 0) {
-                PROFILE_SCOPE_CAT("OBS Capture Redirect", "OBS Hook");
+    GLsync obsFence = nullptr;
+    bool needsFenceWait = false;
+    GLuint obsTexture = SelectObsRedirectTexture(obsFence, needsFenceWait);
+    const GLuint overrideTexture = g_obsOverrideTexture.load(std::memory_order_acquire);
+    const bool usingOverrideTexture = (overrideTexture != 0 && obsTexture == overrideTexture);
+    const int overrideWidth = usingOverrideTexture ? g_obsOverrideWidth.load(std::memory_order_acquire) : 0;
+    const int overrideHeight = usingOverrideTexture ? g_obsOverrideHeight.load(std::memory_order_acquire) : 0;
+    const bool mustReattachOverride =
+        usingOverrideTexture &&
+        (g_obsRedirectAttachedTexture != obsTexture || g_obsRedirectAttachedWidth != overrideWidth ||
+         g_obsRedirectAttachedHeight != overrideHeight);
 
-                if (needsFenceWait && obsFence && glIsSync(obsFence)) { glWaitSync(obsFence, 0, GL_TIMEOUT_IGNORED); }
+    if (obsTexture == 0) {
+        return false;
+    }
 
-                if (needsFenceWait) { glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT | GL_FRAMEBUFFER_BARRIER_BIT); }
+    PROFILE_SCOPE_CAT("OBS Capture Redirect", "OBS Hook");
 
-                if (g_obsRedirectFBO == 0) {
-                    glGenFramebuffers(1, &g_obsRedirectFBO);
-                    g_obsRedirectAttachedTexture = 0;
+    if (needsFenceWait && obsFence && glIsSync(obsFence)) { glWaitSync(obsFence, 0, GL_TIMEOUT_IGNORED); }
+
+    if (needsFenceWait) { glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT | GL_FRAMEBUFFER_BARRIER_BIT); }
+
+    if (g_obsRedirectFBO == 0) {
+        glGenFramebuffers(1, &g_obsRedirectFBO);
+        g_obsRedirectAttachedTexture = 0;
+    }
+
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, g_obsRedirectFBO);
+    if (g_obsRedirectAttachedTexture != obsTexture || mustReattachOverride) {
+        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, obsTexture, 0);
+
+        if (!IsObsRedirectAttachmentValidated(obsTexture, overrideWidth, overrideHeight)) {
+            GLenum status = glCheckFramebufferStatus(GL_READ_FRAMEBUFFER);
+            if (status != GL_FRAMEBUFFER_COMPLETE) {
+                static GLenum lastLoggedStatus = GL_FRAMEBUFFER_COMPLETE;
+                if (status != lastLoggedStatus) {
+                    Log("[OBS Hook] WARNING: Redirect FBO incomplete! Status: " + std::to_string(status) +
+                        ", Texture: " + std::to_string(obsTexture));
+                    lastLoggedStatus = status;
                 }
-
-                glBindFramebuffer(GL_READ_FRAMEBUFFER, g_obsRedirectFBO);
-                if (g_obsRedirectAttachedTexture != obsTexture || mustReattachOverride) {
-                    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, obsTexture, 0);
-
-                    if (!IsObsRedirectAttachmentValidated(obsTexture, overrideWidth, overrideHeight)) {
-                        GLenum status = glCheckFramebufferStatus(GL_READ_FRAMEBUFFER);
-                        if (status != GL_FRAMEBUFFER_COMPLETE) {
-                            static GLenum lastLoggedStatus = GL_FRAMEBUFFER_COMPLETE;
-                            if (status != lastLoggedStatus) {
-                                Log("[OBS Hook] WARNING: Redirect FBO incomplete! Status: " + std::to_string(status) +
-                                    ", Texture: " + std::to_string(obsTexture));
-                                lastLoggedStatus = status;
-                            }
-                            g_obsRedirectAttachedTexture = 0;
-                            g_obsRedirectAttachedWidth = 0;
-                            g_obsRedirectAttachedHeight = 0;
-                            glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-                            Real_glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
-                            return;
-                        }
-                        CacheObsRedirectAttachmentValidation(obsTexture, overrideWidth, overrideHeight);
-                    }
-
-                    g_obsRedirectAttachedTexture = obsTexture;
-                    g_obsRedirectAttachedWidth = overrideWidth;
-                    g_obsRedirectAttachedHeight = overrideHeight;
-                }
-
-                GLint blitSrcX0 = srcX0, blitSrcY0 = srcY0, blitSrcX1 = srcX1, blitSrcY1 = srcY1;
-                if (usingOverrideTexture && overrideWidth > 0 && overrideHeight > 0) {
-                    blitSrcX0 = 0;
-                    blitSrcY0 = 0;
-                    blitSrcX1 = overrideWidth;
-                    blitSrcY1 = overrideHeight;
-                } else if (g_obsPre113Windowed.load(std::memory_order_acquire)) {
-                    int offsetX = g_obsPre113OffsetX.load(std::memory_order_acquire);
-                    int offsetY = g_obsPre113OffsetY.load(std::memory_order_acquire);
-                    blitSrcX0 = srcX0 + offsetX;
-                    blitSrcY0 = srcY0 + offsetY;
-                    blitSrcX1 = srcX1 + offsetX;
-                    blitSrcY1 = srcY1 + offsetY;
-                }
-                Real_glBlitFramebuffer(blitSrcX0, blitSrcY0, blitSrcX1, blitSrcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
-
+                g_obsRedirectAttachedTexture = 0;
+                g_obsRedirectAttachedWidth = 0;
+                g_obsRedirectAttachedHeight = 0;
                 glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-                return;
+                BlitFramebufferDirect(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
+                return true;
             }
+            CacheObsRedirectAttachmentValidation(obsTexture, overrideWidth, overrideHeight);
         }
+
+        g_obsRedirectAttachedTexture = obsTexture;
+        g_obsRedirectAttachedWidth = overrideWidth;
+        g_obsRedirectAttachedHeight = overrideHeight;
     }
 
-    Real_glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
-}
-
-void BlitFramebufferDirect(GLint srcX0,
-                           GLint srcY0,
-                           GLint srcX1,
-                           GLint srcY1,
-                           GLint dstX0,
-                           GLint dstY0,
-                           GLint dstX1,
-                           GLint dstY1,
-                           GLbitfield mask,
-                           GLenum filter) {
-    if (Real_glBlitFramebuffer) {
-        Real_glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
-        return;
+    GLint blitSrcX0 = srcX0;
+    GLint blitSrcY0 = srcY0;
+    GLint blitSrcX1 = srcX1;
+    GLint blitSrcY1 = srcY1;
+    if (usingOverrideTexture && overrideWidth > 0 && overrideHeight > 0) {
+        blitSrcX0 = 0;
+        blitSrcY0 = 0;
+        blitSrcX1 = overrideWidth;
+        blitSrcY1 = overrideHeight;
+    } else if (g_obsPre113Windowed.load(std::memory_order_acquire)) {
+        int offsetX = g_obsPre113OffsetX.load(std::memory_order_acquire);
+        int offsetY = g_obsPre113OffsetY.load(std::memory_order_acquire);
+        blitSrcX0 = srcX0 + offsetX;
+        blitSrcY0 = srcY0 + offsetY;
+        blitSrcX1 = srcX1 + offsetX;
+        blitSrcY1 = srcY1 + offsetY;
     }
 
-    glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
+    BlitFramebufferDirect(blitSrcX0, blitSrcY0, blitSrcX1, blitSrcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
+
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    return true;
 }
 
 void SetObsOverrideTexture(GLuint texture, int width, int height) {
@@ -336,7 +302,7 @@ void ClearObsOverride() {
 }
 
 void EnableObsOverride() {
-    if (g_obsHookActive.load(std::memory_order_acquire)) { g_obsOverrideEnabled.store(true, std::memory_order_release); }
+    g_obsOverrideEnabled.store(true, std::memory_order_release);
 }
 
 bool IsObsHookDetected() {
@@ -344,85 +310,27 @@ bool IsObsHookDetected() {
 }
 
 void StartObsHookThread() {
-    if (g_obsHookInitialized.load()) {
+    if (g_obsHookActive.load(std::memory_order_acquire)) {
         return;
     }
 
     std::lock_guard<std::mutex> lock(g_obsHookMutex);
-    if (g_obsHookInitialized.load()) {
-        return; // Double-check after lock
-    }
-
-    Log("OBS Hook: Initializing...");
-
-    HMODULE opengl32 = GetModuleHandleA("opengl32.dll");
-    if (!opengl32) {
-        Log("OBS Hook: Failed to find opengl32.dll");
+    if (g_obsHookActive.load(std::memory_order_acquire)) {
         return;
     }
 
-    typedef PROC(WINAPI * PFN_wglGetProcAddress)(LPCSTR);
-    PFN_wglGetProcAddress wglGetProcAddressPtr = (PFN_wglGetProcAddress)GetProcAddress(opengl32, "wglGetProcAddress");
-    if (!wglGetProcAddressPtr) {
-        Log("OBS Hook: Failed to get wglGetProcAddress");
-        return;
-    }
+    g_obsHookActive.store(true, std::memory_order_release);
+    g_obsHookInitialized.store(true, std::memory_order_release);
 
-    void* blitAddr = (void*)wglGetProcAddressPtr("glBlitFramebuffer");
-    if (!blitAddr) {
-        Log("OBS Hook: Failed to get glBlitFramebuffer address");
-        return;
-    }
-
-    if (MH_Initialize() != MH_OK && MH_Initialize() != MH_ERROR_ALREADY_INITIALIZED) {
-        Log("OBS Hook: Failed to initialize MinHook");
-        return;
-    }
-
-    MH_STATUS status = MH_CreateHook(blitAddr, (void*)Hook_glBlitFramebuffer, (void**)&Real_glBlitFramebuffer);
-    if (status != MH_OK) {
-        Log("OBS Hook: Failed to create hook (status " + std::to_string(status) + ")");
-        return;
-    }
-
-    status = MH_EnableHook(blitAddr);
-    if (status != MH_OK) {
-        Log("OBS Hook: Failed to enable hook (status " + std::to_string(status) + ")");
-        MH_RemoveHook(blitAddr);
-        return;
-    }
-
-    g_obsHookActive.store(true);
-    g_obsHookInitialized.store(true);
-
-    // Enable the OBS override so the hook redirects captures to our composed override texture.
     g_obsOverrideEnabled.store(true, std::memory_order_release);
-
-    Log("OBS Hook: Successfully hooked glBlitFramebuffer");
+    Log("OBS Hook: Activated redirect state on main glBlitFramebuffer hook");
 }
 
 void StopObsHookThread() {
-    if (!g_obsHookInitialized.load()) { return; }
-
     std::lock_guard<std::mutex> lock(g_obsHookMutex);
 
     g_obsOverrideEnabled.store(false, std::memory_order_release);
-
-    if (g_obsHookActive.load()) {
-        HMODULE opengl32 = GetModuleHandleA("opengl32.dll");
-        if (opengl32) {
-            typedef PROC(WINAPI * PFN_wglGetProcAddress)(LPCSTR);
-            PFN_wglGetProcAddress wglGetProcAddressPtr = (PFN_wglGetProcAddress)GetProcAddress(opengl32, "wglGetProcAddress");
-            if (wglGetProcAddressPtr) {
-                void* blitAddr = (void*)wglGetProcAddressPtr("glBlitFramebuffer");
-                if (blitAddr) {
-                    MH_DisableHook(blitAddr);
-                    MH_RemoveHook(blitAddr);
-                }
-            }
-        }
-        g_obsHookActive.store(false);
-    }
+    g_obsHookActive.store(false, std::memory_order_release);
 
     if (g_obsRedirectFBO != 0) {
         glDeleteFramebuffers(1, &g_obsRedirectFBO);
@@ -432,7 +340,7 @@ void StopObsHookThread() {
 
     ClearObsRedirectAttachmentValidationCache();
 
-    g_obsHookInitialized.store(false);
+    g_obsHookInitialized.store(false, std::memory_order_release);
     Log("OBS Hook: Stopped");
 }
 

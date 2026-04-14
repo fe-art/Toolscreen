@@ -753,6 +753,9 @@ GLNAMEDFRAMEBUFFERTEXTUREPROC oglNamedFramebufferTexture = NULL;
 typedef void(APIENTRY* PFNGLBLITFRAMEBUFFERPROC_HOOK)(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0,
                                                       GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter);
 PFNGLBLITFRAMEBUFFERPROC_HOOK oglBlitFramebuffer = NULL;
+PFNGLBLITFRAMEBUFFERPROC_HOOK g_oglBlitFramebufferDriver = NULL;
+PFNGLBLITFRAMEBUFFERPROC_HOOK g_oglBlitFramebufferThirdParty = NULL;
+std::atomic<void*> g_glBlitFramebufferThirdPartyHookTarget{ nullptr };
 std::atomic<bool> g_glBlitFramebufferHooked{ false };
 
 typedef void (APIENTRY* GLBINDTEXTUREPROC)(GLenum target, GLuint texture);
@@ -911,6 +914,119 @@ static __forceinline bool IsDisallowedThirdPartySwapCaller(void* caller_address)
            !HookChain::IsAllowedSwapBuffersThirdPartyHookAddress(caller_address);
 }
 
+    void APIENTRY hkglBlitFramebuffer(GLint srcX0,
+                          GLint srcY0,
+                          GLint srcX1,
+                          GLint srcY1,
+                          GLint dstX0,
+                          GLint dstY0,
+                          GLint dstX1,
+                          GLint dstY1,
+                          GLbitfield mask,
+                          GLenum filter);
+    void APIENTRY hkglBlitFramebuffer_Driver(GLint srcX0,
+                              GLint srcY0,
+                              GLint srcX1,
+                              GLint srcY1,
+                              GLint dstX0,
+                              GLint dstY0,
+                              GLint dstX1,
+                              GLint dstY1,
+                              GLbitfield mask,
+                              GLenum filter);
+    void APIENTRY hkglBlitFramebuffer_ThirdParty(GLint srcX0,
+                               GLint srcY0,
+                               GLint srcX1,
+                               GLint srcY1,
+                               GLint dstX0,
+                               GLint dstY0,
+                               GLint dstX1,
+                               GLint dstY1,
+                               GLbitfield mask,
+                               GLenum filter);
+
+static bool IsReadableExecutablePointer(const void* address) {
+    MEMORY_BASIC_INFORMATION mbi{};
+    if (VirtualQuery(address, &mbi, sizeof(mbi)) != sizeof(mbi)) {
+        return false;
+    }
+
+    if (mbi.State != MEM_COMMIT) {
+        return false;
+    }
+
+    const DWORD protect = mbi.Protect & 0xFF;
+    return protect == PAGE_EXECUTE || protect == PAGE_EXECUTE_READ || protect == PAGE_EXECUTE_READWRITE ||
+           protect == PAGE_EXECUTE_WRITECOPY || protect == PAGE_READONLY || protect == PAGE_READWRITE ||
+           protect == PAGE_WRITECOPY;
+}
+
+static bool IsAbsoluteJumpStub(const uint8_t* bytes) {
+    if (!bytes) {
+        return false;
+    }
+
+    return (bytes[0] == 0xEB) || (bytes[0] == 0xE9) || (bytes[0] == 0xFF && bytes[1] == 0x25) ||
+           (bytes[0] == 0x48 && bytes[1] == 0xB8 && bytes[10] == 0xFF && bytes[11] == 0xE0) ||
+           (bytes[0] == 0x49 && bytes[1] == 0xBB && bytes[10] == 0x41 && bytes[11] == 0xFF && bytes[12] == 0xE3);
+}
+
+static bool TryResolveJumpTarget(void* current, void*& next) {
+    next = nullptr;
+    if (!current || !IsReadableExecutablePointer(current)) {
+        return false;
+    }
+
+    const uint8_t* bytes = reinterpret_cast<const uint8_t*>(current);
+    if (bytes[0] == 0xEB) {
+        const int8_t rel = *reinterpret_cast<const int8_t*>(bytes + 1);
+        next = const_cast<uint8_t*>(bytes + 2 + rel);
+    } else if (bytes[0] == 0xE9) {
+        const int32_t rel = *reinterpret_cast<const int32_t*>(bytes + 1);
+        next = const_cast<uint8_t*>(bytes + 5 + rel);
+    } else if (bytes[0] == 0xFF && bytes[1] == 0x25) {
+        const int32_t disp = *reinterpret_cast<const int32_t*>(bytes + 2);
+        const uint8_t* ripNext = bytes + 6;
+        const uint8_t* slot = ripNext + disp;
+        if (!IsReadableExecutablePointer(slot)) {
+            return false;
+        }
+        next = *reinterpret_cast<void* const*>(slot);
+    } else if (bytes[0] == 0x48 && bytes[1] == 0xB8 && bytes[10] == 0xFF && bytes[11] == 0xE0) {
+        next = *reinterpret_cast<void* const*>(bytes + 2);
+    } else if (bytes[0] == 0x49 && bytes[1] == 0xBB && bytes[10] == 0x41 && bytes[11] == 0xFF && bytes[12] == 0xE3) {
+        next = *reinterpret_cast<void* const*>(bytes + 2);
+    }
+
+    return next != nullptr;
+}
+
+static void* ResolveBlitFramebufferThirdPartyTarget(void* startAddress) {
+    void* current = startAddress;
+    for (int depth = 0; depth < 8; ++depth) {
+        if (!current || !IsReadableExecutablePointer(current) || !IsAbsoluteJumpStub(reinterpret_cast<const uint8_t*>(current))) {
+            return nullptr;
+        }
+
+        void* next = nullptr;
+        if (!TryResolveJumpTarget(current, next) || !next) {
+            return nullptr;
+        }
+
+        if (next != reinterpret_cast<void*>(&hkglBlitFramebuffer) &&
+            next != reinterpret_cast<void*>(&hkglBlitFramebuffer_Driver) &&
+            next != reinterpret_cast<void*>(&hkglBlitFramebuffer_ThirdParty) &&
+            next != reinterpret_cast<void*>(oglBlitFramebuffer) &&
+            next != reinterpret_cast<void*>(g_oglBlitFramebufferDriver)) {
+            return next;
+        }
+
+        current = next;
+    }
+
+    return nullptr;
+}
+
 void APIENTRY BindTextureDirect(GLenum target, GLuint texture) {
     GLBINDTEXTUREPROC next = oglBindTexture ? oglBindTexture : g_oglBindTextureDriver;
     if (next) {
@@ -918,6 +1034,25 @@ void APIENTRY BindTextureDirect(GLenum target, GLuint texture) {
         return;
     }
     glBindTexture(target, texture);
+}
+
+void BlitFramebufferDirect(GLint srcX0,
+                           GLint srcY0,
+                           GLint srcX1,
+                           GLint srcY1,
+                           GLint dstX0,
+                           GLint dstY0,
+                           GLint dstX1,
+                           GLint dstY1,
+                           GLbitfield mask,
+                           GLenum filter) {
+    PFNGLBLITFRAMEBUFFERPROC_HOOK next = g_oglBlitFramebufferDriver ? g_oglBlitFramebufferDriver : oglBlitFramebuffer;
+    if (next) {
+        next(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
+        return;
+    }
+
+    glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
 }
 
 static bool GetLatestViewportForHook(int& outModeW, int& outModeH, bool& outStretchEnabled, int& outStretchX, int& outStretchY,
@@ -1160,7 +1295,7 @@ HCURSOR WINAPI hkSetCursor_ThirdParty(HCURSOR hCursor) {
     SETCURSORPROC next = g_oSetCursorThirdParty ? g_oSetCursorThirdParty : oSetCursor;
     return SetCursorHook_Impl(next, hCursor);
 }
-// Note: OBS capture is now handled by obs_thread.cpp via glBlitFramebuffer hook
+// OBS redirect now plugs into the main glBlitFramebuffer hook below.
 
 static std::atomic<int> lastViewportW{ 0 };
 static std::atomic<int> lastViewportH{ 0 };
@@ -1549,6 +1684,36 @@ void WINAPI hkglViewport_ThirdParty(GLint x, GLint y, GLsizei width, GLsizei hei
 
 void WINAPI hkglBlitNamedFramebuffer(GLuint readFramebuffer, GLuint drawFramebuffer, GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                                      GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter);
+void APIENTRY hkglBlitFramebuffer(GLint srcX0,
+                                  GLint srcY0,
+                                  GLint srcX1,
+                                  GLint srcY1,
+                                  GLint dstX0,
+                                  GLint dstY0,
+                                  GLint dstX1,
+                                  GLint dstY1,
+                                  GLbitfield mask,
+                                  GLenum filter);
+void APIENTRY hkglBlitFramebuffer_Driver(GLint srcX0,
+                                         GLint srcY0,
+                                         GLint srcX1,
+                                         GLint srcY1,
+                                         GLint dstX0,
+                                         GLint dstY0,
+                                         GLint dstX1,
+                                         GLint dstY1,
+                                         GLbitfield mask,
+                                         GLenum filter);
+void APIENTRY hkglBlitFramebuffer_ThirdParty(GLint srcX0,
+                                             GLint srcY0,
+                                             GLint srcX1,
+                                             GLint srcY1,
+                                             GLint dstX0,
+                                             GLint dstY0,
+                                             GLint dstX1,
+                                             GLint dstY1,
+                                             GLbitfield mask,
+                                             GLenum filter);
 void APIENTRY hkglNamedFramebufferTexture(GLuint framebuffer, GLenum attachment, GLuint texture, GLint level);
 
 static inline void TrackNamedFramebufferTextureAttachment(GLenum attachment, GLuint texture) {
@@ -1587,6 +1752,145 @@ static void AttemptHookGlBlitNamedFramebufferViaGlew() {
 
     s_hooked.store(true, std::memory_order_release);
     LogCategory("init", "Successfully hooked glBlitNamedFramebuffer via GLEW");
+}
+
+static bool ShouldRetargetMinecraftBlitFramebuffer(GLint readFBO, GLint drawFBO) {
+    return drawFBO == 0 && readFBO != 0 && IsVersionInRange(g_gameVersion, GameVersion(1, 21, 2), GameVersion(1, 21, 4));
+}
+
+static inline void BlitFramebufferHook_Impl(PFNGLBLITFRAMEBUFFERPROC_HOOK next,
+                                            GLint srcX0,
+                                            GLint srcY0,
+                                            GLint srcX1,
+                                            GLint srcY1,
+                                            GLint dstX0,
+                                            GLint dstY0,
+                                            GLint dstX1,
+                                            GLint dstY1,
+                                            GLbitfield mask,
+                                            GLenum filter) {
+    if (!next) {
+        return;
+    }
+
+    GLint readFBO = 0;
+    GLint drawFBO = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &readFBO);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &drawFBO);
+
+    if (ShouldRetargetMinecraftBlitFramebuffer(readFBO, drawFBO)) {
+        int resolvedDstX0 = 0;
+        int resolvedDstY0 = 0;
+        int resolvedDstX1 = 0;
+        int resolvedDstY1 = 0;
+        if (ResolvePresentedGameBlitRect(resolvedDstX0, resolvedDstY0, resolvedDstX1, resolvedDstY1)) {
+            next(srcX0, srcY0, srcX1, srcY1, resolvedDstX0, resolvedDstY0, resolvedDstX1, resolvedDstY1, mask, filter);
+            return;
+        }
+    }
+
+    if (TryObsBlitFramebufferRedirect(readFBO, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter)) {
+        return;
+    }
+
+    next(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
+}
+
+static void AttemptHookGlBlitFramebufferViaWgl() {
+    static std::atomic<bool> s_hooked{ false };
+    if (s_hooked.load(std::memory_order_acquire)) return;
+
+    HMODULE hOpenGL32 = GetModuleHandle(L"opengl32.dll");
+    if (!hOpenGL32) return;
+
+    void* pBlitFramebufferExport = reinterpret_cast<void*>(GetProcAddress(hOpenGL32, "glBlitFramebuffer"));
+
+    typedef PROC(WINAPI* PFN_wglGetProcAddress)(LPCSTR);
+    PFN_wglGetProcAddress pwglGetProcAddress =
+        reinterpret_cast<PFN_wglGetProcAddress>(GetProcAddress(hOpenGL32, "wglGetProcAddress"));
+    if (!pwglGetProcAddress) return;
+
+    PROC pBlitFramebufferWGL = pwglGetProcAddress("glBlitFramebuffer");
+    if (pBlitFramebufferWGL != NULL &&
+        reinterpret_cast<void*>(pBlitFramebufferWGL) != reinterpret_cast<void*>(&hkglBlitFramebuffer) &&
+        reinterpret_cast<void*>(pBlitFramebufferWGL) != reinterpret_cast<void*>(&hkglBlitFramebuffer_Driver) &&
+        reinterpret_cast<void*>(pBlitFramebufferWGL) != pBlitFramebufferExport) {
+        LogCategory("init", "Attempting glBlitFramebuffer hook via wglGetProcAddress: " +
+                   std::to_string(reinterpret_cast<uintptr_t>(pBlitFramebufferWGL)));
+
+        MH_STATUS st = MH_CreateHook(reinterpret_cast<void*>(pBlitFramebufferWGL), reinterpret_cast<void*>(&hkglBlitFramebuffer_Driver),
+                                     reinterpret_cast<void**>(&g_oglBlitFramebufferDriver));
+        if (st == MH_OK || st == MH_ERROR_ALREADY_CREATED) {
+            st = MH_EnableHook(reinterpret_cast<void*>(pBlitFramebufferWGL));
+            if (st == MH_OK || st == MH_ERROR_ENABLED) {
+                s_hooked.store(true, std::memory_order_release);
+                g_glBlitFramebufferHooked.store(true, std::memory_order_release);
+                LogCategory("init", "SUCCESS: glBlitFramebuffer hooked via wglGetProcAddress");
+                return;
+            }
+        }
+    }
+
+    PFNGLBLITFRAMEBUFFERPROC_HOOK pBlitFramebufferGLEW = glBlitFramebuffer;
+    if (pBlitFramebufferGLEW != NULL &&
+        reinterpret_cast<void*>(pBlitFramebufferGLEW) != reinterpret_cast<void*>(&hkglBlitFramebuffer) &&
+        reinterpret_cast<void*>(pBlitFramebufferGLEW) != reinterpret_cast<void*>(&hkglBlitFramebuffer_Driver) &&
+        reinterpret_cast<void*>(pBlitFramebufferGLEW) != pBlitFramebufferExport) {
+        LogCategory("init", "Attempting glBlitFramebuffer hook via GLEW pointer: " +
+                   std::to_string(reinterpret_cast<uintptr_t>(pBlitFramebufferGLEW)));
+
+        MH_STATUS st = MH_CreateHook(reinterpret_cast<void*>(pBlitFramebufferGLEW), reinterpret_cast<void*>(&hkglBlitFramebuffer_Driver),
+                                     reinterpret_cast<void**>(&g_oglBlitFramebufferDriver));
+        if (st == MH_OK || st == MH_ERROR_ALREADY_CREATED) {
+            st = MH_EnableHook(reinterpret_cast<void*>(pBlitFramebufferGLEW));
+            if (st == MH_OK || st == MH_ERROR_ENABLED) {
+                s_hooked.store(true, std::memory_order_release);
+                g_glBlitFramebufferHooked.store(true, std::memory_order_release);
+                LogCategory("init", "SUCCESS: glBlitFramebuffer hooked via GLEW pointer");
+            }
+        }
+    }
+}
+
+static void AttemptHookGlBlitFramebufferThirdParty() {
+    if (!g_graphicsHookDetected.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    if (g_glBlitFramebufferThirdPartyHookTarget.load(std::memory_order_acquire) != nullptr) {
+        return;
+    }
+
+    HMODULE hOpenGL32 = GetModuleHandle(L"opengl32.dll");
+    if (!hOpenGL32) {
+        return;
+    }
+
+    typedef PROC(WINAPI* PFN_wglGetProcAddress)(LPCSTR);
+    PFN_wglGetProcAddress pwglGetProcAddress =
+        reinterpret_cast<PFN_wglGetProcAddress>(GetProcAddress(hOpenGL32, "wglGetProcAddress"));
+    if (!pwglGetProcAddress) {
+        return;
+    }
+
+    void* startAddress = reinterpret_cast<void*>(pwglGetProcAddress("glBlitFramebuffer"));
+    if (!startAddress) {
+        return;
+    }
+
+    void* hookTarget = ResolveBlitFramebufferThirdPartyTarget(startAddress);
+    if (!hookTarget) {
+        return;
+    }
+
+    if (HookChain::TryCreateAndEnableHook(hookTarget, reinterpret_cast<void*>(&hkglBlitFramebuffer_ThirdParty),
+                                          reinterpret_cast<void**>(&g_oglBlitFramebufferThirdParty),
+                                          "glBlitFramebuffer (third-party chain)")) {
+        g_glBlitFramebufferThirdPartyHookTarget.store(hookTarget, std::memory_order_release);
+        LogCategory("hookchain",
+                    std::string("[glBlitFramebuffer] installed third-party hook target ") +
+                        HookChain::DescribeAddressWithOwner(hookTarget));
+    }
 }
 
 static void AttemptHookGlNamedFramebufferTextureViaGlew() {
@@ -1974,6 +2278,59 @@ bool ResolvePresentedGameBlitRect(int& outDstX0, int& outDstY0, int& outDstX1, i
     return true;
 }
 
+void APIENTRY hkglBlitFramebuffer(GLint srcX0,
+                                  GLint srcY0,
+                                  GLint srcX1,
+                                  GLint srcY1,
+                                  GLint dstX0,
+                                  GLint dstY0,
+                                  GLint dstX1,
+                                  GLint dstY1,
+                                  GLbitfield mask,
+                                  GLenum filter) {
+    if (!oglBlitFramebuffer) {
+        return;
+    }
+
+    BlitFramebufferHook_Impl(oglBlitFramebuffer, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
+}
+
+void APIENTRY hkglBlitFramebuffer_Driver(GLint srcX0,
+                                         GLint srcY0,
+                                         GLint srcX1,
+                                         GLint srcY1,
+                                         GLint dstX0,
+                                         GLint dstY0,
+                                         GLint dstX1,
+                                         GLint dstY1,
+                                         GLbitfield mask,
+                                         GLenum filter) {
+    if (!g_oglBlitFramebufferDriver) {
+        return;
+    }
+
+    BlitFramebufferHook_Impl(g_oglBlitFramebufferDriver, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
+}
+
+void APIENTRY hkglBlitFramebuffer_ThirdParty(GLint srcX0,
+                                             GLint srcY0,
+                                             GLint srcX1,
+                                             GLint srcY1,
+                                             GLint dstX0,
+                                             GLint dstY0,
+                                             GLint dstX1,
+                                             GLint dstY1,
+                                             GLbitfield mask,
+                                             GLenum filter) {
+    PFNGLBLITFRAMEBUFFERPROC_HOOK next = g_oglBlitFramebufferThirdParty ? g_oglBlitFramebufferThirdParty :
+                                         (g_oglBlitFramebufferDriver ? g_oglBlitFramebufferDriver : oglBlitFramebuffer);
+    if (!next) {
+        return;
+    }
+
+    BlitFramebufferHook_Impl(next, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
+}
+
 void WINAPI hkglBlitNamedFramebuffer(GLuint readFramebuffer, GLuint drawFramebuffer, GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                                      GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter) {
     if (drawFramebuffer != 0) {
@@ -2169,7 +2526,10 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
 
                 CursorTextures::LoadCursorTextures();
 
-                if (wglGetCurrentContext()) { StartObsHookThread(); }
+                if (wglGetCurrentContext()) {
+                    AttemptHookGlBlitFramebufferViaWgl();
+                    StartObsHookThread();
+                }
 
                 AttemptAggressiveGlViewportHook();
 
@@ -2370,6 +2730,8 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
 
         const bool shouldUseObsOverride = g_graphicsHookDetected.load(std::memory_order_acquire);
         if (shouldUseObsOverride) {
+            AttemptHookGlBlitFramebufferThirdParty();
+            StartObsHookThread();
             EnableObsOverride();
         } else {
             ClearObsOverride();
@@ -2895,6 +3257,16 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         } else {
             LogCategory("init",
                         "WARNING: glBlitNamedFramebuffer not found in opengl32.dll - will attempt to hook via GLEW after context init");
+        }
+
+        LPVOID pGlBlitFramebuffer = GetProcAddress(hOpenGL32, "glBlitFramebuffer");
+        if (pGlBlitFramebuffer != NULL) {
+            if (CreateHookOrDie(pGlBlitFramebuffer, &hkglBlitFramebuffer, &oglBlitFramebuffer, "glBlitFramebuffer")) {
+                g_glBlitFramebufferHooked.store(true, std::memory_order_release);
+            }
+        } else {
+            LogCategory("init",
+                        "WARNING: glBlitFramebuffer not found in opengl32.dll - will attempt to hook via WGL/GLEW after context init");
         }
 
         if (MH_EnableHook(MH_ALL_HOOKS) != MH_OK) {

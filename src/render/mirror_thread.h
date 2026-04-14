@@ -135,6 +135,6 @@ int GetFallbackGameHeight();
 // No fence wait needed - this is a simple and reliable fallback
 GLuint GetSafeReadTexture();
 
-// Note: OBS capture is now handled by obs_thread.h/cpp via glBlitFramebuffer hook
+// OBS redirect is now layered onto the main glBlitFramebuffer hook in dllmain.cpp.
 
 
