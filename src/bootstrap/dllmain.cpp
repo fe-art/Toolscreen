@@ -1,4 +1,5 @@
 #include "features/fake_cursor.h"
+#include "features/cursor_trail.h"
 #include "gui/gui.h"
 #include "gui/imgui_cache.h"
 #include "hooks/input_hook.h"
@@ -2922,6 +2923,14 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
         if (g_screenshotRequested.exchange(false)) {
             glBindFramebuffer(GL_READ_FRAMEBUFFER, s.read_fb);
             ScreenshotToClipboard(fullW, fullH);
+        }
+
+        // Cursor trail overlay (MUST be before RenderFakeCursor so the head draws on top of its tail)
+        {
+            if (frameCfg.cursorTrail.enabled) {
+                PROFILE_SCOPE_CAT("Cursor Trail Rendering", "Rendering");
+                if (IsCursorVisible()) { RenderCursorTrail(hwnd, windowWidth, windowHeight, frameCfg.cursorTrail); }
+            }
         }
 
         // Render fake cursor overlay if enabled (MUST be after RestoreGLState)

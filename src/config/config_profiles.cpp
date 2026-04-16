@@ -552,6 +552,7 @@ void ApplyProfileFields(const Config& src, Config& dst, const ProfileSectionSele
     if (sections.inputsMouse) {
         dst.keyRebinds = src.keyRebinds;
         dst.cursors = src.cursors;
+        dst.cursorTrail = src.cursorTrail;
         dst.allowCursorEscape = src.allowCursorEscape;
         dst.confineCursor = src.confineCursor;
         dst.mouseSensitivity = src.mouseSensitivity;

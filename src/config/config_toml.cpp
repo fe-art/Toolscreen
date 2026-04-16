@@ -1680,6 +1680,44 @@ void CursorsConfigFromToml(const toml::table& tbl, CursorsConfig& cfg) {
     if (auto t = GetTable(tbl, "ingame")) { CursorConfigFromToml(*t, cfg.ingame); }
 }
 
+void CursorTrailConfigToToml(const CursorTrailConfig& cfg, toml::table& out) {
+    out.insert("enabled", cfg.enabled);
+    out.insert("lifetimeMs", cfg.lifetimeMs);
+    out.insert("stampSpacingPx", cfg.stampSpacingPx);
+    out.insert("spriteSizePx", cfg.spriteSizePx);
+    out.insert("tailSizeScale", cfg.tailSizeScale);
+    out.insert("useVelocitySize", cfg.useVelocitySize);
+    out.insert("velocitySizeIntensity", cfg.velocitySizeIntensity);
+    out.insert("color", ColorToTomlArray(cfg.color));
+    out.insert("useGradient", cfg.useGradient);
+    out.insert("tailColor", ColorToTomlArray(cfg.tailColor));
+    out.insert("opacity", cfg.opacity);
+    out.insert("blendMode", cfg.blendMode);
+    out.insert("spritePath", cfg.spritePath);
+}
+
+void CursorTrailConfigFromToml(const toml::table& tbl, CursorTrailConfig& cfg) {
+    cfg.enabled = GetOr(tbl, "enabled", ConfigDefaults::CURSOR_TRAIL_ENABLED);
+    cfg.lifetimeMs = std::clamp(GetOr(tbl, "lifetimeMs", ConfigDefaults::CURSOR_TRAIL_LIFETIME_MS), 50, 500);
+    cfg.stampSpacingPx = std::clamp(GetOr(tbl, "stampSpacingPx", ConfigDefaults::CURSOR_TRAIL_STAMP_SPACING_PX), 1, 64);
+    cfg.spriteSizePx = std::clamp(GetOr(tbl, "spriteSizePx", ConfigDefaults::CURSOR_TRAIL_SPRITE_SIZE_PX), 4, 256);
+    cfg.tailSizeScale = std::clamp(GetOr(tbl, "tailSizeScale", ConfigDefaults::CURSOR_TRAIL_TAIL_SIZE_SCALE), 0.0f, 2.0f);
+    cfg.useVelocitySize = GetOr(tbl, "useVelocitySize", ConfigDefaults::CURSOR_TRAIL_USE_VELOCITY_SIZE);
+    cfg.velocitySizeIntensity = std::clamp(GetOr(tbl, "velocitySizeIntensity", ConfigDefaults::CURSOR_TRAIL_VELOCITY_SIZE_INTENSITY), 0.0f, 1.0f);
+    cfg.color = ColorFromTomlArray(GetArray(tbl, "color"),
+                                   Color{ ConfigDefaults::CURSOR_TRAIL_COLOR_R,
+                                          ConfigDefaults::CURSOR_TRAIL_COLOR_G,
+                                          ConfigDefaults::CURSOR_TRAIL_COLOR_B });
+    cfg.useGradient = GetOr(tbl, "useGradient", ConfigDefaults::CURSOR_TRAIL_USE_GRADIENT);
+    cfg.tailColor = ColorFromTomlArray(GetArray(tbl, "tailColor"),
+                                       Color{ ConfigDefaults::CURSOR_TRAIL_TAIL_COLOR_R,
+                                              ConfigDefaults::CURSOR_TRAIL_TAIL_COLOR_G,
+                                              ConfigDefaults::CURSOR_TRAIL_TAIL_COLOR_B });
+    cfg.opacity = std::clamp(GetOr(tbl, "opacity", ConfigDefaults::CURSOR_TRAIL_OPACITY), 0.0f, 1.0f);
+    cfg.blendMode = GetStringOr(tbl, "blendMode", ConfigDefaults::CURSOR_TRAIL_BLEND_MODE);
+    cfg.spritePath = GetStringOr(tbl, "spritePath", ConfigDefaults::CURSOR_TRAIL_SPRITE_PATH);
+}
+
 void EyeZoomConfigToToml(const EyeZoomConfig& cfg, toml::table& out) {
     out.insert("cloneWidth", cfg.cloneWidth);
     out.insert("overlayWidth", cfg.overlayWidth);
@@ -2307,6 +2345,10 @@ void ConfigToToml(const Config& config, toml::table& out) {
     CursorsConfigToToml(config.cursors, cursorsTbl);
     out.insert("cursors", cursorsTbl);
 
+    toml::table cursorTrailTbl;
+    CursorTrailConfigToToml(config.cursorTrail, cursorTrailTbl);
+    out.insert("cursorTrail", cursorTrailTbl);
+
     toml::table keyRebindsTbl;
     KeyRebindsConfigToToml(config.keyRebinds, keyRebindsTbl);
     out.insert("keyRebinds", keyRebindsTbl);
@@ -2728,6 +2770,8 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
 
     if (auto t = GetTable(tbl, "cursors")) { CursorsConfigFromToml(*t, config.cursors); }
 
+    if (auto t = GetTable(tbl, "cursorTrail")) { CursorTrailConfigFromToml(*t, config.cursorTrail); }
+
     if (auto t = GetTable(tbl, "keyRebinds")) { KeyRebindsConfigFromToml(*t, config.keyRebinds); }
 
     if (auto t = GetTable(tbl, "appearance")) { AppearanceConfigFromToml(*t, config.appearance); }
@@ -2870,6 +2914,7 @@ const std::vector<std::string>& GetConfigTomlOrderedKeys() {
         "eyezoom",
         "ninjabrainOverlay",
         "cursors",
+        "cursorTrail",
         "keyRebinds",
         "appearance",
         "mode",
