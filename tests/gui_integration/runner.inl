@@ -227,7 +227,7 @@ bool GroupIncludesTestCaseName(const TestGroupDefinition& testGroup, std::string
 
 const auto& GetTestGroupDefinitions() {
     static const std::vector<TestGroupDefinition> testGroups = {
-        {"config", {"config-default-", "config-roundtrip", "config-load-"}, {}},
+        {"config", {"config-default-", "config-roundtrip", "config-load-"}, {"fullscreen-relative-external-resize-skips-stale-resend"}},
         {"rebind", {"key-rebind-"}, {}},
         {"render", {"mode-"}, {"rebind-indicator-renders-below-settings-gui"}},
         {"settings-and-ui", {"settings-"}, {"config-error-gui", "profiler-unspecified-breakdown"}},
