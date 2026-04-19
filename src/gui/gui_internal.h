@@ -51,7 +51,7 @@ void LoadEmbeddedResourceTexture(GLuint& tex, int resourceId, int filterMode = 0
 bool EnsureSupporterTierTexture(const SupporterRoleEntry& role, GLuint& outTextureId, int& outWidth, int& outHeight);
 void ClearSupporterTierTextureCache();
 
-std::string ValidateImageFile(const std::string& path, const std::wstring& toolscreenPath);
+std::string ValidateImageFile(const std::string& path, const std::wstring& toolscreenPath, int maxDimension = 16384);
 ImagePickerResult OpenImagePickerAndValidate(HWND ownerHwnd, const std::wstring& initialDir, const std::wstring& toolscreenPath);
 void ClearExpiredImageErrors();
 void SetImageError(const std::string& key, const std::string& error);

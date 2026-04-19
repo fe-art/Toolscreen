@@ -212,7 +212,7 @@ static std::wstring GetImagePickerInitialDirectory(const std::wstring& fallbackI
     return L"";
 }
 
-std::string ValidateImageFile(const std::string& path, const std::wstring& toolscreenPath) {
+std::string ValidateImageFile(const std::string& path, const std::wstring& toolscreenPath, int maxDimension) {
     if (path.empty()) { return "Path is empty"; }
 
     std::wstring final_path;
@@ -243,7 +243,9 @@ std::string ValidateImageFile(const std::string& path, const std::wstring& tools
     }
 
     if (w <= 0 || h <= 0) { return "Invalid image dimensions"; }
-    if (w > 16384 || h > 16384) { return "Image too large (max 16384x16384)"; }
+    if (w > maxDimension || h > maxDimension) {
+        return "Image too large (max " + std::to_string(maxDimension) + "x" + std::to_string(maxDimension) + ")";
+    }
 
     return "";
 }

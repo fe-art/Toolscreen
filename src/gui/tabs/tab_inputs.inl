@@ -29,6 +29,21 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                     "custom cursor",
                     "crosshair"
                 });
+                const bool showCursorTrailSection = ShouldRenderConfigSearchSection(showAllMouseSections, {
+                    trc("cursor_trail.section_title"),
+                    trc("cursor_trail.enabled"),
+                    trc("cursor_trail.lifetime_ms"),
+                    trc("cursor_trail.stamp_spacing"),
+                    trc("cursor_trail.color"),
+                    trc("cursor_trail.opacity"),
+                    trc("cursor_trail.blend_mode"),
+                    trc("cursor_trail.sprite_path"),
+                    trc("cursor_trail.use_gradient"),
+                    "cursor trail",
+                    "trail",
+                    "mouse trail",
+                    "gradient"
+                });
 
                 if (showMouseSettingsSection) {
                     ImGui::SeparatorText(trc("inputs.mouse_settings"));
@@ -265,6 +280,148 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                             ImGui::SameLine();
                             if (ImGui::Button(trc("label.cancel"), ImVec2(120, 0))) { ImGui::CloseCurrentPopup(); }
                             ImGui::EndPopup();
+                        }
+                    }
+                }
+
+                if (showCursorTrailSection) {
+                    ImGui::Spacing();
+                    ImGui::SeparatorText(trc("cursor_trail.section_title"));
+                    RecordConfigSearchSectionInteractionRect("config.section.inputs.mouse.cursor_trail");
+
+                    auto& trail = g_config.cursorTrail;
+
+                    if (ImGui::Checkbox(trc("cursor_trail.enabled"), &trail.enabled)) { g_configIsDirty = true; }
+                    ImGui::SameLine();
+                    HelpMarker(trc("cursor_trail.tooltip.enabled"));
+
+                    if (trail.enabled) {
+                        const float sliderW = 300.0f;
+
+                        ImGui::Text(trc("cursor_trail.lifetime_ms"));
+                        ImGui::SetNextItemWidth(sliderW);
+                        if (ImGui::SliderInt("##cursor_trail_lifetime", &trail.lifetimeMs, 50, 500, "%d ms",
+                                             ImGuiSliderFlags_AlwaysClamp)) { g_configIsDirty = true; }
+
+                        ImGui::Text(trc("cursor_trail.opacity"));
+                        ImGui::SetNextItemWidth(sliderW);
+                        if (ImGui::SliderFloat("##cursor_trail_opacity", &trail.opacity, 0.0f, 1.0f, "%.2f",
+                                               ImGuiSliderFlags_AlwaysClamp)) { g_configIsDirty = true; }
+
+                        ImGui::Text(trc("cursor_trail.blend_mode"));
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(sliderW);
+                        const char* blendModes[] = { "Alpha", "Additive" };
+                        const char* blendModeLabels[] = { trc("cursor_trail.blend_mode.alpha"),
+                                                          trc("cursor_trail.blend_mode.additive") };
+                        int blendIdx = 0;
+                        for (int i = 0; i < 2; ++i) {
+                            if (trail.blendMode == blendModes[i]) { blendIdx = i; break; }
+                        }
+                        if (ImGui::BeginCombo("##cursor_trail_blend_mode", blendModeLabels[blendIdx])) {
+                            for (int i = 0; i < 2; ++i) {
+                                const bool selected = (blendIdx == i);
+                                if (ImGui::Selectable(blendModeLabels[i], selected)) {
+                                    trail.blendMode = blendModes[i];
+                                    g_configIsDirty = true;
+                                }
+                                if (selected) { ImGui::SetItemDefaultFocus(); }
+                            }
+                            ImGui::EndCombo();
+                        }
+                        ImGui::SameLine();
+                        HelpMarker(trc("cursor_trail.tooltip.blend_mode"));
+
+                        if (ImGui::Checkbox(trc("cursor_trail.use_velocity_size"), &trail.useVelocitySize)) { g_configIsDirty = true; }
+                        ImGui::SameLine();
+                        HelpMarker(trc("cursor_trail.tooltip.use_velocity_size"));
+
+                        if (trail.useVelocitySize) {
+                            ImGui::Text(trc("cursor_trail.velocity_size_intensity"));
+                            ImGui::SetNextItemWidth(sliderW);
+                            if (ImGui::SliderFloat("##cursor_trail_velocity_intensity", &trail.velocitySizeIntensity, 0.0f, 1.0f, "%.2f",
+                                                   ImGuiSliderFlags_AlwaysClamp)) { g_configIsDirty = true; }
+                        }
+
+                        ImGui::Text(trail.useGradient ? trc("cursor_trail.head_color") : trc("cursor_trail.color"));
+                        float trailColor[3] = { trail.color.r, trail.color.g, trail.color.b };
+                        if (ImGui::ColorEdit3("##cursor_trail_color", trailColor)) {
+                            trail.color.r = trailColor[0];
+                            trail.color.g = trailColor[1];
+                            trail.color.b = trailColor[2];
+                            g_configIsDirty = true;
+                        }
+
+                        if (ImGui::Checkbox(trc("cursor_trail.use_gradient"), &trail.useGradient)) { g_configIsDirty = true; }
+                        ImGui::SameLine();
+                        HelpMarker(trc("cursor_trail.tooltip.use_gradient"));
+
+                        if (trail.useGradient) {
+                            ImGui::Text(trc("cursor_trail.tail_color"));
+                            float trailTailColor[3] = { trail.tailColor.r, trail.tailColor.g, trail.tailColor.b };
+                            if (ImGui::ColorEdit3("##cursor_trail_tail_color", trailTailColor)) {
+                                trail.tailColor.r = trailTailColor[0];
+                                trail.tailColor.g = trailTailColor[1];
+                                trail.tailColor.b = trailTailColor[2];
+                                g_configIsDirty = true;
+                            }
+                        }
+
+                        if (ImGui::CollapsingHeader(trc("cursor_trail.advanced"))) {
+                            ImGui::Text(trc("cursor_trail.stamp_spacing"));
+                            ImGui::SetNextItemWidth(sliderW);
+                            if (ImGui::SliderInt("##cursor_trail_spacing", &trail.stampSpacingPx, 1, 64, "%d px",
+                                                 ImGuiSliderFlags_AlwaysClamp)) { g_configIsDirty = true; }
+                            ImGui::SameLine();
+                            HelpMarker(trc("cursor_trail.tooltip.stamp_spacing"));
+
+                            ImGui::Text(trc("cursor_trail.sprite_size"));
+                            ImGui::SetNextItemWidth(sliderW);
+                            if (ImGui::SliderInt("##cursor_trail_sprite_size", &trail.spriteSizePx, 4, 256, "%d px",
+                                                 ImGuiSliderFlags_AlwaysClamp)) { g_configIsDirty = true; }
+
+                            ImGui::Text(trc("cursor_trail.tail_size_scale"));
+                            ImGui::SetNextItemWidth(sliderW);
+                            if (ImGui::SliderFloat("##cursor_trail_tail_scale", &trail.tailSizeScale, 0.0f, 2.0f, "%.2fx",
+                                                   ImGuiSliderFlags_AlwaysClamp)) { g_configIsDirty = true; }
+                            ImGui::SameLine();
+                            HelpMarker(trc("cursor_trail.tooltip.tail_size_scale"));
+
+                            ImGui::Text(trc("cursor_trail.sprite_path"));
+                            ImGui::SetNextItemWidth(sliderW);
+                            if (ImGui::InputText("##cursor_trail_sprite_path", &trail.spritePath)) {
+                                g_configIsDirty = true;
+                            }
+                            ImGui::SameLine();
+                            if (ImGui::Button((tr("button.browse") + "##cursor_trail_browse").c_str())) {
+                                ImagePickerResult result = OpenImagePickerAndValidate(
+                                    g_minecraftHwnd.load(), g_toolscreenPath, g_toolscreenPath);
+                                if (result.completed && result.success) {
+                                    trail.spritePath = result.path;
+                                    g_configIsDirty = true;
+                                }
+                            }
+                            ImGui::SameLine();
+                            if (ImGui::Button((tr("button.clear") + "##cursor_trail_clear").c_str())) {
+                                if (!trail.spritePath.empty()) {
+                                    trail.spritePath.clear();
+                                    g_configIsDirty = true;
+                                }
+                            }
+                            ImGui::SameLine();
+                            HelpMarker(trc("cursor_trail.tooltip.sprite_path"));
+
+                            static std::string s_lastValidatedPath;
+                            static std::string s_lastValidationError;
+                            if (trail.spritePath != s_lastValidatedPath) {
+                                s_lastValidatedPath = trail.spritePath;
+                                s_lastValidationError = trail.spritePath.empty()
+                                    ? std::string{}
+                                    : ValidateImageFile(trail.spritePath, g_toolscreenPath, 256);
+                            }
+                            if (!s_lastValidationError.empty()) {
+                                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", s_lastValidationError.c_str());
+                            }
                         }
                     }
                 }

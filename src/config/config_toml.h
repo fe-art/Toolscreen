@@ -28,6 +28,7 @@ struct SensitivityHotkeyConfig;
 struct DebugGlobalConfig;
 struct CursorConfig;
 struct CursorsConfig;
+struct CursorTrailConfig;
 struct EyeZoomConfig;
 struct KeyRebind;
 struct KeyRebindsConfig;
@@ -68,6 +69,7 @@ void SensitivityHotkeyConfigToToml(const SensitivityHotkeyConfig& cfg, toml::tab
 void DebugGlobalConfigToToml(const DebugGlobalConfig& cfg, toml::table& out);
 void CursorConfigToToml(const CursorConfig& cfg, toml::table& out);
 void CursorsConfigToToml(const CursorsConfig& cfg, toml::table& out);
+void CursorTrailConfigToToml(const CursorTrailConfig& cfg, toml::table& out);
 void EyeZoomConfigToToml(const EyeZoomConfig& cfg, toml::table& out);
 void KeyRebindToToml(const KeyRebind& cfg, toml::table& out);
 void KeyRebindsConfigToToml(const KeyRebindsConfig& cfg, toml::table& out);
@@ -97,6 +99,7 @@ void SensitivityHotkeyConfigFromToml(const toml::table& tbl, SensitivityHotkeyCo
 void DebugGlobalConfigFromToml(const toml::table& tbl, DebugGlobalConfig& cfg);
 void CursorConfigFromToml(const toml::table& tbl, CursorConfig& cfg);
 void CursorsConfigFromToml(const toml::table& tbl, CursorsConfig& cfg);
+void CursorTrailConfigFromToml(const toml::table& tbl, CursorTrailConfig& cfg);
 void EyeZoomConfigFromToml(const toml::table& tbl, EyeZoomConfig& cfg);
 void KeyRebindFromToml(const toml::table& tbl, KeyRebind& cfg);
 void KeyRebindsConfigFromToml(const toml::table& tbl, KeyRebindsConfig& cfg);

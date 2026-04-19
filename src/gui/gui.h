@@ -509,6 +509,21 @@ struct CursorsConfig {
     CursorConfig wall;
     CursorConfig ingame;
 };
+struct CursorTrailConfig {
+    bool enabled = ConfigDefaults::CURSOR_TRAIL_ENABLED;
+    int lifetimeMs = ConfigDefaults::CURSOR_TRAIL_LIFETIME_MS;
+    int stampSpacingPx = ConfigDefaults::CURSOR_TRAIL_STAMP_SPACING_PX;
+    int spriteSizePx = ConfigDefaults::CURSOR_TRAIL_SPRITE_SIZE_PX;
+    float tailSizeScale = ConfigDefaults::CURSOR_TRAIL_TAIL_SIZE_SCALE;
+    bool useVelocitySize = ConfigDefaults::CURSOR_TRAIL_USE_VELOCITY_SIZE;
+    float velocitySizeIntensity = ConfigDefaults::CURSOR_TRAIL_VELOCITY_SIZE_INTENSITY;
+    Color color = { ConfigDefaults::CURSOR_TRAIL_COLOR_R, ConfigDefaults::CURSOR_TRAIL_COLOR_G, ConfigDefaults::CURSOR_TRAIL_COLOR_B };
+    bool useGradient = ConfigDefaults::CURSOR_TRAIL_USE_GRADIENT;
+    Color tailColor = { ConfigDefaults::CURSOR_TRAIL_TAIL_COLOR_R, ConfigDefaults::CURSOR_TRAIL_TAIL_COLOR_G, ConfigDefaults::CURSOR_TRAIL_TAIL_COLOR_B };
+    float opacity = ConfigDefaults::CURSOR_TRAIL_OPACITY;
+    std::string blendMode = ConfigDefaults::CURSOR_TRAIL_BLEND_MODE;
+    std::string spritePath = ConfigDefaults::CURSOR_TRAIL_SPRITE_PATH;
+};
 enum class EyeZoomOverlayDisplayMode { Manual, Fit, Stretch };
 
 enum class EyeZoomFontSizeMode {
@@ -774,6 +789,7 @@ struct Config {
     std::vector<DWORD> windowOverlaysHotkey = {};
     std::vector<DWORD> ninjabrainOverlayHotkey = {};
     CursorsConfig cursors;
+    CursorTrailConfig cursorTrail;
     std::string fontPath = ConfigDefaults::CONFIG_DEFAULT_GUI_FONT_PATH;
     std::string lang = "en";
     int fpsLimit = 0;
