@@ -8469,6 +8469,7 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
     float blindLine1PrefixW = 0.0f;
     float blindLine2PercentW = 0.0f;
     float blindMessageW = 0.0f;
+    bool showBlindImproveDirection = false;
 
     if (blindResult) {
         auto humanizeBlindEvaluation = [](const std::string& evaluation) {
@@ -8480,6 +8481,9 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
             }
             if (evaluation == "BAD_BUT_IN_RING") {
                 return std::string(tr("ninjabrain.blind_evaluation.bad_but_in_ring"));
+            }
+            if (evaluation == "HIGHROLL_GOOD") {
+                return std::string(tr("ninjabrain.blind_evaluation.highroll_good"));
             }
             if (evaluation == "HIGHROLL_OKAY") {
                 return std::string(tr("ninjabrain.blind_evaluation.highroll_okay"));
@@ -8500,6 +8504,10 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
             }
             if (evaluation == "BAD_BUT_IN_RING") {
                 progress = 0.5;
+                return true;
+            }
+            if (evaluation == "HIGHROLL_GOOD") {
+                progress = 1.0;
                 return true;
             }
             if (evaluation == "HIGHROLL_OKAY") {
@@ -8526,18 +8534,25 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
         blindLine1Prefix.push_back(' ');
 
         blindLine1Highlight = humanizeBlindEvaluation(data.blind.evaluation);
+        showBlindImproveDirection = data.blind.evaluation != "EXCELLENT";
 
         char blindProbabilityText[32];
         std::snprintf(blindProbabilityText, sizeof(blindProbabilityText), "%.1f%%", blindProbabilityPercent);
         blindLine2Percent = blindProbabilityText;
         blindLine2Suffix = tr("ninjabrain.blind_highroll_probability_suffix", blindThreshold);
-        blindLine3 = tr("ninjabrain.blind_improve_direction", blindImproveHeading, blindImproveDistance);
+        if (showBlindImproveDirection) {
+            blindLine3 = tr("ninjabrain.blind_improve_direction", blindImproveHeading, blindImproveDistance);
+        } else {
+            blindLine3.clear();
+        }
 
         blindLine1PrefixW = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, blindLine1Prefix.c_str()).x;
         const float blindLine1W = blindLine1PrefixW + font->CalcTextSizeA(fs, FLT_MAX, 0.0f, blindLine1Highlight.c_str()).x;
         blindLine2PercentW = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, blindLine2Percent.c_str()).x;
         const float blindLine2W = blindLine2PercentW + font->CalcTextSizeA(fs, FLT_MAX, 0.0f, blindLine2Suffix.c_str()).x;
-        const float blindLine3W = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, blindLine3.c_str()).x;
+        const float blindLine3W = showBlindImproveDirection
+            ? font->CalcTextSizeA(fs, FLT_MAX, 0.0f, blindLine3.c_str()).x
+            : 0.0f;
         blindMessageW = (std::max)(blindLine1W, (std::max)(blindLine2W, blindLine3W));
 
         const double blindProbabilityColorProgress = std::clamp(blindProbabilityPercent / 10.0, 0.0, 1.0);
@@ -8843,7 +8858,9 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
             drawText(fs, ImVec2(messageX, messageTop + lineH + summaryLineGap), blindProbabilityCol, blindLine2Percent.c_str());
             drawText(fs, ImVec2(messageX + blindLine2PercentW, messageTop + lineH + summaryLineGap), dataCol,
                      blindLine2Suffix.c_str());
-            drawText(fs, ImVec2(messageX, messageTop + (lineH + summaryLineGap) * 2.0f), dataCol, blindLine3.c_str());
+            if (showBlindImproveDirection) {
+                drawText(fs, ImVec2(messageX, messageTop + (lineH + summaryLineGap) * 2.0f), dataCol, blindLine3.c_str());
+            }
             return;
         }
 
@@ -9344,7 +9361,9 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
     };
 
     if (failedResult || blindResult) {
-        const float summaryBlockH = blindResult ? (lineH * 3.0f + summaryLineGap * 2.0f) : (lineH * 2.0f + summaryLineGap);
+        const float summaryBlockH = blindResult
+            ? (showBlindImproveDirection ? (lineH * 3.0f + summaryLineGap * 2.0f) : (lineH * 2.0f + summaryLineGap))
+            : (lineH * 2.0f + summaryLineGap);
         const float sectionHeaderH = lineH;
         const float detailHeaderH = lineH + throwsHeaderPadY * 2.0f;
         const float detailRowH = lineH + throwsRowPadY * 2.0f;

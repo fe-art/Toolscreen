@@ -17,8 +17,8 @@ using json = nlohmann::json;
 using namespace std::chrono_literals;
 using SteadyClock = std::chrono::steady_clock;
 
-constexpr auto kNinjabrainReconnectIntervalMs = 3000;
-constexpr auto kNinjabrainConnectionTimeout = 3s;
+constexpr auto kNinjabrainReconnectIntervalMs = 200;
+constexpr auto kNinjabrainConnectionTimeout = 200ms;
 constexpr char kStrongholdEventsPath[] = "/api/v1/stronghold/events";
 constexpr char kInformationMessagesEventsPath[] = "/api/v1/information-messages/events";
 constexpr char kBoatEventsPath[] = "/api/v1/boat/events";

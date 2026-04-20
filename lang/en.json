@@ -649,6 +649,7 @@
     "ninjabrain.blind_evaluation.bad": "bad",
     "ninjabrain.blind_evaluation.bad_but_in_ring": "bad, but in ring",
     "ninjabrain.blind_evaluation.excellent": "excellent",
+    "ninjabrain.blind_evaluation.highroll_good": "good for highroll",
     "ninjabrain.blind_evaluation.highroll_okay": "okay for highroll",
     "ninjabrain.blind_coords_prefix": "Blind coords ({}, {}) are",
     "ninjabrain.blind_evaluation.not_in_ring": "not in any ring",

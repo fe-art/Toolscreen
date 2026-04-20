@@ -651,6 +651,7 @@
     "ninjabrain.blind_evaluation.bad": "较差",
     "ninjabrain.blind_evaluation.bad_but_in_ring": "较差但在环内",
     "ninjabrain.blind_evaluation.excellent": "极佳",
+    "ninjabrain.blind_evaluation.highroll_good": "高概率良好",
     "ninjabrain.blind_evaluation.highroll_okay": "高概率可接受",
     "ninjabrain.blind_coords_prefix": "盲扔坐标 ({}, {})：",
     "ninjabrain.blind_evaluation.not_in_ring": "不在任何环内",
