@@ -338,6 +338,10 @@ static bool HasShiftLayerOutputUnicode(const KeyRebind& rebind) {
     return rebind.shiftLayerEnabled && !rebind.shiftLayerOutputDisabled && rebind.shiftLayerOutputUnicode != 0;
 }
 
+static bool HasBaseOutputUnicode(const KeyRebind& rebind) {
+    return rebind.useCustomOutput && rebind.customOutputUnicode != 0;
+}
+
 static bool HasShiftLayerOutputOverride(const KeyRebind& rebind) {
     return IsShiftLayerTypedOutputDisabled(rebind) || HasShiftLayerOutputVk(rebind) || HasShiftLayerOutputUnicode(rebind);
 }
@@ -379,6 +383,12 @@ static DWORD ResolveEffectiveCustomOutputVk(const KeyRebind& rebind, bool shiftL
         return 0;
     }
     if (!shiftLayerActive && IsBaseTypedOutputDisabled(rebind)) {
+        return 0;
+    }
+    if (shiftLayerActive && HasShiftLayerOutputUnicode(rebind)) {
+        return 0;
+    }
+    if (!shiftLayerActive && HasBaseOutputUnicode(rebind)) {
         return 0;
     }
     if (shiftLayerActive && HasShiftLayerOutputVk(rebind)) {

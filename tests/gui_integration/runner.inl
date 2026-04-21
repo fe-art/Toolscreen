@@ -78,6 +78,8 @@ const auto& GetTestCaseDefinitions() {
         {"key-rebind-runtime-full-forwarding", &RunKeyRebindRuntimeFullForwardingTest},
         {"key-rebind-runtime-split-vk-output", &RunKeyRebindRuntimeSplitVkOutputTest},
         {"key-rebind-runtime-split-unicode-output", &RunKeyRebindRuntimeSplitUnicodeOutputTest},
+        {"key-rebind-runtime-unicode-output-ignores-vk", &RunKeyRebindRuntimeUnicodeOutputIgnoresVkTest},
+        {"key-rebind-runtime-shift-layer-unicode-output-ignores-vk", &RunKeyRebindRuntimeShiftLayerUnicodeOutputIgnoresVkTest},
         {"key-rebind-runtime-shift-layer-shift-activated", &RunKeyRebindRuntimeShiftLayerShiftActivatedTest},
         {"key-rebind-runtime-shift-layer-caps-lock-activated", &RunKeyRebindRuntimeShiftLayerCapsLockActivatedTest},
         {"key-rebind-runtime-full-caps-lock-honored", &RunKeyRebindRuntimeFullCapsLockHonoredTest},

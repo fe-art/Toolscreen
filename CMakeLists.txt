@@ -1039,6 +1039,8 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     key-rebind-runtime-full-forwarding
     key-rebind-runtime-split-vk-output
     key-rebind-runtime-split-unicode-output
+    key-rebind-runtime-unicode-output-ignores-vk
+    key-rebind-runtime-shift-layer-unicode-output-ignores-vk
     key-rebind-runtime-shift-layer-shift-activated
     key-rebind-runtime-shift-layer-caps-lock-activated
     key-rebind-runtime-full-caps-lock-honored

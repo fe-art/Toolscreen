@@ -603,6 +603,102 @@ void RunKeyRebindRuntimeSplitUnicodeOutputTest(TestRunMode runMode = TestRunMode
     ExpectCapturedMessage(capture, 0, WM_CHAR, 0x00F8, "Split rebind Unicode WM_CHAR");
 }
 
+void RunKeyRebindRuntimeUnicodeOutputIgnoresVkTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    KeyRebind rebind = MakeEnabledRebind('A', 'B');
+    rebind.useCustomOutput = true;
+    rebind.customOutputUnicode = '5';
+    rebind.customOutputVK = VK_LSHIFT;
+    PrepareRebindRuntimeCase("key_rebind_runtime_unicode_output_ignores_vk", { rebind });
+    ScopedRebindMessageCapture capture(window.hwnd());
+
+    ResetSyntheticRebindKeyEventsForTest();
+    Expect(GetSyntheticRebindKeyEventCountForTest() == 0,
+           "Expected the synthetic rebind key event log to start empty for the Unicode-over-VK test.");
+
+    ScopedKeyboardStateOverride keyboardState;
+    keyboardState.SetKeyDown(VK_SHIFT, false);
+    keyboardState.SetToggle(VK_CAPITAL, false);
+    keyboardState.Apply();
+
+    const LPARAM sourceLParam = BuildTestKeyboardMessageLParam('A', true);
+    const InputHandlerResult keyDownResult = HandleKeyRebinding(window.hwnd(), WM_KEYDOWN, 'A', sourceLParam);
+    Expect(keyDownResult.consumed, "Expected the Unicode-over-VK rebind to consume WM_KEYDOWN.");
+    Expect(keyDownResult.result == kCapturedWndProcResult,
+           "Expected the Unicode-over-VK rebind to forward the trigger WM_KEYDOWN through the original WNDPROC.");
+    Expect(capture.messages.size() == 1, "Expected the Unicode-over-VK rebind to forward exactly one trigger key-down message.");
+    ExpectCapturedMessage(capture, 0, WM_KEYDOWN, 'B', "Unicode-over-VK rebind trigger WM_KEYDOWN");
+    Expect(GetSyntheticRebindKeyEventCountForTest() == 0,
+           "Expected Unicode output to ignore the configured VK when handling WM_KEYDOWN.");
+
+    capture.Clear();
+    const InputHandlerResult charResult = HandleCharRebinding(window.hwnd(), WM_CHAR, static_cast<WPARAM>('a'), sourceLParam);
+    Expect(charResult.consumed, "Expected the Unicode-over-VK rebind WM_CHAR to be consumed.");
+    Expect(capture.messages.size() == 1, "Expected the Unicode-over-VK rebind to forward exactly one character message.");
+    ExpectCapturedMessage(capture, 0, WM_CHAR, '5', "Unicode-over-VK rebind WM_CHAR");
+
+    capture.Clear();
+    const InputHandlerResult keyUpResult = HandleKeyRebinding(window.hwnd(), WM_KEYUP, 'A', BuildTestKeyboardMessageLParam('A', false));
+    Expect(keyUpResult.consumed, "Expected the Unicode-over-VK rebind to consume WM_KEYUP.");
+    Expect(keyUpResult.result == kCapturedWndProcResult,
+           "Expected the Unicode-over-VK rebind to forward the trigger WM_KEYUP through the original WNDPROC.");
+    Expect(capture.messages.size() == 1, "Expected the Unicode-over-VK rebind to forward exactly one trigger key-up message.");
+    ExpectCapturedMessage(capture, 0, WM_KEYUP, 'B', "Unicode-over-VK rebind trigger WM_KEYUP");
+    Expect(GetSyntheticRebindKeyEventCountForTest() == 0,
+           "Expected Unicode output to ignore the configured VK when handling WM_KEYUP.");
+}
+
+void RunKeyRebindRuntimeShiftLayerUnicodeOutputIgnoresVkTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    KeyRebind rebind = MakeEnabledRebind('A', 'B');
+    rebind.useCustomOutput = true;
+    rebind.customOutputUnicode = 'c';
+    rebind.shiftLayerEnabled = true;
+    rebind.shiftLayerOutputUnicode = '5';
+    rebind.shiftLayerOutputVK = VK_LSHIFT;
+    PrepareRebindRuntimeCase("key_rebind_runtime_shift_layer_unicode_output_ignores_vk", { rebind });
+    ScopedRebindMessageCapture capture(window.hwnd());
+
+    ResetSyntheticRebindKeyEventsForTest();
+    Expect(GetSyntheticRebindKeyEventCountForTest() == 0,
+           "Expected the synthetic rebind key event log to start empty for the Shift-layer Unicode-over-VK test.");
+
+    ScopedKeyboardStateOverride keyboardState;
+    keyboardState.SetKeyDown(VK_SHIFT, true);
+    keyboardState.SetToggle(VK_CAPITAL, false);
+    keyboardState.Apply();
+
+    const LPARAM sourceLParam = BuildTestKeyboardMessageLParam('A', true);
+    const InputHandlerResult keyDownResult = HandleKeyRebinding(window.hwnd(), WM_KEYDOWN, 'A', sourceLParam);
+    Expect(keyDownResult.consumed, "Expected the Shift-layer Unicode-over-VK rebind to consume WM_KEYDOWN.");
+    Expect(keyDownResult.result == kCapturedWndProcResult,
+           "Expected the Shift-layer Unicode-over-VK rebind to forward the trigger WM_KEYDOWN through the original WNDPROC.");
+    Expect(capture.messages.size() == 1,
+           "Expected the Shift-layer Unicode-over-VK rebind to forward exactly one trigger key-down message.");
+    ExpectCapturedMessage(capture, 0, WM_KEYDOWN, 'B', "Shift-layer Unicode-over-VK rebind trigger WM_KEYDOWN");
+    Expect(GetSyntheticRebindKeyEventCountForTest() == 0,
+           "Expected Shift-layer Unicode output to ignore the configured VK when handling WM_KEYDOWN.");
+
+    capture.Clear();
+    const InputHandlerResult charResult =
+        HandleCharRebinding(window.hwnd(), WM_CHAR, static_cast<WPARAM>('A'), sourceLParam);
+    Expect(charResult.consumed, "Expected the Shift-layer Unicode-over-VK rebind WM_CHAR to be consumed.");
+    Expect(capture.messages.size() == 1,
+           "Expected the Shift-layer Unicode-over-VK rebind to forward exactly one character message.");
+    ExpectCapturedMessage(capture, 0, WM_CHAR, '5', "Shift-layer Unicode-over-VK rebind WM_CHAR");
+
+    capture.Clear();
+    const InputHandlerResult keyUpResult = HandleKeyRebinding(window.hwnd(), WM_KEYUP, 'A', BuildTestKeyboardMessageLParam('A', false));
+    Expect(keyUpResult.consumed, "Expected the Shift-layer Unicode-over-VK rebind to consume WM_KEYUP.");
+    Expect(keyUpResult.result == kCapturedWndProcResult,
+           "Expected the Shift-layer Unicode-over-VK rebind to forward the trigger WM_KEYUP through the original WNDPROC.");
+    Expect(capture.messages.size() == 1,
+           "Expected the Shift-layer Unicode-over-VK rebind to forward exactly one trigger key-up message.");
+    ExpectCapturedMessage(capture, 0, WM_KEYUP, 'B', "Shift-layer Unicode-over-VK rebind trigger WM_KEYUP");
+    Expect(GetSyntheticRebindKeyEventCountForTest() == 0,
+           "Expected Shift-layer Unicode output to ignore the configured VK when handling WM_KEYUP.");
+}
+
 void RunKeyRebindRuntimeShiftLayerShiftActivatedTest(TestRunMode runMode = TestRunMode::Automated) {
     DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
     KeyRebind rebind = MakeEnabledRebind('A', 'B');
