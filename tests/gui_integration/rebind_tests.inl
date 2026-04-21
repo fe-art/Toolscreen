@@ -1882,6 +1882,70 @@ void RunKeyRebindGuiKeyboardLayoutCursorStateOverrideTest(TestRunMode runMode = 
         ExpectCapturedScanCode(capture, 0, kNumpadEnterScan, "GUI full rebind scan picker WM_KEYDOWN");
     }
 
+    void RunKeyRebindGuiKeyboardLayoutFullBindScanPickerCannotTypeTest(TestRunMode runMode = TestRunMode::Automated) {
+        constexpr DWORD kHomeScan = 0xE047;
+
+        DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+        if (SkipIfNoModernGuiTestGL(window)) { return; }
+        PrepareRebindGuiCase("key_rebind_gui_keyboard_layout_full_bind_scan_picker_cannot_type");
+
+        OpenKeyboardLayoutContext(window, 'A');
+        OpenKeyboardLayoutScanPicker(window);
+        SetKeyboardLayoutScanFilter(window, GuiTestKeyboardLayoutScanFilterGroup::Nav);
+        SelectKeyboardLayoutScan(window, kHomeScan);
+
+        Expect(g_config.keyRebinds.rebinds.size() == 1,
+            "Expected the full rebind scan picker cannot-type flow to create exactly one key rebind.");
+        const KeyRebind& rebind = g_config.keyRebinds.rebinds.front();
+        Expect(rebind.fromKey == 'A',
+            "Expected the full rebind scan picker cannot-type flow to bind from the clicked A key.");
+        Expect(rebind.toKey == VK_HOME,
+            "Expected the full rebind scan picker cannot-type flow to resolve Home as the trigger key.");
+        Expect(rebind.useCustomOutput,
+            "Expected the full rebind scan picker cannot-type flow to keep custom output state enabled.");
+        Expect(rebind.customOutputVK == VK_HOME,
+            "Expected the full rebind scan picker cannot-type flow to mirror Home as the editable full-output VK.");
+        Expect(rebind.customOutputScanCode == kHomeScan,
+            "Expected the full rebind scan picker cannot-type flow to store the Home scan code override.");
+
+        ResetGuiTestInteractionRects();
+        RenderKeyboardInputsFrame(window);
+
+        const GuiTestKeyboardLayoutKeyLabels labels = ExpectKeyboardLayoutKeyLabels(
+            'A', "Expected keyboard-layout labels after selecting Home from the full rebind scan picker.");
+        Expect(labels.primaryText == "CT",
+            "Expected selecting Home from the full rebind scan picker to render the compact cannot-type indicator.");
+        Expect(labels.secondaryText == "Home" || labels.secondaryText == "HOME",
+            "Expected selecting Home from the full rebind scan picker to render Home as the trigger label.");
+        Expect(labels.shiftLayerText.empty(),
+            "Expected selecting Home from the full rebind scan picker to avoid rendering a Shift-layer label.");
+
+        g_showGui.store(false, std::memory_order_release);
+        PublishConfigSnapshot();
+
+        ScopedRebindMessageCapture capture(window.hwnd());
+        ScopedKeyboardStateOverride keyboardState;
+        keyboardState.SetKeyDown(VK_SHIFT, false);
+        keyboardState.SetToggle(VK_CAPITAL, false);
+        keyboardState.Apply();
+
+        const LPARAM keyDownLParam = BuildTestKeyboardMessageLParam('A', true);
+        const InputHandlerResult keyDownResult = HandleKeyRebinding(window.hwnd(), WM_KEYDOWN, 'A', keyDownLParam);
+        Expect(keyDownResult.consumed,
+            "Expected the full rebind scan picker cannot-type flow to consume WM_KEYDOWN.");
+        Expect(capture.messages.size() == 1,
+            "Expected the full rebind scan picker cannot-type flow to forward exactly one WM_KEYDOWN message.");
+        ExpectCapturedMessage(capture, 0, WM_KEYDOWN, VK_HOME, "GUI full rebind scan picker cannot-type WM_KEYDOWN");
+        ExpectCapturedScanCode(capture, 0, kHomeScan, "GUI full rebind scan picker cannot-type WM_KEYDOWN");
+
+        capture.Clear();
+        const InputHandlerResult charResult = HandleCharRebinding(window.hwnd(), WM_CHAR, static_cast<WPARAM>('a'), keyDownLParam);
+        Expect(charResult.consumed,
+            "Expected the full rebind scan picker cannot-type flow to consume WM_CHAR.");
+        Expect(capture.messages.empty(),
+            "Expected the full rebind scan picker cannot-type flow to avoid forwarding WM_CHAR.");
+    }
+
     void RunKeyRebindGuiKeyboardLayoutScanPickerFilterTest(TestRunMode runMode = TestRunMode::Automated) {
         constexpr DWORD kNumpadEnterScan = 0xE01C;
 

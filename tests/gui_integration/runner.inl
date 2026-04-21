@@ -113,6 +113,7 @@ const auto& GetTestCaseDefinitions() {
         {"key-rebind-gui-keyboard-layout-change-custom-input-picker", &RunKeyRebindGuiKeyboardLayoutChangeCustomInputPickerTest},
         {"key-rebind-gui-keyboard-layout-change-custom-input-capture", &RunKeyRebindGuiKeyboardLayoutChangeCustomInputCaptureTest},
         {"key-rebind-gui-keyboard-layout-full-bind-scan-picker-runtime", &RunKeyRebindGuiKeyboardLayoutFullBindScanPickerRuntimeTest},
+        {"key-rebind-gui-keyboard-layout-full-bind-scan-picker-cannot-type", &RunKeyRebindGuiKeyboardLayoutFullBindScanPickerCannotTypeTest},
         {"key-rebind-gui-keyboard-layout-scan-picker-filter", &RunKeyRebindGuiKeyboardLayoutScanPickerFilterTest},
         {"key-rebind-gui-keyboard-layout-scan-picker-reset-to-default", &RunKeyRebindGuiKeyboardLayoutScanPickerResetToDefaultTest},
         {"config-load-fullscreen-stretch-repaired", &RunConfigLoadFullscreenStretchRepairedTest},

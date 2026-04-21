@@ -1074,6 +1074,7 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     key-rebind-gui-keyboard-layout-change-custom-input-picker
     key-rebind-gui-keyboard-layout-change-custom-input-capture
     key-rebind-gui-keyboard-layout-full-bind-scan-picker-runtime
+    key-rebind-gui-keyboard-layout-full-bind-scan-picker-cannot-type
     key-rebind-gui-keyboard-layout-scan-picker-filter
     key-rebind-gui-keyboard-layout-scan-picker-reset-to-default
     config-load-fullscreen-stretch-repaired

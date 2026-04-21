@@ -3202,24 +3202,12 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                     auto& r = g_config.keyRebinds.rebinds[s_layoutBindIndex];
                                     bool captureAccepted = true;
                                     if (s_layoutBindTarget == LayoutBindTarget::FullOutputVk) {
-                                        r.toKey = capturedVk;
-                                        r.triggerOutputDisabled = false;
-                                        r.baseOutputDisabled = false;
-                                        r.customOutputUnicode = 0;
                                         r.customOutputScanCode = 0;
-                                        r.baseOutputShifted = false;
-                                        r.shiftLayerEnabled = false;
-                                        r.shiftLayerUsesCapsLock = false;
-                                        r.shiftLayerOutputDisabled = false;
-                                        r.shiftLayerOutputVK = 0;
-                                        r.shiftLayerOutputUnicode = 0;
-                                        r.shiftLayerOutputShifted = false;
-                                        r.customOutputVK = capturedVk;
+                                        r.toKey = capturedVk;
+                                        setFullRebindState(r, r.fromKey);
                                         if (s_layoutBindIndex >= 0 && s_layoutBindIndex < (int)s_rebindUnicodeTextEdit.size()) {
                                             s_rebindUnicodeTextEdit[s_layoutBindIndex].clear();
                                         }
-
-                                        clearBaseTypesOverrideIfDefault(r, r.fromKey);
                                         g_configIsDirty = true;
                                     } else if (s_layoutBindTarget == LayoutBindTarget::TypesVk) {
                                         if (!canAcceptTypesVkCaptureFor(&r, r.fromKey, capturedVk)) {
@@ -3253,18 +3241,8 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                         r.triggerOutputDisabled = false;
 
                                         if (!s_layoutContextSplitMode) {
-                                            r.baseOutputDisabled = false;
-                                            r.customOutputUnicode = 0;
                                             r.customOutputScanCode = 0;
-                                            r.baseOutputShifted = false;
-                                            r.shiftLayerEnabled = false;
-                                            r.shiftLayerUsesCapsLock = false;
-                                            r.shiftLayerOutputDisabled = false;
-                                            r.shiftLayerOutputVK = 0;
-                                            r.shiftLayerOutputUnicode = 0;
-                                            r.shiftLayerOutputShifted = false;
-                                            r.customOutputVK = capturedVk;
-                                            clearBaseTypesOverrideIfDefault(r, r.fromKey);
+                                            setFullRebindState(r, r.fromKey);
                                         }
                                         g_configIsDirty = true;
                                     }
@@ -4232,14 +4210,24 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                     if (found->group == SG_Raw) return false;
                                     if (s_scanFilterGroup >= 0 && found->group != s_scanFilterGroup) return false;
 
+                                    const DWORD requestedVk = customLayoutSourceVkFromScan(requestedScan);
+                                    if (requestedVk == 0) return false;
+
                                     idx = createRebindForKeyIfMissing(s_layoutContextVk);
                                     s_layoutContextPreferredIndex = idx;
                                     if (idx < 0) return false;
 
                                     auto& rr = g_config.keyRebinds.rebinds[idx];
+                                    rr.toKey = requestedVk;
                                     rr.triggerOutputDisabled = false;
                                     rr.useCustomOutput = true;
                                     rr.customOutputScanCode = requestedScan;
+                                    if (!s_layoutContextSplitMode) {
+                                        setFullRebindState(rr, rr.fromKey);
+                                        if (idx >= 0 && idx < (int)s_rebindUnicodeTextEdit.size()) {
+                                            s_rebindUnicodeTextEdit[idx].clear();
+                                        }
+                                    }
                                     g_configIsDirty = true;
                                     r = &rr;
                                     return true;
