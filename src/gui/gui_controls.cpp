@@ -878,7 +878,7 @@ bool SpinnerDeferredTextInput(const char* id_label, int* v, int step, int min_va
     ImGui::SameLine(0, margin);
     ImGui::SetNextItemWidth(inputWidth);
     int pending_value = storage->GetInt(pending_id, *v);
-    ImGui::InputInt("##value", &pending_value, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::InputInt("##value", &pending_value, 0, 0);
     const bool input_active = ImGui::IsItemActive();
     const bool input_committed = ImGui::IsItemDeactivatedAfterEdit();
 

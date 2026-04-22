@@ -59,7 +59,6 @@ extern std::set<std::string> g_triggerOnReleaseInvalidated;
 extern std::mutex g_triggerOnReleaseMutex;
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
-static bool s_forcedShowCursor = false;
 static size_t s_bestMatchKeyCount = 0;
 static std::unordered_map<DWORD, size_t> s_bestMatchKeyCountByMainVk;
 static HHOOK s_lowLevelKeyboardHook = NULL;
@@ -731,7 +730,8 @@ InputHandlerResult HandleSetCursor(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     if (uMsg != WM_SETCURSOR) { return { false, 0 }; }
     PROFILE_SCOPE("HandleSetCursor");
 
-    if (g_showGui.load() && s_forcedShowCursor && g_gameVersion >= GameVersion(1, 13, 0)) {
+    if (g_showGui.load() && g_forceVisibleCursorWhileGuiOpen.load(std::memory_order_acquire) &&
+        g_gameVersion >= GameVersion(1, 13, 0)) {
         EnsureSystemCursorVisible();
         static HCURSOR s_arrowCursor = LoadCursorW(NULL, IDC_ARROW);
         SetCursor(s_arrowCursor);
@@ -865,9 +865,9 @@ InputHandlerResult HandleGuiToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     if (is_closing) {
         CloseSettingsGuiWindow();
 
-        if (s_forcedShowCursor) {
+        if (g_forceVisibleCursorWhileGuiOpen.load(std::memory_order_acquire)) {
             EnsureSystemCursorHidden();
-            s_forcedShowCursor = false;
+            g_forceVisibleCursorWhileGuiOpen.store(false, std::memory_order_release);
         }
         if (!g_wasCursorVisible.load()) {
             if (g_gameVersion < GameVersion(1, 13, 0)) {
@@ -880,12 +880,13 @@ InputHandlerResult HandleGuiToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         InvalidateImGuiCache();
         const bool wasCursorVisible = IsCursorVisible();
         g_wasCursorVisible = wasCursorVisible;
+        g_forceVisibleCursorWhileGuiOpen.store(false, std::memory_order_release);
         g_guiNeedsRecenter = true;
         if (!ApplyConfineCursorToGameWindow()) {
             ClipCursor(NULL);
         }
         if (!wasCursorVisible && g_gameVersion >= GameVersion(1, 13, 0)) {
-            s_forcedShowCursor = true;
+            g_forceVisibleCursorWhileGuiOpen.store(true, std::memory_order_release);
             EnsureSystemCursorVisible();
             static HCURSOR s_arrowCursor = LoadCursorW(NULL, IDC_ARROW);
             SetCursor(s_arrowCursor);
@@ -3483,14 +3484,15 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         return DefWindowProc(hWnd, uMsg, wParam, lParam);
     }
 
-    if (g_showGui.load() && s_forcedShowCursor && g_gameVersion >= GameVersion(1, 13, 0)) {
+    const bool guiOpen = g_showGui.load(std::memory_order_acquire);
+    if (guiOpen && g_forceVisibleCursorWhileGuiOpen.load(std::memory_order_acquire) && g_gameVersion >= GameVersion(1, 13, 0)) {
         EnsureSystemCursorVisible();
         static HCURSOR s_arrowCursor = LoadCursorW(NULL, IDC_ARROW);
         SetCursor(s_arrowCursor);
     }
-    if (!g_showGui.load() && s_forcedShowCursor) {
+    if (!guiOpen && g_forceVisibleCursorWhileGuiOpen.load(std::memory_order_acquire)) {
         EnsureSystemCursorHidden();
-        s_forcedShowCursor = false;
+        g_forceVisibleCursorWhileGuiOpen.store(false, std::memory_order_release);
     }
 
     UpdateLowLevelKeyboardHookInstalledState();

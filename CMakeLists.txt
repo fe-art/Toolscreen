@@ -1167,11 +1167,18 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     profile-switch-concurrent-snapshot-writes
 )
 
+set(TOOLSCREEN_GUI_INTEGRATION_CASE_TIMEOUT_SECONDS 120)
+set(TOOLSCREEN_GUI_INTEGRATION_GROUP_TIMEOUT_SECONDS 300)
+
 foreach(test_case IN LISTS TOOLSCREEN_GUI_INTEGRATION_TEST_CASES)
     string(REPLACE "-" "_" test_name_suffix "${test_case}")
     add_test(
         NAME toolscreen_integration_${test_name_suffix}
         COMMAND $<TARGET_FILE:toolscreen_gui_integration_tests> ${test_case}
+    )
+    set_tests_properties(
+        toolscreen_integration_${test_name_suffix}
+        PROPERTIES TIMEOUT ${TOOLSCREEN_GUI_INTEGRATION_CASE_TIMEOUT_SECONDS}
     )
 endforeach()
 
@@ -1191,7 +1198,9 @@ foreach(test_group IN LISTS TOOLSCREEN_GUI_INTEGRATION_TEST_GROUPS)
     )
     set_tests_properties(
         toolscreen_integration_group_${test_group_suffix}
-        PROPERTIES LABELS "gui-integration;group;${test_group}"
+        PROPERTIES
+            LABELS "gui-integration;group;${test_group}"
+            TIMEOUT ${TOOLSCREEN_GUI_INTEGRATION_GROUP_TIMEOUT_SECONDS}
     )
 endforeach()
 

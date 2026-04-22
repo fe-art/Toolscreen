@@ -27,6 +27,7 @@ struct RunningParallelTestGroup {
     HANDLE processHandle = nullptr;
     std::filesystem::path stdoutPath;
     std::filesystem::path stderrPath;
+    std::chrono::steady_clock::time_point launchTime;
 };
 
 const auto& GetTestCaseDefinitions() {
@@ -383,6 +384,7 @@ ParallelTestGroupResult RunTestGroupInChildProcess(std::string_view testGroupNam
 RunningParallelTestGroup LaunchTestGroupInChildProcess(std::string_view testGroupName, const std::filesystem::path& logDirectory) {
     RunningParallelTestGroup runningGroup;
     runningGroup.result.groupName = std::string(testGroupName);
+    runningGroup.launchTime = std::chrono::steady_clock::now();
 
     SECURITY_ATTRIBUTES securityAttributes{};
     securityAttributes.nLength = sizeof(securityAttributes);
@@ -855,9 +857,43 @@ void RunAllTestGroupsInParallel() {
     }
 
     constexpr DWORD kHeartbeatIntervalMs = 30000;
+    constexpr auto kGroupTimeout = std::chrono::minutes(5);
     size_t completedGroups = 0;
     std::vector<std::string> failedGroups;
     while (completedGroups < runningGroups.size()) {
+        const auto now = std::chrono::steady_clock::now();
+        for (RunningParallelTestGroup& runningGroup : runningGroups) {
+            if (runningGroup.processHandle == nullptr || now - runningGroup.launchTime < kGroupTimeout) {
+                continue;
+            }
+
+            runningGroup.result.failureMessage =
+                "Timed out after " + std::to_string(std::chrono::duration_cast<std::chrono::seconds>(kGroupTimeout).count()) +
+                " seconds while running GUI integration group '" + runningGroup.result.groupName + "'.";
+
+            if (!TerminateProcess(runningGroup.processHandle, ERROR_TIMEOUT)) {
+                runningGroup.result.failureMessage +=
+                    " Failed to terminate the child process: " + DescribeWindowsError(GetLastError());
+            } else {
+                WaitForSingleObject(runningGroup.processHandle, 5000);
+            }
+
+            try {
+                const ParallelTestGroupResult result = CompleteTestGroupInChildProcess(runningGroup);
+                PrintParallelTestGroupResult(result);
+            } catch (const std::exception& ex) {
+                runningGroup.result.failureMessage += " " + std::string(ex.what());
+                if (runningGroup.processHandle != nullptr) {
+                    CloseHandle(runningGroup.processHandle);
+                    runningGroup.processHandle = nullptr;
+                }
+                PrintParallelTestGroupResult(runningGroup.result);
+            }
+
+            failedGroups.push_back(runningGroup.result.groupName);
+            ++completedGroups;
+        }
+
         std::vector<HANDLE> waitHandles;
         waitHandles.reserve(runningGroups.size() - completedGroups);
         for (const RunningParallelTestGroup& runningGroup : runningGroups) {

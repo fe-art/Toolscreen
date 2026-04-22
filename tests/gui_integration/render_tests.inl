@@ -1378,6 +1378,13 @@ void RunModeNinjabrainOverlayRenderTest(TestRunMode runMode = TestRunMode::Autom
         return ReadFramebufferPixelColor(sampleX, sampleY, surface.height);
     };
 
+    auto renderWithoutOverlayAndSample = [&](DummyWindow& targetWindow) {
+        const bool rendered = RenderModeOverlayFrame(targetWindow, g_config, g_config.modes.front(), 0, false, false);
+        Expect(!rendered, "Expected stale Ninjabrain overlay data to skip overlay rendering.");
+        glFinish();
+        return ReadFramebufferPixelColor(sampleX, sampleY, surface.height);
+    };
+
     if (runMode == TestRunMode::Visual) {
         RunVisualLoop(window, "mode-ninjabrain-overlay-render", [&](DummyWindow& visualWindow) {
             (void)renderAndSample(visualWindow);
@@ -1396,7 +1403,7 @@ void RunModeNinjabrainOverlayRenderTest(TestRunMode runMode = TestRunMode::Autom
         staleData.lastUpdateTime = std::chrono::steady_clock::now() - std::chrono::seconds(nb.hideIfStaleDelaySeconds + 1);
         PublishNinjabrainData(std::move(staleData));
 
-        const Color staleSample = renderAndSample(window);
+        const Color staleSample = renderWithoutOverlayAndSample(window);
         Expect(IsColorNear(staleSample, kExpectedRenderSurfaceClear),
                "Expected the Ninjabrain overlay preview fixture to hide when its data is stale.");
     }

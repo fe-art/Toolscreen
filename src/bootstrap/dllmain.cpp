@@ -171,6 +171,7 @@ std::atomic<bool> g_configLoaded{ false };
 std::unordered_map<std::string, std::chrono::steady_clock::time_point> g_hotkeyTimestamps;
 std::atomic<bool> g_guiNeedsRecenter{ true };
 std::atomic<bool> g_wasCursorVisible{ true };
+std::atomic<bool> g_forceVisibleCursorWhileGuiOpen{ false };
 // Lock-free GUI toggle debounce timestamp
 std::atomic<int64_t> g_lastGuiToggleTimeMs{ 0 };
 
@@ -2000,14 +2001,24 @@ static void AttemptHookGlNamedFramebufferTextureViaGlew() {
 static BOOL SetCursorPosHook_Impl(SETCURSORPOSPROC next, int X, int Y) {
     if (!next) return FALSE;
 
-    if (g_showGui.load() || g_isShuttingDown.load()) { return next(X, Y); }
+    const bool guiOpen = g_showGui.load(std::memory_order_acquire);
+    const CapturingState capturingState = g_capturingMousePos.load(std::memory_order_acquire);
+    HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
+    if (hwnd != NULL && !IsWindowInForegroundTree(hwnd)) {
+        if (guiOpen || capturingState != CapturingState::NONE) {
+            g_capturingMousePos.store(CapturingState::NONE, std::memory_order_release);
+            g_nextMouseXY.store(std::make_pair(-1, -1), std::memory_order_release);
+            return TRUE;
+        }
+        return next(X, Y);
+    }
+
+    if (guiOpen || g_isShuttingDown.load()) { return next(X, Y); }
 
     ModeViewportInfo viewport = GetCurrentModeViewport();
     if (!viewport.valid) { return next(X, Y); }
 
-    CapturingState currentState = g_capturingMousePos.load();
-
-    if (currentState == CapturingState::DISABLED) {
+    if (capturingState == CapturingState::DISABLED) {
         // Convert viewport center (client-space) into absolute screen coordinates only when needed.
         int centerX = viewport.stretchX + viewport.stretchWidth / 2;
         int centerY = viewport.stretchY + viewport.stretchHeight / 2;
@@ -2030,7 +2041,7 @@ static BOOL SetCursorPosHook_Impl(SETCURSORPOSPROC next, int X, int Y) {
         return next(X, Y);
     }
 
-    if (currentState == CapturingState::NORMAL) {
+    if (capturingState == CapturingState::NORMAL) {
         auto [expectedX, expectedY] = g_nextMouseXY.load();
         if (expectedX == -1 && expectedY == -1) { return next(X, Y); }
         return next(expectedX, expectedY);
@@ -2126,19 +2137,34 @@ static void SyncLegacyLwjglRequestedResizeOnSwapThread(HWND hwnd) {
 #define GLFW_CURSOR_HIDDEN 0x00034002
 #define GLFW_CURSOR_DISABLED 0x00034003
 
+static void UpdateGuiCursorRestoreState(bool cursorVisibleAfterClose) {
+    if (!g_showGui.load(std::memory_order_acquire)) { return; }
+
+    g_wasCursorVisible.store(cursorVisibleAfterClose, std::memory_order_release);
+    g_forceVisibleCursorWhileGuiOpen.store(!cursorVisibleAfterClose, std::memory_order_release);
+}
+
 static void GlfwSetInputModeHook_Impl(GLFWSETINPUTMODE next, void* window, int mode, int value) {
     if (!next) return;
     if (mode != GLFW_CURSOR) { return next(window, mode, value); }
 
+    const bool guiOpen = g_showGui.load(std::memory_order_acquire);
+
     if (value == GLFW_CURSOR_DISABLED) {
         g_capturingMousePos.store(CapturingState::DISABLED);
         // When GUI is open, don't actually disable/lock the cursor - let it move freely
-        if (g_showGui.load()) {
+        if (guiOpen) {
+            UpdateGuiCursorRestoreState(false);
+            g_nextMouseXY.store(std::make_pair(-1, -1), std::memory_order_release);
+            g_capturingMousePos.store(CapturingState::NONE, std::memory_order_release);
             return; // Skip the call to keep cursor unlocked
         }
         next(window, mode, value);
     } else if (value == GLFW_CURSOR_NORMAL) {
         g_capturingMousePos.store(CapturingState::NORMAL);
+        if (guiOpen) {
+            UpdateGuiCursorRestoreState(true);
+        }
         next(window, mode, value);
     } else {
         next(window, mode, value);

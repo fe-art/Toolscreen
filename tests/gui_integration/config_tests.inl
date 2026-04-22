@@ -24,7 +24,7 @@ void RunConfigDefaultLoadTest(TestRunMode runMode = TestRunMode::Automated) {
                   "Expected default config load to apply the Ninjabrain Bot preset overlay scale.");
         Expect(!g_config.ninjabrainOverlay.onlyOnMyScreen && !g_config.ninjabrainOverlay.onlyOnObs,
             "Expected default config load to leave both Ninjabrain visibility filters disabled.");
-        Expect(!g_config.ninjabrainOverlay.hideIfStale && g_config.ninjabrainOverlay.hideIfStaleDelaySeconds == 10,
+        Expect(!g_config.ninjabrainOverlay.hideIfStale && g_config.ninjabrainOverlay.hideIfStaleDelaySeconds == 30,
             "Expected default config load to use the default stale-hide Ninjabrain settings.");
 
     if (runMode == TestRunMode::Visual) {
