@@ -864,17 +864,6 @@ InputHandlerResult HandleGuiToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 
     if (is_closing) {
         CloseSettingsGuiWindow();
-
-        if (g_forceVisibleCursorWhileGuiOpen.load(std::memory_order_acquire)) {
-            EnsureSystemCursorHidden();
-            g_forceVisibleCursorWhileGuiOpen.store(false, std::memory_order_release);
-        }
-        if (!g_wasCursorVisible.load()) {
-            if (g_gameVersion < GameVersion(1, 13, 0)) {
-                HCURSOR airCursor = g_specialCursorHandle.load();
-                if (airCursor) SetCursor(airCursor);
-            }
-        }
     } else if (!isEscape) {
         g_showGui = true;
         InvalidateImGuiCache();

@@ -376,6 +376,8 @@ bool GetWindowClientRectInScreen(HWND hwnd, RECT& outRect);
 bool IsWindowInForegroundTree(HWND hwnd);
 BOOL ClipCursorDirect(const RECT* lpRect);
 bool ApplyConfineCursorToGameWindow();
+void ApplyDeferredGuiCursorModeAfterClose();
+void FinalizeGuiCursorStateAfterClose();
 
 UINT GetToolscreenBorderlessToggleMessageId();
 void RememberRequestedWindowClientResize(int width, int height);

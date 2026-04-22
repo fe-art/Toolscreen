@@ -172,6 +172,9 @@ std::unordered_map<std::string, std::chrono::steady_clock::time_point> g_hotkeyT
 std::atomic<bool> g_guiNeedsRecenter{ true };
 std::atomic<bool> g_wasCursorVisible{ true };
 std::atomic<bool> g_forceVisibleCursorWhileGuiOpen{ false };
+constexpr int kDeferredGuiGlfwCursorModeNone = 0;
+std::atomic<int> g_deferredGuiGlfwCursorMode{ kDeferredGuiGlfwCursorModeNone };
+std::atomic<void*> g_lastGlfwCursorWindow{ nullptr };
 // Lock-free GUI toggle debounce timestamp
 std::atomic<int64_t> g_lastGuiToggleTimeMs{ 0 };
 
@@ -2013,7 +2016,8 @@ static BOOL SetCursorPosHook_Impl(SETCURSORPOSPROC next, int X, int Y) {
         return next(X, Y);
     }
 
-    if (guiOpen || g_isShuttingDown.load()) { return next(X, Y); }
+    if (guiOpen) { return TRUE; }
+    if (g_isShuttingDown.load()) { return next(X, Y); }
 
     ModeViewportInfo viewport = GetCurrentModeViewport();
     if (!viewport.valid) { return next(X, Y); }
@@ -2144,33 +2148,66 @@ static void UpdateGuiCursorRestoreState(bool cursorVisibleAfterClose) {
     g_forceVisibleCursorWhileGuiOpen.store(!cursorVisibleAfterClose, std::memory_order_release);
 }
 
+static void ApplyGlfwCursorMode_Impl(GLFWSETINPUTMODE next, void* window, int value) {
+    if (!next) return;
+
+    if (value == GLFW_CURSOR_DISABLED) {
+        g_capturingMousePos.store(CapturingState::DISABLED, std::memory_order_release);
+        next(window, GLFW_CURSOR, value);
+    } else if (value == GLFW_CURSOR_NORMAL) {
+        g_capturingMousePos.store(CapturingState::NORMAL, std::memory_order_release);
+        next(window, GLFW_CURSOR, value);
+    } else {
+        next(window, GLFW_CURSOR, value);
+    }
+
+    g_capturingMousePos.store(CapturingState::NONE, std::memory_order_release);
+}
+
+void ApplyDeferredGuiCursorModeAfterClose() {
+    const int deferredMode = g_deferredGuiGlfwCursorMode.exchange(kDeferredGuiGlfwCursorModeNone, std::memory_order_acq_rel);
+    if (deferredMode == kDeferredGuiGlfwCursorModeNone) { return; }
+
+    void* window = g_lastGlfwCursorWindow.load(std::memory_order_acquire);
+    GLFWSETINPUTMODE directProc = oglfwSetInputMode ? oglfwSetInputMode : g_oglfwSetInputModeThirdParty;
+    if (!window || !directProc) { return; }
+
+    ApplyGlfwCursorMode_Impl(directProc, window, deferredMode);
+}
+
+void FinalizeGuiCursorStateAfterClose() {
+    if (g_forceVisibleCursorWhileGuiOpen.load(std::memory_order_acquire)) {
+        if (g_gameVersion >= GameVersion(1, 13, 0) && IsCursorVisible()) {
+            ShowCursor(FALSE);
+        }
+        g_forceVisibleCursorWhileGuiOpen.store(false, std::memory_order_release);
+    }
+
+    if (!g_wasCursorVisible.load(std::memory_order_acquire) && g_gameVersion < GameVersion(1, 13, 0)) {
+        HCURSOR airCursor = g_specialCursorHandle.load(std::memory_order_acquire);
+        if (airCursor != NULL) {
+            SetCursor(airCursor);
+        }
+    }
+}
+
 static void GlfwSetInputModeHook_Impl(GLFWSETINPUTMODE next, void* window, int mode, int value) {
     if (!next) return;
     if (mode != GLFW_CURSOR) { return next(window, mode, value); }
 
     const bool guiOpen = g_showGui.load(std::memory_order_acquire);
 
-    if (value == GLFW_CURSOR_DISABLED) {
-        g_capturingMousePos.store(CapturingState::DISABLED);
-        // When GUI is open, don't actually disable/lock the cursor - let it move freely
-        if (guiOpen) {
-            UpdateGuiCursorRestoreState(false);
-            g_nextMouseXY.store(std::make_pair(-1, -1), std::memory_order_release);
-            g_capturingMousePos.store(CapturingState::NONE, std::memory_order_release);
-            return; // Skip the call to keep cursor unlocked
-        }
-        next(window, mode, value);
-    } else if (value == GLFW_CURSOR_NORMAL) {
-        g_capturingMousePos.store(CapturingState::NORMAL);
-        if (guiOpen) {
-            UpdateGuiCursorRestoreState(true);
-        }
-        next(window, mode, value);
-    } else {
-        next(window, mode, value);
+    g_lastGlfwCursorWindow.store(window, std::memory_order_release);
+
+    if (guiOpen) {
+        g_deferredGuiGlfwCursorMode.store(value, std::memory_order_release);
+        UpdateGuiCursorRestoreState(value == GLFW_CURSOR_NORMAL);
+        g_nextMouseXY.store(std::make_pair(-1, -1), std::memory_order_release);
+        g_capturingMousePos.store(CapturingState::NONE, std::memory_order_release);
+        return;
     }
 
-    g_capturingMousePos.store(CapturingState::NONE);
+    ApplyGlfwCursorMode_Impl(next, window, value);
 }
 
 void hkglfwSetInputMode(void* window, int mode, int value) { GlfwSetInputModeHook_Impl(oglfwSetInputMode, window, mode, value); }

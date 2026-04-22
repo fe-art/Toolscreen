@@ -2285,6 +2285,8 @@ void CloseSettingsGuiWindow() {
     ImGuiInputQueue_Clear();
     ImGuiInputQueue_ResetMouseCapture(hwnd);
 
+    ApplyDeferredGuiCursorModeAfterClose();
+
     if (ApplyConfineCursorToGameWindow()) {
         SetCursor(NULL);
     } else if (!g_wasCursorVisible.load(std::memory_order_acquire)) {
@@ -2296,6 +2298,8 @@ void CloseSettingsGuiWindow() {
         }
         SetCursor(NULL);
     }
+
+    FinalizeGuiCursorStateAfterClose();
 
     ResetGuiTransientInteractionState();
 }
