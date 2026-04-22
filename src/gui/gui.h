@@ -415,16 +415,16 @@ struct ModeConfig {
     std::vector<std::string> browserOverlayIds;
     StretchConfig stretch;
 
-    GameTransitionType gameTransition = GameTransitionType::Bounce;
+    GameTransitionType gameTransition = GameTransitionType::Cut;
     OverlayTransitionType overlayTransition = OverlayTransitionType::Cut;
     BackgroundTransitionType backgroundTransition = BackgroundTransitionType::Cut;
-    int transitionDurationMs = 500;
+    int transitionDurationMs = 150;
 
     float easeInPower = 1.0f;
     float easeOutPower = 3.0f;
     int bounceCount = 0;
     float bounceIntensity = 0.15f;
-    int bounceDurationMs = 150;
+    int bounceDurationMs = 100;
     bool relativeStretching = false;
     bool skipAnimateX = false;
     bool skipAnimateY = false;
@@ -1084,7 +1084,7 @@ struct ModeTransitionAnimation {
     float easeOutPower = 3.0f;
     int bounceCount = 0;
     float bounceIntensity = 0.15f;
-    int bounceDurationMs = 150;
+    int bounceDurationMs = 100;
     bool skipAnimateX = false;
     bool skipAnimateY = false;
 

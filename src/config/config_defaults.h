@@ -105,7 +105,7 @@ constexpr int BROWSER_OVERLAY_RELOAD_INTERVAL = 0;
 
 constexpr int MODE_WIDTH = 0;
 constexpr int MODE_HEIGHT = 0;
-constexpr int MODE_TRANSITION_DURATION_MS = 500;
+constexpr int MODE_TRANSITION_DURATION_MS = 150;
 constexpr float MODE_EASE_IN_POWER = 1.0f;
 constexpr float MODE_EASE_OUT_POWER = 3.0f;
 constexpr int MODE_BOUNCE_COUNT = 0;

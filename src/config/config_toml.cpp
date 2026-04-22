@@ -333,7 +333,7 @@ void ModeConfigFromTomlInternal(const toml::table& tbl, ModeConfig& cfg, const s
     const toml::table* transitionTbl = GetTable(tbl, "transition");
     const toml::table& transitionSrc = transitionTbl ? *transitionTbl : tbl;
 
-    cfg.gameTransition = StringToGameTransitionType(GetStringOr(transitionSrc, "gameTransition", ConfigDefaults::GAME_TRANSITION_BOUNCE));
+    cfg.gameTransition = StringToGameTransitionType(GetStringOr(transitionSrc, "gameTransition", ConfigDefaults::GAME_TRANSITION_CUT));
     cfg.overlayTransition =
         StringToOverlayTransitionType(GetStringOr(transitionSrc, "overlayTransition", ConfigDefaults::OVERLAY_TRANSITION_CUT));
     cfg.backgroundTransition =
