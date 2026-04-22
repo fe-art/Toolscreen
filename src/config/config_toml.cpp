@@ -1682,6 +1682,8 @@ void CursorsConfigFromToml(const toml::table& tbl, CursorsConfig& cfg) {
 
 void CursorTrailConfigToToml(const CursorTrailConfig& cfg, toml::table& out) {
     out.insert("enabled", cfg.enabled);
+    out.insert("onlyOnMyScreen", cfg.onlyOnMyScreen);
+    out.insert("onlyOnObs", cfg.onlyOnObs);
     out.insert("lifetimeMs", cfg.lifetimeMs);
     out.insert("stampSpacingPx", cfg.stampSpacingPx);
     out.insert("spriteSizePx", cfg.spriteSizePx);
@@ -1698,6 +1700,8 @@ void CursorTrailConfigToToml(const CursorTrailConfig& cfg, toml::table& out) {
 
 void CursorTrailConfigFromToml(const toml::table& tbl, CursorTrailConfig& cfg) {
     cfg.enabled = GetOr(tbl, "enabled", ConfigDefaults::CURSOR_TRAIL_ENABLED);
+    cfg.onlyOnMyScreen = GetOr(tbl, "onlyOnMyScreen", ConfigDefaults::CURSOR_TRAIL_ONLY_ON_MY_SCREEN);
+    cfg.onlyOnObs = GetOr(tbl, "onlyOnObs", ConfigDefaults::CURSOR_TRAIL_ONLY_ON_OBS);
     cfg.lifetimeMs = std::clamp(GetOr(tbl, "lifetimeMs", ConfigDefaults::CURSOR_TRAIL_LIFETIME_MS), 50, 500);
     cfg.stampSpacingPx = std::clamp(GetOr(tbl, "stampSpacingPx", ConfigDefaults::CURSOR_TRAIL_STAMP_SPACING_PX), 1, 64);
     cfg.spriteSizePx = std::clamp(GetOr(tbl, "spriteSizePx", ConfigDefaults::CURSOR_TRAIL_SPRITE_SIZE_PX), 4, 256);

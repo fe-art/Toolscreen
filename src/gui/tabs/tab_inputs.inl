@@ -32,6 +32,8 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                 const bool showCursorTrailSection = ShouldRenderConfigSearchSection(showAllMouseSections, {
                     trc("cursor_trail.section_title"),
                     trc("cursor_trail.enabled"),
+                    trc("cursor_trail.only_on_my_screen"),
+                    trc("cursor_trail.only_on_obs"),
                     trc("cursor_trail.lifetime_ms"),
                     trc("cursor_trail.stamp_spacing"),
                     trc("cursor_trail.color"),
@@ -294,6 +296,20 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                     if (ImGui::Checkbox(trc("cursor_trail.enabled"), &trail.enabled)) { g_configIsDirty = true; }
                     ImGui::SameLine();
                     HelpMarker(trc("cursor_trail.tooltip.enabled"));
+
+                    if (ImGui::Checkbox(trc("cursor_trail.only_on_my_screen"), &trail.onlyOnMyScreen)) {
+                        if (trail.onlyOnMyScreen) trail.onlyOnObs = false;
+                        g_configIsDirty = true;
+                    }
+                    ImGui::SameLine();
+                    HelpMarker(trc("cursor_trail.tooltip.only_on_my_screen"));
+
+                    if (ImGui::Checkbox(trc("cursor_trail.only_on_obs"), &trail.onlyOnObs)) {
+                        if (trail.onlyOnObs) trail.onlyOnMyScreen = false;
+                        g_configIsDirty = true;
+                    }
+                    ImGui::SameLine();
+                    HelpMarker(trc("cursor_trail.tooltip.only_on_obs"));
 
                     if (trail.enabled) {
                         const float sliderW = 300.0f;

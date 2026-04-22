@@ -47,6 +47,7 @@ struct TrailState {
     DWORD lastThreadId = 0;
     int lastWindowWidth = 0;
     int lastWindowHeight = 0;
+    uint64_t lastUpdateFrameTag = 0;
 
     GLuint texture = 0;
     std::string cachedSpritePath;
@@ -68,6 +69,7 @@ void ResetTrailBuffer() {
     g_trail.head = 0;
     g_trail.count = 0;
     g_trail.sampleCount = 0;
+    g_trail.lastUpdateFrameTag = 0;
 }
 
 bool ReadFileBytes(const std::wstring& widePath, std::vector<unsigned char>& out) {
@@ -195,7 +197,7 @@ void EmitStampsAlongQuadBezier(float p0x, float p0y, float p1x, float p1y, float
 
 } // namespace
 
-void RenderCursorTrail(HWND hwnd, int windowWidth, int windowHeight, const CursorTrailConfig& cfg) {
+void RenderCursorTrail(HWND hwnd, int windowWidth, int windowHeight, const CursorTrailConfig& cfg, uint64_t frameTag) {
     if (!cfg.enabled) {
         ResetTrailBuffer();
         return;
@@ -233,61 +235,65 @@ void RenderCursorTrail(HWND hwnd, int windowWidth, int windowHeight, const Curso
     const uint64_t now = NowMs();
     const int lifetimeMs = std::max(1, cfg.lifetimeMs);
 
-    const uint64_t lastCall = g_trail.lastCallTimeMs;
-    g_trail.lastCallTimeMs = now;
-    if (lastCall > 0 && now > lastCall && (now - lastCall) > kMaxSampleGapMs) {
-        g_trail.sampleCount = 0;
-    }
-
-    g_trail.samples[0] = g_trail.samples[1];
-    g_trail.samples[1] = g_trail.samples[2];
-    g_trail.samples[2] = { curX, curY };
-    if (g_trail.sampleCount < 3) { g_trail.sampleCount++; }
-
-    if (g_trail.sampleCount >= 2) {
-        const float dxT = g_trail.samples[2].first - g_trail.samples[1].first;
-        const float dyT = g_trail.samples[2].second - g_trail.samples[1].second;
-        const float distT = std::sqrt(dxT * dxT + dyT * dyT);
-        const float screenDiagonal = std::sqrt(
-            static_cast<float>(windowWidth) * static_cast<float>(windowWidth) +
-            static_cast<float>(windowHeight) * static_cast<float>(windowHeight));
-        if (distT > screenDiagonal) {
+    const bool shouldAdvanceState = frameTag == 0 || g_trail.lastUpdateFrameTag != frameTag;
+    if (shouldAdvanceState) {
+        const uint64_t lastCall = g_trail.lastCallTimeMs;
+        g_trail.lastCallTimeMs = now;
+        if (frameTag != 0) { g_trail.lastUpdateFrameTag = frameTag; }
+        if (lastCall > 0 && now > lastCall && (now - lastCall) > kMaxSampleGapMs) {
             g_trail.sampleCount = 0;
         }
-    }
 
-    if (g_trail.sampleCount >= 2) {
-        const float s1x = g_trail.samples[1].first;
-        const float s1y = g_trail.samples[1].second;
-        const float s2x = g_trail.samples[2].first;
-        const float s2y = g_trail.samples[2].second;
+        g_trail.samples[0] = g_trail.samples[1];
+        g_trail.samples[1] = g_trail.samples[2];
+        g_trail.samples[2] = { curX, curY };
+        if (g_trail.sampleCount < 3) { g_trail.sampleCount++; }
 
-        float ctlX;
-        float ctlY;
-        if (g_trail.sampleCount >= 3) {
-            const float s0x = g_trail.samples[0].first;
-            const float s0y = g_trail.samples[0].second;
-            ctlX = s1x + (s2x - s0x) * 0.25f;
-            ctlY = s1y + (s2y - s0y) * 0.25f;
-        } else {
-            ctlX = 0.5f * (s1x + s2x);
-            ctlY = 0.5f * (s1y + s2y);
+        if (g_trail.sampleCount >= 2) {
+            const float dxT = g_trail.samples[2].first - g_trail.samples[1].first;
+            const float dyT = g_trail.samples[2].second - g_trail.samples[1].second;
+            const float distT = std::sqrt(dxT * dxT + dyT * dyT);
+            const float screenDiagonal = std::sqrt(
+                static_cast<float>(windowWidth) * static_cast<float>(windowWidth) +
+                static_cast<float>(windowHeight) * static_cast<float>(windowHeight));
+            if (distT > screenDiagonal) {
+                g_trail.sampleCount = 0;
+            }
         }
 
-        float sizeBoost = 1.0f;
-        if (cfg.useVelocitySize && lastCall > 0 && now > lastCall) {
-            constexpr float kReferencePxPerMs = 2.0f;
-            const float dxV = s2x - s1x;
-            const float dyV = s2y - s1y;
-            const float distV = std::sqrt(dxV * dxV + dyV * dyV);
-            const float dtMs = static_cast<float>(now - lastCall);
-            const float velocityPxPerMs = distV / dtMs;
-            const float velocityFraction = std::clamp(velocityPxPerMs / kReferencePxPerMs, 0.0f, 1.0f);
-            const float intensity = std::clamp(cfg.velocitySizeIntensity, 0.0f, 1.0f);
-            sizeBoost = 1.0f + intensity * velocityFraction;
-        }
+        if (g_trail.sampleCount >= 2) {
+            const float s1x = g_trail.samples[1].first;
+            const float s1y = g_trail.samples[1].second;
+            const float s2x = g_trail.samples[2].first;
+            const float s2y = g_trail.samples[2].second;
 
-        EmitStampsAlongQuadBezier(s1x, s1y, ctlX, ctlY, s2x, s2y, cfg.stampSpacingPx, now, sizeBoost);
+            float ctlX;
+            float ctlY;
+            if (g_trail.sampleCount >= 3) {
+                const float s0x = g_trail.samples[0].first;
+                const float s0y = g_trail.samples[0].second;
+                ctlX = s1x + (s2x - s0x) * 0.25f;
+                ctlY = s1y + (s2y - s0y) * 0.25f;
+            } else {
+                ctlX = 0.5f * (s1x + s2x);
+                ctlY = 0.5f * (s1y + s2y);
+            }
+
+            float sizeBoost = 1.0f;
+            if (cfg.useVelocitySize && lastCall > 0 && now > lastCall) {
+                constexpr float kReferencePxPerMs = 2.0f;
+                const float dxV = s2x - s1x;
+                const float dyV = s2y - s1y;
+                const float distV = std::sqrt(dxV * dxV + dyV * dyV);
+                const float dtMs = static_cast<float>(now - lastCall);
+                const float velocityPxPerMs = distV / dtMs;
+                const float velocityFraction = std::clamp(velocityPxPerMs / kReferencePxPerMs, 0.0f, 1.0f);
+                const float intensity = std::clamp(cfg.velocitySizeIntensity, 0.0f, 1.0f);
+                sizeBoost = 1.0f + intensity * velocityFraction;
+            }
+
+            EmitStampsAlongQuadBezier(s1x, s1y, ctlX, ctlY, s2x, s2y, cfg.stampSpacingPx, now, sizeBoost);
+        }
     }
 
     if (g_trail.count == 0) { return; }
@@ -307,7 +313,6 @@ void RenderCursorTrail(HWND hwnd, int windowWidth, int windowHeight, const Curso
     GLint oldProgram = 0;
     glGetIntegerv(GL_CURRENT_PROGRAM, &oldProgram);
 
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glDisable(GL_SCISSOR_TEST);
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_CULL_FACE);

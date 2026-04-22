@@ -150,6 +150,8 @@ constexpr int CURSOR_SIZE = 64;
 constexpr bool CURSORS_ENABLED = false;
 
 constexpr bool  CURSOR_TRAIL_ENABLED             = false;
+constexpr bool  CURSOR_TRAIL_ONLY_ON_MY_SCREEN   = false;
+constexpr bool  CURSOR_TRAIL_ONLY_ON_OBS         = false;
 constexpr int   CURSOR_TRAIL_LIFETIME_MS         = 150;
 constexpr int   CURSOR_TRAIL_STAMP_SPACING_PX    = 1;
 constexpr int   CURSOR_TRAIL_SPRITE_SIZE_PX      = 11;

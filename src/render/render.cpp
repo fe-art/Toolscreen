@@ -1,5 +1,6 @@
 #include "render.h"
 #include "platform/resource.h"
+#include "features/cursor_trail.h"
 #include "features/ninjabrain_data.h"
 #include "features/fake_cursor.h"
 #include "gui/gui.h"
@@ -4288,6 +4289,7 @@ struct SameThreadOverlayState {
     bool showWelcomeToast = false;
     bool welcomeToastIsFullscreen = false;
     bool showRebindIndicator = false;
+    bool showCursorTrail = false;
     bool modeHasMirrors = false;
     bool modeHasImages = false;
     bool modeHasWindowOverlays = false;
@@ -4370,6 +4372,13 @@ static bool ShouldRenderNinjabrainOverlayForRequest(const SameThreadOverlayState
     return GetNinjabrainOverlayRenderEligibilityFailure(request) == nullptr;
 }
 
+static bool ShouldRenderCursorTrailForRequest(const SameThreadOverlayState& request, const Config& cfg) {
+    if (!request.showCursorTrail || !cfg.cursorTrail.enabled) { return false; }
+    if (request.excludeOnlyOnMyScreen && cfg.cursorTrail.onlyOnMyScreen) { return false; }
+    if (!request.excludeOnlyOnMyScreen && cfg.cursorTrail.onlyOnObs) { return false; }
+    return true;
+}
+
 #ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
 const char* GetNinjabrainOverlayRenderEligibilityFailureForIntegrationTest(const std::string& modeId,
                                                                            bool excludeOnlyOnMyScreen) {
@@ -4382,7 +4391,7 @@ const char* GetNinjabrainOverlayRenderEligibilityFailureForIntegrationTest(const
 
 static bool HasSameThreadOverlayWork(const SameThreadOverlayState& request, const Config& cfg, bool renderNinjabrainOverlay) {
     if (request.modeHasMirrors || request.modeHasImages || request.modeHasWindowOverlays || request.modeHasBrowserOverlays ||
-        request.shouldRenderGui ||
+        request.shouldRenderGui || request.showCursorTrail ||
         request.showPerformanceOverlay || request.showProfiler || request.showTextureGrid || request.showEyeZoom ||
         request.showWelcomeToast || request.showRebindIndicator || renderNinjabrainOverlay) {
         return true;
@@ -4533,9 +4542,11 @@ static void RenderSameThreadImGui(const SameThreadOverlayState& request, bool re
 
 static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, const Config& cfg, const GLState& s) {
     bool renderNinjabrainOverlay = false;
+    bool renderCursorTrail = false;
     {
         PROFILE_SCOPE_CAT("Resolve Same-Thread Overlay Work", "Rendering");
         renderNinjabrainOverlay = ShouldRenderNinjabrainOverlayForRequest(request);
+        renderCursorTrail = ShouldRenderCursorTrailForRequest(request, cfg);
         if (!HasSameThreadOverlayWork(request, cfg, renderNinjabrainOverlay)) { return false; }
     }
 
@@ -4816,6 +4827,14 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
         RenderRebindIndicator();
     }
 
+    if (renderCursorTrail) {
+        HWND hwnd = g_minecraftHwnd.load();
+        if (hwnd) {
+            PROFILE_SCOPE_CAT("Render Cursor Trail", "Rendering");
+            RenderCursorTrail(hwnd, request.fullW, request.fullH, cfg.cursorTrail, request.mirrorCaptureFrameTag);
+        }
+    }
+
     RenderSameThreadImGui(request, renderNinjabrainOverlay);
     if (request.showWelcomeToast) {
         PROFILE_SCOPE_CAT("Render Welcome Toast", "Rendering");
@@ -4823,7 +4842,7 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
     }
     return !activeMirrors.empty() || !eyeZoomSlideOutMirrors->empty() || !transitionSlideOutMirrors->empty() || !activeImages.empty() ||
             !activeWindowOverlays.empty() || !activeBrowserOverlays.empty() || request.shouldRenderGui || request.showPerformanceOverlay || request.showProfiler ||
-           request.showTextureGrid || request.showEyeZoom || request.showWelcomeToast || request.showRebindIndicator || renderNinjabrainOverlay;
+           request.showTextureGrid || request.showEyeZoom || request.showWelcomeToast || request.showRebindIndicator || renderCursorTrail || renderNinjabrainOverlay;
 }
 
 bool RenderModeOverlaysForIntegrationTest(const Config& config, const ModeConfig& modeToRender, const GLState& s, int fullW,
@@ -4858,6 +4877,7 @@ bool RenderModeOverlaysForIntegrationTest(const Config& config, const ModeConfig
     request.toFullW = fullW;
     request.toFullH = fullH;
     request.shouldRenderGui = renderGui;
+    request.showCursorTrail = config.cursorTrail.enabled && IsCursorVisible();
     request.modeHasMirrors = gameTextureId != 0 && (!modeToRender.mirrorIds.empty() || !modeToRender.mirrorGroupIds.empty());
     request.modeHasImages = !modeToRender.imageIds.empty();
     request.modeHasWindowOverlays = g_windowOverlaysVisible.load(std::memory_order_acquire) &&
@@ -5569,6 +5589,7 @@ bool RenderSameThreadObsFrame(const ModeConfig* modeToRender, const GLState& s, 
             request.textureGridModeHeight = 0;
             request.showWelcomeToast = false;
             request.welcomeToastIsFullscreen = false;
+            request.showCursorTrail = cfgSnap->cursorTrail.enabled && IsCursorVisible();
             request.modeHasMirrors = !modeToRender->mirrorIds.empty() || !modeToRender->mirrorGroupIds.empty();
             request.modeHasImages = g_imageOverlaysVisible.load(std::memory_order_acquire) && !modeToRender->imageIds.empty();
             request.modeHasWindowOverlays = g_windowOverlaysVisible.load(std::memory_order_acquire) &&
@@ -6987,7 +7008,9 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
         }
     }
 
-    const bool wantOverlayThisFrame = wantOverlayElements || wantAnyImGui || wantWelcomeToast || wantRebindIndicator;
+    const bool wantCursorTrail = configSnap && configSnap->cursorTrail.enabled && IsCursorVisible();
+    const bool wantOverlayThisFrame = wantOverlayElements || wantAnyImGui || wantWelcomeToast || wantRebindIndicator ||
+                                      wantCursorTrail;
     const auto populateOverlayState = [&](auto& target) {
         const bool slideAnimationsEnabled = transitionState.active && transitionState.gameTransition == GameTransitionType::Bounce;
 
@@ -7084,6 +7107,7 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
             target.welcomeToastIsFullscreen = isFullscreenMode;
             target.showWelcomeToast = wantWelcomeToast;
             target.showRebindIndicator = wantRebindIndicator;
+            target.showCursorTrail = wantCursorTrail;
             target.modeHasMirrors = hasMirrors;
             target.modeHasImages = g_imageOverlaysVisible.load(std::memory_order_acquire) && !modeToRender->imageIds.empty();
             target.modeHasWindowOverlays = g_windowOverlaysVisible.load(std::memory_order_acquire) &&

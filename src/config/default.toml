@@ -38,6 +38,8 @@ enabled = false
 
 [cursorTrail]
 enabled = false
+onlyOnMyScreen = false
+onlyOnObs = false
 lifetimeMs = 150
 stampSpacingPx = 1
 spriteSizePx = 11

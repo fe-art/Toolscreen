@@ -512,6 +512,8 @@ struct CursorsConfig {
 };
 struct CursorTrailConfig {
     bool enabled = ConfigDefaults::CURSOR_TRAIL_ENABLED;
+    bool onlyOnMyScreen = ConfigDefaults::CURSOR_TRAIL_ONLY_ON_MY_SCREEN;
+    bool onlyOnObs = ConfigDefaults::CURSOR_TRAIL_ONLY_ON_OBS;
     int lifetimeMs = ConfigDefaults::CURSOR_TRAIL_LIFETIME_MS;
     int stampSpacingPx = ConfigDefaults::CURSOR_TRAIL_STAMP_SPACING_PX;
     int spriteSizePx = ConfigDefaults::CURSOR_TRAIL_SPRITE_SIZE_PX;
