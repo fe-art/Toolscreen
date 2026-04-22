@@ -574,6 +574,7 @@
     "modes.eyezoom.overlay": "Overlay",
     "modes.eyezoom.overlay_pixels": "Overlay Pixels",
     "modes.eyezoom.per_square_auto_font_size": "Per-Square Auto Font Size",
+    "modes.eyezoom.override_rect_height": "Override Rectangle Height (px)",
     "modes.eyezoom.settings": "EyeZoom Settings",
     "modes.eyezoom.slide_zoom_in": "Slide Zoom In",
     "modes.eyezoom.text_color": "Text Color",

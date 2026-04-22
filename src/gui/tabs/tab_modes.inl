@@ -879,7 +879,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
 
                 if (!g_config.eyezoom.linkRectToFont) {
                     ImGui::SetNextItemWidth(250);
-                    if (ImGui::SliderInt("Override Rectangle Height (px)", &g_config.eyezoom.rectHeight, 8, 120)) {
+                    if (ImGui::SliderInt(trc("modes.eyezoom.override_rect_height"), &g_config.eyezoom.rectHeight, 8, 120)) {
                         g_configIsDirty = true;
                     }
                 }
@@ -969,13 +969,13 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                         const char* animTypeNames[] = { trc("modes.gradient_animation_none"), trc("modes.gradient_animation_rotate"), trc("modes.gradient_animation_slide"), trc("modes.gradient_animation_wave"), trc("modes.gradient_animation_spiral"), trc("modes.gradient_animation_fade") };
                         int currentAnimType = static_cast<int>(mode.background.gradientAnimation);
                         ImGui::SetNextItemWidth(120);
-                        if (ImGui::Combo("Type##GradAnim", &currentAnimType, animTypeNames, IM_ARRAYSIZE(animTypeNames))) {
+                        if (ImGui::Combo((std::string(tr("modes.gradient_animation_type")) + "##GradAnim").c_str(), &currentAnimType, animTypeNames, IM_ARRAYSIZE(animTypeNames))) {
                             mode.background.gradientAnimation = static_cast<GradientAnimationType>(currentAnimType);
                             g_configIsDirty = true;
                         }
                         if (mode.background.gradientAnimation != GradientAnimationType::None) {
                             ImGui::SetNextItemWidth(150);
-                            if (ImGui::SliderFloat("Speed##GradAnimSpeed", &mode.background.gradientAnimationSpeed, 0.1f, 5.0f, "%.1fx")) {
+                            if (ImGui::SliderFloat((tr("modes.gradient_animation_speed") + "##GradAnimSpeed").c_str(), &mode.background.gradientAnimationSpeed, 0.1f, 5.0f, "%.1fx")) {
                                 g_configIsDirty = true;
                             }
                             /*
@@ -987,7 +987,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                             }*/
                         }
                     } else if (mode.background.selectedMode == "image") {
-                        if (ImGui::InputText("Path", &mode.background.image)) {
+                        if (ImGui::InputText(tr("modes.bg_image_path").c_str(), &mode.background.image)) {
                             ClearImageError("eyezoom_bg");
                             g_configIsDirty = true;
                             g_allImagesLoaded = false;
@@ -1332,7 +1332,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                         if (ImGui::ColorEdit3("##bgColorPreemptive", &mode.background.color.r)) { g_configIsDirty = true; }
                     } else if (mode.background.selectedMode == "gradient") {
                         ImGui::SetNextItemWidth(200);
-                        if (ImGui::SliderFloat("Angle##bgGradAnglePreemptive", &mode.background.gradientAngle, 0.0f, 360.0f, "%.0f deg")) {
+                        if (ImGui::SliderFloat((tr("modes.gradient_angle") + "##bgGradAnglePreemptive").c_str(), &mode.background.gradientAngle, 0.0f, 360.0f, "%.0f deg")) {
                             g_configIsDirty = true;
                         }
 
@@ -1381,19 +1381,19 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                         const char* animTypeNames[] = { trc("modes.gradient_animation_none"), trc("modes.gradient_animation_rotate"), trc("modes.gradient_animation_slide"), trc("modes.gradient_animation_wave"), trc("modes.gradient_animation_spiral"), trc("modes.gradient_animation_fade") };
                         int currentAnimType = static_cast<int>(mode.background.gradientAnimation);
                         ImGui::SetNextItemWidth(120);
-                        if (ImGui::Combo("Type##GradAnimPreemptive", &currentAnimType, animTypeNames, IM_ARRAYSIZE(animTypeNames))) {
+                        if (ImGui::Combo((tr("modes.gradient_animation_type") + "##GradAnimPreemptive").c_str(), &currentAnimType, animTypeNames, IM_ARRAYSIZE(animTypeNames))) {
                             mode.background.gradientAnimation = static_cast<GradientAnimationType>(currentAnimType);
                             g_configIsDirty = true;
                         }
                         if (mode.background.gradientAnimation != GradientAnimationType::None) {
                             ImGui::SetNextItemWidth(150);
-                            if (ImGui::SliderFloat("Speed##GradAnimSpeedPreemptive", &mode.background.gradientAnimationSpeed, 0.1f, 5.0f,
+                            if (ImGui::SliderFloat((tr("modes.gradient_animation_speed") + "##GradAnimSpeedPreemptive").c_str(), &mode.background.gradientAnimationSpeed, 0.1f, 5.0f,
                                                    "%.1fx")) {
                                 g_configIsDirty = true;
                             }
                         }
                     } else if (mode.background.selectedMode == "image") {
-                        if (ImGui::InputText("Path##preemptive_bg", &mode.background.image)) {
+                        if (ImGui::InputText((tr("modes.bg_image_path") + "##preemptive_bg").c_str(), &mode.background.image)) {
                             ClearImageError("preemptive_bg");
                             g_configIsDirty = true;
                             g_allImagesLoaded = false;
