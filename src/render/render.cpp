@@ -8343,6 +8343,7 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
     const float lineH = fs;
     const float colGap = (std::max)(0.0f, nb.resultsColumnGap) * scale;
     const int outlineR = nb.outlineWidth;
+        const float leftAlignedOutlineInset = (outlineR > 0) ? static_cast<float>(outlineR) : 0.0f;
     const float contentPadX = (8.0f + (float)outlineR) * scale;
     const float sidePadX = (std::max)(0.0f, nb.sidePadding) * scale;
     const float contentPadTop = (std::max)(0.0f, nb.contentPaddingTop) * scale;
@@ -8617,10 +8618,22 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
         }
     };
     auto measureRow = [&](Col& c, int ri) {
-        c.width = (std::max)(c.width, font->CalcTextSizeA(fs, FLT_MAX, 0.0f, c.rows[ri].text).x);
+        float rowWidth = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, c.rows[ri].text).x;
+        if (c.leftAlign && rowWidth > 0.0f) {
+            rowWidth += leftAlignedOutlineInset;
+        }
+        c.width = (std::max)(c.width, rowWidth);
     };
     auto reserveStaticColWidth = [&](Col& c, const NinjabrainColumn& colCfg) {
         if (!nb.staticColumnWidths) return;
+
+        auto reserveSampleWidth = [&](const char* sample) {
+            float sampleWidth = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, sample).x;
+            if (c.leftAlign && sampleWidth > 0.0f) {
+                sampleWidth += leftAlignedOutlineInset;
+            }
+            c.width = (std::max)(c.width, sampleWidth);
+        };
 
         if (colCfg.staticWidth > 0) {
             c.width = static_cast<float>(colCfg.staticWidth) * scale;
@@ -8630,22 +8643,21 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
         const std::string& colId = colCfg.id;
 
         if (colId == "coords") {
-            const char* sample = (nb.coordsDisplay == "chunk") ? "(-999, -999)" : "(-99999, -99999)";
-            c.width = (std::max)(c.width, font->CalcTextSizeA(fs, FLT_MAX, 0.0f, sample).x);
+            reserveSampleWidth((nb.coordsDisplay == "chunk") ? "(-999, -999)" : "(-99999, -99999)");
         } else if (colId == "certainty") {
-            c.width = (std::max)(c.width, font->CalcTextSizeA(fs, FLT_MAX, 0.0f, "100.00%").x);
+            reserveSampleWidth("100.00%");
         } else if (colId == "distance") {
-            c.width = (std::max)(c.width, font->CalcTextSizeA(fs, FLT_MAX, 0.0f, "999999").x);
+            reserveSampleWidth("999999");
         } else if (colId == "nether") {
-            c.width = (std::max)(c.width, font->CalcTextSizeA(fs, FLT_MAX, 0.0f, "(-99999, -99999)").x);
+            reserveSampleWidth("(-99999, -99999)");
         } else if (colId == "angle") {
             if (nb.showDirectionToStronghold) {
-                c.width = (std::max)(c.width, font->CalcTextSizeA(fs, FLT_MAX, 0.0f, "-359.99 (-> 359.0)").x);
+                reserveSampleWidth("-359.99 (-> 359.0)");
             } else {
-                c.width = (std::max)(c.width, font->CalcTextSizeA(fs, FLT_MAX, 0.0f, "-359.99").x);
+                reserveSampleWidth("-359.99");
             }
             if (!nb.showThrowDetails) {
-                c.width = (std::max)(c.width, font->CalcTextSizeA(fs, FLT_MAX, 0.0f, "-359.99+999").x);
+                reserveSampleWidth("-359.99+999");
             }
         }
     };
@@ -8992,7 +9004,7 @@ void RenderNinjabrainOverlay(const NinjabrainOverlayConfig& nb, ImFont* font, co
         drawList->PushClipRect(ImVec2(left, -FLT_MAX), ImVec2(left + width, FLT_MAX), true);
         float textW = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, text).x;
         float anchorW = centerOnPart1 && splitOffset > 0.0f ? splitOffset : textW;
-        float textX = leftAlign ? left : left + (width - anchorW) * 0.5f;
+        float textX = leftAlign ? left + leftAlignedOutlineInset : left + (width - anchorW) * 0.5f;
         if (splitOffset <= 0.0f) {
             drawText(fs, ImVec2(textX, y), color, text);
             drawList->PopClipRect();
