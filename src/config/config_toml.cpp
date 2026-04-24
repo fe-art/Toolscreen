@@ -2511,7 +2511,7 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
     // NinjabrainBot overlay config
     if (auto nb = tbl.get_as<toml::table>("ninjabrainOverlay")) {
         auto& c = config.ninjabrainOverlay;
-        c.enabled              = GetOr(*nb, "enabled",              true);
+        c.enabled              = GetOr(*nb, "enabled",              false);
         c.x                    = GetOr(*nb, "x",                    5);
         c.y                    = GetOr(*nb, "y",                    -5);
         c.relativeTo           = GetStringOr(*nb, "relativeTo",     "bottomLeftScreen");

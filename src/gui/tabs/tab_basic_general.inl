@@ -520,11 +520,11 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.general"))) {
             }
         };
 
-        bool ninjabrainEnabled = ModeHasNinjabrain("Fullscreen") || ModeHasNinjabrain("EyeZoom") || ModeHasNinjabrain("Preemptive") ||
-                                ModeHasNinjabrain("Thin") || ModeHasNinjabrain("Wide");
+        bool ninjabrainImageEnabled = ModeHasNinjabrain("Fullscreen") || ModeHasNinjabrain("EyeZoom") || ModeHasNinjabrain("Preemptive") ||
+                                     ModeHasNinjabrain("Thin") || ModeHasNinjabrain("Wide");
 
-        if (ImGui::Checkbox(trc("general.ninjabrainbot_overlay"), &ninjabrainEnabled)) {
-            if (ninjabrainEnabled) {
+        if (ImGui::Checkbox(trc("general.ninjabrainbot_overlay_image"), &ninjabrainImageEnabled)) {
+            if (ninjabrainImageEnabled) {
                 if (!FindNinjabrainBotImage()) { CreateNinjabrainBotImage(); }
                 AddNinjabrainToMode("Fullscreen");
                 AddNinjabrainToMode("EyeZoom");
@@ -538,6 +538,12 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.general"))) {
                 RemoveNinjabrainFromMode("Thin");
                 RemoveNinjabrainFromMode("Wide");
             }
+            g_configIsDirty = true;
+        }
+
+        bool ninjabrainApiEnabled = g_config.ninjabrainOverlay.enabled;
+        if (ImGui::Checkbox(trc("general.ninjabrainbot_overlay_api"), &ninjabrainApiEnabled)) {
+            g_config.ninjabrainOverlay.enabled = ninjabrainApiEnabled;
             g_configIsDirty = true;
         }
     }

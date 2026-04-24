@@ -839,7 +839,7 @@ struct NinjabrainColumn {
 constexpr float kNinjabrainOverlayBaseFontSize = 64.0f;
 
 struct NinjabrainOverlayConfig {
-    bool enabled = true;
+    bool enabled = false;
     int x = 4;
     int y = -5;
     std::string relativeTo = "bottomLeftScreen";
