@@ -2539,7 +2539,7 @@ bool RenderMirrorCapturesOnCurrentThread(const std::vector<ThreadedMirrorConfig>
 
         {
             PROFILE_SCOPE_CAT("Prepare Mirror Capture Targets", "Rendering");
-            int borderPadding = (conf.borderType == MirrorBorderType::Dynamic) ? conf.dynamicBorderThickness : 0;
+            int borderPadding = (!conf.rawOutput && conf.borderType == MirrorBorderType::Dynamic) ? conf.dynamicBorderThickness : 0;
             int requiredFboW = conf.captureWidth + 2 * borderPadding;
             int requiredFboH = conf.captureHeight + 2 * borderPadding;
 
