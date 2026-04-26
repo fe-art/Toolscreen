@@ -287,18 +287,18 @@ uniform vec4 u_borderColor;
 uniform vec2 u_screenPixel;
 
 bool hasBorderSample(vec2 coord, vec2 pixel) {
-    return texture(filterTexture, coord + vec2(-pixel.x, -pixel.y)).a > 0.5 ||
-           texture(filterTexture, coord + vec2(0.0, -pixel.y)).a > 0.5 ||
-           texture(filterTexture, coord + vec2(pixel.x, -pixel.y)).a > 0.5 ||
-           texture(filterTexture, coord + vec2(-pixel.x, 0.0)).a > 0.5 ||
-           texture(filterTexture, coord + vec2(pixel.x, 0.0)).a > 0.5 ||
-           texture(filterTexture, coord + vec2(-pixel.x, pixel.y)).a > 0.5 ||
-           texture(filterTexture, coord + vec2(0.0, pixel.y)).a > 0.5 ||
-           texture(filterTexture, coord + vec2(pixel.x, pixel.y)).a > 0.5;
+    return texture(filterTexture, coord + vec2(-pixel.x, -pixel.y)).a > 0.001 ||
+           texture(filterTexture, coord + vec2(0.0, -pixel.y)).a > 0.001 ||
+           texture(filterTexture, coord + vec2(pixel.x, -pixel.y)).a > 0.001 ||
+           texture(filterTexture, coord + vec2(-pixel.x, 0.0)).a > 0.001 ||
+           texture(filterTexture, coord + vec2(pixel.x, 0.0)).a > 0.001 ||
+           texture(filterTexture, coord + vec2(-pixel.x, pixel.y)).a > 0.001 ||
+           texture(filterTexture, coord + vec2(0.0, pixel.y)).a > 0.001 ||
+           texture(filterTexture, coord + vec2(pixel.x, pixel.y)).a > 0.001;
 }
 
 void main() {
-    if (texture(filterTexture, TexCoord).a > 0.5) {
+    if (texture(filterTexture, TexCoord).a > 0.001) {
         FragColor = u_outputColor;
         return;
     }
@@ -317,7 +317,7 @@ void main() {
             maxA = max(maxA, texture(filterTexture, TexCoord + offset).a);
         }
     }
-    if (maxA > 0.5) {
+    if (maxA > 0.001) {
         FragColor = u_borderColor;
     } else {
         discard;
@@ -333,19 +333,19 @@ uniform vec4 u_borderColor;
 uniform vec2 u_screenPixel;
 
 bool hasBorderSample(vec2 coord, vec2 pixel) {
-    return texture(filterTexture, coord + vec2(-pixel.x, -pixel.y)).a > 0.5 ||
-           texture(filterTexture, coord + vec2(0.0, -pixel.y)).a > 0.5 ||
-           texture(filterTexture, coord + vec2(pixel.x, -pixel.y)).a > 0.5 ||
-           texture(filterTexture, coord + vec2(-pixel.x, 0.0)).a > 0.5 ||
-           texture(filterTexture, coord + vec2(pixel.x, 0.0)).a > 0.5 ||
-           texture(filterTexture, coord + vec2(-pixel.x, pixel.y)).a > 0.5 ||
-           texture(filterTexture, coord + vec2(0.0, pixel.y)).a > 0.5 ||
-           texture(filterTexture, coord + vec2(pixel.x, pixel.y)).a > 0.5;
+    return texture(filterTexture, coord + vec2(-pixel.x, -pixel.y)).a > 0.001 ||
+           texture(filterTexture, coord + vec2(0.0, -pixel.y)).a > 0.001 ||
+           texture(filterTexture, coord + vec2(pixel.x, -pixel.y)).a > 0.001 ||
+           texture(filterTexture, coord + vec2(-pixel.x, 0.0)).a > 0.001 ||
+           texture(filterTexture, coord + vec2(pixel.x, 0.0)).a > 0.001 ||
+           texture(filterTexture, coord + vec2(-pixel.x, pixel.y)).a > 0.001 ||
+           texture(filterTexture, coord + vec2(0.0, pixel.y)).a > 0.001 ||
+           texture(filterTexture, coord + vec2(pixel.x, pixel.y)).a > 0.001;
 }
 
 void main() {
     vec4 texColor = texture(filterTexture, TexCoord);
-    if (texColor.a > 0.5) {
+    if (texColor.a > 0.001) {
         FragColor = vec4(texColor.rgb, 1.0);
         return;
     }
@@ -364,7 +364,7 @@ void main() {
             maxA = max(maxA, texture(filterTexture, TexCoord + offset).a);
         }
     }
-    if (maxA > 0.5) {
+    if (maxA > 0.001) {
         FragColor = u_borderColor;
     } else {
         discard;
@@ -512,18 +512,18 @@ vec4 sampleGradientColor() {
 }
 
 bool hasBorderSample(vec2 coord, vec2 pixel) {
-    return texture(filterTexture, coord + vec2(-pixel.x, -pixel.y)).a > 0.5 ||
-           texture(filterTexture, coord + vec2(0.0, -pixel.y)).a > 0.5 ||
-           texture(filterTexture, coord + vec2(pixel.x, -pixel.y)).a > 0.5 ||
-           texture(filterTexture, coord + vec2(-pixel.x, 0.0)).a > 0.5 ||
-           texture(filterTexture, coord + vec2(pixel.x, 0.0)).a > 0.5 ||
-           texture(filterTexture, coord + vec2(-pixel.x, pixel.y)).a > 0.5 ||
-           texture(filterTexture, coord + vec2(0.0, pixel.y)).a > 0.5 ||
-           texture(filterTexture, coord + vec2(pixel.x, pixel.y)).a > 0.5;
+    return texture(filterTexture, coord + vec2(-pixel.x, -pixel.y)).a > 0.001 ||
+           texture(filterTexture, coord + vec2(0.0, -pixel.y)).a > 0.001 ||
+           texture(filterTexture, coord + vec2(pixel.x, -pixel.y)).a > 0.001 ||
+           texture(filterTexture, coord + vec2(-pixel.x, 0.0)).a > 0.001 ||
+           texture(filterTexture, coord + vec2(pixel.x, 0.0)).a > 0.001 ||
+           texture(filterTexture, coord + vec2(-pixel.x, pixel.y)).a > 0.001 ||
+           texture(filterTexture, coord + vec2(0.0, pixel.y)).a > 0.001 ||
+           texture(filterTexture, coord + vec2(pixel.x, pixel.y)).a > 0.001;
 }
 
 void main() {
-    if (texture(filterTexture, TexCoord).a > 0.5) {
+    if (texture(filterTexture, TexCoord).a > 0.001) {
         FragColor = sampleGradientColor();
         return;
     }
@@ -544,7 +544,7 @@ void main() {
         for (int y = -u_borderWidth; y <= u_borderWidth; y++) {
             if (x == 0 && y == 0) continue;
             vec2 offset = vec2(float(x), float(y)) * u_screenPixel;
-            if (texture(filterTexture, TexCoord + offset).a > 0.5) {
+            if (texture(filterTexture, TexCoord + offset).a > 0.001) {
                 FragColor = u_borderColor;
                 return;
             }
@@ -580,7 +580,7 @@ uniform vec4 u_outputColor;
 uniform vec4 u_borderColor;
 void main() {
     float centerAlpha = texture(sourceTexture, TexCoord).a;
-    if (centerAlpha > 0.5) {
+    if (centerAlpha > 0.001) {
         FragColor = u_outputColor;
         return;
     }
@@ -589,7 +589,7 @@ void main() {
         vec2 offset = vec2(0.0, float(y) * u_screenPixel.y);
         maxA = max(maxA, texture(dilateTexture, TexCoord + offset).r);
     }
-    if (maxA > 0.5) {
+    if (maxA > 0.001) {
         FragColor = u_borderColor;
     } else {
         FragColor = vec4(0.0, 0.0, 0.0, 0.0);
@@ -606,7 +606,7 @@ uniform vec2 u_screenPixel;
 uniform vec4 u_borderColor;
 void main() {
     vec4 centerColor = texture(sourceTexture, TexCoord);
-    if (centerColor.a > 0.5) {
+    if (centerColor.a > 0.001) {
         FragColor = vec4(centerColor.rgb, 1.0);
         return;
     }
@@ -615,7 +615,7 @@ void main() {
         vec2 offset = vec2(0.0, float(y) * u_screenPixel.y);
         maxA = max(maxA, texture(dilateTexture, TexCoord + offset).r);
     }
-    if (maxA > 0.5) {
+    if (maxA > 0.001) {
         FragColor = u_borderColor;
     } else {
         FragColor = vec4(0.0, 0.0, 0.0, 0.0);

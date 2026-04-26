@@ -977,8 +977,6 @@ void RenderGameBorder(int x, int y, int w, int h, int borderWidth, int radius, c
     glUseProgram(g_solidColorProgram);
     glBindVertexArray(g_vao);
     glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
     glUniform4f(g_solidColorShaderLocs.color, color.r, color.g, color.b, 1.0f);
 
@@ -1071,8 +1069,6 @@ void RenderGameBorder(int x, int y, int w, int h, int borderWidth, int radius, c
 
         renderCornerArc((float)(x + w - effectiveRadius), (float)(y_gl + effectiveRadius), innerR, outerR, PI * 1.5f, PI * 2.0f);
     }
-
-    glDisable(GL_BLEND);
 }
 
 static float GetViewportRelativeImageScale(float scaleX, float scaleY) {
@@ -1231,20 +1227,20 @@ const char* render_frag_shader = R"(#version 330 core
     uniform vec2 u_screenPixel;
 
     bool hasBorderSample(vec2 coord, vec2 pixel) {
-        return texture(filterTexture, coord + vec2(-pixel.x, -pixel.y)).a > 0.5 ||
-               texture(filterTexture, coord + vec2(0.0, -pixel.y)).a > 0.5 ||
-               texture(filterTexture, coord + vec2(pixel.x, -pixel.y)).a > 0.5 ||
-               texture(filterTexture, coord + vec2(-pixel.x, 0.0)).a > 0.5 ||
-               texture(filterTexture, coord + vec2(pixel.x, 0.0)).a > 0.5 ||
-               texture(filterTexture, coord + vec2(-pixel.x, pixel.y)).a > 0.5 ||
-               texture(filterTexture, coord + vec2(0.0, pixel.y)).a > 0.5 ||
-               texture(filterTexture, coord + vec2(pixel.x, pixel.y)).a > 0.5;
+        return texture(filterTexture, coord + vec2(-pixel.x, -pixel.y)).a > 0.001 ||
+               texture(filterTexture, coord + vec2(0.0, -pixel.y)).a > 0.001 ||
+               texture(filterTexture, coord + vec2(pixel.x, -pixel.y)).a > 0.001 ||
+               texture(filterTexture, coord + vec2(-pixel.x, 0.0)).a > 0.001 ||
+               texture(filterTexture, coord + vec2(pixel.x, 0.0)).a > 0.001 ||
+               texture(filterTexture, coord + vec2(-pixel.x, pixel.y)).a > 0.001 ||
+               texture(filterTexture, coord + vec2(0.0, pixel.y)).a > 0.001 ||
+               texture(filterTexture, coord + vec2(pixel.x, pixel.y)).a > 0.001;
     }
 
     void main() {
         float centerAlpha = texture(filterTexture, TexCoord).a;
 
-        if (centerAlpha > 0.5) {
+        if (centerAlpha > 0.001) {
             FragColor = u_outputColor;
             return;
         }
@@ -1266,7 +1262,7 @@ const char* render_frag_shader = R"(#version 330 core
                 vec2 offset = vec2(float(x), float(y)) * u_screenPixel;
                 float alpha = texture(filterTexture, TexCoord + offset).a;
 
-                if (alpha > 0.5) {
+                if (alpha > 0.001) {
                     FragColor = u_borderColor;
                     return;
                 }
@@ -1287,20 +1283,20 @@ const char* render_passthrough_frag_shader = R"(#version 330 core
     uniform float u_opacity;
 
     bool hasBorderSample(vec2 coord, vec2 pixel) {
-        return texture(filterTexture, coord + vec2(-pixel.x, -pixel.y)).a > 0.5 ||
-               texture(filterTexture, coord + vec2(0.0, -pixel.y)).a > 0.5 ||
-               texture(filterTexture, coord + vec2(pixel.x, -pixel.y)).a > 0.5 ||
-               texture(filterTexture, coord + vec2(-pixel.x, 0.0)).a > 0.5 ||
-               texture(filterTexture, coord + vec2(pixel.x, 0.0)).a > 0.5 ||
-               texture(filterTexture, coord + vec2(-pixel.x, pixel.y)).a > 0.5 ||
-               texture(filterTexture, coord + vec2(0.0, pixel.y)).a > 0.5 ||
-               texture(filterTexture, coord + vec2(pixel.x, pixel.y)).a > 0.5;
+        return texture(filterTexture, coord + vec2(-pixel.x, -pixel.y)).a > 0.001 ||
+               texture(filterTexture, coord + vec2(0.0, -pixel.y)).a > 0.001 ||
+               texture(filterTexture, coord + vec2(pixel.x, -pixel.y)).a > 0.001 ||
+               texture(filterTexture, coord + vec2(-pixel.x, 0.0)).a > 0.001 ||
+               texture(filterTexture, coord + vec2(pixel.x, 0.0)).a > 0.001 ||
+               texture(filterTexture, coord + vec2(-pixel.x, pixel.y)).a > 0.001 ||
+               texture(filterTexture, coord + vec2(0.0, pixel.y)).a > 0.001 ||
+               texture(filterTexture, coord + vec2(pixel.x, pixel.y)).a > 0.001;
     }
 
     void main() {
         vec4 centerColor = texture(filterTexture, TexCoord);
 
-        if (centerColor.a > 0.5) {
+        if (centerColor.a > 0.001) {
             FragColor = vec4(centerColor.rgb, u_opacity);
             return;
         }
@@ -1320,7 +1316,7 @@ const char* render_passthrough_frag_shader = R"(#version 330 core
                 vec2 offset = vec2(float(x), float(y)) * u_screenPixel;
                 float alpha = texture(filterTexture, TexCoord + offset).a;
 
-                if (alpha > 0.5) {
+                if (alpha > 0.001) {
                     FragColor = u_borderColor;
                     return;
                 }
@@ -5494,12 +5490,16 @@ bool RenderSameThreadObsFrame(const ModeConfig* modeToRender, const GLState& s, 
 
     {
         PROFILE_SCOPE_CAT("Render OBS Border", "OBS");
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         if (transitioningToFullscreen && fromBorder.enabled && fromBorder.width > 0) {
             RenderGameBorder(finalX, finalY, finalW, finalH, fromBorder.width, fromBorder.radius, fromBorder.color, fullW, fullH);
-        } else if (modeToRender->border.enabled && modeToRender->border.width > 0) {
-            RenderGameBorder(finalX, finalY, finalW, finalH, modeToRender->border.width, modeToRender->border.radius,
-                             modeToRender->border.color, fullW, fullH);
         }
+        else if (modeToRender->border.enabled && modeToRender->border.width > 0) {
+            RenderGameBorder(finalX, finalY, finalW, finalH, modeToRender->border.width, modeToRender->border.radius,
+                modeToRender->border.color, fullW, fullH);
+        };
+        glDisable(GL_BLEND);
     }
 
     if (auto cfgSnap = GetConfigSnapshot()) {
@@ -6585,12 +6585,15 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
 
         {
             PROFILE_SCOPE_CAT("Render Game Border", "Rendering");
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
             if (transitioningToFullscreen && fromBorder.enabled && fromBorder.width > 0) {
                 RenderGameBorder(finalX, finalY, finalW, finalH, fromBorder.width, fromBorder.radius, fromBorder.color, fullW, fullH);
             } else if (modeToRender->border.enabled && modeToRender->border.width > 0) {
                 RenderGameBorder(finalX, finalY, finalW, finalH, modeToRender->border.width, modeToRender->border.radius,
                                  modeToRender->border.color, fullW, fullH);
             }
+            glDisable(GL_BLEND);
         }
     }
 
