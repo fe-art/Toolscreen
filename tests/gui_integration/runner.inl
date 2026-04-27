@@ -145,6 +145,8 @@ const auto& GetTestCaseDefinitions() {
         {"mode-mirror-render-viewport-anchors", &RunModeMirrorRenderViewportAnchorsTest},
         {"mode-mirror-render-screen-anchor-size-matrix", &RunModeMirrorRenderScreenAnchorSizeMatrixTest},
         {"mode-mirror-render-viewport-anchor-size-matrix", &RunModeMirrorRenderViewportAnchorSizeMatrixTest},
+        {"mode-mirror-render-raw-output-dynamic-border-size", &RunModeMirrorRenderRawOutputDynamicBorderSizeTest},
+        {"mode-mirror-render-low-alpha-visibility", &RunModeMirrorRenderLowAlphaVisibilityTest},
         {"mode-mirror-group-render", &RunModeMirrorGroupRenderTest},
         {"mode-mirror-group-relative-position-resolution", &RunModeMirrorGroupRelativePositionResolutionTest},
         {"mode-mirror-group-slide-unit-transition", &RunModeMirrorGroupSlideUnitTransitionTest},

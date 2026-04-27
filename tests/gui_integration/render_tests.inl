@@ -416,6 +416,192 @@ void RunModeMirrorRenderViewportAnchorSizeMatrixTest(TestRunMode runMode = TestR
     CleanupShaders();
 }
 
+void RunModeMirrorRenderRawOutputDynamicBorderSizeTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    if (!g_hasModernGL) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
+
+    const std::filesystem::path root = PrepareCaseDirectory("mode_mirror_render_raw_output_dynamic_border_size");
+    ResetGlobalTestState(root);
+
+    constexpr char kModeId[] = "Mirror Raw Output Dynamic Border Size";
+
+    MirrorConfig mirror = MakeMirrorRenderTestConfig("Raw Output Dynamic Border Mirror", 17, 11, "topLeftScreen", 28, 24, 1.0f);
+    mirror.output.separateScale = true;
+    mirror.output.scaleX = 3.0f;
+    mirror.output.scaleY = 2.0f;
+    mirror.border.dynamicThickness = 5;
+
+    ModeConfig mode;
+    mode.id = kModeId;
+    mode.width = 257;
+    mode.height = 211;
+    mode.manualWidth = mode.width;
+    mode.manualHeight = mode.height;
+    mode.mirrorIds = { mirror.name };
+
+    g_config.defaultMode = kModeId;
+    g_config.mirrors = { mirror };
+    g_config.modes = { mode };
+    g_configLoaded.store(true, std::memory_order_release);
+
+    InitializeMirrorRenderTestResources();
+
+    const SimulatedOverlayGeometry geometry{ "raw-output-dynamic-border", 257, 211, 0, 0, 257, 211 };
+    ScopedTexture2D sourceTexture(geometry.fullW, geometry.fullH,
+                                  MakeSolidRgbaPixels(geometry.fullW, geometry.fullH, 0, 255, 0));
+
+    auto renderAndAssert = [&](DummyWindow& targetWindow) {
+        RenderModeOverlayFrameToSimulatedSurface(targetWindow, g_config, g_config.modes.front(), geometry, sourceTexture.id(),
+                                                 [&](const SurfaceSize& surface) {
+            if (runMode != TestRunMode::Automated) {
+                return;
+            }
+
+            std::vector<MirrorConfig> activeMirrors;
+            std::vector<ImageConfig> unusedImages;
+            std::vector<WindowOverlayConfig> unusedWindowOverlays;
+            std::vector<BrowserOverlayConfig> unusedBrowserOverlays;
+            CollectActiveElementsForMode(g_config, kModeId, false, activeMirrors, unusedImages, unusedWindowOverlays,
+                                         unusedBrowserOverlays, geometry.fullW, geometry.fullH);
+
+            Expect(activeMirrors.size() == 1,
+                   "Expected the raw-output regression test to resolve exactly one active mirror.");
+            const ExpectedMirrorRect expectedRect = ComputeExpectedMirrorRect(activeMirrors[0], surface.width, surface.height,
+                                                                              geometry.gameX, geometry.gameY, geometry.gameW,
+                                                                              geometry.gameH);
+            const ExpectedMirrorRect actualRect = GetCachedMirrorRect(activeMirrors[0].name);
+
+            ExpectMirrorRectNear(actualRect, expectedRect,
+                                 "Raw-output dynamic-border mirror cached bounds should ignore border padding.", 0);
+            ExpectSolidColorRect(expectedRect, surface.height, kExpectedMirrorRenderGreen,
+                                 "Expected the raw-output dynamic-border mirror interior to remain unstretched.");
+
+            const int outsideX = expectedRect.x + expectedRect.width + 3;
+            if (outsideX < surface.width) {
+                ExpectBackgroundPixel(outsideX, expectedRect.y + expectedRect.height / 2, surface.height,
+                                      "Expected pixels just outside the raw-output mirror width to remain background.");
+            }
+        });
+    };
+
+    if (runMode == TestRunMode::Visual) {
+        RunVisualLoop(window, "mode-mirror-render-raw-output-dynamic-border-size",
+                      [&](DummyWindow& visualWindow) { renderAndAssert(visualWindow); });
+    } else {
+        renderAndAssert(window);
+    }
+
+    CleanupBrowserOverlayCache();
+    CleanupWindowOverlayCache();
+    CleanupGPUResources();
+    CleanupShaders();
+}
+
+void RunModeMirrorRenderLowAlphaVisibilityTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    if (!g_hasModernGL) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
+
+    const std::filesystem::path root = PrepareCaseDirectory("mode_mirror_render_low_alpha_visibility");
+    ResetGlobalTestState(root);
+
+    constexpr char kModeId[] = "Mirror Low Alpha Visibility";
+
+    MirrorConfig compositeMirror = MakeMirrorRenderTestConfig("Low Opacity Composite Mirror", 18, 12, "topLeftScreen", 24, 32, 4.0f);
+    compositeMirror.rawOutput = false;
+    compositeMirror.opacity = 0.4f;
+    compositeMirror.border.dynamicThickness = 1;
+    compositeMirror.colors.targetColors = { { 0.0f, 1.0f, 0.0f, 1.0f } };
+    compositeMirror.colors.output = { 0.0f, 1.0f, 0.0f, 1.0f };
+    compositeMirror.colors.border = { 1.0f, 0.2f, 0.2f, 1.0f };
+    compositeMirror.colorSensitivity = 0.2f;
+
+    MirrorConfig finalTargetMirror = MakeMirrorRenderTestConfig("Low Alpha Final Target Mirror", 18, 12, "topLeftScreen", 170, 32, 4.0f);
+    finalTargetMirror.rawOutput = false;
+    finalTargetMirror.opacity = 1.0f;
+    finalTargetMirror.border.dynamicThickness = 2;
+    finalTargetMirror.colors.targetColors = { { 0.0f, 1.0f, 0.0f, 1.0f } };
+    finalTargetMirror.colors.output = { 0.0f, 1.0f, 0.0f, 0.4f };
+    finalTargetMirror.colors.border = { 1.0f, 0.8f, 0.1f, 1.0f };
+    finalTargetMirror.colorSensitivity = 0.2f;
+
+    ModeConfig mode;
+    mode.id = kModeId;
+    mode.width = 320;
+    mode.height = 200;
+    mode.manualWidth = mode.width;
+    mode.manualHeight = mode.height;
+    mode.mirrorIds = { compositeMirror.name, finalTargetMirror.name };
+
+    g_config.defaultMode = kModeId;
+    g_config.mirrors = { compositeMirror, finalTargetMirror };
+    g_config.modes = { mode };
+    g_configLoaded.store(true, std::memory_order_release);
+
+    InitializeMirrorRenderTestResources();
+
+    const SimulatedOverlayGeometry geometry{ "low-alpha-mirrors", 320, 200, 0, 0, 320, 200 };
+    ScopedTexture2D sourceTexture(geometry.fullW, geometry.fullH,
+                                  MakeSolidRgbaPixels(geometry.fullW, geometry.fullH, 0, 255, 0));
+
+    auto renderAndAssert = [&](DummyWindow& targetWindow) {
+        RenderModeOverlayFrameToSimulatedSurface(targetWindow, g_config, g_config.modes.front(), geometry, sourceTexture.id(),
+                                                 [&](const SurfaceSize& surface) {
+            if (runMode != TestRunMode::Automated) {
+                return;
+            }
+
+            std::vector<MirrorConfig> activeMirrors;
+            std::vector<ImageConfig> unusedImages;
+            std::vector<WindowOverlayConfig> unusedWindowOverlays;
+            std::vector<BrowserOverlayConfig> unusedBrowserOverlays;
+            CollectActiveElementsForMode(g_config, kModeId, false, activeMirrors, unusedImages, unusedWindowOverlays,
+                                         unusedBrowserOverlays, geometry.fullW, geometry.fullH);
+
+            Expect(activeMirrors.size() == 2,
+                   "Expected both low-alpha mirrors to resolve for the low-alpha visibility regression test.");
+
+            const ExpectedMirrorRect compositeRect = GetCachedMirrorRect(compositeMirror.name);
+            const ExpectedMirrorRect finalTargetRect = GetCachedMirrorRect(finalTargetMirror.name);
+
+            Expect(compositeRect.width > 0 && compositeRect.height > 0,
+                   "Expected the low-opacity composite mirror to cache a positive output size.");
+            Expect(finalTargetRect.width > 0 && finalTargetRect.height > 0,
+                   "Expected the low-alpha final-target mirror to cache a positive output size.");
+
+            ExpectFramebufferPixelChannelDominance(compositeRect.x + compositeRect.width / 2,
+                                                   compositeRect.y + compositeRect.height / 2, surface.height, 1, 0.32f,
+                                                   0.18f,
+                                                   "Expected the dynamic-composite low-opacity mirror center to remain visible.");
+            ExpectFramebufferPixelChannelDominance(finalTargetRect.x + finalTargetRect.width / 2,
+                                                   finalTargetRect.y + finalTargetRect.height / 2, surface.height, 1, 0.32f,
+                                                   0.18f,
+                                                   "Expected the final-target low-alpha mirror center to remain visible.");
+
+            if (compositeRect.x > 2) {
+                ExpectBackgroundPixel(compositeRect.x - 2, compositeRect.y + compositeRect.height / 2, surface.height,
+                                      "Expected pixels left of the low-opacity composite mirror to remain background.");
+            }
+            const int finalTargetOutsideX = finalTargetRect.x + finalTargetRect.width + 2;
+            if (finalTargetOutsideX < surface.width) {
+                ExpectBackgroundPixel(finalTargetOutsideX, finalTargetRect.y + finalTargetRect.height / 2, surface.height,
+                                      "Expected pixels right of the low-alpha final-target mirror to remain background.");
+            }
+        });
+    };
+
+    if (runMode == TestRunMode::Visual) {
+        RunVisualLoop(window, "mode-mirror-render-low-alpha-visibility",
+                      [&](DummyWindow& visualWindow) { renderAndAssert(visualWindow); });
+    } else {
+        renderAndAssert(window);
+    }
+
+    CleanupBrowserOverlayCache();
+    CleanupWindowOverlayCache();
+    CleanupGPUResources();
+    CleanupShaders();
+}
+
 void RunModeMirrorGroupRenderTest(TestRunMode runMode = TestRunMode::Automated) {
     DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
     if (!g_hasModernGL) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }

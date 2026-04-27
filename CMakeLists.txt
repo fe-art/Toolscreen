@@ -1098,6 +1098,8 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     mode-mirror-render-viewport-anchors
     mode-mirror-render-screen-anchor-size-matrix
     mode-mirror-render-viewport-anchor-size-matrix
+    mode-mirror-render-raw-output-dynamic-border-size
+    mode-mirror-render-low-alpha-visibility
     mode-mirror-group-render
     mode-mirror-group-relative-position-resolution
     mode-mirror-group-slide-unit-transition

@@ -50,6 +50,12 @@ long long DurationToMilliseconds(SteadyClock::duration duration) {
     return std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
 }
 
+std::pair<time_t, time_t> SplitDurationForHttplibTimeout(std::chrono::milliseconds duration) {
+    const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(duration);
+    const auto remainder = std::chrono::duration_cast<std::chrono::microseconds>(duration - seconds);
+    return { static_cast<time_t>(seconds.count()), static_cast<time_t>(remainder.count()) };
+}
+
 template <typename Callback, typename... Args>
 void InvokeIfPresent(const Callback& callback, Args&&... args) {
     if (callback) { callback(std::forward<Args>(args)...); }
@@ -471,9 +477,9 @@ void NinjabrainApiSession::RunStream(
     const std::function<void(const std::string&)>& onDisconnect) const {
     httplib::Client client(apiBaseUrl_);
     client.set_keep_alive(true);
-    client.set_connection_timeout(
-        static_cast<time_t>(std::chrono::duration_cast<std::chrono::seconds>(kNinjabrainConnectionTimeout).count()),
-        0);
+    const auto [connectionTimeoutSeconds, connectionTimeoutMicros] =
+        SplitDurationForHttplibTimeout(std::chrono::duration_cast<std::chrono::milliseconds>(kNinjabrainConnectionTimeout));
+    client.set_connection_timeout(connectionTimeoutSeconds, connectionTimeoutMicros);
 
     const httplib::Headers headers = {
         { "Accept", "text/event-stream" },
