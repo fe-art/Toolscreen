@@ -417,7 +417,8 @@ void LoadImageAsync(DecodedImageData::Type type, std::string id, std::string pat
 void LoadAllImages();
 
 bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::vector<DWORD>& exclusionKeys = {},
-                      bool triggerOnRelease = false, size_t minKeyCount = 0);
+                      bool skipLiveKeyStateChecks = false, size_t minKeyCount = 0, WPARAM rawWParam = 0,
+                      bool hasIncomingKeyState = false, bool incomingIsKeyDown = false);
 
 std::string FindHotkeyConflict(const std::vector<DWORD>& newKeys, const std::string& excludeLabel);
 
