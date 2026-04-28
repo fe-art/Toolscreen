@@ -1118,6 +1118,7 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     profiler-unspecified-breakdown
     settings-gui-basic
     settings-gui-advanced
+    settings-key-repeat-system-repeat-hides-local-controls
     settings-mouse-translation-prefers-live-viewport
     settings-search-subcategory-filtering
     settings-search-specific-options

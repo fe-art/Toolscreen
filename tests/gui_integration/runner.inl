@@ -187,6 +187,7 @@ const auto& GetTestCaseDefinitions() {
         {"settings-tab-hotkeys-default", &RunSettingsTabHotkeysDefaultTest},
         {"settings-tab-inputs-mouse-default", &RunSettingsTabInputsMouseDefaultTest},
         {"settings-tab-inputs-keyboard-default", &RunSettingsTabInputsKeyboardDefaultTest},
+        {"settings-key-repeat-system-repeat-hides-local-controls", &RunSettingsKeyRepeatSystemRepeatHidesLocalControlsTest},
         {"settings-tab-settings-default", &RunSettingsTabSettingsDefaultTest},
         {"settings-tab-appearance-default", &RunSettingsTabAppearanceDefaultTest},
         {"settings-tab-misc-default", &RunSettingsTabMiscDefaultTest},

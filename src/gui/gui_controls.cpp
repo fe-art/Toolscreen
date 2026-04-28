@@ -94,6 +94,14 @@ bool SliderIntDoubleClickInput(const char* label, int* v, int v_min, int v_max, 
 }
 }
 
+std::string GetKeyRepeatSliderFormat(int value, int autoValueMs) {
+    if (value >= 0) {
+        return "%d ms";
+    }
+
+    return std::string(trc("label.auto")) + " (" + std::to_string((std::max)(autoValueMs, 1)) + "ms)";
+}
+
 void RenderTransitionSettingsHorizontalNoBackground(ModeConfig& mode, const std::string& idSuffix) {
     ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(10, 5));
 

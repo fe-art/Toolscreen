@@ -10,6 +10,7 @@
 #include "features/ninjabrain_data.h"
 #include "features/window_overlay.h"
 #include "gui/gui.h"
+#include "gui/gui_internal.h"
 #include "hooks/input_hook.h"
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_win32.h"
@@ -38,6 +39,7 @@
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
 extern std::atomic<bool> g_configLoaded;
 extern std::atomic<HWND> g_subclassedHwnd;
+bool GetEffectiveKeyRepeatTimings(int& outStartDelayMs, int& outRepeatDelayMs);
 
 namespace {
 
