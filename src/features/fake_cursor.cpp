@@ -1132,28 +1132,31 @@ static void RenderFakeCursorInternal(HWND hwnd,
         return;
     }
 
-    POINT cursorPos = cursorInfo.ptScreenPos;
-
-    if (!ScreenToClient(hwnd, &cursorPos)) {
+    RECT gameClientRectInScreen;
+    if (!GetWindowClientRectInScreen(hwnd, gameClientRectInScreen)) {
         if (shouldLog) {
             DWORD err = GetLastError();
-            Log("[FakeCursor] ScreenToClient failed with error " + std::to_string(err));
+            Log("[FakeCursor] GetWindowClientRectInScreen failed with error " + std::to_string(err));
         }
         return;
     }
 
-    RECT gameRect;
-    if (!GetClientRect(hwnd, &gameRect)) {
-        if (shouldLog) {
-            DWORD err = GetLastError();
-            Log("[FakeCursor] GetClientRect failed with error " + std::to_string(err));
-        }
+    const int actualGameWindowWidth = gameClientRectInScreen.right - gameClientRectInScreen.left;
+    const int actualGameWindowHeight = gameClientRectInScreen.bottom - gameClientRectInScreen.top;
+    if (actualGameWindowWidth <= 0 || actualGameWindowHeight <= 0) { return; }
+
+    if (cursorInfo.ptScreenPos.x < gameClientRectInScreen.left || cursorInfo.ptScreenPos.x >= gameClientRectInScreen.right ||
+        cursorInfo.ptScreenPos.y < gameClientRectInScreen.top || cursorInfo.ptScreenPos.y >= gameClientRectInScreen.bottom) {
         return;
     }
-    int gameWidth = sourceWidth > 0 ? sourceWidth : (gameRect.right - gameRect.left);
-    int gameHeight = sourceHeight > 0 ? sourceHeight : (gameRect.bottom - gameRect.top);
 
-    if (gameWidth == 0 || gameHeight == 0) { return; }
+    const bool projectAcrossWholeWindow = sourceWidth > 0 && sourceHeight > 0;
+    const int projectionX = projectAcrossWholeWindow ? 0 : targetX;
+    const int projectionY = projectAcrossWholeWindow ? 0 : targetY;
+    const int projectionWidth = projectAcrossWholeWindow ? fullWidth : targetWidth;
+    const int projectionHeight = projectAcrossWholeWindow ? fullHeight : targetHeight;
+
+    if (projectionWidth <= 0 || projectionHeight <= 0) { return; }
 
     // The bitmap is already at the user's desired cursor size (includes Windows cursor scaling)
 
@@ -1163,8 +1166,8 @@ static void RenderFakeCursorInternal(HWND hwnd,
     int systemCursorHeight = cursorData->bitmapHeight;
     if (systemCursorWidth <= 0 || systemCursorHeight <= 0) { return; }
 
-    int scaledCursorWidth = (systemCursorWidth * targetWidth) / gameWidth;
-    int scaledCursorHeight = (systemCursorHeight * targetHeight) / gameHeight;
+    int scaledCursorWidth = (systemCursorWidth * projectionWidth) / actualGameWindowWidth;
+    int scaledCursorHeight = (systemCursorHeight * projectionHeight) / actualGameWindowHeight;
 
     int scaledHotspotX = static_cast<int>((cursorData->hotspotX * scaledCursorWidth * offset) / systemCursorWidth);
     int scaledHotspotY = static_cast<int>((cursorData->hotspotY * scaledCursorHeight * offset) / systemCursorHeight);
@@ -1172,8 +1175,13 @@ static void RenderFakeCursorInternal(HWND hwnd,
     int renderWidth = static_cast<int>(scaledCursorWidth * offset);
     int renderHeight = static_cast<int>(scaledCursorHeight * offset);
 
-    int cursorX = targetX + ((cursorPos.x * targetWidth) / gameWidth) - scaledHotspotX;
-    int cursorY = targetY + ((cursorPos.y * targetHeight) / gameHeight) - scaledHotspotY;
+    const double projectedCursorX = (static_cast<double>(cursorInfo.ptScreenPos.x - gameClientRectInScreen.left) * projectionWidth) /
+                                    static_cast<double>(actualGameWindowWidth);
+    const double projectedCursorY = (static_cast<double>(cursorInfo.ptScreenPos.y - gameClientRectInScreen.top) * projectionHeight) /
+                                    static_cast<double>(actualGameWindowHeight);
+
+    int cursorX = projectionX + static_cast<int>(projectedCursorX) - scaledHotspotX;
+    int cursorY = projectionY + static_cast<int>(projectedCursorY) - scaledHotspotY;
 
     auto RenderCursorQuad = [&](int x, int y) {
         glBegin(GL_QUADS);
