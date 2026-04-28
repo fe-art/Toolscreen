@@ -544,6 +544,18 @@ void RunKeyRebindRuntimeFullForwardingTest(TestRunMode runMode = TestRunMode::Au
     ExpectCapturedMessage(capture, 0, WM_SYSKEYUP, 'B', "Full rebind WM_SYSKEYUP");
 }
 
+void RunHotkeyRuntimeSpecificShiftReleaseMatchesExactKeyupTest(TestRunMode runMode = TestRunMode::Automated) {
+    (void)runMode;
+
+    const std::filesystem::path root = PrepareCaseDirectory("hotkey_runtime_specific_shift_release_matches_exact_keyup");
+    ResetGlobalTestState(root);
+
+    Expect(CheckHotkeyMatch({ VK_RSHIFT }, VK_RSHIFT, {}, true, 1, VK_SHIFT, true, false),
+           "Expected a right-Shift hold/release hotkey to match an exact right-Shift keyup.");
+    Expect(!CheckHotkeyMatch({ VK_RSHIFT }, VK_LSHIFT, {}, true, 1, VK_SHIFT, true, false),
+           "Expected a right-Shift hold/release hotkey not to match a left-Shift keyup.");
+}
+
 void RunKeyRebindRuntimeSplitVkOutputTest(TestRunMode runMode = TestRunMode::Automated) {
     DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
     KeyRebind rebind = MakeEnabledRebind('A', 'B');

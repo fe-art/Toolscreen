@@ -85,6 +85,7 @@ const auto& GetTestCaseDefinitions() {
         {"config-load-key-rebind-shift-layer-caps-lock-defaulted", &RunConfigLoadKeyRebindShiftLayerCapsLockDefaultedTest},
         {"config-load-key-rebind-cursor-state-defaulted", &RunConfigLoadKeyRebindCursorStateDefaultedTest},
         {"config-publish-key-rebind-cannot-type-clears-typed-output", &RunConfigPublishKeyRebindCannotTypeClearsTypedOutputTest},
+        {"hotkey-runtime-specific-shift-release-matches-exact-keyup", &RunHotkeyRuntimeSpecificShiftReleaseMatchesExactKeyupTest},
         {"key-rebind-runtime-full-forwarding", &RunKeyRebindRuntimeFullForwardingTest},
         {"key-rebind-runtime-split-vk-output", &RunKeyRebindRuntimeSplitVkOutputTest},
         {"key-rebind-runtime-split-unicode-output", &RunKeyRebindRuntimeSplitUnicodeOutputTest},

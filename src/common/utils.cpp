@@ -2458,6 +2458,25 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
         }
     };
 
+    auto getGenericModifierKey = [](DWORD key) {
+        switch (key) {
+        case VK_CONTROL:
+        case VK_LCONTROL:
+        case VK_RCONTROL:
+            return static_cast<DWORD>(VK_CONTROL);
+        case VK_SHIFT:
+        case VK_LSHIFT:
+        case VK_RSHIFT:
+            return static_cast<DWORD>(VK_SHIFT);
+        case VK_MENU:
+        case VK_LMENU:
+        case VK_RMENU:
+            return static_cast<DWORD>(VK_MENU);
+        default:
+            return key;
+        }
+    };
+
     auto isModifierDownNow = [&](DWORD key) {
         switch (key) {
         case VK_CONTROL:
@@ -2562,7 +2581,16 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
     bool main_key_pressed = false;
 
     if (isModifierReleaseEvent) {
-        main_key_pressed = !isModifierDownNow(main_key);
+        const DWORD genericModifierKey = getGenericModifierKey(main_key);
+        const bool isSpecificModifierKey = main_key != genericModifierKey;
+
+        if (isSpecificModifierKey && wParam == main_key) {
+            main_key_pressed = true;
+        } else if (isSpecificModifierKey && wParam != genericModifierKey) {
+            main_key_pressed = false;
+        } else {
+            main_key_pressed = !isModifierDownNow(main_key);
+        }
     } else {
         main_key_pressed = (main_key == wParam);
     }
