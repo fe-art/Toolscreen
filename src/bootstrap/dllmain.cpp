@@ -18,6 +18,7 @@
 #include "features/virtual_camera.h"
 #include "features/window_overlay.h"
 #include "features/ninjabrain_client.h"
+#include "runtime/auto_updater.h"
 
 #include "MinHook.h"
 #include <array>
@@ -3341,6 +3342,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         if (g_toolscreenPath.empty()) { Log("FATAL: Could not get toolscreen directory."); }
         
         StartSupportersFetch();
+        toolscreen::auto_updater::Start();
 
         g_gameVersion = GetGameVersionFromCommandLine();
         GameVersion minVersion(1, 16, 1);

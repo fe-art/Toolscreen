@@ -9,6 +9,7 @@
 #include "imgui_impl_win32.h"
 #include "imgui_input_queue.h"
 #include "imgui_stdlib.h"
+#include "runtime/auto_updater.h"
 #include "runtime/logic_thread.h"
 #include "render/mirror_thread.h"
 #include "common/profiler.h"
@@ -2896,6 +2897,22 @@ void RenderSettingsGUI() {
     if (windowVisible && windowOpen) {
         bool openProfileManagerPopup = false;
         ImVec2 profileManagerPopupAnchor(0.0f, 0.0f);
+
+        {
+            std::string newVersion;
+            if (toolscreen::auto_updater::IsUpdateReady(newVersion)) {
+                ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.18f, 0.30f, 0.18f, 1.0f));
+                ImGui::BeginChild("##autoUpdateBanner", ImVec2(0.0f, ImGui::GetFrameHeight() + 14.0f), true);
+                ImGui::AlignTextToFramePadding();
+                ImGui::Text("Toolscreen v%s ready. Applying will close & relaunch Minecraft.", newVersion.c_str());
+                ImGui::SameLine();
+                if (ImGui::Button("Apply update")) {
+                    toolscreen::auto_updater::ApplyAndRelaunch();
+                }
+                ImGui::EndChild();
+                ImGui::PopStyleColor();
+            }
+        }
 
         {
             PROFILE_SCOPE_CAT("Settings Header Controls", "ImGui");
