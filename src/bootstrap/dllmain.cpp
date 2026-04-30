@@ -21,6 +21,7 @@
 #include "features/virtual_camera.h"
 #include "features/window_overlay.h"
 #include "features/ninjabrain_client.h"
+#include "runtime/auto_updater.h"
 
 #include "MinHook.h"
 #include <array>
@@ -4689,6 +4690,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         LogVersionInfo();
         if (g_toolscreenPath.empty()) { Log("FATAL: Could not get toolscreen directory."); }
         
+        toolscreen::auto_updater::Start();
+
         g_gameVersion = GetGameVersionFromCommandLine();
         // Layer activation is capability-based: it is inert for OpenGL-only
         // clients and works when a launcher omits a Minecraft version flag.
