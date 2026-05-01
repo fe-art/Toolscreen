@@ -261,7 +261,7 @@ const auto& GetTestGroupDefinitions() {
             {"fullscreen-relative-external-resize-skips-stale-resend", "fullscreen-relative-os-wmsize-overrides-computed-dimensions",
              "fullscreen-relative-display-dimensions-follow-window-resize",
              "fullscreen-relative-gui-publish-preserves-recalculated-size"}},
-        {"rebind", {"key-rebind-"}, {}},
+        {"rebind", {"key-rebind-", "key-repeat-", "hotkey-runtime-"}, {}},
         {"render", {"mode-"}, {"rebind-indicator-renders-below-settings-gui", "render-ninjabrain-information-message-translation-spans"}},
         {"settings-and-ui", {"settings-"}, {"config-error-gui", "profiler-unspecified-breakdown"}},
         {"logs-and-profiles", {"log-", "profile-"}, {}},
