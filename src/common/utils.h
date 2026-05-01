@@ -416,9 +416,6 @@ GLuint CreateShaderProgram(const char* vert, const char* frag);
 void LoadImageAsync(DecodedImageData::Type type, std::string id, std::string path, const std::wstring& toolscreenPath);
 void LoadAllImages();
 
-bool MatchesConfiguredInputKeyEvent(DWORD incomingVk, DWORD incomingRawVk, DWORD configuredKey);
-bool IsConfiguredInputKeyDown(DWORD key);
-
 bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::vector<DWORD>& exclusionKeys = {},
                       bool skipLiveKeyStateChecks = false, size_t minKeyCount = 0, WPARAM rawWParam = 0,
                       bool hasIncomingKeyState = false, bool incomingIsKeyDown = false);

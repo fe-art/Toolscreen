@@ -82,10 +82,6 @@ void ResetSyntheticRebindKeyEventsForTest();
 size_t GetSyntheticRebindKeyEventCountForTest();
 bool GetSyntheticRebindKeyEventForTest(size_t index, UINT& outScanCodeWithFlags, bool& outKeyDown);
 size_t GetActiveSyntheticRebindOutputCountForTest();
-void ResetLowLevelExactModifierStateForTest();
-void SetLowLevelExactModifierDownForTest(DWORD vk, bool isDown);
-void QueueLowLevelExactModifierKeyupForTest(DWORD vk);
-DWORD ResolveTrackedKeyboardVkFromMessageForTest(UINT uMsg, WPARAM wParam, LPARAM lParam);
 #endif
 
 LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
