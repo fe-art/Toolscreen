@@ -91,6 +91,7 @@ IDR_NINJABRAIN_PRESET_NINJABRAINBOT RCDATA     "../config/ninjabrain_preset_ninj
 IDR_MINECRAFT_FONT     RCDATA                  "../assets/fonts/Minecraft.ttf"
 IDR_OPENSANS_FONT      RCDATA                  "../assets/fonts/OpenSans-Regular.ttf"
 IDR_MONOCRAFT_FONT     RCDATA                  "../assets/fonts/Monocraft.ttf"
+IDR_LANG_PT_BR         RCDATA                  "../../lang/pt_BR.json"
 #endif    // English (United States) resources
 /////////////////////////////////////////////////////////////////////////////
 
