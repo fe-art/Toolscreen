@@ -628,7 +628,7 @@ if(TOOLSCREEN_ENABLE_JAR_PACKAGING OR TOOLSCREEN_ENABLE_EXE_PACKAGING)
     FetchContent_Declare(
         easyinjectbundled
         GIT_REPOSITORY https://github.com/jojoe77777/EasyInjectBundled.git
-        GIT_TAG be353d11613b362028901717fce9904b70951405
+        GIT_TAG 2fbea3673442cfb351aa4be9a1ec9bea231807ef
         GIT_SHALLOW TRUE
     )
 
