@@ -2418,6 +2418,71 @@ DWORD WINAPI ImageMonitorThread(LPVOID lpParam) {
     }
 }
 
+bool MatchesConfiguredInputKeyEvent(DWORD incomingVk, DWORD incomingRawVk, DWORD configuredKey) {
+    if (configuredKey == 0) return false;
+    if (incomingVk == configuredKey) return true;
+
+    if (configuredKey == VK_CONTROL) {
+        return incomingVk == VK_LCONTROL || incomingVk == VK_RCONTROL || incomingRawVk == VK_CONTROL;
+    }
+    if (configuredKey == VK_SHIFT) {
+        return incomingVk == VK_LSHIFT || incomingVk == VK_RSHIFT || incomingRawVk == VK_SHIFT;
+    }
+    if (configuredKey == VK_MENU) {
+        return incomingVk == VK_LMENU || incomingVk == VK_RMENU || incomingRawVk == VK_MENU;
+    }
+
+    if (incomingRawVk == VK_CONTROL && incomingVk == VK_CONTROL && (configuredKey == VK_LCONTROL || configuredKey == VK_RCONTROL)) {
+        return true;
+    }
+    if (incomingRawVk == VK_SHIFT && incomingVk == VK_SHIFT && (configuredKey == VK_LSHIFT || configuredKey == VK_RSHIFT)) {
+        return true;
+    }
+    if (incomingRawVk == VK_MENU && incomingVk == VK_MENU && (configuredKey == VK_LMENU || configuredKey == VK_RMENU)) {
+        return true;
+    }
+
+    return false;
+}
+
+bool IsConfiguredInputKeyDown(DWORD key) {
+    auto isKeyboardKeyDown = [](int vk) {
+        return (GetKeyState(vk) & 0x8000) != 0;
+    };
+    auto isMouseKeyDown = [](int vk) {
+        return (GetAsyncKeyState(vk) & 0x8000) != 0;
+    };
+
+    switch (key) {
+    case VK_CONTROL:
+        return isKeyboardKeyDown(VK_LCONTROL) || isKeyboardKeyDown(VK_RCONTROL);
+    case VK_LCONTROL:
+        return isKeyboardKeyDown(VK_LCONTROL);
+    case VK_RCONTROL:
+        return isKeyboardKeyDown(VK_RCONTROL);
+    case VK_SHIFT:
+        return isKeyboardKeyDown(VK_LSHIFT) || isKeyboardKeyDown(VK_RSHIFT);
+    case VK_LSHIFT:
+        return isKeyboardKeyDown(VK_LSHIFT);
+    case VK_RSHIFT:
+        return isKeyboardKeyDown(VK_RSHIFT);
+    case VK_MENU:
+        return isKeyboardKeyDown(VK_LMENU) || isKeyboardKeyDown(VK_RMENU);
+    case VK_LMENU:
+        return isKeyboardKeyDown(VK_LMENU);
+    case VK_RMENU:
+        return isKeyboardKeyDown(VK_RMENU);
+    case VK_LBUTTON:
+    case VK_RBUTTON:
+    case VK_MBUTTON:
+    case VK_XBUTTON1:
+    case VK_XBUTTON2:
+        return isMouseKeyDown(static_cast<int>(key));
+    default:
+        return isKeyboardKeyDown(static_cast<int>(key));
+    }
+}
+
 bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::vector<DWORD>& exclusionKeys, bool skipLiveKeyStateChecks,
                       size_t minKeyCount, WPARAM rawWParam, bool hasIncomingKeyState, bool incomingIsKeyDown) {
     PROFILE_SCOPE_CAT("Hotkey Match Check", "Game Logic");
@@ -2429,12 +2494,12 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
                key == VK_MENU || key == VK_LMENU || key == VK_RMENU;
     };
 
-    const bool lctrl_down = (GetAsyncKeyState(VK_LCONTROL) & 0x8000) != 0;
-    const bool rctrl_down = (GetAsyncKeyState(VK_RCONTROL) & 0x8000) != 0;
-    const bool lshift_down = (GetAsyncKeyState(VK_LSHIFT) & 0x8000) != 0;
-    const bool rshift_down = (GetAsyncKeyState(VK_RSHIFT) & 0x8000) != 0;
-    const bool lalt_down = (GetAsyncKeyState(VK_LMENU) & 0x8000) != 0;
-    const bool ralt_down = (GetAsyncKeyState(VK_RMENU) & 0x8000) != 0;
+    const bool lctrl_down = IsConfiguredInputKeyDown(VK_LCONTROL);
+    const bool rctrl_down = IsConfiguredInputKeyDown(VK_RCONTROL);
+    const bool lshift_down = IsConfiguredInputKeyDown(VK_LSHIFT);
+    const bool rshift_down = IsConfiguredInputKeyDown(VK_RSHIFT);
+    const bool lalt_down = IsConfiguredInputKeyDown(VK_LMENU);
+    const bool ralt_down = IsConfiguredInputKeyDown(VK_RMENU);
     const bool ctrl_down_now = lctrl_down || rctrl_down;
     const bool shift_down_now = lshift_down || rshift_down;
     const bool alt_down_now = lalt_down || ralt_down;
@@ -2498,7 +2563,7 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
         case VK_RMENU:
             return ralt_down;
         default:
-            return (GetAsyncKeyState(key) & 0x8000) != 0;
+            return IsConfiguredInputKeyDown(key);
         }
     };
 
@@ -2525,7 +2590,7 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
             } else if (excluded_key == VK_RMENU) {
                 excludedPressed = ralt_down;
             } else {
-                excludedPressed = (GetAsyncKeyState(excluded_key) & 0x8000) != 0;
+                excludedPressed = IsConfiguredInputKeyDown(excluded_key);
             }
 
             if (excludedPressed) {
@@ -2687,7 +2752,7 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
             if (isModifierKey(requiredKey)) continue;
             if (requiredKey == 0) continue;
 
-            if ((GetAsyncKeyState(requiredKey) & 0x8000) == 0) {
+            if (!IsConfiguredInputKeyDown(requiredKey)) {
                 if (s_enableHotkeyDebug) {
                     Log("[Hotkey] FAIL: Required key " + std::to_string(requiredKey) + " is not pressed");
                 }

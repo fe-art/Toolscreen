@@ -18,6 +18,7 @@ inline constexpr UINT WM_TOOLSCREEN_CHAR_NO_REBIND = WM_APP + 0x2A1;
 inline constexpr UINT WM_TOOLSCREEN_KEYDOWN_NO_REBIND = WM_APP + 0x2A2;
 inline constexpr UINT WM_TOOLSCREEN_KEYUP_NO_REBIND = WM_APP + 0x2A3;
 inline constexpr UINT WM_TOOLSCREEN_APPLY_FOCUS_REGAIN_SIZE = WM_APP + 0x2A4;
+inline constexpr UINT WM_TOOLSCREEN_LOCAL_KEY_REPEAT = WM_APP + 0x2A5;
 
 InputHandlerResult HandleMouseMoveViewportOffset(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM& lParam);
 
@@ -72,6 +73,8 @@ InputHandlerResult HandleCustomCharNoRebind(HWND hWnd, UINT uMsg, WPARAM wParam,
 
 InputHandlerResult HandleCharRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
+void ResetLocalKeyRepeatState(HWND hWnd);
+
 void ReleaseActiveLowLevelRebindKeys(HWND hWnd);
 
 #ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
@@ -79,6 +82,15 @@ void ResetSyntheticRebindKeyEventsForTest();
 size_t GetSyntheticRebindKeyEventCountForTest();
 bool GetSyntheticRebindKeyEventForTest(size_t index, UINT& outScanCodeWithFlags, bool& outKeyDown);
 size_t GetActiveSyntheticRebindOutputCountForTest();
+void ResetExactKeyboardMessageStateForTest();
+void ResetHotkeyRuntimeStateForTest();
+void ResetLowLevelExactModifierStateForTest();
+void SetLowLevelExactModifierDownForTest(DWORD vk, bool isDown);
+void SetPhysicalModifierDownForTest(DWORD vk, bool isDown);
+void ResetPhysicalModifierStateForTest();
+void QueueLowLevelExactModifierKeydownForTest(DWORD vk);
+void QueueLowLevelExactModifierKeyupForTest(DWORD vk);
+DWORD ResolveTrackedKeyboardVkFromMessageForTest(UINT uMsg, WPARAM wParam, LPARAM lParam);
 #endif
 
 LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);

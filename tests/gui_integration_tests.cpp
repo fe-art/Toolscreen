@@ -10,6 +10,7 @@
 #include "features/ninjabrain_data.h"
 #include "features/window_overlay.h"
 #include "gui/gui.h"
+#include "gui/gui_internal.h"
 #include "hooks/input_hook.h"
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_win32.h"
@@ -37,6 +38,8 @@
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
 extern std::atomic<bool> g_configLoaded;
+extern std::atomic<HWND> g_subclassedHwnd;
+bool GetEffectiveKeyRepeatTimings(int& outStartDelayMs, int& outRepeatDelayMs);
 
 namespace {
 
@@ -469,6 +472,10 @@ bool ContainsFileName(const std::vector<std::string>& fileNames, std::string_vie
 
 void ResetGlobalTestState(const std::filesystem::path& root) {
     StopNinjabrainClient();
+
+    ResetExactKeyboardMessageStateForTest();
+    ResetHotkeyRuntimeStateForTest();
+    ResetLowLevelExactModifierStateForTest();
 
     g_toolscreenPath = root.wstring();
     g_modeFilePath = (root / "mode.txt").wstring();
@@ -1591,8 +1598,10 @@ void PopulateRichConfigFixture() {
     g_config.hideAnimationsInGame = true;
     g_config.limitCaptureFramerate = false;
     g_config.obsFramerate = 73;
+    g_config.useSystemKeyRepeat = true;
+    g_config.modifiersInterruptKeyRepeat = true;
     g_config.keyRepeatStartDelay = 275;
-    g_config.keyRepeatDelay = 42;
+    g_config.keyRepeatDelay = 4;
     g_config.basicModeEnabled = false;
     g_config.restoreWindowedModeOnFullscreenExit = false;
     g_config.disableFullscreenPrompt = true;
@@ -2029,8 +2038,10 @@ void VerifyRichGlobalSettings() {
     Expect(g_config.hideAnimationsInGame, "Expected hideAnimationsInGame to roundtrip.");
     Expect(!g_config.limitCaptureFramerate, "Expected limitCaptureFramerate to roundtrip.");
     Expect(g_config.obsFramerate == 73, "Expected obsFramerate to roundtrip.");
+    Expect(g_config.useSystemKeyRepeat, "Expected useSystemKeyRepeat to roundtrip.");
+    Expect(g_config.modifiersInterruptKeyRepeat, "Expected modifiersInterruptKeyRepeat to roundtrip.");
     Expect(g_config.keyRepeatStartDelay == 275, "Expected keyRepeatStartDelay to roundtrip.");
-    Expect(g_config.keyRepeatDelay == 42, "Expected keyRepeatDelay to roundtrip.");
+    Expect(g_config.keyRepeatDelay == 4, "Expected keyRepeatDelay to roundtrip.");
     Expect(!g_config.basicModeEnabled, "Expected basicModeEnabled to roundtrip.");
     Expect(!g_config.restoreWindowedModeOnFullscreenExit, "Expected restoreWindowedModeOnFullscreenExit to roundtrip.");
     Expect(g_config.disableFullscreenPrompt, "Expected disableFullscreenPrompt to roundtrip.");

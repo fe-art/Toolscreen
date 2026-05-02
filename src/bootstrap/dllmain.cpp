@@ -650,46 +650,64 @@ void SaveOriginalKeyRepeatSettings() {
     }
 }
 
-void ApplyKeyRepeatSettings() {
-    if (!ShouldOwnGlobalInputState()) {
-        RestoreKeyRepeatSettings();
-        return;
+static int GetFallbackKeyboardDelayMs() {
+    UINT keyboardDelay = 0;
+    if (SystemParametersInfo(SPI_GETKEYBOARDDELAY, 0, &keyboardDelay, 0)) {
+        keyboardDelay = (std::min)(keyboardDelay, 3u);
+        return static_cast<int>((keyboardDelay + 1u) * 250u);
     }
+    return 250;
+}
 
-    if (!g_originalFilterKeysCaptured.load(std::memory_order_acquire)) { SaveOriginalKeyRepeatSettings(); }
-
-    int startDelay = g_config.keyRepeatStartDelay;
-    int repeatDelay = g_config.keyRepeatDelay;
-
-    if (startDelay == -1 && repeatDelay == -1) {
-        if (g_filterKeysApplied.load()) {
-            if (SystemParametersInfo(SPI_SETFILTERKEYS, sizeof(FILTERKEYS), &g_originalFilterKeys, 0)) {
-                Log("Restored original FILTERKEYS settings");
-            }
-            g_filterKeysApplied.store(false);
+static int GetFallbackKeyboardRepeatMs() {
+    UINT keyboardSpeed = 31;
+    if (SystemParametersInfo(SPI_GETKEYBOARDSPEED, 0, &keyboardSpeed, 0)) {
+        keyboardSpeed = (std::min)(keyboardSpeed, 31u);
+        const double repeatsPerSecond = 2.5 + (27.5 * (static_cast<double>(keyboardSpeed) / 31.0));
+        if (repeatsPerSecond > 0.0) {
+            return (std::max)(1, static_cast<int>(std::lround(1000.0 / repeatsPerSecond)));
         }
-        return;
     }
+    return 33;
+}
 
-    if (startDelay < -1) startDelay = -1;
-    if (startDelay > 300) startDelay = 300;
-    if (repeatDelay < -1) repeatDelay = -1;
-    if (repeatDelay > 300) repeatDelay = 300;
+bool GetEffectiveKeyRepeatTimings(int& outStartDelayMs, int& outRepeatDelayMs) {
+    auto clampKeyRepeatStartDelayValue = [](int value) {
+        if (value < 0) {
+            return -1;
+        }
+        if (value < 100) {
+            return 100;
+        }
 
-    FILTERKEYS fk = { sizeof(FILTERKEYS) };
-    fk.dwFlags = FKF_FILTERKEYSON;
-    fk.iWaitMSec = 0;
-    fk.iDelayMSec = (startDelay >= 0) ? (startDelay == 0 ? 1 : startDelay) : g_originalFilterKeys.iDelayMSec;
-    fk.iRepeatMSec = (repeatDelay >= 0) ? (repeatDelay == 0 ? 1 : repeatDelay) : g_originalFilterKeys.iRepeatMSec;
-    fk.iBounceMSec = 0;
+        value = (std::min)(value, 300);
+        return 100 + (((value - 100) + 2) / 5) * 5;
+    };
 
-    if (SystemParametersInfo(SPI_SETFILTERKEYS, sizeof(FILTERKEYS), &fk, 0)) {
-        g_filterKeysApplied.store(true);
-        Log("Applied key repeat settings: startDelay=" + std::to_string(fk.iDelayMSec) +
-            "ms, repeatDelay=" + std::to_string(fk.iRepeatMSec) + "ms");
-    } else {
-        Log("WARNING: Failed to set key repeat settings");
-    }
+    auto clampKeyRepeatDelayValue = [](int value) {
+        if (value < 0) {
+            return -1;
+        }
+        if (value > 50) {
+            value = 50;
+        }
+        return (std::max)(value, 1);
+    };
+
+    int configuredStartDelay = clampKeyRepeatStartDelayValue(g_config.keyRepeatStartDelay);
+    int configuredRepeatDelay = clampKeyRepeatDelayValue(g_config.keyRepeatDelay);
+    outStartDelayMs =
+        (configuredStartDelay >= 0) ? (configuredStartDelay == 0 ? 1 : configuredStartDelay) : ConfigDefaults::CONFIG_KEY_REPEAT_AUTO_START_DELAY_MS;
+    outRepeatDelayMs =
+        (configuredRepeatDelay >= 0) ? configuredRepeatDelay : ConfigDefaults::CONFIG_KEY_REPEAT_AUTO_DELAY_MS;
+    outStartDelayMs = (std::max)(outStartDelayMs, 1);
+    outRepeatDelayMs = (std::max)(outRepeatDelayMs, 1);
+    return true;
+}
+
+void ApplyKeyRepeatSettings() {
+    ResetLocalKeyRepeatState(g_subclassedHwnd.load(std::memory_order_acquire));
+    RestoreKeyRepeatSettings();
 }
 
 void RestoreKeyRepeatSettings() {

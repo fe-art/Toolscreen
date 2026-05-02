@@ -5,6 +5,7 @@ struct CapturedWindowMessage {
 };
 
 constexpr wchar_t kRebindCapturePropName[] = L"ToolscreenRebindCapture";
+constexpr wchar_t kSubclassedInputCapturePropName[] = L"ToolscreenSubclassedInputCapture";
 constexpr LRESULT kCapturedWndProcResult = 0x5A17;
 
 class ScopedKeyboardStateOverride {
@@ -155,8 +156,55 @@ class ScopedRebindMessageCapture {
     WNDPROC m_previousOriginalWndProc = nullptr;
 };
 
-static LPARAM BuildTestKeyboardMessageLParam(DWORD vk, bool isKeyDown, bool isSystemKey = false, UINT repeatCount = 1) {
-    const UINT scanCodeWithFlags = static_cast<UINT>(MapVirtualKeyW(vk, MAPVK_VK_TO_VSC_EX));
+class ScopedSubclassedInputCapture {
+  public:
+    explicit ScopedSubclassedInputCapture(HWND hwnd) : m_hwnd(hwnd) {
+        Expect(m_hwnd != nullptr, "ScopedSubclassedInputCapture requires a valid HWND.");
+        m_previousWindowProc = reinterpret_cast<WNDPROC>(GetWindowLongPtrW(m_hwnd, GWLP_WNDPROC));
+        Expect(m_previousWindowProc != nullptr, "Failed to read the previous WNDPROC for subclassed input capture.");
+        const BOOL setPropOk = SetPropW(m_hwnd, kSubclassedInputCapturePropName, this);
+        Expect(setPropOk == TRUE, "Failed to associate subclassed input capture with the integration-test window.");
+        const LONG_PTR setProcResult = SetWindowLongPtrW(m_hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&SubclassedWndProc));
+        Expect(setProcResult != 0, "Failed to install the subclassed input capture window procedure.");
+        m_previousOriginalWndProc = g_originalWndProc;
+        m_previousSubclassedHwnd = ::g_subclassedHwnd.load(std::memory_order_acquire);
+        g_originalWndProc = &CaptureOriginalWndProc;
+        ::g_subclassedHwnd.store(m_hwnd, std::memory_order_release);
+    }
+
+    ~ScopedSubclassedInputCapture() {
+        ResetLocalKeyRepeatState(m_hwnd);
+        ::g_subclassedHwnd.store(m_previousSubclassedHwnd, std::memory_order_release);
+        g_originalWndProc = m_previousOriginalWndProc;
+        if (m_hwnd != nullptr && m_previousWindowProc != nullptr) {
+            (void)SetWindowLongPtrW(m_hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(m_previousWindowProc));
+            (void)RemovePropW(m_hwnd, kSubclassedInputCapturePropName);
+        }
+    }
+
+    void Clear() { messages.clear(); }
+
+    std::vector<CapturedWindowMessage> messages;
+
+  private:
+    static ScopedSubclassedInputCapture* FromWindow(HWND hwnd) {
+        return reinterpret_cast<ScopedSubclassedInputCapture*>(GetPropW(hwnd, kSubclassedInputCapturePropName));
+    }
+
+    static LRESULT CALLBACK CaptureOriginalWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+        if (auto* capture = FromWindow(hwnd)) {
+            capture->messages.push_back({ message, wParam, lParam });
+        }
+        return kCapturedWndProcResult;
+    }
+
+    HWND m_hwnd = nullptr;
+    HWND m_previousSubclassedHwnd = nullptr;
+    WNDPROC m_previousWindowProc = nullptr;
+    WNDPROC m_previousOriginalWndProc = nullptr;
+};
+
+static LPARAM BuildTestKeyboardMessageLParamFromScan(UINT scanCodeWithFlags, bool isKeyDown, bool isSystemKey = false, UINT repeatCount = 1) {
     LPARAM out = static_cast<LPARAM>(repeatCount & 0xFFFFu);
     out |= static_cast<LPARAM>(scanCodeWithFlags & 0xFFu) << 16;
     if ((scanCodeWithFlags & 0xFF00u) != 0) {
@@ -169,6 +217,11 @@ static LPARAM BuildTestKeyboardMessageLParam(DWORD vk, bool isKeyDown, bool isSy
         out |= (static_cast<LPARAM>(1) << 30) | (static_cast<LPARAM>(1) << 31);
     }
     return out;
+}
+
+static LPARAM BuildTestKeyboardMessageLParam(DWORD vk, bool isKeyDown, bool isSystemKey = false, UINT repeatCount = 1) {
+    const UINT scanCodeWithFlags = static_cast<UINT>(MapVirtualKeyW(vk, MAPVK_VK_TO_VSC_EX));
+    return BuildTestKeyboardMessageLParamFromScan(scanCodeWithFlags, isKeyDown, isSystemKey, repeatCount);
 }
 
 static KeyRebind MakeEnabledRebind(DWORD fromKey, DWORD toKey) {
@@ -194,6 +247,17 @@ static void PrepareRebindRuntimeCase(std::string_view caseName, const std::vecto
 }
 
 static void ExpectCapturedMessage(const ScopedRebindMessageCapture& capture, size_t index, UINT expectedMessage, WPARAM expectedWParam,
+                                  const std::string& label) {
+    Expect(index < capture.messages.size(), label + " missing captured message at index " + std::to_string(index) + ".");
+    const CapturedWindowMessage& message = capture.messages[index];
+    Expect(message.message == expectedMessage,
+           label + " expected message " + std::to_string(expectedMessage) + ", got " + std::to_string(message.message) + ".");
+    Expect(message.wParam == expectedWParam,
+           label + " expected wParam " + std::to_string(static_cast<unsigned long long>(expectedWParam)) + ", got " +
+               std::to_string(static_cast<unsigned long long>(message.wParam)) + ".");
+}
+
+static void ExpectCapturedMessage(const ScopedSubclassedInputCapture& capture, size_t index, UINT expectedMessage, WPARAM expectedWParam,
                                   const std::string& label) {
     Expect(index < capture.messages.size(), label + " missing captured message at index " + std::to_string(index) + ".");
     const CapturedWindowMessage& message = capture.messages[index];
@@ -1136,6 +1200,385 @@ void RunKeyRebindRuntimeCursorStatePriorityAndFallbackTest(TestRunMode runMode =
         ExpectCapturedMessage(capture, 0, WM_CHAR, 'b', "Cursor-state fallback WM_CHAR");
     }
 }
+
+void RunKeyRepeatRuntimeLastPressedOnlyTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    PrepareRebindRuntimeCase("key_repeat_runtime_last_pressed_only", {});
+    g_config.useSystemKeyRepeat = false;
+    PublishConfigSnapshot();
+    Expect(window.PumpMessages(), "Expected the test window to stay open before local repeat capture setup.");
+    ScopedSubclassedInputCapture capture(window.hwnd());
+    Expect(window.PumpMessages(), "Expected the test window to stay open after local repeat capture setup.");
+    capture.Clear();
+
+    ScopedKeyboardStateOverride keyboardState;
+    keyboardState.SetKeyDown(VK_SHIFT, false);
+    keyboardState.SetToggle(VK_CAPITAL, false);
+    keyboardState.Apply();
+
+    auto postAndPump = [&](UINT message, WPARAM wParam, LPARAM lParam, const std::string& label) {
+        Expect(PostMessageW(window.hwnd(), message, wParam, lParam) != FALSE, label + " should post successfully.");
+        Expect(window.PumpMessages(), label + " should keep the window open while dispatching messages.");
+    };
+
+    postAndPump(WM_KEYDOWN, 'A', BuildTestKeyboardMessageLParam('A', true), "Initial A keydown");
+    Expect(capture.messages.size() == 2, "Expected the initial A keydown to forward WM_KEYDOWN and WM_CHAR.");
+    ExpectCapturedMessage(capture, 0, WM_KEYDOWN, 'A', "Initial A WM_KEYDOWN");
+    ExpectCapturedMessage(capture, 1, WM_CHAR, 'a', "Initial A WM_CHAR");
+
+    capture.Clear();
+    postAndPump(WM_TOOLSCREEN_LOCAL_KEY_REPEAT, 0, 0, "First local repeat tick");
+    Expect(capture.messages.size() == 2, "Expected the first local repeat tick to repeat the A keydown and character.");
+    ExpectCapturedMessage(capture, 0, WM_KEYDOWN, 'A', "Repeated A WM_KEYDOWN");
+    ExpectCapturedMessage(capture, 1, WM_CHAR, 'a', "Repeated A WM_CHAR");
+
+    capture.Clear();
+    postAndPump(WM_KEYDOWN, 'B', BuildTestKeyboardMessageLParam('B', true), "Initial B keydown");
+    Expect(capture.messages.size() == 2, "Expected the initial B keydown to forward WM_KEYDOWN and WM_CHAR.");
+    ExpectCapturedMessage(capture, 0, WM_KEYDOWN, 'B', "Initial B WM_KEYDOWN");
+    ExpectCapturedMessage(capture, 1, WM_CHAR, 'b', "Initial B WM_CHAR");
+
+    capture.Clear();
+    postAndPump(WM_TOOLSCREEN_LOCAL_KEY_REPEAT, 0, 0, "Second local repeat tick");
+    Expect(capture.messages.size() == 2, "Expected the second local repeat tick to repeat only the most recently pressed key.");
+    ExpectCapturedMessage(capture, 0, WM_KEYDOWN, 'B', "Repeated B WM_KEYDOWN");
+    ExpectCapturedMessage(capture, 1, WM_CHAR, 'b', "Repeated B WM_CHAR");
+
+    capture.Clear();
+    postAndPump(WM_KEYUP, 'B', BuildTestKeyboardMessageLParam('B', false), "B keyup");
+    Expect(capture.messages.size() == 1, "Expected releasing B to forward one WM_KEYUP message.");
+    ExpectCapturedMessage(capture, 0, WM_KEYUP, 'B', "B WM_KEYUP");
+
+    capture.Clear();
+    postAndPump(WM_TOOLSCREEN_LOCAL_KEY_REPEAT, 0, 0, "Third local repeat tick");
+    Expect(capture.messages.empty(), "Expected the earlier A key to stay non-repeating after the newer B key is released.");
+
+    capture.Clear();
+    postAndPump(WM_KEYUP, 'A', BuildTestKeyboardMessageLParam('A', false), "A keyup");
+}
+
+void RunKeyRepeatRuntimeLocalRepeatUsesRebindTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    KeyRebind rebind = MakeEnabledRebind('A', 'B');
+    rebind.useCustomOutput = true;
+    rebind.customOutputVK = 'B';
+    PrepareRebindRuntimeCase("key_repeat_runtime_local_repeat_uses_rebind", { rebind });
+    g_config.useSystemKeyRepeat = false;
+    PublishConfigSnapshot();
+    Expect(window.PumpMessages(), "Expected the test window to stay open before subclassed repeat capture setup.");
+    ScopedSubclassedInputCapture capture(window.hwnd());
+    Expect(window.PumpMessages(), "Expected the test window to stay open after subclassed repeat capture setup.");
+    capture.Clear();
+
+    ScopedKeyboardStateOverride keyboardState;
+    keyboardState.SetKeyDown(VK_SHIFT, false);
+    keyboardState.SetToggle(VK_CAPITAL, false);
+    keyboardState.Apply();
+
+    auto postAndPump = [&](UINT message, WPARAM wParam, LPARAM lParam, const std::string& label) {
+        Expect(PostMessageW(window.hwnd(), message, wParam, lParam) != FALSE, label + " should post successfully.");
+        Expect(window.PumpMessages(), label + " should keep the window open while dispatching messages.");
+    };
+
+    postAndPump(WM_KEYDOWN, 'A', BuildTestKeyboardMessageLParam('A', true), "Initial rebound A keydown");
+    Expect(capture.messages.size() == 2, "Expected the initial rebound A keydown to forward the remapped WM_KEYDOWN and WM_CHAR.");
+    ExpectCapturedMessage(capture, 0, WM_KEYDOWN, 'B', "Initial rebound WM_KEYDOWN");
+    ExpectCapturedMessage(capture, 1, WM_CHAR, 'b', "Initial rebound WM_CHAR");
+
+    capture.Clear();
+    LPARAM physicalRepeatLParam = BuildTestKeyboardMessageLParam('A', true);
+    physicalRepeatLParam |= (static_cast<LPARAM>(1) << 30);
+    postAndPump(WM_KEYDOWN, 'A', physicalRepeatLParam, "Physical repeat A keydown");
+    Expect(capture.messages.empty(), "Expected physical auto-repeat WM_KEYDOWN/WM_CHAR to be suppressed when local repeat is enabled.");
+
+    capture.Clear();
+    postAndPump(WM_TOOLSCREEN_LOCAL_KEY_REPEAT, 0, 0, "Local repeat tick with rebound key");
+    Expect(capture.messages.size() == 2, "Expected the local repeat tick to flow through the rebind pipeline.");
+    ExpectCapturedMessage(capture, 0, WM_KEYDOWN, 'B', "Repeated rebound WM_KEYDOWN");
+    ExpectCapturedMessage(capture, 1, WM_CHAR, 'b', "Repeated rebound WM_CHAR");
+
+    capture.Clear();
+    postAndPump(WM_KEYUP, 'A', BuildTestKeyboardMessageLParam('A', false), "Rebound A keyup");
+    Expect(capture.messages.size() == 1, "Expected releasing the rebound A key to forward one remapped WM_KEYUP.");
+    ExpectCapturedMessage(capture, 0, WM_KEYUP, 'B', "Rebound WM_KEYUP");
+}
+
+void RunKeyRepeatRuntimeAutohotkeyDuplicateKeydownTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    PrepareRebindRuntimeCase("key_repeat_runtime_autohotkey_duplicate_keydown", {});
+    g_config.useSystemKeyRepeat = false;
+    PublishConfigSnapshot();
+    Expect(window.PumpMessages(), "Expected the test window to stay open before AutoHotkey duplicate repeat capture setup.");
+    ScopedSubclassedInputCapture capture(window.hwnd());
+    Expect(window.PumpMessages(), "Expected the test window to stay open after AutoHotkey duplicate repeat capture setup.");
+    capture.Clear();
+
+    ScopedKeyboardStateOverride keyboardState;
+    keyboardState.SetKeyDown(VK_SHIFT, false);
+    keyboardState.SetToggle(VK_CAPITAL, false);
+    keyboardState.Apply();
+
+    auto postAndPump = [&](UINT message, WPARAM wParam, LPARAM lParam, const std::string& label) {
+        Expect(PostMessageW(window.hwnd(), message, wParam, lParam) != FALSE, label + " should post successfully.");
+        Expect(window.PumpMessages(), label + " should keep the window open while dispatching messages.");
+    };
+
+    const LPARAM initialKeyDownLParam = BuildTestKeyboardMessageLParam('B', true);
+    postAndPump(WM_KEYDOWN, 'B', initialKeyDownLParam, "Initial remapped B keydown");
+    Expect(capture.messages.size() == 2, "Expected the initial remapped B keydown to forward WM_KEYDOWN and WM_CHAR.");
+    ExpectCapturedMessage(capture, 0, WM_KEYDOWN, 'B', "Initial remapped B WM_KEYDOWN");
+    ExpectCapturedMessage(capture, 1, WM_CHAR, 'b', "Initial remapped B WM_CHAR");
+
+    capture.Clear();
+    postAndPump(WM_KEYDOWN, 'B', initialKeyDownLParam, "AutoHotkey-style duplicate B keydown");
+    Expect(capture.messages.empty(),
+           "Expected duplicate held-key WM_KEYDOWN/WM_CHAR without bit 30 to be suppressed when local repeat is enabled.");
+
+    capture.Clear();
+    postAndPump(WM_TOOLSCREEN_LOCAL_KEY_REPEAT, 0, 0, "Local repeat tick after duplicate remapped keydown");
+    Expect(capture.messages.size() == 2, "Expected local repeat to continue after an AutoHotkey-style duplicate held-key keydown.");
+    ExpectCapturedMessage(capture, 0, WM_KEYDOWN, 'B', "Repeated remapped B WM_KEYDOWN");
+    ExpectCapturedMessage(capture, 1, WM_CHAR, 'b', "Repeated remapped B WM_CHAR");
+
+    capture.Clear();
+    postAndPump(WM_KEYUP, 'B', BuildTestKeyboardMessageLParam('B', false), "Remapped B keyup");
+    Expect(capture.messages.size() == 1, "Expected releasing the remapped B key to forward one WM_KEYUP.");
+    ExpectCapturedMessage(capture, 0, WM_KEYUP, 'B', "Remapped B WM_KEYUP");
+
+    capture.Clear();
+    postAndPump(WM_KEYDOWN, 'B', initialKeyDownLParam, "Fresh remapped B keydown after release");
+    Expect(capture.messages.size() == 2, "Expected a fresh remapped B keydown after release to forward WM_KEYDOWN and WM_CHAR.");
+    ExpectCapturedMessage(capture, 0, WM_KEYDOWN, 'B', "Fresh remapped B WM_KEYDOWN");
+    ExpectCapturedMessage(capture, 1, WM_CHAR, 'b', "Fresh remapped B WM_CHAR");
+
+    capture.Clear();
+    postAndPump(WM_KEYUP, 'B', BuildTestKeyboardMessageLParam('B', false), "Final remapped B keyup");
+}
+
+void RunKeyRepeatRuntimeAutohotkeyRetainedNumpadScanTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    PrepareRebindRuntimeCase("key_repeat_runtime_autohotkey_retained_numpad_scan", {});
+    g_config.useSystemKeyRepeat = false;
+    PublishConfigSnapshot();
+    Expect(window.PumpMessages(), "Expected the test window to stay open before retained-scan repeat capture setup.");
+    ScopedSubclassedInputCapture capture(window.hwnd());
+    Expect(window.PumpMessages(), "Expected the test window to stay open after retained-scan repeat capture setup.");
+    capture.Clear();
+
+    ScopedKeyboardStateOverride keyboardState;
+    keyboardState.SetKeyDown(VK_SHIFT, false);
+    keyboardState.SetToggle(VK_CAPITAL, false);
+    keyboardState.Apply();
+
+    auto postAndPump = [&](UINT message, WPARAM wParam, LPARAM lParam, const std::string& label) {
+        Expect(PostMessageW(window.hwnd(), message, wParam, lParam) != FALSE, label + " should post successfully.");
+        Expect(window.PumpMessages(), label + " should keep the window open while dispatching messages.");
+    };
+
+    const UINT numpadClearScanCodeWithFlags = 0x4C;
+    const LPARAM retainedScanKeyDownLParam = BuildTestKeyboardMessageLParamFromScan(numpadClearScanCodeWithFlags, true);
+    postAndPump(WM_KEYDOWN, '5', retainedScanKeyDownLParam, "Initial remapped 5 keydown with retained numpad-clear scan");
+
+    capture.Clear();
+    postAndPump(WM_TOOLSCREEN_LOCAL_KEY_REPEAT, 0, 0, "Local repeat tick after retained numpad-clear scan");
+    Expect(capture.messages.size() == 2,
+           "Expected local repeat to normalize a retained numpad-clear scan so the remapped digit keeps producing WM_KEYDOWN and WM_CHAR.");
+    ExpectCapturedMessage(capture, 0, WM_KEYDOWN, '5', "Repeated retained-scan WM_KEYDOWN");
+    ExpectCapturedMessage(capture, 1, WM_CHAR, '5', "Repeated retained-scan WM_CHAR");
+
+    capture.Clear();
+    postAndPump(WM_KEYUP, '5', BuildTestKeyboardMessageLParamFromScan(numpadClearScanCodeWithFlags, false), "Retained-scan remapped 5 keyup");
+}
+
+void RunKeyRepeatRuntimeAutohotkeyNumpadClearCharOverrideTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    PrepareRebindRuntimeCase("key_repeat_runtime_autohotkey_numpadclear_char_override", {});
+    g_config.useSystemKeyRepeat = false;
+    PublishConfigSnapshot();
+    Expect(window.PumpMessages(), "Expected the test window to stay open before numpad-clear char override capture setup.");
+    ScopedSubclassedInputCapture capture(window.hwnd());
+    Expect(window.PumpMessages(), "Expected the test window to stay open after numpad-clear char override capture setup.");
+    capture.Clear();
+
+    ScopedKeyboardStateOverride keyboardState;
+    keyboardState.SetKeyDown(VK_SHIFT, false);
+    keyboardState.SetToggle(VK_CAPITAL, false);
+    keyboardState.Apply();
+
+    auto postAndPump = [&](UINT message, WPARAM wParam, LPARAM lParam, const std::string& label) {
+        Expect(PostMessageW(window.hwnd(), message, wParam, lParam) != FALSE, label + " should post successfully.");
+        Expect(window.PumpMessages(), label + " should keep the window open while dispatching messages.");
+    };
+
+    const UINT numpadClearScanCodeWithFlags = 0x4C;
+    const LPARAM numpadClearKeyDownLParam = BuildTestKeyboardMessageLParamFromScan(numpadClearScanCodeWithFlags, true);
+    postAndPump(WM_KEYDOWN, VK_CLEAR, numpadClearKeyDownLParam, "Initial NumpadClear source keydown");
+
+    capture.Clear();
+    postAndPump(WM_CHAR, '5', numpadClearKeyDownLParam, "Remapped digit 5 char after NumpadClear keydown");
+    Expect(capture.messages.size() == 1, "Expected the remapped digit char to forward once after the source NumpadClear keydown.");
+    ExpectCapturedMessage(capture, 0, WM_CHAR, '5', "Initial remapped digit WM_CHAR");
+
+    capture.Clear();
+    postAndPump(WM_TOOLSCREEN_LOCAL_KEY_REPEAT, 0, 0, "Local repeat tick after NumpadClear char override");
+    Expect(capture.messages.size() == 2,
+           "Expected local repeat to reuse the observed remapped digit after a non-typing NumpadClear source keydown.");
+    ExpectCapturedMessage(capture, 0, WM_KEYDOWN, '5', "Repeated char-override WM_KEYDOWN");
+    ExpectCapturedMessage(capture, 1, WM_CHAR, '5', "Repeated char-override WM_CHAR");
+
+    capture.Clear();
+    postAndPump(WM_KEYUP, '5', BuildTestKeyboardMessageLParam('5', false), "Remapped digit 5 keyup after NumpadClear source");
+    Expect(capture.messages.size() == 1, "Expected the remapped destination keyup to forward once after the NumpadClear source release.");
+    ExpectCapturedMessage(capture, 0, WM_KEYUP, '5', "Remapped destination WM_KEYUP");
+
+    capture.Clear();
+    postAndPump(WM_TOOLSCREEN_LOCAL_KEY_REPEAT, 0, 0, "Local repeat tick after remapped destination keyup");
+    Expect(capture.messages.empty(), "Expected repeat to stop after the remapped destination keyup releases the held NumpadClear source.");
+}
+
+    void RunKeyRepeatRuntimeAutohotkeyTypingThenClearAliasTest(TestRunMode runMode = TestRunMode::Automated) {
+        DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+        PrepareRebindRuntimeCase("key_repeat_runtime_autohotkey_typing_then_clear_alias", {});
+        g_config.useSystemKeyRepeat = false;
+        PublishConfigSnapshot();
+        Expect(window.PumpMessages(), "Expected the test window to stay open before typing-then-clear alias capture setup.");
+        ScopedSubclassedInputCapture capture(window.hwnd());
+        Expect(window.PumpMessages(), "Expected the test window to stay open after typing-then-clear alias capture setup.");
+        capture.Clear();
+
+        ScopedKeyboardStateOverride keyboardState;
+        keyboardState.SetKeyDown(VK_SHIFT, false);
+        keyboardState.SetToggle(VK_CAPITAL, false);
+        keyboardState.Apply();
+
+        const UINT numpadClearScanCodeWithFlags = 0x4C;
+        const LPARAM topRowFiveKeyDownLParam = BuildTestKeyboardMessageLParam('5', true);
+        const LPARAM numpadClearKeyDownLParam = BuildTestKeyboardMessageLParamFromScan(numpadClearScanCodeWithFlags, true);
+
+        Expect(PostMessageW(window.hwnd(), WM_KEYDOWN, '5', topRowFiveKeyDownLParam) != FALSE,
+            "Expected the remapped digit keydown to post successfully.");
+        Expect(PostMessageW(window.hwnd(), WM_KEYDOWN, VK_CLEAR, numpadClearKeyDownLParam) != FALSE,
+            "Expected the trailing VK_CLEAR alias keydown to post successfully.");
+        Expect(window.PumpMessages(), "Expected the typing-then-clear alias sequence to keep the window open while dispatching messages.");
+
+        capture.Clear();
+        Expect(PostMessageW(window.hwnd(), WM_TOOLSCREEN_LOCAL_KEY_REPEAT, 0, 0) != FALSE,
+            "Expected the local repeat tick to post successfully after the alias sequence.");
+        Expect(window.PumpMessages(), "Expected the local repeat tick after the alias sequence to keep the window open.");
+        Expect(capture.messages.size() == 2,
+            "Expected the typing key to remain the repeat output even after an immediate trailing VK_CLEAR alias keydown.");
+        ExpectCapturedMessage(capture, 0, WM_KEYDOWN, '5', "Repeated typing-alias WM_KEYDOWN");
+        ExpectCapturedMessage(capture, 1, WM_CHAR, '5', "Repeated typing-alias WM_CHAR");
+
+        capture.Clear();
+        Expect(PostMessageW(window.hwnd(), WM_KEYUP, VK_CLEAR, BuildTestKeyboardMessageLParamFromScan(numpadClearScanCodeWithFlags, false)) != FALSE,
+            "Expected the VK_CLEAR alias keyup to post successfully.");
+        Expect(window.PumpMessages(), "Expected the VK_CLEAR alias keyup to keep the window open while dispatching messages.");
+
+        capture.Clear();
+        Expect(PostMessageW(window.hwnd(), WM_TOOLSCREEN_LOCAL_KEY_REPEAT, 0, 0) != FALSE,
+            "Expected the local repeat tick after alias release to post successfully.");
+        Expect(window.PumpMessages(), "Expected the local repeat tick after alias release to keep the window open.");
+        Expect(capture.messages.empty(), "Expected repeat to stop after the trailing VK_CLEAR alias keyup.");
+    }
+
+    void RunKeyRepeatRuntimeModifiersDoNotInterruptByDefaultTest(TestRunMode runMode = TestRunMode::Automated) {
+        DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+        PrepareRebindRuntimeCase("key_repeat_runtime_modifiers_do_not_interrupt_by_default", {});
+        g_config.useSystemKeyRepeat = false;
+        g_config.modifiersInterruptKeyRepeat = false;
+        PublishConfigSnapshot();
+        Expect(window.PumpMessages(), "Expected the test window to stay open before modifier repeat capture setup.");
+        ScopedSubclassedInputCapture capture(window.hwnd());
+        Expect(window.PumpMessages(), "Expected the test window to stay open after modifier repeat capture setup.");
+        capture.Clear();
+
+        ScopedKeyboardStateOverride keyboardState;
+        keyboardState.SetKeyDown(VK_SHIFT, false);
+        keyboardState.SetToggle(VK_CAPITAL, false);
+        keyboardState.Apply();
+
+        auto postAndPump = [&](UINT message, WPARAM wParam, LPARAM lParam, const std::string& label) {
+            Expect(PostMessageW(window.hwnd(), message, wParam, lParam) != FALSE, label + " should post successfully.");
+            Expect(window.PumpMessages(), label + " should keep the window open while dispatching messages.");
+        };
+
+        postAndPump(WM_KEYDOWN, 'A', BuildTestKeyboardMessageLParam('A', true), "Initial A keydown before modifier");
+        Expect(capture.messages.size() == 2, "Expected the initial A keydown to forward WM_KEYDOWN and WM_CHAR.");
+
+        capture.Clear();
+        keyboardState.SetKeyDown(VK_SHIFT, true);
+        keyboardState.Apply();
+        postAndPump(WM_KEYDOWN, VK_SHIFT, BuildTestKeyboardMessageLParam(VK_SHIFT, true), "Shift keydown while A is held");
+        Expect(capture.messages.size() == 1, "Expected Shift keydown to forward once without stealing repeat ownership by default.");
+        ExpectCapturedMessage(capture, 0, WM_KEYDOWN, VK_SHIFT, "Modifier WM_KEYDOWN without repeat interruption");
+
+        capture.Clear();
+        postAndPump(WM_TOOLSCREEN_LOCAL_KEY_REPEAT, 0, 0, "Local repeat tick after Shift keydown");
+        Expect(capture.messages.size() == 2, "Expected the held A key to keep repeating after a modifier keydown when modifier interruption is disabled.");
+        ExpectCapturedMessage(capture, 0, WM_KEYDOWN, 'A', "Repeated A WM_KEYDOWN after modifier");
+
+        capture.Clear();
+        keyboardState.SetKeyDown(VK_SHIFT, false);
+        keyboardState.Apply();
+        postAndPump(WM_KEYUP, VK_SHIFT, BuildTestKeyboardMessageLParam(VK_SHIFT, false), "Shift keyup after non-interrupting repeat");
+        Expect(capture.messages.size() == 1, "Expected releasing Shift to forward one WM_KEYUP.");
+        ExpectCapturedMessage(capture, 0, WM_KEYUP, VK_SHIFT, "Modifier WM_KEYUP after non-interrupting repeat");
+
+        capture.Clear();
+        postAndPump(WM_KEYUP, 'A', BuildTestKeyboardMessageLParam('A', false), "A keyup after non-interrupting repeat");
+    }
+
+    void RunKeyRepeatRuntimeModifiersInterruptWhenEnabledTest(TestRunMode runMode = TestRunMode::Automated) {
+        DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+        PrepareRebindRuntimeCase("key_repeat_runtime_modifiers_interrupt_when_enabled", {});
+        g_config.useSystemKeyRepeat = false;
+        g_config.modifiersInterruptKeyRepeat = true;
+        PublishConfigSnapshot();
+        Expect(window.PumpMessages(), "Expected the test window to stay open before modifier interrupt capture setup.");
+        ScopedSubclassedInputCapture capture(window.hwnd());
+        Expect(window.PumpMessages(), "Expected the test window to stay open after modifier interrupt capture setup.");
+        capture.Clear();
+
+        ScopedKeyboardStateOverride keyboardState;
+        keyboardState.SetKeyDown(VK_SHIFT, false);
+        keyboardState.SetToggle(VK_CAPITAL, false);
+        keyboardState.Apply();
+
+        auto postAndPump = [&](UINT message, WPARAM wParam, LPARAM lParam, const std::string& label) {
+            Expect(PostMessageW(window.hwnd(), message, wParam, lParam) != FALSE, label + " should post successfully.");
+            Expect(window.PumpMessages(), label + " should keep the window open while dispatching messages.");
+        };
+
+        postAndPump(WM_KEYDOWN, 'A', BuildTestKeyboardMessageLParam('A', true), "Initial A keydown before interrupting modifier");
+        Expect(capture.messages.size() == 2, "Expected the initial A keydown to forward WM_KEYDOWN and WM_CHAR.");
+
+        capture.Clear();
+        keyboardState.SetKeyDown(VK_SHIFT, true);
+        keyboardState.Apply();
+        postAndPump(WM_KEYDOWN, VK_SHIFT, BuildTestKeyboardMessageLParam(VK_SHIFT, true), "Shift keydown while A is held with interruption enabled");
+        Expect(capture.messages.size() == 1, "Expected Shift keydown to forward once when modifier interruption is enabled.");
+        ExpectCapturedMessage(capture, 0, WM_KEYDOWN, VK_SHIFT, "Modifier WM_KEYDOWN with repeat interruption");
+
+        capture.Clear();
+        postAndPump(WM_TOOLSCREEN_LOCAL_KEY_REPEAT, 0, 0, "Local repeat tick after interrupting Shift keydown");
+         Expect(capture.messages.empty(),
+             "Expected pressing an interrupting modifier to stop the active local key repeat instead of switching repeat ownership to the modifier.");
+
+        capture.Clear();
+        keyboardState.SetKeyDown(VK_SHIFT, false);
+        keyboardState.Apply();
+        postAndPump(WM_KEYUP, VK_SHIFT, BuildTestKeyboardMessageLParam(VK_SHIFT, false), "Shift keyup after interrupting repeat");
+        Expect(capture.messages.size() == 1, "Expected releasing Shift to forward one WM_KEYUP.");
+        ExpectCapturedMessage(capture, 0, WM_KEYUP, VK_SHIFT, "Modifier WM_KEYUP after interrupting repeat");
+
+        capture.Clear();
+        postAndPump(WM_TOOLSCREEN_LOCAL_KEY_REPEAT, 0, 0, "Local repeat tick after releasing interrupting modifier");
+        Expect(capture.messages.empty(), "Expected the original A key to stay non-repeating after the interrupting modifier is released.");
+
+        capture.Clear();
+        postAndPump(WM_KEYUP, 'A', BuildTestKeyboardMessageLParam('A', false), "A keyup after interrupting repeat");
+    }
 
 void RunKeyRebindGuiKeyboardLayoutFullBindAndTriggerTest(TestRunMode runMode = TestRunMode::Automated) {
     DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);

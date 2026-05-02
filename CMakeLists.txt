@@ -1037,6 +1037,8 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     config-load-key-rebind-shift-layer-caps-lock-parsed
     config-load-key-rebind-shift-layer-caps-lock-defaulted
     config-load-key-rebind-cursor-state-defaulted
+    key-repeat-runtime-modifiers-do-not-interrupt-by-default
+    key-repeat-runtime-modifiers-interrupt-when-enabled
     config-publish-key-rebind-cannot-type-clears-typed-output
     key-rebind-runtime-full-forwarding
     key-rebind-runtime-split-vk-output
@@ -1116,6 +1118,7 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     profiler-unspecified-breakdown
     settings-gui-basic
     settings-gui-advanced
+    settings-key-repeat-system-repeat-hides-local-controls
     settings-mouse-translation-prefers-live-viewport
     settings-search-subcategory-filtering
     settings-search-specific-options

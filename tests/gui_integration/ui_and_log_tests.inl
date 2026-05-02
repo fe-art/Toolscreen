@@ -349,6 +349,58 @@ void RunSettingsTabInputsKeyboardDefaultTest(TestRunMode runMode = TestRunMode::
     RunDefaultSettingsTabCase("settings_tab_inputs_keyboard_default", tr("tabs.inputs"), tr("inputs.keyboard"), false, runMode);
 }
 
+void RunSettingsKeyRepeatSystemRepeatHidesLocalControlsTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    if (!window.hasModernGL()) { std::cout << "SKIP (no GL 3.3+)" << std::endl; return; }
+    PrepareDefaultConfigForGui("settings_key_repeat_system_repeat_hides_local_controls", false);
+
+    if (runMode == TestRunMode::Visual) {
+     RunVisualLoopWithNinjabrainPreview(window, "settings-key-repeat-system-repeat-hides-local-controls", [&](DummyWindow& visualWindow) {
+         g_config.useSystemKeyRepeat = true;
+         RenderSettingsFrame(visualWindow, tr("tabs.inputs").c_str(), tr("inputs.keyboard").c_str());
+     });
+     return;
+    }
+
+    int startDelayMs = 0;
+    int repeatDelayMs = 0;
+
+    g_config.useSystemKeyRepeat = true;
+    g_config.modifiersInterruptKeyRepeat = true;
+    g_config.keyRepeatStartDelay = ConfigDefaults::CONFIG_KEY_REPEAT_START_DELAY;
+    g_config.keyRepeatDelay = ConfigDefaults::CONFIG_KEY_REPEAT_DELAY;
+    RenderSettingsSearchFrame(window, "", tr("tabs.inputs").c_str(), tr("inputs.keyboard").c_str());
+    ExpectGuiInteractionRectPresence("config.control.inputs.keyboard.modifiers_interrupt_key_repeat", false,
+                      "Expected modifier interruption to be hidden when system key repeat is enabled.");
+    ExpectGuiInteractionRectPresence("config.control.inputs.keyboard.key_repeat_start_delay", false,
+                      "Expected the local repeat start delay slider to be hidden when system key repeat is enabled.");
+    ExpectGuiInteractionRectPresence("config.control.inputs.keyboard.key_repeat_delay", false,
+                      "Expected the local repeat delay slider to be hidden when system key repeat is enabled.");
+
+    Expect(GetEffectiveKeyRepeatTimings(startDelayMs, repeatDelayMs), "Expected key repeat timings to resolve for Auto values.");
+    Expect(startDelayMs == ConfigDefaults::CONFIG_KEY_REPEAT_AUTO_START_DELAY_MS,
+        "Expected Auto key repeat start delay to resolve to the fixed 200ms default.");
+    Expect(repeatDelayMs == ConfigDefaults::CONFIG_KEY_REPEAT_AUTO_DELAY_MS,
+        "Expected Auto key repeat delay to resolve to the fixed 5ms default.");
+    Expect(GetKeyRepeatSliderFormat(-1, ConfigDefaults::CONFIG_KEY_REPEAT_AUTO_START_DELAY_MS) == "Auto (200ms)",
+        "Expected the start delay slider to show the Auto default in its label.");
+    Expect(GetKeyRepeatDelaySliderFormat(-1, ConfigDefaults::CONFIG_KEY_REPEAT_AUTO_DELAY_MS) == "Auto (5ms)",
+        "Expected the repeat delay slider to show the Auto default in its label.");
+
+    g_config.keyRepeatDelay = 1;
+    Expect(GetEffectiveKeyRepeatTimings(startDelayMs, repeatDelayMs), "Expected key repeat timings to resolve for a 1ms delay value.");
+    Expect(repeatDelayMs == 1, "Expected local key repeat delay to preserve integer millisecond precision.");
+
+    g_config.useSystemKeyRepeat = false;
+    RenderSettingsSearchFrame(window, "", tr("tabs.inputs").c_str(), tr("inputs.keyboard").c_str());
+    ExpectGuiInteractionRectPresence("config.control.inputs.keyboard.modifiers_interrupt_key_repeat", true,
+                      "Expected modifier interruption to be visible when local key repeat is active.");
+    ExpectGuiInteractionRectPresence("config.control.inputs.keyboard.key_repeat_start_delay", true,
+                      "Expected the local repeat start delay slider to be visible when local key repeat is active.");
+    ExpectGuiInteractionRectPresence("config.control.inputs.keyboard.key_repeat_delay", true,
+                      "Expected the local repeat delay slider to be visible when local key repeat is active.");
+}
+
 void RunSettingsTabSettingsDefaultTest(TestRunMode runMode = TestRunMode::Automated) {
     RunDefaultSettingsTabCase("settings_tab_settings_default", tr("tabs.settings"), std::string(), false, runMode);
 }
@@ -587,8 +639,10 @@ void RunProfileApplyFieldsRoundtripTest(TestRunMode runMode = TestRunMode::Autom
     g_config.windowsMouseSpeed = 7;
     g_config.allowCursorEscape = true;
     g_config.confineCursor = true;
+    g_config.useSystemKeyRepeat = true;
+    g_config.modifiersInterruptKeyRepeat = true;
     g_config.keyRepeatStartDelay = 42;
-    g_config.keyRepeatDelay = 24;
+    g_config.keyRepeatDelay = 2;
     g_config.autoBorderless = true;
     g_config.hideAnimationsInGame = true;
     g_config.limitCaptureFramerate = false;
@@ -622,8 +676,10 @@ void RunProfileApplyFieldsRoundtripTest(TestRunMode runMode = TestRunMode::Autom
     Expect(dst.windowsMouseSpeed == 7, "windowsMouseSpeed should roundtrip.");
     Expect(dst.allowCursorEscape, "allowCursorEscape should roundtrip.");
     Expect(dst.confineCursor, "confineCursor should roundtrip.");
+    Expect(dst.useSystemKeyRepeat, "useSystemKeyRepeat should roundtrip.");
+    Expect(dst.modifiersInterruptKeyRepeat, "modifiersInterruptKeyRepeat should roundtrip.");
     Expect(dst.keyRepeatStartDelay == 42, "keyRepeatStartDelay should roundtrip.");
-    Expect(dst.keyRepeatDelay == 24, "keyRepeatDelay should roundtrip.");
+    Expect(dst.keyRepeatDelay == 2, "keyRepeatDelay should roundtrip.");
     Expect(dst.autoBorderless == true, "autoBorderless should roundtrip.");
     Expect(dst.hideAnimationsInGame == true, "hideAnimationsInGame should roundtrip.");
     Expect(dst.limitCaptureFramerate == false, "limitCaptureFramerate should roundtrip.");

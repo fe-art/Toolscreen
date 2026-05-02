@@ -18,7 +18,11 @@
 
 #include <chrono>
 #include <cmath>
+#include <deque>
 #include <map>
+#include <mutex>
+#include <optional>
+#include <sstream>
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
@@ -64,7 +68,33 @@ static std::unordered_map<DWORD, size_t> s_bestMatchKeyCountByMainVk;
 static HHOOK s_lowLevelKeyboardHook = NULL;
 static std::mutex s_lowLevelKeyboardHookMutex;
 static std::atomic<bool> s_deferredFocusRegainWmSizePending{ false };
+static constexpr UINT_PTR kToolscreenLocalKeyRepeatTimerId = 0x2A51;
+static constexpr UINT_PTR kToolscreenShiftHotkeyPollTimerId = 0x2A52;
+static constexpr LPARAM kToolscreenLocalKeyRepeatMessageTag = (static_cast<LPARAM>(1) << 25);
+static constexpr ULONG_PTR kToolscreenInjectedExtraInfo = (ULONG_PTR)0x5453434E;
+static constexpr ULONG_PTR kToolscreenMenuMaskExtraInfo = (ULONG_PTR)0x54534D4B;
 static void UpdateLowLevelKeyboardHookInstalledState();
+static void ResetShiftHotkeyPollingState(HWND hWnd);
+static void UpdateShiftHotkeyPollingState(HWND hWnd);
+static void SyncShiftHotkeyPollingStateFromMessage(UINT uMsg, WPARAM wParam, LPARAM lParam);
+static InputHandlerResult HandleShiftHotkeyPolling(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+static bool EnsureLocalKeyRepeatSchedulerInitialized();
+static DWORD WINAPI LocalKeyRepeatSchedulerThreadProc(LPVOID parameter);
+
+struct LocalKeyRepeatState {
+    DWORD rawVk = 0;
+    UINT scanCodeWithFlags = 0;
+    bool isSystemKey = false;
+    DWORD repeatVk = 0;
+    UINT repeatScanCodeWithFlags = 0;
+    LPARAM sourceKeyDownLParam = 0;
+    DWORD sourceMessageTimeMs = 0;
+};
+
+struct SuppressedLocalRepeatChar {
+    DWORD rawVk = 0;
+    LPARAM lParam = 0;
+};
 
 struct LowLevelSuppressedKeyState {
     DWORD rawVk = 0;
@@ -72,9 +102,53 @@ struct LowLevelSuppressedKeyState {
     bool isSystemKey = false;
 };
 
+struct LowLevelExactModifierEvent {
+    DWORD vk = 0;
+    bool isKeyDown = false;
+};
+
+struct ExactKeyboardMessageState {
+    UINT uMsg = 0;
+    WPARAM wParam = 0;
+    LPARAM lParam = 0;
+    DWORD trackedVk = 0;
+    bool isKeyDown = false;
+    bool isKeyUp = false;
+    bool exactKeyWasDown = false;
+};
+
+static std::unordered_map<DWORD, LocalKeyRepeatState> s_localKeyRepeatHeldKeys;
+static LocalKeyRepeatState s_localKeyRepeatOwner;
+static bool s_localKeyRepeatOwnerActive = false;
+static std::vector<SuppressedLocalRepeatChar> s_localKeyRepeatSuppressedChars;
+static HANDLE s_localKeyRepeatHighResTimer = NULL;
+static HANDLE s_localKeyRepeatWakeEvent = NULL;
+static HANDLE s_localKeyRepeatThread = NULL;
+static std::mutex s_localKeyRepeatSchedulerInitMutex;
+static std::atomic<HWND> s_localKeyRepeatScheduledHwnd{ NULL };
+static std::atomic<int64_t> s_localKeyRepeatRequestedDelay100ns{ 0 };
 static std::unordered_map<DWORD, LowLevelSuppressedKeyState> s_lowLevelSuppressedKeys;
 static std::mutex s_lowLevelSuppressedKeysMutex;
+static std::unordered_set<DWORD> s_lowLevelExactModifierKeysDown;
+static std::deque<LowLevelExactModifierEvent> s_pendingLowLevelExactModifierEvents;
+static std::mutex s_lowLevelExactModifierStateMutex;
 static bool s_systemAltTabPassthroughActive = false;
+static std::unordered_set<DWORD> s_exactKeyboardKeysDown;
+static thread_local std::vector<ExactKeyboardMessageState> s_exactKeyboardMessageStateStack;
+struct ShiftHotkeyPollState {
+    bool timerArmed = false;
+    bool exactShiftHotkeysEnabled = false;
+    bool lastLeftDown = false;
+    bool lastRightDown = false;
+};
+static ShiftHotkeyPollState s_shiftHotkeyPollState;
+struct ActiveHoldHotkeyState {
+    std::string hotkeyId;
+    std::vector<DWORD> keys;
+    DWORD mainKey = 0;
+    bool blockKey = false;
+};
+static std::optional<ActiveHoldHotkeyState> s_activeHoldHotkey;
 static std::unordered_map<uint64_t, UINT> s_activeSyntheticRebindOutputsBySource;
 static std::unordered_map<UINT, size_t> s_activeSyntheticRebindOutputRefCounts;
 static std::mutex s_activeSyntheticRebindOutputsMutex;
@@ -86,6 +160,7 @@ struct SyntheticRebindKeyEventForTest {
 };
 
 static std::vector<SyntheticRebindKeyEventForTest> s_syntheticRebindKeyEventsForTests;
+static std::unordered_map<DWORD, bool> s_physicalModifierDownOverridesForTests;
 #endif
 
 static bool SendMenuMaskKeyTap();
@@ -97,6 +172,16 @@ static uint64_t BuildSyntheticRebindOutputSourceId(DWORD vkCode, DWORD rawVkCode
 static void TrackSyntheticRebindOutputHold(uint64_t sourceId, UINT outputScanCode);
 static bool ReleaseTrackedSyntheticRebindOutputHold(uint64_t sourceId);
 static void ReleaseAllTrackedSyntheticRebindOutputHolds();
+static bool IsNonCharKeyVk(DWORD vk);
+static bool IsLocalRepeatDebugEnabled();
+static const char* GetLocalRepeatMessageName(UINT uMsg);
+static std::string FormatLocalKeyRepeatStateForDebug(const LocalKeyRepeatState& state);
+static void LogLocalRepeatDebug(const char* phase, UINT uMsg, WPARAM wParam, LPARAM lParam, bool isLocalRepeatTagged);
+static bool RetargetLocalKeyRepeatAliasSource(DWORD rawVk, UINT scanCodeWithFlags, bool isSystemKey, LPARAM sourceKeyDownLParam);
+static UINT ResolveLocalKeyRepeatOutputScanCode(DWORD rawVk, UINT incomingScanCodeWithFlags);
+static bool TryResolveLocalKeyRepeatVkFromChar(WPARAM charCode, DWORD& outVk, UINT& outScanCodeWithFlags);
+static InputHandlerResult HandleLocalKeyRepeat(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, bool isLocalRepeatTagged);
+bool GetEffectiveKeyRepeatTimings(int& outStartDelayMs, int& outRepeatDelayMs);
 static void ReleaseSuppressedLowLevelRebindKeys(HWND hWnd);
 
 static bool MatchesConfiguredGameStateCondition(const std::vector<std::string>& configuredStates, const std::string& gameState) {
@@ -252,25 +337,365 @@ static DWORD NormalizeModifierVkFromConfig(DWORD vk, UINT scanCodeWithFlags = 0)
     }
 }
 
+static bool IsTrackedSpecificModifierVk(DWORD vk) {
+    switch (vk) {
+    case VK_LSHIFT:
+    case VK_RSHIFT:
+    case VK_LCONTROL:
+    case VK_RCONTROL:
+    case VK_LMENU:
+    case VK_RMENU:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static DWORD GetOppositeTrackedModifierVk(DWORD vk) {
+    switch (vk) {
+    case VK_LSHIFT:
+        return VK_RSHIFT;
+    case VK_RSHIFT:
+        return VK_LSHIFT;
+    case VK_LCONTROL:
+        return VK_RCONTROL;
+    case VK_RCONTROL:
+        return VK_LCONTROL;
+    case VK_LMENU:
+        return VK_RMENU;
+    case VK_RMENU:
+        return VK_LMENU;
+    default:
+        return 0;
+    }
+}
+
+static bool IsTrackedModifierKeyDownNow(DWORD vk) {
+    if (vk == 0) {
+        return false;
+    }
+
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+    if (const auto overrideIt = s_physicalModifierDownOverridesForTests.find(vk);
+        overrideIt != s_physicalModifierDownOverridesForTests.end()) {
+        return ((GetKeyState(static_cast<int>(vk)) & 0x8000) != 0) || overrideIt->second;
+    }
+#endif
+
+    return ((GetKeyState(static_cast<int>(vk)) & 0x8000) != 0) || ((GetAsyncKeyState(static_cast<int>(vk)) & 0x8000) != 0);
+}
+
+static DWORD GetTrackedModifierFamilyVk(DWORD vk) {
+    switch (vk) {
+    case VK_SHIFT:
+    case VK_LSHIFT:
+    case VK_RSHIFT:
+        return VK_SHIFT;
+    case VK_CONTROL:
+    case VK_LCONTROL:
+    case VK_RCONTROL:
+        return VK_CONTROL;
+    case VK_MENU:
+    case VK_LMENU:
+    case VK_RMENU:
+        return VK_MENU;
+    default:
+        return 0;
+    }
+}
+
+static bool AreTrackedModifierFamilyMatches(DWORD a, DWORD b) {
+    const DWORD familyA = GetTrackedModifierFamilyVk(a);
+    return familyA != 0 && familyA == GetTrackedModifierFamilyVk(b);
+}
+
+static void ResetLowLevelExactModifierState() {
+    std::lock_guard<std::mutex> lock(s_lowLevelExactModifierStateMutex);
+    s_lowLevelExactModifierKeysDown.clear();
+    s_pendingLowLevelExactModifierEvents.clear();
+}
+
+static void RecordLowLevelExactModifierEvent(DWORD vk, bool isKeyDown) {
+    if (!IsTrackedSpecificModifierVk(vk)) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(s_lowLevelExactModifierStateMutex);
+    if (isKeyDown) {
+        s_lowLevelExactModifierKeysDown.insert(vk);
+        return;
+    }
+
+    s_lowLevelExactModifierKeysDown.erase(vk);
+    if (s_pendingLowLevelExactModifierEvents.size() >= 16) {
+        s_pendingLowLevelExactModifierEvents.pop_front();
+    }
+    s_pendingLowLevelExactModifierEvents.push_back({ vk, false });
+}
+
+static DWORD ConsumePendingLowLevelExactModifierKeyup(DWORD trackedVk) {
+    if (!IsTrackedSpecificModifierVk(trackedVk)) {
+        return 0;
+    }
+
+    std::lock_guard<std::mutex> lock(s_lowLevelExactModifierStateMutex);
+    for (auto it = s_pendingLowLevelExactModifierEvents.begin(); it != s_pendingLowLevelExactModifierEvents.end(); ++it) {
+        if (it->isKeyDown) {
+            continue;
+        }
+        if (!AreTrackedModifierFamilyMatches(it->vk, trackedVk)) {
+            continue;
+        }
+
+        const DWORD resolvedVk = it->vk;
+        s_pendingLowLevelExactModifierEvents.erase(it);
+        return resolvedVk;
+    }
+
+    return 0;
+}
+
+static DWORD ResolveTrackedModifierKeyupFromLowLevelState(DWORD trackedVk) {
+    if (!IsTrackedSpecificModifierVk(trackedVk)) {
+        return 0;
+    }
+
+    if (const DWORD resolvedVk = ConsumePendingLowLevelExactModifierKeyup(trackedVk); resolvedVk != 0) {
+        return resolvedVk;
+    }
+
+    const DWORD oppositeVk = GetOppositeTrackedModifierVk(trackedVk);
+    if (oppositeVk == 0) {
+        return 0;
+    }
+
+    std::lock_guard<std::mutex> lock(s_lowLevelExactModifierStateMutex);
+    const bool trackedIsDown = s_lowLevelExactModifierKeysDown.contains(trackedVk);
+    const bool oppositeIsDown = s_lowLevelExactModifierKeysDown.contains(oppositeVk);
+    if (trackedIsDown && !oppositeIsDown) {
+        return oppositeVk;
+    }
+    if (!trackedIsDown && oppositeIsDown) {
+        return trackedVk;
+    }
+
+    return 0;
+}
+
+static bool IsTrackedExactKeyboardMessage(UINT uMsg) {
+    return uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN || uMsg == WM_KEYUP || uMsg == WM_SYSKEYUP;
+}
+
+static DWORD ResolveTrackedKeyboardVkFromMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    if (!IsTrackedExactKeyboardMessage(uMsg)) {
+        return 0;
+    }
+
+    const bool isKeyDown = (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN);
+    const bool isKeyUp = (uMsg == WM_KEYUP || uMsg == WM_SYSKEYUP);
+    const DWORD rawVk = static_cast<DWORD>(wParam);
+    DWORD trackedVk = NormalizeModifierVkFromKeyMessage(rawVk, lParam);
+    if (trackedVk == 0) {
+        trackedVk = rawVk;
+    }
+
+    if (!IsTrackedSpecificModifierVk(trackedVk)) {
+        return trackedVk;
+    }
+
+    const DWORD oppositeVk = GetOppositeTrackedModifierVk(trackedVk);
+    if (oppositeVk == 0) {
+        return trackedVk;
+    }
+
+    if (isKeyUp) {
+        if (const DWORD lowLevelResolvedVk = ResolveTrackedModifierKeyupFromLowLevelState(trackedVk); lowLevelResolvedVk != 0) {
+            return lowLevelResolvedVk;
+        }
+    }
+
+    const bool trackedWasDown = s_exactKeyboardKeysDown.contains(trackedVk);
+    const bool oppositeWasDown = s_exactKeyboardKeysDown.contains(oppositeVk);
+    const bool trackedIsDownNow = IsTrackedModifierKeyDownNow(trackedVk);
+    const bool oppositeIsDownNow = IsTrackedModifierKeyDownNow(oppositeVk);
+
+    if (isKeyDown) {
+        if (trackedWasDown && !oppositeWasDown && trackedIsDownNow && oppositeIsDownNow) {
+            return oppositeVk;
+        }
+        if (!trackedWasDown && oppositeWasDown && trackedIsDownNow && oppositeIsDownNow) {
+            return trackedVk;
+        }
+    }
+
+    if (isKeyUp) {
+        if (trackedIsDownNow && !oppositeIsDownNow) {
+            return oppositeVk;
+        }
+        if (!trackedIsDownNow && oppositeIsDownNow) {
+            return trackedVk;
+        }
+        if (trackedWasDown != oppositeWasDown) {
+            return trackedWasDown ? trackedVk : oppositeVk;
+        }
+    }
+
+    return trackedVk;
+}
+
+static DWORD ResolveEffectiveKeyboardVkForMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    if (!IsTrackedExactKeyboardMessage(uMsg)) {
+        return static_cast<DWORD>(wParam);
+    }
+
+    if (!s_exactKeyboardMessageStateStack.empty()) {
+        const ExactKeyboardMessageState& current = s_exactKeyboardMessageStateStack.back();
+        if (current.uMsg == uMsg && current.wParam == wParam && current.lParam == lParam) {
+            return current.trackedVk != 0 ? current.trackedVk : static_cast<DWORD>(wParam);
+        }
+    }
+
+    const DWORD trackedVk = ResolveTrackedKeyboardVkFromMessage(uMsg, wParam, lParam);
+    return trackedVk != 0 ? trackedVk : static_cast<DWORD>(wParam);
+}
+
+class ScopedExactKeyboardMessageState {
+  public:
+    ScopedExactKeyboardMessageState(UINT uMsg, WPARAM wParam, LPARAM lParam) {
+        if (!IsTrackedExactKeyboardMessage(uMsg)) {
+            return;
+        }
+
+        if (!s_exactKeyboardMessageStateStack.empty()) {
+            const ExactKeyboardMessageState& current = s_exactKeyboardMessageStateStack.back();
+            if (current.uMsg == uMsg && current.wParam == wParam && current.lParam == lParam) {
+                return;
+            }
+        }
+
+        ExactKeyboardMessageState state;
+        state.uMsg = uMsg;
+        state.wParam = wParam;
+        state.lParam = lParam;
+        state.trackedVk = ResolveTrackedKeyboardVkFromMessage(uMsg, wParam, lParam);
+        state.isKeyDown = (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN);
+        state.isKeyUp = (uMsg == WM_KEYUP || uMsg == WM_SYSKEYUP);
+        state.exactKeyWasDown = state.trackedVk != 0 && s_exactKeyboardKeysDown.contains(state.trackedVk);
+
+        s_exactKeyboardMessageStateStack.push_back(state);
+        owned_ = true;
+    }
+
+    ~ScopedExactKeyboardMessageState() {
+        if (!owned_) {
+            return;
+        }
+        if (s_exactKeyboardMessageStateStack.empty()) {
+            return;
+        }
+
+        const ExactKeyboardMessageState state = s_exactKeyboardMessageStateStack.back();
+        s_exactKeyboardMessageStateStack.pop_back();
+
+        if (state.trackedVk == 0) {
+            return;
+        }
+
+        if (state.isKeyDown) {
+            s_exactKeyboardKeysDown.insert(state.trackedVk);
+        } else if (state.isKeyUp) {
+            s_exactKeyboardKeysDown.erase(state.trackedVk);
+        }
+    }
+
+  private:
+    bool owned_ = false;
+};
+
+static void ResetExactKeyboardMessageState() {
+    s_exactKeyboardKeysDown.clear();
+    s_exactKeyboardMessageStateStack.clear();
+}
+
+static bool IsTrackedExactAutoRepeatKeyDown(UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    if (uMsg != WM_KEYDOWN && uMsg != WM_SYSKEYDOWN) {
+        return false;
+    }
+    if ((lParam & (static_cast<LPARAM>(1) << 30)) == 0) {
+        return false;
+    }
+
+    if (!s_exactKeyboardMessageStateStack.empty()) {
+        const ExactKeyboardMessageState& current = s_exactKeyboardMessageStateStack.back();
+        if (current.uMsg == uMsg && current.wParam == wParam && current.lParam == lParam) {
+            return current.exactKeyWasDown;
+        }
+    }
+
+    const DWORD trackedVk = ResolveTrackedKeyboardVkFromMessage(uMsg, wParam, lParam);
+    return trackedVk != 0 && s_exactKeyboardKeysDown.contains(trackedVk);
+}
+
 static bool MatchesRebindSourceKey(DWORD incomingVk, DWORD incomingRawVk, DWORD fromKey) {
-    if (fromKey == 0) return false;
-    if (incomingVk == fromKey) return true;
+    return MatchesConfiguredInputKeyEvent(incomingVk, incomingRawVk, fromKey);
+}
 
-    if (fromKey == VK_CONTROL) {
-        return incomingVk == VK_LCONTROL || incomingVk == VK_RCONTROL || incomingRawVk == VK_CONTROL;
-    }
-    if (fromKey == VK_SHIFT) {
-        return incomingVk == VK_LSHIFT || incomingVk == VK_RSHIFT || incomingRawVk == VK_SHIFT;
-    }
-    if (fromKey == VK_MENU) {
-        return incomingVk == VK_LMENU || incomingVk == VK_RMENU || incomingRawVk == VK_MENU;
+static bool AreConfiguredKeysCurrentlyDown(const std::vector<DWORD>& keys) {
+    if (keys.empty()) return false;
+
+    for (DWORD key : keys) {
+        if (key == 0 || !IsConfiguredInputKeyDown(key)) {
+            return false;
+        }
     }
 
-    if (incomingRawVk == VK_CONTROL && incomingVk == VK_CONTROL && (fromKey == VK_LCONTROL || fromKey == VK_RCONTROL)) return true;
-    if (incomingRawVk == VK_SHIFT && incomingVk == VK_SHIFT && (fromKey == VK_LSHIFT || fromKey == VK_RSHIFT)) return true;
-    if (incomingRawVk == VK_MENU && incomingVk == VK_MENU && (fromKey == VK_LMENU || fromKey == VK_RMENU)) return true;
+    return true;
+}
 
-    return false;
+static void ActivateHoldHotkeyState(const std::vector<DWORD>& keys, const std::string& hotkeyId, bool blockKey) {
+    if (keys.empty() || hotkeyId.empty()) return;
+
+    s_activeHoldHotkey = ActiveHoldHotkeyState{ hotkeyId, keys, keys.back(), blockKey };
+}
+
+static bool TryHandleBrokenHoldHotkey(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, DWORD vkCode, DWORD rawVkCode,
+                                      DWORD rebindTargetVk, bool isKeyDown, const Config& cfg, bool enableHotkeyDebug,
+                                      InputHandlerResult& outResult) {
+    outResult = { false, 0 };
+
+    if (!s_activeHoldHotkey.has_value()) {
+        return false;
+    }
+
+    const ActiveHoldHotkeyState activeHold = *s_activeHoldHotkey;
+    if (AreConfiguredKeysCurrentlyDown(activeHold.keys)) {
+        return false;
+    }
+
+    if (enableHotkeyDebug) {
+        Log("[Hotkey] HOLD RELEASE (state): " + activeHold.hotkeyId + " -> " + cfg.defaultMode);
+    }
+
+    s_activeHoldHotkey.reset();
+    if (!cfg.defaultMode.empty()) {
+        SwitchToMode(cfg.defaultMode, "hotkey (hold release)");
+    }
+
+    const bool releasedByMainKey = !isKeyDown &&
+                                   (MatchesConfiguredInputKeyEvent(vkCode, rawVkCode, activeHold.mainKey) ||
+                                    (rebindTargetVk != 0 &&
+                                     MatchesConfiguredInputKeyEvent(rebindTargetVk, rebindTargetVk, activeHold.mainKey)));
+    if (!releasedByMainKey) {
+        return true;
+    }
+
+    if (activeHold.blockKey) {
+        outResult = { true, 0 };
+    } else {
+        outResult = { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
+    }
+
+    return true;
 }
 
 static bool IsModifierVk(DWORD vk) {
@@ -288,6 +713,21 @@ static bool IsTabVk(DWORD vk) {
 
 static bool IsShiftVk(DWORD vk) {
     return vk == VK_SHIFT || vk == VK_LSHIFT || vk == VK_RSHIFT;
+}
+
+static bool IsPhysicalShiftKeyDown(DWORD vk) {
+    if (vk == 0) {
+        return false;
+    }
+
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+    if (const auto overrideIt = s_physicalModifierDownOverridesForTests.find(vk);
+        overrideIt != s_physicalModifierDownOverridesForTests.end()) {
+        return overrideIt->second;
+    }
+#endif
+
+    return (GetAsyncKeyState(static_cast<int>(vk)) & 0x8000) != 0;
 }
 
 static bool IsAltCurrentlyDown() {
@@ -755,6 +1195,8 @@ InputHandlerResult HandleDestroy(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
     if (uMsg != WM_DESTROY) { return { false, 0 }; }
     PROFILE_SCOPE("HandleDestroy");
 
+    ResetLocalKeyRepeatState(hWnd);
+    ResetShiftHotkeyPollingState(hWnd);
     ReleaseActiveLowLevelRebindKeys(hWnd);
 
     extern GameVersion g_gameVersion;
@@ -788,17 +1230,17 @@ InputHandlerResult HandleGuiToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     }
     PROFILE_SCOPE("HandleGuiToggle");
 
-    const bool isAutoRepeatKeyDown =
-        (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) && ((lParam & (static_cast<LPARAM>(1) << 30)) != 0);
+    ScopedExactKeyboardMessageState scopedKeyboardMessageState(uMsg, wParam, lParam);
+
+    const bool isAutoRepeatKeyDown = IsTrackedExactAutoRepeatKeyDown(uMsg, wParam, lParam);
 
     DWORD vkCode = 0;
     bool isEscape = false;
     switch (uMsg) {
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN: {
-        vkCode = static_cast<DWORD>(wParam);
         isEscape = (wParam == VK_ESCAPE);
-        vkCode = NormalizeModifierVkFromKeyMessage(vkCode, lParam);
+        vkCode = ResolveEffectiveKeyboardVkForMessage(uMsg, wParam, lParam);
         break;
     }
     case WM_LBUTTONDOWN:
@@ -906,8 +1348,9 @@ InputHandlerResult HandleBorderlessToggle(HWND hWnd, UINT uMsg, WPARAM wParam, L
     }
     PROFILE_SCOPE("HandleBorderlessToggle");
 
-    const bool isAutoRepeatKeyDown =
-        (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) && ((lParam & (static_cast<LPARAM>(1) << 30)) != 0);
+    ScopedExactKeyboardMessageState scopedKeyboardMessageState(uMsg, wParam, lParam);
+
+    const bool isAutoRepeatKeyDown = IsTrackedExactAutoRepeatKeyDown(uMsg, wParam, lParam);
 
     if (g_showGui.load(std::memory_order_acquire)) { return { false, 0 }; }
 
@@ -919,8 +1362,7 @@ InputHandlerResult HandleBorderlessToggle(HWND hWnd, UINT uMsg, WPARAM wParam, L
     switch (uMsg) {
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN: {
-        vkCode = static_cast<DWORD>(wParam);
-        vkCode = NormalizeModifierVkFromKeyMessage(vkCode, lParam);
+        vkCode = ResolveEffectiveKeyboardVkForMessage(uMsg, wParam, lParam);
         break;
     }
     case WM_LBUTTONDOWN:
@@ -972,8 +1414,9 @@ InputHandlerResult HandleImageOverlaysToggle(HWND hWnd, UINT uMsg, WPARAM wParam
     }
     PROFILE_SCOPE("HandleImageOverlaysToggle");
 
-    const bool isAutoRepeatKeyDown =
-        (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) && ((lParam & (static_cast<LPARAM>(1) << 30)) != 0);
+    ScopedExactKeyboardMessageState scopedKeyboardMessageState(uMsg, wParam, lParam);
+
+    const bool isAutoRepeatKeyDown = IsTrackedExactAutoRepeatKeyDown(uMsg, wParam, lParam);
 
     if (g_config.imageOverlaysHotkey.empty()) { return { false, 0 }; }
 
@@ -983,8 +1426,7 @@ InputHandlerResult HandleImageOverlaysToggle(HWND hWnd, UINT uMsg, WPARAM wParam
     switch (uMsg) {
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN: {
-        vkCode = static_cast<DWORD>(wParam);
-        vkCode = NormalizeModifierVkFromKeyMessage(vkCode, lParam);
+        vkCode = ResolveEffectiveKeyboardVkForMessage(uMsg, wParam, lParam);
         break;
     }
     case WM_LBUTTONDOWN:
@@ -1038,8 +1480,9 @@ InputHandlerResult HandleWindowOverlaysToggle(HWND hWnd, UINT uMsg, WPARAM wPara
     }
     PROFILE_SCOPE("HandleWindowOverlaysToggle");
 
-    const bool isAutoRepeatKeyDown =
-        (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) && ((lParam & (static_cast<LPARAM>(1) << 30)) != 0);
+    ScopedExactKeyboardMessageState scopedKeyboardMessageState(uMsg, wParam, lParam);
+
+    const bool isAutoRepeatKeyDown = IsTrackedExactAutoRepeatKeyDown(uMsg, wParam, lParam);
 
     if (g_config.windowOverlaysHotkey.empty()) { return { false, 0 }; }
 
@@ -1049,8 +1492,7 @@ InputHandlerResult HandleWindowOverlaysToggle(HWND hWnd, UINT uMsg, WPARAM wPara
     switch (uMsg) {
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN: {
-        vkCode = static_cast<DWORD>(wParam);
-        vkCode = NormalizeModifierVkFromKeyMessage(vkCode, lParam);
+        vkCode = ResolveEffectiveKeyboardVkForMessage(uMsg, wParam, lParam);
         break;
     }
     case WM_LBUTTONDOWN:
@@ -1108,8 +1550,9 @@ InputHandlerResult HandleNinjabrainOverlayToggle(HWND hWnd, UINT uMsg, WPARAM wP
     }
     PROFILE_SCOPE("HandleNinjabrainOverlayToggle");
 
-    const bool isAutoRepeatKeyDown =
-        (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) && ((lParam & (static_cast<LPARAM>(1) << 30)) != 0);
+    ScopedExactKeyboardMessageState scopedKeyboardMessageState(uMsg, wParam, lParam);
+
+    const bool isAutoRepeatKeyDown = IsTrackedExactAutoRepeatKeyDown(uMsg, wParam, lParam);
 
     if (g_config.ninjabrainOverlayHotkey.empty()) { return { false, 0 }; }
 
@@ -1119,8 +1562,7 @@ InputHandlerResult HandleNinjabrainOverlayToggle(HWND hWnd, UINT uMsg, WPARAM wP
     switch (uMsg) {
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN: {
-        vkCode = static_cast<DWORD>(wParam);
-        vkCode = NormalizeModifierVkFromKeyMessage(vkCode, lParam);
+        vkCode = ResolveEffectiveKeyboardVkForMessage(uMsg, wParam, lParam);
         break;
     }
     case WM_LBUTTONDOWN:
@@ -1174,8 +1616,9 @@ InputHandlerResult HandleKeyRebindsToggle(HWND hWnd, UINT uMsg, WPARAM wParam, L
     }
     PROFILE_SCOPE("HandleKeyRebindsToggle");
 
-    const bool isAutoRepeatKeyDown =
-        (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) && ((lParam & (static_cast<LPARAM>(1) << 30)) != 0);
+    ScopedExactKeyboardMessageState scopedKeyboardMessageState(uMsg, wParam, lParam);
+
+    const bool isAutoRepeatKeyDown = IsTrackedExactAutoRepeatKeyDown(uMsg, wParam, lParam);
 
     if (g_config.keyRebinds.toggleHotkey.empty()) { return { false, 0 }; }
 
@@ -1185,8 +1628,7 @@ InputHandlerResult HandleKeyRebindsToggle(HWND hWnd, UINT uMsg, WPARAM wParam, L
     switch (uMsg) {
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN: {
-        vkCode = static_cast<DWORD>(wParam);
-        vkCode = NormalizeModifierVkFromKeyMessage(vkCode, lParam);
+        vkCode = ResolveEffectiveKeyboardVkForMessage(uMsg, wParam, lParam);
         break;
     }
     case WM_LBUTTONDOWN:
@@ -1398,6 +1840,9 @@ InputHandlerResult HandleActivate(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lP
     if (becameInactive) {
         ImGuiInputQueue_EnqueueFocus(false);
 
+        ResetExactKeyboardMessageState();
+        ResetLowLevelExactModifierState();
+        ResetLocalKeyRepeatState(hWnd);
         ReleaseActiveLowLevelRebindKeys(hWnd);
 
         if (auto cs = GetConfigSnapshot(); cs && cs->debug.showHotkeyDebug) {
@@ -1520,6 +1965,8 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
     }
     PROFILE_SCOPE("HandleHotkeys");
 
+    ScopedExactKeyboardMessageState scopedKeyboardMessageState(uMsg, wParam, lParam);
+
     DWORD rawVkCode = 0;
     DWORD vkCode = 0;
     bool isKeyDown = false;
@@ -1560,14 +2007,12 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
         return { false, 0 };
     }
 
-    const bool isAutoRepeatKeyDown =
-        (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) && isKeyDown && ((lParam & (static_cast<LPARAM>(1) << 30)) != 0);
+    const bool isAutoRepeatKeyDown = isKeyDown && IsTrackedExactAutoRepeatKeyDown(uMsg, wParam, lParam);
 
     // This mirrors imgui_impl_win32 behavior and enables reliable hotkeys + key rebinding.
     vkCode = rawVkCode;
     if (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN || uMsg == WM_KEYUP || uMsg == WM_SYSKEYUP) {
-        vkCode = NormalizeModifierVkFromKeyMessage(rawVkCode, lParam);
-        if (vkCode == 0) vkCode = rawVkCode;
+        vkCode = ResolveEffectiveKeyboardVkForMessage(uMsg, wParam, lParam);
     }
 
     // Even if resolution-change features are unsupported, we must not short-circuit the input pipeline.
@@ -1580,7 +2025,9 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                           (g_hotkeyMainKeys.find(vkCode) != g_hotkeyMainKeys.end());
     }
 
-    if (!isHotkeyMainKey) {
+    const bool hasActiveHoldHotkey = s_activeHoldHotkey.has_value();
+
+    if (!isHotkeyMainKey && !hasActiveHoldHotkey) {
         // This key is not a hotkey main key, but it might invalidate pending trigger-on-release hotkeys
         if (isKeyDown) {
             std::lock_guard<std::mutex> lock(g_triggerOnReleaseMutex);
@@ -1611,6 +2058,25 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
     }
 
     bool s_enableHotkeyDebug = cfg.debug.showHotkeyDebug;
+
+    InputHandlerResult brokenHoldResult;
+    if (TryHandleBrokenHoldHotkey(hWnd, uMsg, wParam, lParam, vkCode, rawVkCode, rebindTargetVk, isKeyDown, cfg, s_enableHotkeyDebug,
+                                  brokenHoldResult)) {
+        if (brokenHoldResult.consumed) {
+            return brokenHoldResult;
+        }
+        if (!isHotkeyMainKey) {
+            return { false, 0 };
+        }
+    }
+
+    if (!isHotkeyMainKey) {
+        if (isKeyDown) {
+            std::lock_guard<std::mutex> lock(g_triggerOnReleaseMutex);
+            for (const auto& pendingHotkeyId : g_triggerOnReleasePending) { g_triggerOnReleaseInvalidated.insert(pendingHotkeyId); }
+        }
+        return { false, 0 };
+    }
 
     if (s_enableHotkeyDebug) {
         Log("[Hotkey] Key/button pressed: " + std::to_string(vkCode) + " (raw=" + std::to_string(rawVkCode) + ") in mode: " +
@@ -1650,7 +2116,8 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
         }
 
         // Hold-mode helper: activate target mode on press, revert to default on release
-        auto handleHoldMode = [&](const std::string& targetMode, const std::string& hotkeyId, bool blockKey) -> InputHandlerResult {
+        auto handleHoldMode = [&](const std::vector<DWORD>& holdKeys, const std::string& targetMode, const std::string& hotkeyId,
+                                  bool blockKey) -> InputHandlerResult {
             if (isKeyDown) {
                 if (isAutoRepeatKeyDown) {
                     if (s_enableHotkeyDebug) { Log("[Hotkey] HOLD DOWN repeat ignored: " + hotkeyId); }
@@ -1671,10 +2138,14 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                     }
                 }
                 if (!debounced && !targetMode.empty()) {
+                    ActivateHoldHotkeyState(holdKeys, hotkeyId, blockKey);
                     if (s_enableHotkeyDebug) { Log("[Hotkey] HOLD DOWN: " + hotkeyId + " -> " + targetMode); }
                     SwitchToMode(targetMode, "hotkey (hold)");
                 }
             } else {
+                if (s_activeHoldHotkey.has_value() && s_activeHoldHotkey->hotkeyId == hotkeyId) {
+                    s_activeHoldHotkey.reset();
+                }
                 if (s_enableHotkeyDebug) { Log("[Hotkey] HOLD RELEASE: " + hotkeyId + " -> " + cfg.defaultMode); }
                 SwitchToMode(cfg.defaultMode, "hotkey (hold release)");
             }
@@ -1697,7 +2168,7 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                     (void)SendMenuMaskKeyTap();
                 }
 
-                if (hotkey.triggerOnHold) { return handleHoldMode(alt.mode, hotkeyId, blockKey); }
+                if (hotkey.triggerOnHold) { return handleHoldMode(alt.keys, alt.mode, hotkeyId, blockKey); }
 
                 // Handle trigger-on-release invalidation tracking
                 if (hotkey.triggerOnRelease) {
@@ -1779,7 +2250,7 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
 
                 if (hotkey.triggerOnHold) {
                     if (currentSecMode.empty()) { currentSecMode = GetHotkeySecondaryMode(hotkeyIdx); }
-                    return handleHoldMode(currentSecMode, hotkeyId, blockKey);
+                    return handleHoldMode(hotkey.keys, currentSecMode, hotkeyId, blockKey);
                 }
 
                 if (hotkey.triggerOnRelease) {
@@ -2158,6 +2629,505 @@ static LPARAM BuildKeyboardMessageLParam(UINT scanCodeWithFlags, bool isKeyDown,
     return out;
 }
 
+static bool IsLocalKeyRepeatTrackedKeyboardMessage(UINT uMsg) {
+    return uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN || uMsg == WM_KEYUP || uMsg == WM_SYSKEYUP;
+}
+
+static bool IsLocalKeyRepeatTrackedCharMessage(UINT uMsg) {
+    return uMsg == WM_CHAR || uMsg == WM_SYSCHAR || uMsg == WM_DEADCHAR || uMsg == WM_SYSDEADCHAR;
+}
+
+static bool HasLocalKeyRepeatTag(UINT uMsg, LPARAM lParam) {
+    if (!IsLocalKeyRepeatTrackedKeyboardMessage(uMsg) && !IsLocalKeyRepeatTrackedCharMessage(uMsg)) {
+        return false;
+    }
+    return (lParam & kToolscreenLocalKeyRepeatMessageTag) != 0;
+}
+
+static LPARAM StripLocalKeyRepeatTag(LPARAM lParam) {
+    return lParam & ~kToolscreenLocalKeyRepeatMessageTag;
+}
+
+static bool IsLocalRepeatDebugEnabled() {
+    auto cfgSnap = GetConfigSnapshot();
+    return cfgSnap && cfgSnap->debug.showHotkeyDebug;
+}
+
+static const char* GetLocalRepeatMessageName(UINT uMsg) {
+    switch (uMsg) {
+    case WM_KEYDOWN: return "WM_KEYDOWN";
+    case WM_SYSKEYDOWN: return "WM_SYSKEYDOWN";
+    case WM_KEYUP: return "WM_KEYUP";
+    case WM_SYSKEYUP: return "WM_SYSKEYUP";
+    case WM_CHAR: return "WM_CHAR";
+    case WM_SYSCHAR: return "WM_SYSCHAR";
+    case WM_DEADCHAR: return "WM_DEADCHAR";
+    case WM_SYSDEADCHAR: return "WM_SYSDEADCHAR";
+    case WM_TIMER: return "WM_TIMER";
+    case WM_TOOLSCREEN_LOCAL_KEY_REPEAT: return "WM_TOOLSCREEN_LOCAL_KEY_REPEAT";
+    default: return "OTHER";
+    }
+}
+
+static std::string FormatLocalKeyRepeatStateForDebug(const LocalKeyRepeatState& state) {
+    std::ostringstream stream;
+    stream << "{rawVk=" << state.rawVk << ",scan=" << state.scanCodeWithFlags << ",sys=" << (state.isSystemKey ? 1 : 0)
+           << ",repeatVk=" << state.repeatVk << ",repeatScan=" << state.repeatScanCodeWithFlags
+           << ",srcLParam=" << static_cast<long long>(state.sourceKeyDownLParam)
+           << ",srcTime=" << state.sourceMessageTimeMs << "}";
+    return stream.str();
+}
+
+static void LogLocalRepeatDebug(const char* phase, UINT uMsg, WPARAM wParam, LPARAM lParam, bool isLocalRepeatTagged) {
+    if (!IsLocalRepeatDebugEnabled()) {
+        return;
+    }
+
+    const bool previousState = (lParam & (static_cast<LPARAM>(1) << 30)) != 0;
+    const bool transitionState = (lParam & (static_cast<LPARAM>(1) << 31)) != 0;
+    std::ostringstream stream;
+    stream << "[LocalRepeat] " << phase << " msg=" << GetLocalRepeatMessageName(uMsg) << " wParam="
+           << static_cast<unsigned long long>(wParam) << " scan=" << GetScanCodeWithExtendedFlagFromLParam(lParam)
+           << " prev=" << (previousState ? 1 : 0) << " up=" << (transitionState ? 1 : 0)
+           << " tagged=" << (isLocalRepeatTagged ? 1 : 0)
+           << " extraInfo=" << static_cast<unsigned long long>(GetMessageExtraInfo())
+           << " owner=" << FormatLocalKeyRepeatStateForDebug(s_localKeyRepeatOwner)
+           << " held=" << s_localKeyRepeatHeldKeys.size();
+    Log(stream.str());
+}
+
+static DWORD WINAPI LocalKeyRepeatSchedulerThreadProc(LPVOID) {
+    HANDLE handles[2] = { s_localKeyRepeatWakeEvent, s_localKeyRepeatHighResTimer };
+    for (;;) {
+        const DWORD waitResult = WaitForMultipleObjects(2, handles, FALSE, INFINITE);
+        if (waitResult == WAIT_OBJECT_0) {
+            if (s_localKeyRepeatHighResTimer) {
+                (void)CancelWaitableTimer(s_localKeyRepeatHighResTimer);
+            }
+
+            const HWND targetHwnd = s_localKeyRepeatScheduledHwnd.load(std::memory_order_acquire);
+            const int64_t delay100ns = s_localKeyRepeatRequestedDelay100ns.load(std::memory_order_acquire);
+            if (!targetHwnd || !IsWindow(targetHwnd) || delay100ns <= 0 || !s_localKeyRepeatHighResTimer) {
+                continue;
+            }
+
+            LARGE_INTEGER dueTime;
+            dueTime.QuadPart = -static_cast<LONGLONG>(delay100ns);
+            if (!SetWaitableTimer(s_localKeyRepeatHighResTimer, &dueTime, 0, NULL, NULL, FALSE)) {
+                Log("WARNING: Failed to arm high-resolution local key repeat timer");
+            }
+            continue;
+        }
+
+        if (waitResult == (WAIT_OBJECT_0 + 1)) {
+            const HWND targetHwnd = s_localKeyRepeatScheduledHwnd.load(std::memory_order_acquire);
+            if (targetHwnd && IsWindow(targetHwnd)) {
+                if (::PostMessageW(targetHwnd, WM_TOOLSCREEN_LOCAL_KEY_REPEAT, 0, 0) == FALSE) {
+                    Log("WARNING: Failed to post high-resolution local key repeat tick");
+                }
+            }
+            continue;
+        }
+
+        break;
+    }
+
+    return 0;
+}
+
+static bool EnsureLocalKeyRepeatSchedulerInitialized() {
+    if (s_localKeyRepeatWakeEvent && s_localKeyRepeatHighResTimer && s_localKeyRepeatThread) {
+        return true;
+    }
+
+    std::lock_guard<std::mutex> lock(s_localKeyRepeatSchedulerInitMutex);
+    if (s_localKeyRepeatWakeEvent && s_localKeyRepeatHighResTimer && s_localKeyRepeatThread) {
+        return true;
+    }
+
+    if (!s_localKeyRepeatWakeEvent) {
+        s_localKeyRepeatWakeEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
+        if (!s_localKeyRepeatWakeEvent) {
+            Log("WARNING: Failed to create local key repeat wake event; falling back to WM_TIMER");
+            return false;
+        }
+    }
+
+    if (!s_localKeyRepeatHighResTimer) {
+        s_localKeyRepeatHighResTimer = CreateWaitableTimerExW(NULL, NULL, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+        if (!s_localKeyRepeatHighResTimer) {
+            s_localKeyRepeatHighResTimer = CreateWaitableTimerW(NULL, FALSE, NULL);
+        }
+        if (!s_localKeyRepeatHighResTimer) {
+            Log("WARNING: Failed to create high-resolution local key repeat timer; falling back to WM_TIMER");
+            return false;
+        }
+    }
+
+    if (!s_localKeyRepeatThread) {
+        s_localKeyRepeatThread = CreateThread(NULL, 0, &LocalKeyRepeatSchedulerThreadProc, NULL, 0, NULL);
+        if (!s_localKeyRepeatThread) {
+            Log("WARNING: Failed to create local key repeat scheduler thread; falling back to WM_TIMER");
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static void StopLocalKeyRepeatTimer(HWND hWnd) {
+    const HWND targetHwnd = hWnd ? hWnd : g_subclassedHwnd.load(std::memory_order_acquire);
+    if (targetHwnd && IsWindow(targetHwnd)) {
+        (void)KillTimer(targetHwnd, kToolscreenLocalKeyRepeatTimerId);
+    }
+
+    if (s_localKeyRepeatWakeEvent && s_localKeyRepeatHighResTimer) {
+        s_localKeyRepeatScheduledHwnd.store(NULL, std::memory_order_release);
+        s_localKeyRepeatRequestedDelay100ns.store(0, std::memory_order_release);
+        (void)SetEvent(s_localKeyRepeatWakeEvent);
+    }
+}
+
+static void ArmLocalKeyRepeatTimer(HWND hWnd, int delayMs) {
+    if (!hWnd || !IsWindow(hWnd)) {
+        return;
+    }
+
+    const int intervalMs = (std::max)(delayMs, 1);
+    (void)KillTimer(hWnd, kToolscreenLocalKeyRepeatTimerId);
+
+    if (EnsureLocalKeyRepeatSchedulerInitialized()) {
+        s_localKeyRepeatScheduledHwnd.store(hWnd, std::memory_order_release);
+        s_localKeyRepeatRequestedDelay100ns.store(static_cast<int64_t>(intervalMs) * 10000,
+                                                  std::memory_order_release);
+        if (SetEvent(s_localKeyRepeatWakeEvent) != FALSE) {
+            return;
+        }
+
+        Log("WARNING: Failed to signal high-resolution local key repeat timer; falling back to WM_TIMER");
+    }
+
+    const UINT fallbackIntervalMs = static_cast<UINT>((std::max)(intervalMs, 1));
+    if (SetTimer(hWnd, kToolscreenLocalKeyRepeatTimerId, fallbackIntervalMs, NULL) == 0) {
+        Log("WARNING: Failed to arm local key repeat timer");
+    }
+}
+
+void ResetLocalKeyRepeatState(HWND hWnd) {
+    StopLocalKeyRepeatTimer(hWnd);
+    s_localKeyRepeatHeldKeys.clear();
+    s_localKeyRepeatOwner = {};
+    s_localKeyRepeatOwnerActive = false;
+    s_localKeyRepeatSuppressedChars.clear();
+}
+
+static bool IsLocalKeyRepeatOwnerStillHeld() {
+    if (!s_localKeyRepeatOwnerActive || s_localKeyRepeatOwner.rawVk == 0) {
+        return false;
+    }
+
+    return s_localKeyRepeatHeldKeys.find(s_localKeyRepeatOwner.rawVk) != s_localKeyRepeatHeldKeys.end();
+}
+
+static void BeginLocalKeyRepeatTracking(HWND hWnd, DWORD rawVk, UINT scanCodeWithFlags, bool isSystemKey, LPARAM sourceKeyDownLParam) {
+    if (!hWnd || rawVk == 0) {
+        return;
+    }
+
+    LocalKeyRepeatState state;
+    state.rawVk = rawVk;
+    state.scanCodeWithFlags = (scanCodeWithFlags != 0) ? scanCodeWithFlags : GetScanCodeWithExtendedFlag(rawVk);
+    state.isSystemKey = isSystemKey;
+    state.repeatVk = rawVk;
+    state.repeatScanCodeWithFlags = ResolveLocalKeyRepeatOutputScanCode(rawVk, state.scanCodeWithFlags);
+    state.sourceKeyDownLParam = sourceKeyDownLParam;
+    state.sourceMessageTimeMs = static_cast<DWORD>(GetMessageTime());
+
+    s_localKeyRepeatHeldKeys[rawVk] = state;
+    s_localKeyRepeatOwner = state;
+    s_localKeyRepeatOwnerActive = true;
+
+    int startDelayMs = 250;
+    int repeatDelayMs = 33;
+    (void)GetEffectiveKeyRepeatTimings(startDelayMs, repeatDelayMs);
+    ArmLocalKeyRepeatTimer(hWnd, startDelayMs);
+}
+
+static bool RetargetLocalKeyRepeatAliasSource(DWORD rawVk, UINT scanCodeWithFlags, bool isSystemKey, LPARAM sourceKeyDownLParam) {
+    if (!s_localKeyRepeatOwnerActive) {
+        return false;
+    }
+    if (!IsNonCharKeyVk(rawVk)) {
+        return false;
+    }
+    if (IsModifierVk(rawVk)) {
+        return false;
+    }
+    if (s_localKeyRepeatHeldKeys.size() != 1) {
+        return false;
+    }
+    if (s_localKeyRepeatOwner.rawVk != s_localKeyRepeatOwner.repeatVk) {
+        return false;
+    }
+    if (s_localKeyRepeatOwner.repeatVk == 0 || IsNonCharKeyVk(s_localKeyRepeatOwner.repeatVk)) {
+        return false;
+    }
+
+    const DWORD messageTimeMs = static_cast<DWORD>(GetMessageTime());
+    if (messageTimeMs < s_localKeyRepeatOwner.sourceMessageTimeMs ||
+        (messageTimeMs - s_localKeyRepeatOwner.sourceMessageTimeMs) > 2) {
+        return false;
+    }
+
+    LocalKeyRepeatState retargetedState = s_localKeyRepeatOwner;
+    retargetedState.rawVk = rawVk;
+    retargetedState.scanCodeWithFlags = (scanCodeWithFlags != 0) ? scanCodeWithFlags : GetScanCodeWithExtendedFlag(rawVk);
+    retargetedState.isSystemKey = isSystemKey;
+    retargetedState.sourceKeyDownLParam = sourceKeyDownLParam;
+    retargetedState.sourceMessageTimeMs = messageTimeMs;
+
+    s_localKeyRepeatHeldKeys.clear();
+    s_localKeyRepeatHeldKeys[rawVk] = retargetedState;
+    s_localKeyRepeatOwner = retargetedState;
+
+    if (IsLocalRepeatDebugEnabled()) {
+        Log("[LocalRepeat] retarget alias source owner=" + FormatLocalKeyRepeatStateForDebug(s_localKeyRepeatOwner));
+    }
+
+    return true;
+}
+
+static bool PostLocalKeyRepeatKeyDown(HWND hWnd) {
+    if (!hWnd || !IsWindow(hWnd) || !IsLocalKeyRepeatOwnerStillHeld()) {
+        if (IsLocalRepeatDebugEnabled()) {
+            Log("[LocalRepeat] post-repeat skipped because owner is not held owner=" + FormatLocalKeyRepeatStateForDebug(s_localKeyRepeatOwner));
+        }
+        return false;
+    }
+
+    const UINT msg = s_localKeyRepeatOwner.isSystemKey ? WM_SYSKEYDOWN : WM_KEYDOWN;
+    LPARAM repeatLParam =
+        BuildKeyboardMessageLParam(s_localKeyRepeatOwner.repeatScanCodeWithFlags,
+                                   true,
+                                   s_localKeyRepeatOwner.isSystemKey,
+                                   1,
+                                   true,
+                                   false);
+    repeatLParam |= kToolscreenLocalKeyRepeatMessageTag;
+    if (IsLocalRepeatDebugEnabled()) {
+        Log("[LocalRepeat] post-repeat vk=" + std::to_string(s_localKeyRepeatOwner.repeatVk) +
+            " scan=" + std::to_string(s_localKeyRepeatOwner.repeatScanCodeWithFlags) +
+            " owner=" + FormatLocalKeyRepeatStateForDebug(s_localKeyRepeatOwner));
+    }
+    return ::PostMessage(hWnd, msg, static_cast<WPARAM>(s_localKeyRepeatOwner.repeatVk), repeatLParam) != FALSE;
+}
+
+static InputHandlerResult HandleLocalKeyRepeat(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, bool isLocalRepeatTagged) {
+    const bool isRepeatTickMessage =
+        (uMsg == WM_TIMER && static_cast<UINT_PTR>(wParam) == kToolscreenLocalKeyRepeatTimerId) || uMsg == WM_TOOLSCREEN_LOCAL_KEY_REPEAT;
+
+    if (isRepeatTickMessage || IsLocalKeyRepeatTrackedKeyboardMessage(uMsg) || IsLocalKeyRepeatTrackedCharMessage(uMsg)) {
+        LogLocalRepeatDebug("enter", uMsg, wParam, lParam, isLocalRepeatTagged);
+    }
+
+    if (g_config.useSystemKeyRepeat) {
+        if (s_localKeyRepeatOwnerActive || !s_localKeyRepeatHeldKeys.empty()) {
+            ResetLocalKeyRepeatState(hWnd);
+        }
+        if (isRepeatTickMessage) {
+            if (IsLocalRepeatDebugEnabled()) {
+                Log("[LocalRepeat] consume repeat tick because system repeat is enabled");
+            }
+            return { true, 0 };
+        }
+        return { false, 0 };
+    }
+
+    if (isRepeatTickMessage) {
+        if (!IsLocalKeyRepeatOwnerStillHeld()) {
+            if (IsLocalRepeatDebugEnabled()) {
+                Log("[LocalRepeat] reset on repeat tick because owner is no longer held");
+            }
+            ResetLocalKeyRepeatState(hWnd);
+            return { true, 0 };
+        }
+
+        int startDelayMs = 250;
+        int repeatDelayMs = 33;
+        (void)GetEffectiveKeyRepeatTimings(startDelayMs, repeatDelayMs);
+        if (!PostLocalKeyRepeatKeyDown(hWnd)) {
+            if (IsLocalRepeatDebugEnabled()) {
+                Log("[LocalRepeat] reset on repeat tick because posting repeat keydown failed");
+            }
+            ResetLocalKeyRepeatState(hWnd);
+            return { true, 0 };
+        }
+
+        ArmLocalKeyRepeatTimer(hWnd, repeatDelayMs);
+        return { true, 0 };
+    }
+
+    if (IsLocalKeyRepeatTrackedCharMessage(uMsg)) {
+        if (!isLocalRepeatTagged && s_localKeyRepeatOwnerActive && s_localKeyRepeatOwner.sourceKeyDownLParam == lParam &&
+            IsNonCharKeyVk(s_localKeyRepeatOwner.rawVk)) {
+            DWORD repeatVk = 0;
+            UINT repeatScanCodeWithFlags = 0;
+            if (TryResolveLocalKeyRepeatVkFromChar(wParam, repeatVk, repeatScanCodeWithFlags)) {
+                if (IsLocalRepeatDebugEnabled()) {
+                    Log("[LocalRepeat] learn repeat from char=" + std::to_string(static_cast<unsigned int>(wParam)) +
+                        " repeatVk=" + std::to_string(repeatVk) + " repeatScan=" + std::to_string(repeatScanCodeWithFlags));
+                }
+                s_localKeyRepeatOwner.repeatVk = repeatVk;
+                s_localKeyRepeatOwner.repeatScanCodeWithFlags = repeatScanCodeWithFlags;
+
+                auto heldIt = s_localKeyRepeatHeldKeys.find(s_localKeyRepeatOwner.rawVk);
+                if (heldIt != s_localKeyRepeatHeldKeys.end()) {
+                    heldIt->second.repeatVk = repeatVk;
+                    heldIt->second.repeatScanCodeWithFlags = repeatScanCodeWithFlags;
+                }
+            }
+        }
+
+        if (!isLocalRepeatTagged) {
+            auto pendingSuppressedChar = std::find_if(s_localKeyRepeatSuppressedChars.begin(),
+                                                      s_localKeyRepeatSuppressedChars.end(),
+                                                      [&](const SuppressedLocalRepeatChar& entry) { return entry.lParam == lParam; });
+            if (pendingSuppressedChar != s_localKeyRepeatSuppressedChars.end()) {
+                if (IsLocalRepeatDebugEnabled()) {
+                    Log("[LocalRepeat] suppress char because a duplicate held keydown was swallowed");
+                }
+                s_localKeyRepeatSuppressedChars.erase(pendingSuppressedChar);
+                return { true, 0 };
+            }
+        }
+
+        const bool isRepeatChar = (lParam & (static_cast<LPARAM>(1) << 30)) != 0;
+        if (isRepeatChar && !isLocalRepeatTagged) {
+            if (IsLocalRepeatDebugEnabled()) {
+                Log("[LocalRepeat] suppress char because bit30 marks it as repeat");
+            }
+            return { true, 0 };
+        }
+        return { false, 0 };
+    }
+
+    if (!IsLocalKeyRepeatTrackedKeyboardMessage(uMsg)) {
+        return { false, 0 };
+    }
+
+    const ULONG_PTR extraInfo = GetMessageExtraInfo();
+    if (extraInfo == kToolscreenInjectedExtraInfo || extraInfo == kToolscreenMenuMaskExtraInfo) {
+        if (IsLocalRepeatDebugEnabled()) {
+            Log("[LocalRepeat] ignore keyboard event because Toolscreen injected it extraInfo=" +
+                std::to_string(static_cast<unsigned long long>(extraInfo)));
+        }
+        return { false, 0 };
+    }
+
+    if (isLocalRepeatTagged) {
+        if (IsLocalRepeatDebugEnabled()) {
+            Log("[LocalRepeat] allow tagged synthetic repeat to continue through the normal pipeline");
+        }
+        return { false, 0 };
+    }
+
+    const bool isKeyDown = (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN);
+    const DWORD rawVk = static_cast<DWORD>(wParam);
+    if (rawVk == 0) {
+        return { false, 0 };
+    }
+
+    DWORD trackedVk = NormalizeModifierVkFromKeyMessage(rawVk, lParam);
+    if (trackedVk == 0) {
+        trackedVk = rawVk;
+    }
+
+    if (isKeyDown) {
+        const bool alreadyHeld = s_localKeyRepeatHeldKeys.find(trackedVk) != s_localKeyRepeatHeldKeys.end();
+        if ((lParam & (static_cast<LPARAM>(1) << 30)) != 0 && alreadyHeld) {
+            if (IsLocalRepeatDebugEnabled()) {
+                Log("[LocalRepeat] suppress keydown because bit30 marks exact key as repeat rawVk=" + std::to_string(rawVk) +
+                    " trackedVk=" + std::to_string(trackedVk));
+            }
+            return { true, 0 };
+        }
+
+        if ((lParam & (static_cast<LPARAM>(1) << 30)) != 0 && IsLocalRepeatDebugEnabled()) {
+            Log("[LocalRepeat] allow keydown despite bit30 because exact key is not held rawVk=" + std::to_string(rawVk) +
+                " trackedVk=" + std::to_string(trackedVk));
+        }
+
+        if (alreadyHeld) {
+            if (!IsNonCharKeyVk(trackedVk)) {
+                s_localKeyRepeatSuppressedChars.push_back({ trackedVk, lParam });
+            }
+            if (IsLocalRepeatDebugEnabled()) {
+                Log("[LocalRepeat] suppress duplicate held keydown rawVk=" + std::to_string(rawVk) +
+                    " trackedVk=" + std::to_string(trackedVk) +
+                    " owner=" + FormatLocalKeyRepeatStateForDebug(s_localKeyRepeatOwner));
+            }
+            return { true, 0 };
+        }
+
+        if (RetargetLocalKeyRepeatAliasSource(trackedVk, GetScanCodeWithExtendedFlagFromLParam(lParam), uMsg == WM_SYSKEYDOWN, lParam)) {
+            return { false, 0 };
+        }
+
+        if (IsModifierVk(trackedVk)) {
+            if (!g_config.modifiersInterruptKeyRepeat) {
+                if (IsLocalRepeatDebugEnabled()) {
+                    Log("[LocalRepeat] allow modifier keydown without taking repeat ownership rawVk=" + std::to_string(rawVk) +
+                        " trackedVk=" + std::to_string(trackedVk));
+                }
+                return { false, 0 };
+            }
+
+            if (s_localKeyRepeatOwnerActive || !s_localKeyRepeatHeldKeys.empty()) {
+                if (IsLocalRepeatDebugEnabled()) {
+                    Log("[LocalRepeat] interrupt active repeat on modifier keydown rawVk=" + std::to_string(rawVk) +
+                        " trackedVk=" + std::to_string(trackedVk));
+                }
+                ResetLocalKeyRepeatState(hWnd);
+            } else if (IsLocalRepeatDebugEnabled()) {
+                Log("[LocalRepeat] allow modifier keydown with no active repeat to interrupt rawVk=" + std::to_string(rawVk) +
+                    " trackedVk=" + std::to_string(trackedVk));
+            }
+            return { false, 0 };
+        }
+
+        BeginLocalKeyRepeatTracking(hWnd, trackedVk, GetScanCodeWithExtendedFlagFromLParam(lParam), uMsg == WM_SYSKEYDOWN, lParam);
+        if (IsLocalRepeatDebugEnabled()) {
+            Log("[LocalRepeat] begin tracking owner=" + FormatLocalKeyRepeatStateForDebug(s_localKeyRepeatOwner));
+        }
+        return { false, 0 };
+    }
+
+    std::erase_if(s_localKeyRepeatSuppressedChars, [trackedVk](const SuppressedLocalRepeatChar& entry) { return entry.rawVk == trackedVk; });
+
+    const bool matchesRemappedOwnerKeyUp =
+        s_localKeyRepeatOwnerActive && IsNonCharKeyVk(s_localKeyRepeatOwner.rawVk) && s_localKeyRepeatOwner.repeatVk != 0 &&
+        s_localKeyRepeatOwner.repeatVk == trackedVk;
+
+    size_t erasedHeldCount = s_localKeyRepeatHeldKeys.erase(trackedVk);
+    if (erasedHeldCount == 0 && matchesRemappedOwnerKeyUp) {
+        erasedHeldCount = s_localKeyRepeatHeldKeys.erase(s_localKeyRepeatOwner.rawVk);
+    }
+
+    if (s_localKeyRepeatOwnerActive && (s_localKeyRepeatOwner.rawVk == trackedVk || matchesRemappedOwnerKeyUp)) {
+        if (IsLocalRepeatDebugEnabled()) {
+            Log("[LocalRepeat] release owner rawVk=" + std::to_string(rawVk) +
+                " trackedVk=" + std::to_string(trackedVk) +
+                " remappedMatch=" + std::to_string(matchesRemappedOwnerKeyUp ? 1 : 0) +
+                " owner=" + FormatLocalKeyRepeatStateForDebug(s_localKeyRepeatOwner));
+        }
+        s_localKeyRepeatOwner = {};
+        s_localKeyRepeatOwnerActive = false;
+        StopLocalKeyRepeatTimer(hWnd);
+    }
+
+    return { false, 0 };
+}
+
 static UINT ResolveOutputScanCode(DWORD outputVk, UINT configuredScanCodeWithFlags) {
     if (configuredScanCodeWithFlags == 0) { return GetScanCodeWithExtendedFlag(outputVk); }
 
@@ -2214,6 +3184,58 @@ static bool IsNonCharKeyVk(DWORD vk) {
     default:
         return false;
     }
+}
+
+static UINT ResolveLocalKeyRepeatOutputScanCode(DWORD rawVk, UINT incomingScanCodeWithFlags) {
+    const UINT canonicalScanCodeWithFlags = GetScanCodeWithExtendedFlag(rawVk);
+    if (incomingScanCodeWithFlags == 0) {
+        return canonicalScanCodeWithFlags;
+    }
+    if (rawVk == 0) {
+        return incomingScanCodeWithFlags;
+    }
+
+    DWORD incomingMappedVk = static_cast<DWORD>(::MapVirtualKeyW(incomingScanCodeWithFlags, MAPVK_VSC_TO_VK_EX));
+    if (incomingMappedVk == 0 && (incomingScanCodeWithFlags & 0xFF00) != 0) {
+        incomingMappedVk = static_cast<DWORD>(::MapVirtualKeyW(incomingScanCodeWithFlags & 0xFF, MAPVK_VSC_TO_VK_EX));
+    }
+    if (incomingMappedVk == 0 || incomingMappedVk == rawVk) {
+        return incomingScanCodeWithFlags;
+    }
+
+    if (!IsNonCharKeyVk(rawVk) && IsNonCharKeyVk(incomingMappedVk) && canonicalScanCodeWithFlags != 0) {
+        return canonicalScanCodeWithFlags;
+    }
+
+    return incomingScanCodeWithFlags;
+}
+
+static bool TryResolveLocalKeyRepeatVkFromChar(WPARAM charCode, DWORD& outVk, UINT& outScanCodeWithFlags) {
+    outVk = 0;
+    outScanCodeWithFlags = 0;
+
+    if (charCode == 0 || charCode > 0xFFFFu) {
+        return false;
+    }
+
+    const HKL keyboardLayout = GetKeyboardLayout(0);
+    const SHORT vkAndShiftState = VkKeyScanExW(static_cast<WCHAR>(charCode), keyboardLayout);
+    if (vkAndShiftState == -1) {
+        return false;
+    }
+
+    const BYTE shiftState = HIBYTE(vkAndShiftState);
+    if ((shiftState & ~static_cast<BYTE>(1)) != 0) {
+        return false;
+    }
+
+    outVk = static_cast<DWORD>(LOBYTE(vkAndShiftState));
+    if (outVk == 0) {
+        return false;
+    }
+
+    outScanCodeWithFlags = GetScanCodeWithExtendedFlag(outVk);
+    return outScanCodeWithFlags != 0;
 }
 
 static bool RebindCannotType(const KeyRebind& rebind) {
@@ -2394,8 +3416,6 @@ static LRESULT SendUnicodeScalarAsCharMessage(HWND hWnd, UINT charMsg, uint32_t 
     return CallWindowProc(g_originalWndProc, hWnd, charMsg, (WPARAM)low, lParam);
 }
 
-static constexpr ULONG_PTR kToolscreenInjectedExtraInfo = (ULONG_PTR)0x5453434E;
-static constexpr ULONG_PTR kToolscreenMenuMaskExtraInfo = (ULONG_PTR)0x54534D4B;
 static constexpr WORD kToolscreenMenuMaskVk = 0xFF;
 
 static bool SendSynthKeyByVirtualKey(WORD virtualKey, bool keyDown, ULONG_PTR extraInfo) {
@@ -2535,6 +3555,11 @@ static LRESULT CALLBACK LowLevelKeyboardProc(int code, WPARAM wParam, LPARAM lPa
     }
 
     const DWORD rawVk = static_cast<DWORD>(info->vkCode);
+
+    // Exact-sided modifier resolution for later window messages depends on seeing the
+    // low-level transition even if the suppression path declines to act on this event.
+    RecordLowLevelExactModifierEvent(rawVk, isKeyDown);
+
     const HWND targetHwnd = g_subclassedHwnd.load(std::memory_order_acquire);
     if (!targetHwnd) {
         return CallNextHookEx(s_lowLevelKeyboardHook, code, wParam, lParam);
@@ -2598,7 +3623,7 @@ static void EnsureLowLevelKeyboardHookInstalled() {
         return;
     }
 
-    LogCategory("init", "Installed low-level keyboard hook for deep key rebind suppression.");
+    LogCategory("init", "Installed low-level keyboard hook for exact modifier tracking and deep key rebind suppression.");
 }
 
 static bool HasDeepSuppressionEligibleEnabledRebind() {
@@ -2626,6 +3651,56 @@ static bool HasDeepSuppressionEligibleEnabledRebind() {
     return false;
 }
 
+static bool HotkeyKeysNeedExactModifierTracking(const std::vector<DWORD>& keys) {
+    for (DWORD key : keys) {
+        if (IsTrackedSpecificModifierVk(key)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool HasExactModifierTrackingNeed() {
+    if (!DoesSubclassedWindowOwnForegroundInput()) return false;
+    if (!g_gameWindowActive.load(std::memory_order_acquire)) return false;
+    if (IsHotkeyBindingActive() || IsRebindBindingActive()) return false;
+
+    const auto cfg = GetConfigSnapshot();
+    if (!cfg) return false;
+
+    if (HotkeyKeysNeedExactModifierTracking(cfg->guiHotkey)) return true;
+    if (HotkeyKeysNeedExactModifierTracking(cfg->borderlessHotkey)) return true;
+    if (HotkeyKeysNeedExactModifierTracking(cfg->imageOverlaysHotkey)) return true;
+    if (HotkeyKeysNeedExactModifierTracking(cfg->windowOverlaysHotkey)) return true;
+    if (HotkeyKeysNeedExactModifierTracking(cfg->ninjabrainOverlayHotkey)) return true;
+    if (HotkeyKeysNeedExactModifierTracking(cfg->keyRebinds.toggleHotkey)) return true;
+
+    for (const auto& hotkey : cfg->hotkeys) {
+        if (HotkeyKeysNeedExactModifierTracking(hotkey.keys)) return true;
+        for (const auto& alt : hotkey.altSecondaryModes) {
+            if (HotkeyKeysNeedExactModifierTracking(alt.keys)) return true;
+        }
+    }
+
+    for (const auto& hotkey : cfg->sensitivityHotkeys) {
+        if (HotkeyKeysNeedExactModifierTracking(hotkey.keys)) return true;
+    }
+
+    if (!cfg->keyRebinds.enabled) {
+        return false;
+    }
+
+    for (const auto& rebind : cfg->keyRebinds.rebinds) {
+        if (!rebind.enabled) continue;
+        if (IsTrackedSpecificModifierVk(rebind.fromKey)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 static void UninstallLowLevelKeyboardHook() {
     std::lock_guard<std::mutex> lock(s_lowLevelKeyboardHookMutex);
     if (s_lowLevelKeyboardHook == NULL) return;
@@ -2638,13 +3713,17 @@ static void UninstallLowLevelKeyboardHook() {
         return;
     }
 
-    LogCategory("init", "Uninstalled low-level keyboard hook for deep key rebind suppression.");
+    LogCategory("init", "Uninstalled low-level keyboard hook for exact modifier tracking and deep key rebind suppression.");
 }
 
 static void UpdateLowLevelKeyboardHookInstalledState() {
-    if (g_isShuttingDown.load(std::memory_order_acquire) || !HasDeepSuppressionEligibleEnabledRebind()) {
+    const bool needsDeepSuppression = HasDeepSuppressionEligibleEnabledRebind();
+    const bool needsExactModifierTracking = HasExactModifierTrackingNeed();
+
+    if (g_isShuttingDown.load(std::memory_order_acquire) || (!needsDeepSuppression && !needsExactModifierTracking)) {
         const HWND targetHwnd = g_subclassedHwnd.load(std::memory_order_acquire);
         ReleaseSuppressedLowLevelRebindKeys(targetHwnd);
+        ResetLowLevelExactModifierState();
         UninstallLowLevelKeyboardHook();
         return;
     }
@@ -2827,6 +3906,42 @@ bool GetSyntheticRebindKeyEventForTest(size_t index, UINT& outScanCodeWithFlags,
 size_t GetActiveSyntheticRebindOutputCountForTest() {
     std::lock_guard<std::mutex> lock(s_activeSyntheticRebindOutputsMutex);
     return s_activeSyntheticRebindOutputsBySource.size();
+}
+
+void ResetExactKeyboardMessageStateForTest() { ResetExactKeyboardMessageState(); }
+
+void ResetHotkeyRuntimeStateForTest() {
+    s_bestMatchKeyCount = 0;
+    s_bestMatchKeyCountByMainVk.clear();
+    s_activeHoldHotkey.reset();
+    s_shiftHotkeyPollState = {};
+}
+
+void ResetLowLevelExactModifierStateForTest() { ResetLowLevelExactModifierState(); }
+
+void SetLowLevelExactModifierDownForTest(DWORD vk, bool isDown) {
+    if (!IsTrackedSpecificModifierVk(vk)) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(s_lowLevelExactModifierStateMutex);
+    if (isDown) {
+        s_lowLevelExactModifierKeysDown.insert(vk);
+    } else {
+        s_lowLevelExactModifierKeysDown.erase(vk);
+    }
+}
+
+void SetPhysicalModifierDownForTest(DWORD vk, bool isDown) { s_physicalModifierDownOverridesForTests[vk] = isDown; }
+
+void ResetPhysicalModifierStateForTest() { s_physicalModifierDownOverridesForTests.clear(); }
+
+void QueueLowLevelExactModifierKeydownForTest(DWORD vk) { RecordLowLevelExactModifierEvent(vk, true); }
+
+void QueueLowLevelExactModifierKeyupForTest(DWORD vk) { RecordLowLevelExactModifierEvent(vk, false); }
+
+DWORD ResolveTrackedKeyboardVkFromMessageForTest(UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    return ResolveTrackedKeyboardVkFromMessage(uMsg, wParam, lParam);
 }
 #endif
 
@@ -3118,6 +4233,8 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
     }
     PROFILE_SCOPE("HandleKeyRebinding");
 
+    ScopedExactKeyboardMessageState scopedKeyboardMessageState(uMsg, wParam, lParam);
+
     if (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN || uMsg == WM_KEYUP || uMsg == WM_SYSKEYUP) {
         if (GetMessageExtraInfo() == kToolscreenInjectedExtraInfo) {
             return { false, 0 };
@@ -3181,8 +4298,7 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
 
     vkCode = rawVkCode;
     if (!isMouseButton && (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN || uMsg == WM_KEYUP || uMsg == WM_SYSKEYUP)) {
-        vkCode = NormalizeModifierVkFromKeyMessage(rawVkCode, lParam);
-        if (vkCode == 0) vkCode = rawVkCode;
+        vkCode = ResolveEffectiveKeyboardVkForMessage(uMsg, wParam, lParam);
     }
 
     const uint64_t syntheticOutputSourceId = BuildSyntheticRebindOutputSourceId(vkCode, rawVkCode, isMouseButton);
@@ -3192,7 +4308,7 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
 
     if (isMouseButton && g_showGui.load(std::memory_order_acquire)) { return { false, 0 }; }
 
-    const bool isAutoRepeatKeyDown = (!isMouseButton && isKeyDown && (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) && ((lParam & (1LL << 30)) != 0));
+    const bool isAutoRepeatKeyDown = !isMouseButton && isKeyDown && IsTrackedExactAutoRepeatKeyDown(uMsg, wParam, lParam);
 
     // Use config snapshot for thread-safe access to key rebinds
     auto rebindCfg = GetConfigSnapshot();
@@ -3378,12 +4494,12 @@ static void ResolveHotkeyPriority(UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN:
-        vkCode = NormalizeModifierVkFromKeyMessage(static_cast<DWORD>(wParam), lParam);
+        vkCode = ResolveEffectiveKeyboardVkForMessage(uMsg, wParam, lParam);
         isKeyDownMessage = true;
         break;
     case WM_KEYUP:
     case WM_SYSKEYUP:
-        vkCode = NormalizeModifierVkFromKeyMessage(static_cast<DWORD>(wParam), lParam);
+        vkCode = ResolveEffectiveKeyboardVkForMessage(uMsg, wParam, lParam);
         isKeyUpMessage = true;
         break;
     case WM_LBUTTONDOWN:
@@ -3471,13 +4587,196 @@ static void ResolveHotkeyPriority(UINT uMsg, WPARAM wParam, LPARAM lParam) {
     s_bestMatchKeyCountByMainVk[vkCode] = s_bestMatchKeyCount;
 }
 
+static bool KeyComboUsesExactShift(const std::vector<DWORD>& keys) {
+    for (DWORD key : keys) {
+        if (key == VK_LSHIFT || key == VK_RSHIFT) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool ConfigUsesExactShiftHotkeys(const Config& cfg) {
+    auto usesExactShift = [](const std::vector<DWORD>& keys) { return KeyComboUsesExactShift(keys); };
+
+    if (usesExactShift(cfg.guiHotkey) || usesExactShift(cfg.borderlessHotkey) || usesExactShift(cfg.imageOverlaysHotkey) ||
+        usesExactShift(cfg.windowOverlaysHotkey) || usesExactShift(cfg.ninjabrainOverlayHotkey) ||
+        usesExactShift(cfg.keyRebinds.toggleHotkey)) {
+        return true;
+    }
+
+    for (const auto& hotkey : cfg.hotkeys) {
+        if (usesExactShift(hotkey.keys)) {
+            return true;
+        }
+
+        for (const auto& alt : hotkey.altSecondaryModes) {
+            if (usesExactShift(alt.keys)) {
+                return true;
+            }
+        }
+    }
+
+    for (const auto& hotkey : cfg.sensitivityHotkeys) {
+        if (usesExactShift(hotkey.keys)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void ResetShiftHotkeyPollingState(HWND hWnd) {
+    const HWND targetHwnd = hWnd ? hWnd : g_subclassedHwnd.load(std::memory_order_acquire);
+    if (s_shiftHotkeyPollState.timerArmed && targetHwnd && IsWindow(targetHwnd)) {
+        (void)KillTimer(targetHwnd, kToolscreenShiftHotkeyPollTimerId);
+    }
+
+    s_shiftHotkeyPollState = {};
+}
+
+static void UpdateShiftHotkeyPollingState(HWND hWnd) {
+    auto cfgSnap = GetConfigSnapshot();
+    const bool shouldEnable = cfgSnap && ConfigUsesExactShiftHotkeys(*cfgSnap);
+    if (!shouldEnable || !hWnd || !IsWindow(hWnd)) {
+        ResetShiftHotkeyPollingState(hWnd);
+        return;
+    }
+
+    const bool leftDown = IsPhysicalShiftKeyDown(VK_LSHIFT);
+    const bool rightDown = IsPhysicalShiftKeyDown(VK_RSHIFT);
+    const bool wasEnabled = s_shiftHotkeyPollState.exactShiftHotkeysEnabled;
+
+    if (!s_shiftHotkeyPollState.timerArmed) {
+        if (SetTimer(hWnd, kToolscreenShiftHotkeyPollTimerId, 10, NULL) == 0) {
+            if (cfgSnap->debug.showHotkeyDebug) {
+                Log("[Hotkey] WARNING: Failed to arm sided-shift polling timer");
+            }
+            s_shiftHotkeyPollState = {};
+            return;
+        }
+        s_shiftHotkeyPollState.timerArmed = true;
+    }
+
+    s_shiftHotkeyPollState.exactShiftHotkeysEnabled = true;
+    if (!wasEnabled) {
+        s_shiftHotkeyPollState.lastLeftDown = leftDown;
+        s_shiftHotkeyPollState.lastRightDown = rightDown;
+    }
+}
+
+static void SyncShiftHotkeyPollingStateFromMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    if (!s_shiftHotkeyPollState.exactShiftHotkeysEnabled || !IsTrackedExactKeyboardMessage(uMsg)) {
+        return;
+    }
+
+    const DWORD vkCode = ResolveEffectiveKeyboardVkForMessage(uMsg, wParam, lParam);
+    if (vkCode != VK_LSHIFT && vkCode != VK_RSHIFT) {
+        return;
+    }
+
+    s_shiftHotkeyPollState.lastLeftDown = IsPhysicalShiftKeyDown(VK_LSHIFT);
+    s_shiftHotkeyPollState.lastRightDown = IsPhysicalShiftKeyDown(VK_RSHIFT);
+}
+
+static InputHandlerResult DispatchSyntheticShiftHotkeyEvent(HWND hWnd, DWORD vkCode, bool isKeyDown, bool previousWasDown) {
+    const UINT uMsg = isKeyDown ? WM_KEYDOWN : WM_KEYUP;
+    const LPARAM lParam =
+        BuildKeyboardMessageLParam(GetScanCodeWithExtendedFlag(vkCode), isKeyDown, false, 1, previousWasDown, !isKeyDown);
+
+    ScopedExactKeyboardMessageState scopedKeyboardMessageState(uMsg, static_cast<WPARAM>(vkCode), lParam);
+
+    ResolveHotkeyPriority(uMsg, static_cast<WPARAM>(vkCode), lParam);
+
+    InputHandlerResult result = HandleBorderlessToggle(hWnd, uMsg, static_cast<WPARAM>(vkCode), lParam);
+    if (result.consumed) return result;
+
+    result = HandleImageOverlaysToggle(hWnd, uMsg, static_cast<WPARAM>(vkCode), lParam);
+    if (result.consumed) return result;
+
+    result = HandleWindowOverlaysToggle(hWnd, uMsg, static_cast<WPARAM>(vkCode), lParam);
+    if (result.consumed) return result;
+
+    result = HandleNinjabrainOverlayToggle(hWnd, uMsg, static_cast<WPARAM>(vkCode), lParam);
+    if (result.consumed) return result;
+
+    result = HandleKeyRebindsToggle(hWnd, uMsg, static_cast<WPARAM>(vkCode), lParam);
+    if (result.consumed) return result;
+
+    result = HandleGuiToggle(hWnd, uMsg, static_cast<WPARAM>(vkCode), lParam);
+    if (result.consumed) return result;
+
+    const std::string currentModeId = g_modeIdBuffers[g_currentModeIdIndex.load(std::memory_order_acquire)];
+    const std::string localGameState = g_gameStateBuffers[g_currentGameStateIndex.load(std::memory_order_acquire)];
+    return HandleHotkeys(hWnd, uMsg, static_cast<WPARAM>(vkCode), lParam, currentModeId, localGameState);
+}
+
+static InputHandlerResult HandleShiftHotkeyPolling(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    if (uMsg != WM_TIMER || static_cast<UINT_PTR>(wParam) != kToolscreenShiftHotkeyPollTimerId) {
+        return { false, 0 };
+    }
+
+    if (!s_shiftHotkeyPollState.exactShiftHotkeysEnabled) {
+        ResetShiftHotkeyPollingState(hWnd);
+        return { true, 0 };
+    }
+
+    const bool leftDownNow = IsPhysicalShiftKeyDown(VK_LSHIFT);
+    const bool rightDownNow = IsPhysicalShiftKeyDown(VK_RSHIFT);
+    const bool leftChanged = leftDownNow != s_shiftHotkeyPollState.lastLeftDown;
+    const bool rightChanged = rightDownNow != s_shiftHotkeyPollState.lastRightDown;
+
+    if (!leftChanged && !rightChanged) {
+        return { true, 0 };
+    }
+
+    auto cfgSnap = GetConfigSnapshot();
+    const bool logHotkeyDebug = cfgSnap && cfgSnap->debug.showHotkeyDebug;
+    auto processTransition = [&](DWORD vkCode, bool wasDown, bool isDownNow, const char* label, InputHandlerResult& lastResult,
+                                 bool& anyConsumed) {
+        if (logHotkeyDebug) {
+            Log(std::string("[Hotkey] shift poll dispatch ") + label + (isDownNow ? " down" : " up"));
+        }
+        lastResult = DispatchSyntheticShiftHotkeyEvent(hWnd, vkCode, isDownNow, wasDown);
+        anyConsumed = anyConsumed || lastResult.consumed;
+    };
+
+    InputHandlerResult lastResult{ false, 0 };
+    bool anyConsumed = false;
+
+    if (s_shiftHotkeyPollState.lastLeftDown && !leftDownNow) {
+        processTransition(VK_LSHIFT, true, false, "LShift", lastResult, anyConsumed);
+    }
+    if (s_shiftHotkeyPollState.lastRightDown && !rightDownNow) {
+        processTransition(VK_RSHIFT, true, false, "RShift", lastResult, anyConsumed);
+    }
+    if (!s_shiftHotkeyPollState.lastLeftDown && leftDownNow) {
+        processTransition(VK_LSHIFT, false, true, "LShift", lastResult, anyConsumed);
+    }
+    if (!s_shiftHotkeyPollState.lastRightDown && rightDownNow) {
+        processTransition(VK_RSHIFT, false, true, "RShift", lastResult, anyConsumed);
+    }
+
+    s_shiftHotkeyPollState.lastLeftDown = leftDownNow;
+    s_shiftHotkeyPollState.lastRightDown = rightDownNow;
+    return { true, anyConsumed ? lastResult.result : 0 };
+}
+
 LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     PROFILE_SCOPE("SubclassedWndProc");
+
+    const bool isLocalRepeatTagged = HasLocalKeyRepeatTag(uMsg, lParam);
+    if (isLocalRepeatTagged) {
+        lParam = StripLocalKeyRepeatTag(lParam);
+    }
 
     const HWND expectedHwnd = g_subclassedHwnd.load();
     if (expectedHwnd != NULL && hWnd != expectedHwnd) {
         return DefWindowProc(hWnd, uMsg, wParam, lParam);
     }
+
+    ScopedExactKeyboardMessageState scopedKeyboardMessageState(uMsg, wParam, lParam);
 
     const bool guiOpen = g_showGui.load(std::memory_order_acquire);
     if (guiOpen && g_forceVisibleCursorWhileGuiOpen.load(std::memory_order_acquire) && g_gameVersion >= GameVersion(1, 13, 0)) {
@@ -3491,13 +4790,23 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     }
 
     UpdateLowLevelKeyboardHookInstalledState();
+    UpdateShiftHotkeyPollingState(hWnd);
+    SyncShiftHotkeyPollingStateFromMessage(uMsg, wParam, lParam);
 
-    RegisterBindingInputEvent(uMsg, wParam, lParam);
+    InputHandlerResult result;
+
+    result = HandleShiftHotkeyPolling(hWnd, uMsg, wParam, lParam);
+    if (result.consumed) return result.result;
+
+    result = HandleLocalKeyRepeat(hWnd, uMsg, wParam, lParam, isLocalRepeatTagged);
+    if (result.consumed) return result.result;
+
+    if (!isLocalRepeatTagged) {
+        RegisterBindingInputEvent(uMsg, wParam, lParam);
+    }
 
     // Keep all window metrics/cache updates in one place to avoid split-brain resize state.
     SyncWindowMetricsFromMessage(hWnd, uMsg, wParam, lParam);
-
-    InputHandlerResult result;
 
     result = HandleShutdownCheck(hWnd, uMsg, wParam, lParam);
     if (result.consumed) return result.result;

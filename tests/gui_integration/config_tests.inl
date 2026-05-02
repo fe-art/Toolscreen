@@ -367,15 +367,36 @@ void RunConfigLoadLegacyVersionUpgradeTest(TestRunMode runMode = TestRunMode::Au
                           config.modes.push_back(precisionMode);
 
                           WriteConfigFixtureToDisk(config);
+
+                             const std::filesystem::path configPath = GetCurrentConfigPath();
+                             std::ifstream in(configPath, std::ios::binary);
+                             Expect(in.is_open(), "Failed to reopen legacy config fixture for keyRepeatDelay migration rewrite.");
+                             std::string rawToml((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                             in.close();
+
+                                 const std::string currentDelayLinePrefix = "keyRepeatDelay = ";
+                                 const size_t delayLineStart = rawToml.find(currentDelayLinePrefix);
+                                 Expect(delayLineStart != std::string::npos,
+                                     "Expected serialized legacy config fixture to contain the keyRepeatDelay line.");
+                                 size_t delayLineEnd = rawToml.find('\n', delayLineStart);
+                                 if (delayLineEnd == std::string::npos) {
+                                  delayLineEnd = rawToml.size();
+                                 }
+                                 rawToml.replace(delayLineStart, delayLineEnd - delayLineStart, "keyRepeatDelay = 0");
+                             WriteRawConfigTomlToDisk(rawToml);
                       },
                       []() {
                           ExpectConfigLoadSucceeded("config-load-legacy-version-upgrade");
                           Expect(g_config.configVersion == GetConfigVersion(), "Expected legacy config version to upgrade to the current version.");
                           Expect(g_config.disableHookChaining,
                                  "Expected legacy disableHookChaining to remain preserved on the 1.2.1 branch.");
-                          Expect(g_config.keyRepeatStartDelay == 10,
-                                 "Expected legacy non-zero keyRepeatStartDelay to remain preserved after upgrade.");
-                          Expect(g_config.keyRepeatDelay == ConfigDefaults::CONFIG_KEY_REPEAT_DELAY,
+                             Expect(!g_config.useSystemKeyRepeat,
+                                 "Expected legacy configs without the useSystemKeyRepeat flag to default to local repeat handling.");
+                         Expect(!g_config.modifiersInterruptKeyRepeat,
+                             "Expected legacy configs without the modifiersInterruptKeyRepeat flag to leave modifier interruption disabled.");
+                             Expect(g_config.keyRepeatStartDelay == 100,
+                                 "Expected legacy non-auto keyRepeatStartDelay to normalize to the minimum supported value.");
+                             Expect(g_config.keyRepeatDelay == ConfigDefaults::CONFIG_KEY_REPEAT_DELAY,
                                  "Expected legacy zero keyRepeatDelay to normalize to the default value.");
                       },
                       runMode);
@@ -387,6 +408,8 @@ void RunConfigLoadClampGlobalValuesTest(TestRunMode runMode = TestRunMode::Autom
                           Config config;
                           config.defaultMode = "Fullscreen";
                           config.obsFramerate = 999;
+                          config.keyRepeatStartDelay = 97;
+                          config.keyRepeatDelay = 999;
                           config.cursors.enabled = true;
                           config.cursors.title.cursorSize = 9999;
                           config.cursors.wall.cursorSize = 2;
@@ -396,6 +419,10 @@ void RunConfigLoadClampGlobalValuesTest(TestRunMode runMode = TestRunMode::Autom
                       []() {
                           ExpectConfigLoadSucceeded("config-load-clamp-global-values");
                           Expect(g_config.obsFramerate == 120, "Expected obsFramerate to clamp to the configured maximum.");
+                         Expect(g_config.keyRepeatStartDelay == 100,
+                             "Expected keyRepeatStartDelay to clamp to the minimum supported non-auto value.");
+                         Expect(g_config.keyRepeatDelay == 50,
+                             "Expected keyRepeatDelay to clamp to the configured maximum.");
                           Expect(g_config.cursors.title.cursorSize == ConfigDefaults::CURSOR_MAX_SIZE,
                                  "Expected title cursor size to clamp to CURSOR_MAX_SIZE.");
                           Expect(g_config.cursors.wall.cursorSize == ConfigDefaults::CURSOR_MIN_SIZE,
