@@ -366,12 +366,9 @@ void RunSettingsKeyRepeatSystemRepeatHidesLocalControlsTest(TestRunMode runMode 
     int repeatDelayMs = 0;
 
     g_config.useSystemKeyRepeat = true;
-    g_config.modifiersInterruptKeyRepeat = true;
     g_config.keyRepeatStartDelay = ConfigDefaults::CONFIG_KEY_REPEAT_START_DELAY;
     g_config.keyRepeatDelay = ConfigDefaults::CONFIG_KEY_REPEAT_DELAY;
     RenderSettingsSearchFrame(window, "", tr("tabs.inputs").c_str(), tr("inputs.keyboard").c_str());
-    ExpectGuiInteractionRectPresence("config.control.inputs.keyboard.modifiers_interrupt_key_repeat", false,
-                      "Expected modifier interruption to be hidden when system key repeat is enabled.");
     ExpectGuiInteractionRectPresence("config.control.inputs.keyboard.key_repeat_start_delay", false,
                       "Expected the local repeat start delay slider to be hidden when system key repeat is enabled.");
     ExpectGuiInteractionRectPresence("config.control.inputs.keyboard.key_repeat_delay", false,
@@ -393,8 +390,6 @@ void RunSettingsKeyRepeatSystemRepeatHidesLocalControlsTest(TestRunMode runMode 
 
     g_config.useSystemKeyRepeat = false;
     RenderSettingsSearchFrame(window, "", tr("tabs.inputs").c_str(), tr("inputs.keyboard").c_str());
-    ExpectGuiInteractionRectPresence("config.control.inputs.keyboard.modifiers_interrupt_key_repeat", true,
-                      "Expected modifier interruption to be visible when local key repeat is active.");
     ExpectGuiInteractionRectPresence("config.control.inputs.keyboard.key_repeat_start_delay", true,
                       "Expected the local repeat start delay slider to be visible when local key repeat is active.");
     ExpectGuiInteractionRectPresence("config.control.inputs.keyboard.key_repeat_delay", true,
@@ -640,7 +635,6 @@ void RunProfileApplyFieldsRoundtripTest(TestRunMode runMode = TestRunMode::Autom
     g_config.allowCursorEscape = true;
     g_config.confineCursor = true;
     g_config.useSystemKeyRepeat = true;
-    g_config.modifiersInterruptKeyRepeat = true;
     g_config.keyRepeatStartDelay = 42;
     g_config.keyRepeatDelay = 2;
     g_config.autoBorderless = true;
@@ -677,7 +671,6 @@ void RunProfileApplyFieldsRoundtripTest(TestRunMode runMode = TestRunMode::Autom
     Expect(dst.allowCursorEscape, "allowCursorEscape should roundtrip.");
     Expect(dst.confineCursor, "confineCursor should roundtrip.");
     Expect(dst.useSystemKeyRepeat, "useSystemKeyRepeat should roundtrip.");
-    Expect(dst.modifiersInterruptKeyRepeat, "modifiersInterruptKeyRepeat should roundtrip.");
     Expect(dst.keyRepeatStartDelay == 42, "keyRepeatStartDelay should roundtrip.");
     Expect(dst.keyRepeatDelay == 2, "keyRepeatDelay should roundtrip.");
     Expect(dst.autoBorderless == true, "autoBorderless should roundtrip.");

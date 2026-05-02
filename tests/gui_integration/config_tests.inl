@@ -392,8 +392,6 @@ void RunConfigLoadLegacyVersionUpgradeTest(TestRunMode runMode = TestRunMode::Au
                                  "Expected legacy disableHookChaining to remain preserved on the 1.2.1 branch.");
                              Expect(!g_config.useSystemKeyRepeat,
                                  "Expected legacy configs without the useSystemKeyRepeat flag to default to local repeat handling.");
-                         Expect(!g_config.modifiersInterruptKeyRepeat,
-                             "Expected legacy configs without the modifiersInterruptKeyRepeat flag to leave modifier interruption disabled.");
                              Expect(g_config.keyRepeatStartDelay == 100,
                                  "Expected legacy non-auto keyRepeatStartDelay to normalize to the minimum supported value.");
                              Expect(g_config.keyRepeatDelay == ConfigDefaults::CONFIG_KEY_REPEAT_DELAY,

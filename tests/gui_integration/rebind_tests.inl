@@ -1482,58 +1482,10 @@ void RunKeyRepeatRuntimeAutohotkeyNumpadClearCharOverrideTest(TestRunMode runMod
         Expect(capture.messages.empty(), "Expected repeat to stop after the trailing VK_CLEAR alias keyup.");
     }
 
-    void RunKeyRepeatRuntimeModifiersDoNotInterruptByDefaultTest(TestRunMode runMode = TestRunMode::Automated) {
-        DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
-        PrepareRebindRuntimeCase("key_repeat_runtime_modifiers_do_not_interrupt_by_default", {});
-        g_config.useSystemKeyRepeat = false;
-        g_config.modifiersInterruptKeyRepeat = false;
-        PublishConfigSnapshot();
-        Expect(window.PumpMessages(), "Expected the test window to stay open before modifier repeat capture setup.");
-        ScopedSubclassedInputCapture capture(window.hwnd());
-        Expect(window.PumpMessages(), "Expected the test window to stay open after modifier repeat capture setup.");
-        capture.Clear();
-
-        ScopedKeyboardStateOverride keyboardState;
-        keyboardState.SetKeyDown(VK_SHIFT, false);
-        keyboardState.SetToggle(VK_CAPITAL, false);
-        keyboardState.Apply();
-
-        auto postAndPump = [&](UINT message, WPARAM wParam, LPARAM lParam, const std::string& label) {
-            Expect(PostMessageW(window.hwnd(), message, wParam, lParam) != FALSE, label + " should post successfully.");
-            Expect(window.PumpMessages(), label + " should keep the window open while dispatching messages.");
-        };
-
-        postAndPump(WM_KEYDOWN, 'A', BuildTestKeyboardMessageLParam('A', true), "Initial A keydown before modifier");
-        Expect(capture.messages.size() == 2, "Expected the initial A keydown to forward WM_KEYDOWN and WM_CHAR.");
-
-        capture.Clear();
-        keyboardState.SetKeyDown(VK_SHIFT, true);
-        keyboardState.Apply();
-        postAndPump(WM_KEYDOWN, VK_SHIFT, BuildTestKeyboardMessageLParam(VK_SHIFT, true), "Shift keydown while A is held");
-        Expect(capture.messages.size() == 1, "Expected Shift keydown to forward once without stealing repeat ownership by default.");
-        ExpectCapturedMessage(capture, 0, WM_KEYDOWN, VK_SHIFT, "Modifier WM_KEYDOWN without repeat interruption");
-
-        capture.Clear();
-        postAndPump(WM_TOOLSCREEN_LOCAL_KEY_REPEAT, 0, 0, "Local repeat tick after Shift keydown");
-        Expect(capture.messages.size() == 2, "Expected the held A key to keep repeating after a modifier keydown when modifier interruption is disabled.");
-        ExpectCapturedMessage(capture, 0, WM_KEYDOWN, 'A', "Repeated A WM_KEYDOWN after modifier");
-
-        capture.Clear();
-        keyboardState.SetKeyDown(VK_SHIFT, false);
-        keyboardState.Apply();
-        postAndPump(WM_KEYUP, VK_SHIFT, BuildTestKeyboardMessageLParam(VK_SHIFT, false), "Shift keyup after non-interrupting repeat");
-        Expect(capture.messages.size() == 1, "Expected releasing Shift to forward one WM_KEYUP.");
-        ExpectCapturedMessage(capture, 0, WM_KEYUP, VK_SHIFT, "Modifier WM_KEYUP after non-interrupting repeat");
-
-        capture.Clear();
-        postAndPump(WM_KEYUP, 'A', BuildTestKeyboardMessageLParam('A', false), "A keyup after non-interrupting repeat");
-    }
-
     void RunKeyRepeatRuntimeModifiersInterruptWhenEnabledTest(TestRunMode runMode = TestRunMode::Automated) {
         DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
         PrepareRebindRuntimeCase("key_repeat_runtime_modifiers_interrupt_when_enabled", {});
         g_config.useSystemKeyRepeat = false;
-        g_config.modifiersInterruptKeyRepeat = true;
         PublishConfigSnapshot();
         Expect(window.PumpMessages(), "Expected the test window to stay open before modifier interrupt capture setup.");
         ScopedSubclassedInputCapture capture(window.hwnd());

@@ -90,7 +90,6 @@ const auto& GetTestCaseDefinitions() {
         {"key-repeat-runtime-autohotkey-retained-numpad-scan", &RunKeyRepeatRuntimeAutohotkeyRetainedNumpadScanTest},
         {"key-repeat-runtime-autohotkey-numpadclear-char-override", &RunKeyRepeatRuntimeAutohotkeyNumpadClearCharOverrideTest},
         {"key-repeat-runtime-autohotkey-typing-then-clear-alias", &RunKeyRepeatRuntimeAutohotkeyTypingThenClearAliasTest},
-        {"key-repeat-runtime-modifiers-do-not-interrupt-by-default", &RunKeyRepeatRuntimeModifiersDoNotInterruptByDefaultTest},
         {"key-repeat-runtime-modifiers-interrupt-when-enabled", &RunKeyRepeatRuntimeModifiersInterruptWhenEnabledTest},
         {"config-publish-key-rebind-cannot-type-clears-typed-output", &RunConfigPublishKeyRebindCannotTypeClearsTypedOutputTest},
         {"hotkey-runtime-specific-shift-release-matches-exact-keyup", &RunHotkeyRuntimeSpecificShiftReleaseMatchesExactKeyupTest},
