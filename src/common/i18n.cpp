@@ -4,6 +4,7 @@
 #include "utils.h"
 
 #include <atomic>
+#include <stdexcept>
 #include <unordered_map>
 
 inline nlohmann::json                               g_langsJson;
@@ -11,16 +12,71 @@ inline nlohmann::json                               g_translationJson;
 inline std::unordered_map<std::string, std::string> g_translationCache;
 inline std::atomic<uint64_t>                        g_translationGeneration{ 0 };
 
+namespace {
+
+constexpr const char* kPrimaryLocale = "en";
+
+HMODULE GetCurrentModuleHandle() {
+    HMODULE hModule = nullptr;
+    GetModuleHandleExW(
+        GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+        (LPCWSTR)&RenderWelcomeToast, &hModule
+    );
+    if (!hModule) {
+        throw std::runtime_error("GetModuleHandleExW failed");
+    }
+    return hModule;
+}
+
+const LPWSTR GetTranslationResourceName(const std::string& lang) {
+    static const std::unordered_map<std::string, LPWSTR> langToResName = {
+        {kPrimaryLocale, MAKEINTRESOURCEW(IDR_LANG_EN)},
+        {"zh_CN", MAKEINTRESOURCEW(IDR_LANG_ZH_CN)},
+    };
+
+    const auto it = langToResName.find(lang);
+    if (it == langToResName.end()) {
+        throw std::runtime_error("Unsupported language: " + lang);
+    }
+    return it->second;
+}
+
+nlohmann::json LoadTranslationResource(const std::string& lang) {
+    HMODULE hModule = GetCurrentModuleHandle();
+
+    HRSRC resSrc = FindResourceW(hModule, GetTranslationResourceName(lang), RT_RCDATA);
+    if (!resSrc) {
+        throw std::runtime_error("FindResourceW failed");
+    }
+
+    HGLOBAL resHandle = LoadResource(hModule, resSrc);
+    if (!resHandle) {
+        throw std::runtime_error("LoadResource failed");
+    }
+
+    auto* const resPtr = LockResource(resHandle);
+    if (!resPtr) {
+        throw std::runtime_error("LockResource failed");
+    }
+
+    const auto resSize = SizeofResource(hModule, resSrc);
+    if (resSize == 0) {
+        throw std::runtime_error("SizeofResource failed");
+    }
+
+    nlohmann::json loadedJson = nlohmann::json::parse((const char*)resPtr, (const char*)resPtr + resSize);
+    if (!loadedJson.is_object()) {
+        throw std::runtime_error("Translation JSON must be an object");
+    }
+
+    return loadedJson;
+}
+
+} // namespace
+
 void LoadLangs() {
     try {
-        HMODULE hModule = nullptr;
-        GetModuleHandleExW(
-            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-            (LPCWSTR)&RenderWelcomeToast, &hModule
-        );
-        if (!hModule) {
-            throw std::exception("GetModuleHandleExW failed");
-        }
+        HMODULE hModule = GetCurrentModuleHandle();
 
         HRSRC resSrc = FindResourceW(hModule, MAKEINTRESOURCEW(IDR_LANG_LANGS), RT_RCDATA);
         if (!resSrc) {
@@ -53,44 +109,14 @@ const nlohmann::json& GetLangs() {
 }
 
 bool LoadTranslation(const std::string& lang) {
-    static const std::unordered_map<std::string, LPWSTR> langToResName = {
-        {"en", MAKEINTRESOURCEW(IDR_LANG_EN)},
-        {"zh_CN", MAKEINTRESOURCEW(IDR_LANG_ZH_CN)},
-    };
-
     try {
-        nlohmann::json loadedTranslationJson;
-
-        HMODULE hModule = nullptr;
-        GetModuleHandleExW(
-            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-            (LPCWSTR)&RenderWelcomeToast, &hModule
-        );
-        if (!hModule) {
-            throw std::exception("GetModuleHandleExW failed");
+        nlohmann::json loadedTranslationJson = LoadTranslationResource(kPrimaryLocale);
+        if (lang != kPrimaryLocale) {
+            nlohmann::json localeTranslationJson = LoadTranslationResource(lang);
+            for (auto& [key, value] : localeTranslationJson.items()) {
+                loadedTranslationJson[key] = std::move(value);
+            }
         }
-
-        HRSRC resSrc = FindResourceW(hModule, langToResName.at(lang), RT_RCDATA);
-        if (!resSrc) {
-            throw std::exception("FindResourceW failed");
-        }
-
-        HGLOBAL resHandle = LoadResource(hModule, resSrc);
-        if (!resHandle) {
-            throw std::exception("LoadResource failed");
-        }
-
-        auto* const resPtr = LockResource(resHandle);
-        if (!resPtr) {
-            throw std::exception("LockResource failed");
-        }
-
-        const auto resSize = SizeofResource(hModule, resSrc);
-        if (resSize == 0) {
-            throw std::exception("SizeofResource failed");
-        }
-
-        loadedTranslationJson = nlohmann::json::parse((const char*)resPtr, (const char*)resPtr + resSize);
 
         g_translationJson = std::move(loadedTranslationJson);
         g_translationCache.clear();
@@ -149,7 +175,7 @@ const std::string& tr_ref(const char* key) {
     }
 
     if (!g_translationJson.contains(key)) {
-        Log("Missing translation for key: " + std::string(key));
+        Log("Missing English translation for key: " + std::string(key));
         return g_translationCache.emplace(key, key).first->second;
     }
     if (!g_translationJson[key].is_string()) {

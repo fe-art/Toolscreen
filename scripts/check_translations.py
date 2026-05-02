@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Validate translation keys against the codebase.
 
-Two rules:
-  1. Every key passed to tr/trc/tr_ref as a string literal must exist in every
-     lang/*.json locale (excluding langs.json).
+Rules:
+  1. Every key passed to tr/trc/tr_ref as a string literal must exist in
+      lang/en.json.
   2. Every key in lang/en.json must appear as a string literal somewhere in
-     src/, directly or via an intermediate struct field, switch, data table.
+      src/, directly or via an intermediate struct field, switch, data table.
+
+Non-primary locales may omit keys. Missing locale entries fall back to English
+at runtime, and are reported as informational output only.
 
 Exits 0 clean, 1 on validation errors, 2 on usage error.
 """
@@ -177,16 +180,26 @@ def main() -> int:
         for file, line, snippet in dynamic_sites:
             print(f"  {file}:{line}  {snippet}")
 
-    for locale in sorted(translations.keys()):
-        missing = sorted(set(tr_call_keys) - set(translations[locale].keys()))
-        if not missing:
-            continue
+    primary_keys = set(translations[PRIMARY_LOCALE].keys())
+
+    missing_primary = sorted(set(tr_call_keys) - primary_keys)
+    if missing_primary:
         has_errors = True
-        width = max(len(k) for k in missing)
-        print(f"\nmissing in lang/{locale}.json ({len(missing)}):")
-        for key in missing:
+        width = max(len(k) for k in missing_primary)
+        print(f"\nmissing in lang/{PRIMARY_LOCALE}.json ({len(missing_primary)}):")
+        for key in missing_primary:
             f, ln = tr_call_keys[key][0]
             print(f"  {key.ljust(width)}  {f}:{ln}")
+
+    for locale in sorted(translations.keys()):
+        if locale == PRIMARY_LOCALE:
+            continue
+        english_only = sorted(primary_keys - set(translations[locale].keys()))
+        if not english_only:
+            continue
+        print(f"\nenglish-only keys missing from lang/{locale}.json ({len(english_only)}):")
+        for key in english_only:
+            print(f"  {key}")
 
     for locale in sorted(translations.keys()):
         unused = sorted(set(translations[locale]) - all_literals)
