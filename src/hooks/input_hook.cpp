@@ -3074,14 +3074,6 @@ static InputHandlerResult HandleLocalKeyRepeat(HWND hWnd, UINT uMsg, WPARAM wPar
         }
 
         if (IsModifierVk(trackedVk)) {
-            if (!g_config.modifiersInterruptKeyRepeat) {
-                if (IsLocalRepeatDebugEnabled()) {
-                    Log("[LocalRepeat] allow modifier keydown without taking repeat ownership rawVk=" + std::to_string(rawVk) +
-                        " trackedVk=" + std::to_string(trackedVk));
-                }
-                return { false, 0 };
-            }
-
             if (s_localKeyRepeatOwnerActive || !s_localKeyRepeatHeldKeys.empty()) {
                 if (IsLocalRepeatDebugEnabled()) {
                     Log("[LocalRepeat] interrupt active repeat on modifier keydown rawVk=" + std::to_string(rawVk) +
