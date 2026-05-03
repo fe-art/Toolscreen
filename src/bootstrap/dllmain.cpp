@@ -1622,7 +1622,7 @@ static inline void ViewportHook_Impl(GLVIEWPORTPROC next, GLint x, GLint y, GLsi
 
     const bool isLegacyVersion = g_gameVersion < GameVersion(1, 17, 0);
     const bool shouldBypassViewportHook = isLegacyVersion ?
-        (currentTexture == 0 || drawFBO != 0) :
+        (drawFBO != 0) :
         (currentTexture != 0 || drawFBO != 0);
     if (shouldBypassViewportHook) {
         return next(x, y, width, height);
