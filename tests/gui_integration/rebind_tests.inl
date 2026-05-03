@@ -1532,6 +1532,69 @@ void RunKeyRepeatRuntimeAutohotkeyNumpadClearCharOverrideTest(TestRunMode runMod
         postAndPump(WM_KEYUP, 'A', BuildTestKeyboardMessageLParam('A', false), "A keyup after interrupting repeat");
     }
 
+    void RunKeyRepeatRuntimeModifierReleaseRestartsDelayTest(TestRunMode runMode = TestRunMode::Automated) {
+        DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+        PrepareRebindRuntimeCase("key_repeat_runtime_modifier_release_restarts_delay", {});
+        g_config.useSystemKeyRepeat = false;
+        g_config.keyRepeatStartDelay = 100;
+        g_config.keyRepeatDelay = 1;
+        PublishConfigSnapshot();
+        Expect(window.PumpMessages(), "Expected the test window to stay open before modifier-release repeat capture setup.");
+        ScopedSubclassedInputCapture capture(window.hwnd());
+        Expect(window.PumpMessages(), "Expected the test window to stay open after modifier-release repeat capture setup.");
+        capture.Clear();
+
+        ScopedKeyboardStateOverride keyboardState;
+        keyboardState.SetKeyDown(VK_SHIFT, true);
+        keyboardState.SetToggle(VK_CAPITAL, false);
+        keyboardState.Apply();
+
+        auto postAndPump = [&](UINT message, WPARAM wParam, LPARAM lParam, const std::string& label) {
+            Expect(PostMessageW(window.hwnd(), message, wParam, lParam) != FALSE, label + " should post successfully.");
+            Expect(window.PumpMessages(), label + " should keep the window open while dispatching messages.");
+        };
+
+        int effectiveStartDelayMs = 0;
+        int effectiveRepeatDelayMs = 0;
+        Expect(GetEffectiveKeyRepeatTimings(effectiveStartDelayMs, effectiveRepeatDelayMs),
+               "Expected effective key repeat timings to resolve for the modifier-release restart test.");
+
+        postAndPump(WM_KEYDOWN, 'A', BuildTestKeyboardMessageLParam('A', true), "Initial shifted A keydown");
+        Expect(capture.messages.size() == 2, "Expected the initial shifted A keydown to forward WM_KEYDOWN and uppercase WM_CHAR.");
+        ExpectCapturedMessage(capture, 0, WM_KEYDOWN, 'A', "Initial shifted A WM_KEYDOWN");
+        ExpectCapturedMessage(capture, 1, WM_CHAR, 'A', "Initial shifted A WM_CHAR");
+
+        capture.Clear();
+        postAndPump(WM_TOOLSCREEN_LOCAL_KEY_REPEAT, 0, 0, "Local repeat tick while Shift is held");
+        Expect(capture.messages.size() == 2, "Expected local repeat to emit shifted output while Shift is held.");
+        ExpectCapturedMessage(capture, 0, WM_KEYDOWN, 'A', "Repeated shifted A WM_KEYDOWN");
+        ExpectCapturedMessage(capture, 1, WM_CHAR, 'A', "Repeated shifted A WM_CHAR");
+
+        capture.Clear();
+        keyboardState.SetKeyDown(VK_SHIFT, false);
+        keyboardState.Apply();
+        postAndPump(WM_KEYUP, VK_SHIFT, BuildTestKeyboardMessageLParam(VK_SHIFT, false), "Shift keyup while A remains held");
+        Expect(capture.messages.size() == 1, "Expected releasing Shift to forward one WM_KEYUP.");
+        ExpectCapturedMessage(capture, 0, WM_KEYUP, VK_SHIFT, "Shift WM_KEYUP while A remains held");
+
+        capture.Clear();
+        postAndPump(WM_TOOLSCREEN_LOCAL_KEY_REPEAT, 0, 0, "Immediate local repeat tick after Shift keyup");
+        Expect(capture.messages.empty(), "Expected modifier release to restart the repeat delay before lowercase repeat resumes.");
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(effectiveStartDelayMs + 20));
+
+        capture.Clear();
+        Expect(window.PumpMessages(), "Expected the restarted local repeat timer to keep the window open after Shift keyup.");
+        Expect(capture.messages.size() == 2,
+               "Expected repeat to resume after the restarted delay once Shift is released; got " +
+                   std::to_string(capture.messages.size()) + " captured messages.");
+        ExpectCapturedMessage(capture, 0, WM_KEYDOWN, 'A', "Repeated lowercase A WM_KEYDOWN after Shift release");
+        ExpectCapturedMessage(capture, 1, WM_CHAR, 'a', "Repeated lowercase A WM_CHAR after Shift release");
+
+        capture.Clear();
+        postAndPump(WM_KEYUP, 'A', BuildTestKeyboardMessageLParam('A', false), "A keyup after Shift-release repeat delay restart");
+    }
+
 void RunKeyRebindGuiKeyboardLayoutFullBindAndTriggerTest(TestRunMode runMode = TestRunMode::Automated) {
     DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
     if (SkipIfNoModernGuiTestGL(window)) { return; }

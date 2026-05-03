@@ -1039,6 +1039,7 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     config-load-key-rebind-cursor-state-defaulted
     key-repeat-runtime-modifiers-do-not-interrupt-by-default
     key-repeat-runtime-modifiers-interrupt-when-enabled
+    key-repeat-runtime-modifier-release-restarts-delay
     config-publish-key-rebind-cannot-type-clears-typed-output
     key-rebind-runtime-full-forwarding
     key-rebind-runtime-split-vk-output

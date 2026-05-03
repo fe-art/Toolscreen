@@ -124,6 +124,7 @@ static std::vector<SuppressedLocalRepeatChar> s_localKeyRepeatSuppressedChars;
 static HANDLE s_localKeyRepeatHighResTimer = NULL;
 static HANDLE s_localKeyRepeatWakeEvent = NULL;
 static HANDLE s_localKeyRepeatThread = NULL;
+static ULONGLONG s_localKeyRepeatDelayGateDeadlineMs = 0;
 static std::mutex s_localKeyRepeatSchedulerInitMutex;
 static std::atomic<HWND> s_localKeyRepeatScheduledHwnd{ NULL };
 static std::atomic<int64_t> s_localKeyRepeatRequestedDelay100ns{ 0 };
@@ -2782,6 +2783,8 @@ static void StopLocalKeyRepeatTimer(HWND hWnd) {
         (void)KillTimer(targetHwnd, kToolscreenLocalKeyRepeatTimerId);
     }
 
+    s_localKeyRepeatDelayGateDeadlineMs = 0;
+
     if (s_localKeyRepeatWakeEvent && s_localKeyRepeatHighResTimer) {
         s_localKeyRepeatScheduledHwnd.store(NULL, std::memory_order_release);
         s_localKeyRepeatRequestedDelay100ns.store(0, std::memory_order_release);
@@ -2828,6 +2831,18 @@ static bool IsLocalKeyRepeatOwnerStillHeld() {
     }
 
     return s_localKeyRepeatHeldKeys.find(s_localKeyRepeatOwner.rawVk) != s_localKeyRepeatHeldKeys.end();
+}
+
+static void RestartLocalKeyRepeatStartDelay(HWND hWnd) {
+    if (!hWnd || !IsWindow(hWnd) || !IsLocalKeyRepeatOwnerStillHeld()) {
+        return;
+    }
+
+    int startDelayMs = 250;
+    int repeatDelayMs = 33;
+    (void)GetEffectiveKeyRepeatTimings(startDelayMs, repeatDelayMs);
+    s_localKeyRepeatDelayGateDeadlineMs = GetTickCount64() + static_cast<ULONGLONG>((std::max)(startDelayMs, 1));
+    ArmLocalKeyRepeatTimer(hWnd, startDelayMs);
 }
 
 static void BeginLocalKeyRepeatTracking(HWND hWnd, DWORD rawVk, UINT scanCodeWithFlags, bool isSystemKey, LPARAM sourceKeyDownLParam) {
@@ -2952,6 +2967,19 @@ static InputHandlerResult HandleLocalKeyRepeat(HWND hWnd, UINT uMsg, WPARAM wPar
             ResetLocalKeyRepeatState(hWnd);
             return { true, 0 };
         }
+
+        const ULONGLONG nowMs = GetTickCount64();
+        if (s_localKeyRepeatDelayGateDeadlineMs != 0 && nowMs < s_localKeyRepeatDelayGateDeadlineMs) {
+            const ULONGLONG remainingDelayMs64 = s_localKeyRepeatDelayGateDeadlineMs - nowMs;
+            const int remainingDelayMs =
+                remainingDelayMs64 > static_cast<ULONGLONG>(0x7fffffff) ? 0x7fffffff : static_cast<int>(remainingDelayMs64);
+            if (IsLocalRepeatDebugEnabled()) {
+                Log("[LocalRepeat] ignore repeat tick before due time remainingMs=" + std::to_string(remainingDelayMs));
+            }
+            ArmLocalKeyRepeatTimer(hWnd, remainingDelayMs);
+            return { true, 0 };
+        }
+        s_localKeyRepeatDelayGateDeadlineMs = 0;
 
         int startDelayMs = 250;
         int repeatDelayMs = 33;
@@ -3116,6 +3144,14 @@ static InputHandlerResult HandleLocalKeyRepeat(HWND hWnd, UINT uMsg, WPARAM wPar
         s_localKeyRepeatOwner = {};
         s_localKeyRepeatOwnerActive = false;
         StopLocalKeyRepeatTimer(hWnd);
+    }
+
+    if (IsModifierVk(trackedVk) && IsLocalKeyRepeatOwnerStillHeld()) {
+        if (IsLocalRepeatDebugEnabled()) {
+            Log("[LocalRepeat] restart repeat delay after modifier keyup trackedVk=" + std::to_string(trackedVk) +
+                " owner=" + FormatLocalKeyRepeatStateForDebug(s_localKeyRepeatOwner));
+        }
+        RestartLocalKeyRepeatStartDelay(hWnd);
     }
 
     return { false, 0 };

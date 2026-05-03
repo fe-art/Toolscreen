@@ -91,6 +91,7 @@ const auto& GetTestCaseDefinitions() {
         {"key-repeat-runtime-autohotkey-numpadclear-char-override", &RunKeyRepeatRuntimeAutohotkeyNumpadClearCharOverrideTest},
         {"key-repeat-runtime-autohotkey-typing-then-clear-alias", &RunKeyRepeatRuntimeAutohotkeyTypingThenClearAliasTest},
         {"key-repeat-runtime-modifiers-interrupt-when-enabled", &RunKeyRepeatRuntimeModifiersInterruptWhenEnabledTest},
+        {"key-repeat-runtime-modifier-release-restarts-delay", &RunKeyRepeatRuntimeModifierReleaseRestartsDelayTest},
         {"config-publish-key-rebind-cannot-type-clears-typed-output", &RunConfigPublishKeyRebindCannotTypeClearsTypedOutputTest},
         {"hotkey-runtime-specific-shift-release-matches-exact-keyup", &RunHotkeyRuntimeSpecificShiftReleaseMatchesExactKeyupTest},
         {"key-rebind-runtime-full-forwarding", &RunKeyRebindRuntimeFullForwardingTest},
