@@ -6436,16 +6436,39 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
 
             PROFILE_SCOPE_CAT("Scissor Background Image", "Rendering");
 
+            GLint savedActiveTexture = 0;
             GLint savedTexture = 0;
+            GLint savedSampler = 0;
+            GLboolean savedRasterizerDiscard = GL_FALSE;
+            GLboolean savedColorLogicOp = GL_FALSE;
+            GLint savedBlendEqRgb = GL_FUNC_ADD;
+            GLint savedBlendEqAlpha = GL_FUNC_ADD;
+            GLfloat savedBlendColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+
+            glGetIntegerv(GL_ACTIVE_TEXTURE, &savedActiveTexture);
+            glActiveTexture(GL_TEXTURE0);
             glGetIntegerv(GL_TEXTURE_BINDING_2D, &savedTexture);
+            if (SupportsSamplerObjects()) {
+                glGetIntegerv(GL_SAMPLER_BINDING, &savedSampler);
+                glBindSampler(0, 0);
+            }
+            savedRasterizerDiscard = glIsEnabled(GL_RASTERIZER_DISCARD);
+            savedColorLogicOp = glIsEnabled(GL_COLOR_LOGIC_OP);
+            glGetIntegerv(GL_BLEND_EQUATION_RGB, &savedBlendEqRgb);
+            glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &savedBlendEqAlpha);
+            glGetFloatv(GL_BLEND_COLOR, savedBlendColor);
 
             glEnable(GL_SCISSOR_TEST);
+            glDisable(GL_RASTERIZER_DISCARD);
+            glDisable(GL_COLOR_LOGIC_OP);
             glUseProgram(g_backgroundProgram);
             BindTextureDirect(GL_TEXTURE_2D, texId);
             glUniform1i(g_backgroundShaderLocs.backgroundTexture, 0);
             glUniform1f(g_backgroundShaderLocs.opacity, opacity);
             glBindVertexArray(g_vao);
             glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+            glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
+            glBlendColor(0.0f, 0.0f, 0.0f, 0.0f);
 
             if (opacity < 1.0f) {
                 glEnable(GL_BLEND);
@@ -6467,6 +6490,20 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
             glDisable(GL_SCISSOR_TEST);
 
             BindTextureDirect(GL_TEXTURE_2D, savedTexture);
+            if (SupportsSamplerObjects()) { glBindSampler(0, static_cast<GLuint>(savedSampler)); }
+            if (savedRasterizerDiscard) {
+                glEnable(GL_RASTERIZER_DISCARD);
+            } else {
+                glDisable(GL_RASTERIZER_DISCARD);
+            }
+            if (savedColorLogicOp) {
+                glEnable(GL_COLOR_LOGIC_OP);
+            } else {
+                glDisable(GL_COLOR_LOGIC_OP);
+            }
+            glBlendEquationSeparate(savedBlendEqRgb, savedBlendEqAlpha);
+            glBlendColor(savedBlendColor[0], savedBlendColor[1], savedBlendColor[2], savedBlendColor[3]);
+            glActiveTexture(savedActiveTexture);
         };
 
         auto renderBackgroundColor = [&](const Color& color, float opacity) {
