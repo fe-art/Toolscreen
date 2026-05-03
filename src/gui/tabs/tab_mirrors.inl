@@ -8,14 +8,97 @@ if (BeginSelectableSettingsNestedTabItem(trc("tabs.mirrors"))) {
     static std::string selectedMirrorName = "";
 
     static std::string selectedGroupName = "";
+    static std::string activeMirrorColorPickerName = "";
+    static int activeMirrorColorPickerIndex = 0;
+    static bool openMirrorColorPickerPopup = false;
+    static bool mirrorColorPickerEscapeRequiresRelease = false;
+    static GLuint s_mirrorColorPickerReadFbo = 0;
 
     constexpr float kSettingsLabelColumnWidth = 186.0f;
     constexpr float kInlineHelpMarkerSpacing = 4.0f;
+
+    auto normalizeCaptureAnchor = [](const std::string& relativeTo) {
+        if (relativeTo.length() > 8 && relativeTo.substr(relativeTo.length() - 8) == "Viewport") {
+            return relativeTo.substr(0, relativeTo.length() - 8);
+        }
+        if (relativeTo.length() > 6 && relativeTo.substr(relativeTo.length() - 6) == "Screen") {
+            return relativeTo.substr(0, relativeTo.length() - 6);
+        }
+        return relativeTo;
+    };
+
+    auto getRelativeCoordsNormalized = [](const std::string& anchor, int relX, int relY, int w, int h, int containerW,
+                                          int containerH, int& outX, int& outY) {
+        const char firstChar = anchor.empty() ? '\0' : anchor[0];
+
+        if (firstChar == 't') {
+            outY = relY;
+            outX = (anchor == "topLeft") ? relX : containerW - w - relX;
+        } else if (firstChar == 'c') {
+            outX = (containerW - w) / 2 + relX;
+            outY = (containerH - h) / 2 + relY;
+        } else if (firstChar == 'p') {
+            const int pieYTop = 220;
+            const int pieXLeft = 92;
+            const int pieXRight = 36;
+            const int baseX = (anchor == "pieLeft") ? containerW - pieXLeft : containerW - pieXRight;
+            outX = baseX + relX;
+            outY = containerH - pieYTop + relY;
+        } else {
+            outY = containerH - h - relY;
+            outX = (anchor == "bottomRight") ? containerW - w - relX : relX;
+        }
+    };
+
+    auto sampleReadyGamePixel = [&](int gameX, int gameY, Color& outColor) {
+        const GLuint readyTexture = GetReadyGameTexture();
+        const int gameW = GetReadyGameWidth();
+        const int gameH = GetReadyGameHeight();
+        if (readyTexture == 0 || gameW <= 0 || gameH <= 0 || gameX < 0 || gameY < 0 || gameX >= gameW || gameY >= gameH) {
+            return false;
+        }
+
+        if (s_mirrorColorPickerReadFbo == 0) {
+            glGenFramebuffers(1, &s_mirrorColorPickerReadFbo);
+        }
+
+        GLint previousReadFramebuffer = 0;
+        GLint previousPackAlignment = 0;
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFramebuffer);
+        glGetIntegerv(GL_PACK_ALIGNMENT, &previousPackAlignment);
+
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, s_mirrorColorPickerReadFbo);
+        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, readyTexture, 0);
+        if (glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previousReadFramebuffer));
+            glPixelStorei(GL_PACK_ALIGNMENT, previousPackAlignment);
+            return false;
+        }
+
+        unsigned char pixel[4] = { 0, 0, 0, 255 };
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glReadPixels(gameX, gameH - gameY - 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previousReadFramebuffer));
+        glPixelStorei(GL_PACK_ALIGNMENT, previousPackAlignment);
+
+        outColor = {
+            pixel[0] / 255.0f,
+            pixel[1] / 255.0f,
+            pixel[2] / 255.0f,
+            pixel[3] / 255.0f,
+        };
+        return true;
+    };
 
     int mirror_to_remove = -1;
     for (size_t i = 0; i < g_config.mirrors.size(); ++i) {
         auto& mirror = g_config.mirrors[i];
         ImGui::PushID((int)i);
+
+        if (mirrorColorPickerEscapeRequiresRelease && !ImGui::IsKeyDown(ImGuiKey_Escape)) {
+            mirrorColorPickerEscapeRequiresRelease = false;
+        }
 
         bool is_selected = (selectedMirrorName == mirror.name);
         ImGuiTreeNodeFlags node_flags = ImGuiTreeNodeFlags_SpanAvailWidth | (is_selected ? ImGuiTreeNodeFlags_Selected : 0);
@@ -157,6 +240,167 @@ if (BeginSelectableSettingsNestedTabItem(trc("tabs.mirrors"))) {
                 ImGui::SetNextItemWidth(240.0f);
             };
 
+            auto drawMirrorTargetColorPickerPreview = [&](int targetColorIndex) {
+                const GLuint readyTexture = GetReadyGameTexture();
+                const int gameW = GetReadyGameWidth();
+                const int gameH = GetReadyGameHeight();
+                if (readyTexture == 0 || gameW <= 0 || gameH <= 0 || mirror.input.empty() || mirror.captureWidth <= 0 ||
+                    mirror.captureHeight <= 0) {
+                    ImGui::TextDisabled("%s", trc("mirrors.color_picker_unavailable"));
+                    return false;
+                }
+
+                constexpr float kMagnifierSize = 110.0f;
+                constexpr float kPreviewWidth = 420.0f;
+                constexpr float kPreviewMinHeight = kMagnifierSize + 24.0f;
+                constexpr float kPreviewTileGap = 8.0f;
+                constexpr int kMagnifierRadius = 4;
+
+                const int inputCount = static_cast<int>(mirror.input.size());
+                const int gridColumns = (std::max)(1, static_cast<int>(std::ceil(std::sqrt(static_cast<float>(inputCount)))));
+                const int gridRows = (std::max)(1, (inputCount + gridColumns - 1) / gridColumns);
+                const float tileWidth =
+                    (kPreviewWidth - kPreviewTileGap * static_cast<float>((std::max)(0, gridColumns - 1))) / static_cast<float>(gridColumns);
+                const float tileHeight = tileWidth * (static_cast<float>(mirror.captureHeight) /
+                                                      (std::max)(1.0f, static_cast<float>(mirror.captureWidth)));
+                const float previewContentHeight =
+                    tileHeight * static_cast<float>(gridRows) + kPreviewTileGap * static_cast<float>((std::max)(0, gridRows - 1));
+
+                const float previewHeight = (std::max)(
+                    kPreviewMinHeight,
+                    previewContentHeight);
+                const ImVec2 previewSize(kPreviewWidth, previewHeight);
+                ImGui::InvisibleButton("##mirror_target_color_picker_preview", previewSize);
+
+                ImDrawList* drawList = ImGui::GetWindowDrawList();
+                const ImVec2 previewMin = ImGui::GetItemRectMin();
+                const ImVec2 previewMax = ImGui::GetItemRectMax();
+                const float previewContentOffsetY = (previewHeight - previewContentHeight) * 0.5f;
+
+                drawList->AddRectFilled(previewMin, previewMax, ImGui::GetColorU32(ImGuiCol_FrameBg), 4.0f);
+
+                std::vector<ImVec2> tileMins;
+                tileMins.reserve(mirror.input.size());
+                for (size_t inputIndex = 0; inputIndex < mirror.input.size(); ++inputIndex) {
+                    const auto& input = mirror.input[inputIndex];
+                    const int column = static_cast<int>(inputIndex) % gridColumns;
+                    const int row = static_cast<int>(inputIndex) / gridColumns;
+                    const ImVec2 tileMin(previewMin.x + column * (tileWidth + kPreviewTileGap),
+                                         previewMin.y + previewContentOffsetY + row * (tileHeight + kPreviewTileGap));
+                    const ImVec2 tileMax(tileMin.x + tileWidth, tileMin.y + tileHeight);
+                    tileMins.push_back(tileMin);
+
+                    int capX = 0;
+                    int capY = 0;
+                    getRelativeCoordsNormalized(normalizeCaptureAnchor(input.relativeTo), input.x, input.y, mirror.captureWidth,
+                                                mirror.captureHeight, gameW, gameH, capX, capY);
+
+                    const float u0 = static_cast<float>(capX) / gameW;
+                    const float v0 = static_cast<float>(gameH - capY - mirror.captureHeight) / gameH;
+                    const float u1 = static_cast<float>(capX + mirror.captureWidth) / gameW;
+                    const float v1 = static_cast<float>(gameH - capY) / gameH;
+                    drawList->AddImage((ImTextureID)(intptr_t)readyTexture, tileMin, tileMax, ImVec2(u0, v1), ImVec2(u1, v0));
+                    drawList->AddRect(tileMin, tileMax, ImGui::GetColorU32(ImGuiCol_Border), 4.0f);
+                }
+
+                drawList->AddRect(previewMin, previewMax, ImGui::GetColorU32(ImGuiCol_Border), 4.0f);
+
+                bool changed = false;
+                if (ImGui::IsItemHovered()) {
+                    const ImVec2 mousePos = ImGui::GetMousePos();
+                    bool foundSample = false;
+                    int hoveredGameX = 0;
+                    int hoveredGameY = 0;
+                    int hoveredTileIndex = -1;
+                    int previewPixelX = 0;
+                    int previewPixelY = 0;
+                    for (size_t inputIndex = 0; inputIndex < mirror.input.size(); ++inputIndex) {
+                        const ImVec2 tileMin = tileMins[inputIndex];
+                        const ImVec2 tileMax(tileMin.x + tileWidth, tileMin.y + tileHeight);
+                        if (mousePos.x < tileMin.x || mousePos.x >= tileMax.x || mousePos.y < tileMin.y || mousePos.y >= tileMax.y) {
+                            continue;
+                        }
+
+                        const float localX = std::clamp(mousePos.x - tileMin.x, 0.0f, tileWidth - 0.001f);
+                        const float localY = std::clamp(mousePos.y - tileMin.y, 0.0f, tileHeight - 0.001f);
+                        previewPixelX = std::clamp(static_cast<int>((localX / tileWidth) * mirror.captureWidth), 0,
+                                                   mirror.captureWidth - 1);
+                        previewPixelY = std::clamp(static_cast<int>((localY / tileHeight) * mirror.captureHeight), 0,
+                                                   mirror.captureHeight - 1);
+
+                        const auto& input = mirror.input[inputIndex];
+                        int capX = 0;
+                        int capY = 0;
+                        getRelativeCoordsNormalized(normalizeCaptureAnchor(input.relativeTo), input.x, input.y, mirror.captureWidth,
+                                                    mirror.captureHeight, gameW, gameH, capX, capY);
+
+                        const int candidateGameX = capX + previewPixelX;
+                        const int candidateGameY = capY + previewPixelY;
+                        if (candidateGameX < 0 || candidateGameY < 0 || candidateGameX >= gameW || candidateGameY >= gameH) {
+                            continue;
+                        }
+
+                        hoveredGameX = candidateGameX;
+                        hoveredGameY = candidateGameY;
+                        hoveredTileIndex = static_cast<int>(inputIndex);
+                        foundSample = true;
+                        break;
+                    }
+
+                    if (foundSample) {
+                        Color hoveredColor;
+                        if (sampleReadyGamePixel(hoveredGameX, hoveredGameY, hoveredColor)) {
+                            const float cellWidth = tileWidth / (std::max)(1, mirror.captureWidth);
+                            const float cellHeight = tileHeight / (std::max)(1, mirror.captureHeight);
+                            const ImVec2 tileMin = tileMins[static_cast<size_t>(hoveredTileIndex)];
+                            const ImVec2 hoverMin(tileMin.x + previewPixelX * cellWidth, tileMin.y + previewPixelY * cellHeight);
+                            const ImVec2 hoverMax(hoverMin.x + cellWidth, hoverMin.y + cellHeight);
+                            drawList->AddRect(hoverMin, hoverMax, IM_COL32(255, 255, 255, 255), 0.0f, 0, 2.0f);
+
+                            const int zoomMinX = (std::max)(hoveredGameX - kMagnifierRadius, 0);
+                            const int zoomMaxX = (std::min)(hoveredGameX + kMagnifierRadius + 1, gameW);
+                            const int zoomMinY = (std::max)(hoveredGameY - kMagnifierRadius, 0);
+                            const int zoomMaxY = (std::min)(hoveredGameY + kMagnifierRadius + 1, gameH);
+
+                            const ImVec2 magnifierMin(previewMin.x + 8.0f, previewMin.y + 8.0f);
+                            const ImVec2 magnifierMax(magnifierMin.x + kMagnifierSize, magnifierMin.y + kMagnifierSize);
+                            drawList->AddRectFilled(magnifierMin, magnifierMax, IM_COL32(12, 12, 12, 230), 4.0f);
+                            drawList->AddImage((ImTextureID)(intptr_t)readyTexture, magnifierMin, magnifierMax,
+                                               ImVec2(static_cast<float>(zoomMinX) / gameW, static_cast<float>(gameH - zoomMinY) / gameH),
+                                               ImVec2(static_cast<float>(zoomMaxX) / gameW, static_cast<float>(gameH - zoomMaxY) / gameH));
+                            const ImVec2 magnifierCenter((magnifierMin.x + magnifierMax.x) * 0.5f, (magnifierMin.y + magnifierMax.y) * 0.5f);
+                            drawList->AddLine(ImVec2(magnifierCenter.x, magnifierMin.y + 2.0f),
+                                              ImVec2(magnifierCenter.x, magnifierMax.y - 2.0f), IM_COL32(255, 255, 255, 220));
+                            drawList->AddLine(ImVec2(magnifierMin.x + 2.0f, magnifierCenter.y),
+                                              ImVec2(magnifierMax.x - 2.0f, magnifierCenter.y), IM_COL32(255, 255, 255, 220));
+                            drawList->AddRect(magnifierMin, magnifierMax, ImGui::GetColorU32(ImGuiCol_Border), 4.0f);
+
+                            const ImVec2 swatchMin(magnifierMin.x, magnifierMax.y + 6.0f);
+                            const ImVec2 swatchMax(swatchMin.x + 18.0f, swatchMin.y + 18.0f);
+                            drawList->AddRectFilled(swatchMin, swatchMax,
+                                                    ImGui::GetColorU32(ImVec4(hoveredColor.r, hoveredColor.g, hoveredColor.b, 1.0f)), 3.0f);
+                            drawList->AddRect(swatchMin, swatchMax, ImGui::GetColorU32(ImGuiCol_Border), 3.0f);
+
+                            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+                                targetColorIndex >= 0 &&
+                                targetColorIndex < static_cast<int>(mirror.colors.targetColors.size())) {
+                                mirror.colors.targetColors[static_cast<size_t>(targetColorIndex)] = {
+                                    hoveredColor.r,
+                                    hoveredColor.g,
+                                    hoveredColor.b,
+                                };
+                                g_configIsDirty = true;
+                                syncMirrorCaptureSettings();
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+
+                ImGui::TextWrapped("%s", trc("mirrors.color_picker_help"));
+                return changed;
+            };
+
             const bool disableGradientOutput = mirror.colorPassthrough || mirror.rawOutput;
             const bool disableSolidOutputColor = mirror.colorPassthrough || mirror.rawOutput || mirror.gradientOutput;
 
@@ -194,7 +438,15 @@ if (BeginSelectableSettingsNestedTabItem(trc("tabs.mirrors"))) {
             ImGui::SeparatorText(trc("mirrors.matching"));
             if (beginMirrorSettingsTable("mirror_matching_settings")) {
                 mirrorSettingsRowLabel(trc("mirrors.target_color"));
+                if (activeMirrorColorPickerName != mirror.name) {
+                    activeMirrorColorPickerIndex = 0;
+                }
+                activeMirrorColorPickerName = mirror.name;
+                activeMirrorColorPickerIndex = std::clamp(activeMirrorColorPickerIndex, 0,
+                                                          (std::max)(0, static_cast<int>(mirror.colors.targetColors.size()) - 1));
                 int target_color_to_remove = -1;
+                const std::string mirrorColorPickerPopupId = std::string("mirror_target_color_picker##") + mirror.name;
+                const std::string mirrorColorPickerPopupTitle = tr("mirrors.color_picker") + "###" + mirrorColorPickerPopupId;
                 for (size_t j = 0; j < mirror.colors.targetColors.size(); ++j) {
                     ImGui::PushID(static_cast<int>(j));
 
@@ -222,6 +474,13 @@ if (BeginSelectableSettingsNestedTabItem(trc("tabs.mirrors"))) {
                         if (ImGui::Button("X##remove_target_color")) { target_color_to_remove = static_cast<int>(j); }
                     }
 
+                    ImGui::SameLine();
+                    if (ImGui::Button(trc("mirrors.pick_color"))) {
+                        activeMirrorColorPickerName = mirror.name;
+                        activeMirrorColorPickerIndex = static_cast<int>(j);
+                        openMirrorColorPickerPopup = true;
+                    }
+
                     ImGui::PopID();
                 }
 
@@ -235,9 +494,51 @@ if (BeginSelectableSettingsNestedTabItem(trc("tabs.mirrors"))) {
                     if (ImGui::Button(trc("mirrors.add_target_color"))) {
                         Color newColor = { 0.0f, 1.0f, 0.0f };
                         mirror.colors.targetColors.push_back(newColor);
+                        activeMirrorColorPickerName = mirror.name;
+                        activeMirrorColorPickerIndex = static_cast<int>(mirror.colors.targetColors.size()) - 1;
                         g_configIsDirty = true;
                         syncMirrorCaptureSettings();
                     }
+                }
+
+                if (openMirrorColorPickerPopup && activeMirrorColorPickerName == mirror.name) {
+                    ImGui::OpenPopup(mirrorColorPickerPopupTitle.c_str());
+                    openMirrorColorPickerPopup = false;
+                }
+
+                const ImGuiViewport* pickerViewport = ImGui::GetMainViewport();
+                const ImVec2 pickerMaxSize = pickerViewport != nullptr
+                    ? ImVec2(pickerViewport->WorkSize.x * 0.9f, pickerViewport->WorkSize.y * 0.9f)
+                    : ImVec2(FLT_MAX, FLT_MAX);
+                ImGui::SetNextWindowPos(GetSettingsGuiCenterPosition(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+                ImGui::SetNextWindowSizeConstraints(ImVec2(480.0f, 0.0f), pickerMaxSize);
+                if (ImGui::BeginPopupModal(mirrorColorPickerPopupTitle.c_str(), NULL,
+                                           ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
+                    MarkMirrorColorPickerPopupActive();
+                    bool closeColorPickerPopup = false;
+                    if (ImGui::IsKeyPressed(ImGuiKey_Escape) && !mirrorColorPickerEscapeRequiresRelease) {
+                        mirrorColorPickerEscapeRequiresRelease = true;
+                        closeColorPickerPopup = true;
+                    }
+
+                    if (!closeColorPickerPopup) {
+                        ImGui::Separator();
+                        const bool pickedColor = drawMirrorTargetColorPickerPreview(activeMirrorColorPickerIndex);
+                        if (pickedColor) {
+                            mirrorColorPickerEscapeRequiresRelease = true;
+                            closeColorPickerPopup = true;
+                        }
+                        ImGui::Separator();
+                        if (ImGui::Button(trc("button.cancel"), ImVec2(120, 0))) {
+                            mirrorColorPickerEscapeRequiresRelease = true;
+                            closeColorPickerPopup = true;
+                        }
+                    }
+
+                    if (closeColorPickerPopup) {
+                        ImGui::CloseCurrentPopup();
+                    }
+                    ImGui::EndPopup();
                 }
 
                 mirrorSettingsRowLabel(trc("mirrors.color_sensitivity"));

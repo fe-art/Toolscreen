@@ -59,6 +59,7 @@ AltBindState s_altHotkeyToBind = { -1, -1 };
 static constexpr uint64_t kBindingActiveGraceMs = 250;
 static std::atomic<uint64_t> s_lastHotkeyBindingMarkMs{ 0 };
 static std::atomic<uint64_t> s_lastRebindBindingMarkMs{ 0 };
+static std::atomic<uint64_t> s_lastMirrorColorPickerPopupMarkMs{ 0 };
 static std::atomic<bool> s_hotkeyBindingUiActive{ false };
 static std::atomic<bool> s_rebindBindingUiActive{ false };
 
@@ -399,6 +400,12 @@ bool IsRebindBindingActive() {
     return (NowMs_TickCount64() - last) <= kBindingActiveGraceMs;
 }
 
+bool IsMirrorColorPickerPopupActive() {
+    const uint64_t last = s_lastMirrorColorPickerPopupMarkMs.load(std::memory_order_acquire);
+    if (!g_showGui.load(std::memory_order_acquire) || last == 0) return false;
+    return (NowMs_TickCount64() - last) <= kBindingActiveGraceMs;
+}
+
 void ResetTransientBindingUiState() {
     s_hotkeyBindingUiActive.store(false, std::memory_order_release);
     s_rebindBindingUiActive.store(false, std::memory_order_release);
@@ -407,6 +414,10 @@ void ResetTransientBindingUiState() {
 void MarkRebindBindingActive() {
     s_rebindBindingUiActive.store(true, std::memory_order_release);
     s_lastRebindBindingMarkMs.store(NowMs_TickCount64(), std::memory_order_release);
+}
+
+void MarkMirrorColorPickerPopupActive() {
+    s_lastMirrorColorPickerPopupMarkMs.store(NowMs_TickCount64(), std::memory_order_release);
 }
 
 void MarkHotkeyBindingActive() {

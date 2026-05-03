@@ -1303,6 +1303,7 @@ InputHandlerResult HandleGuiToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     if (isEscape && g_imguiAnyItemActive.load(std::memory_order_acquire)) { is_closing = false; }
     if (isEscape && IsHotkeyBindingActive()) { is_closing = false; }
     if (isEscape && IsRebindBindingActive()) { is_closing = false; }
+    if (isEscape && IsMirrorColorPickerPopupActive()) { is_closing = false; }
 
     if (is_closing) {
         CloseSettingsGuiWindow();
