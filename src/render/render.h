@@ -84,7 +84,7 @@ struct ImageRenderShaderLocs {
 };
 
 struct PassthroughShaderLocs {
-    GLint screenTexture, sourceRect, opacity;
+    GLint screenTexture, sourceRect, opacity, sourceTexelSize, sourcePixelSize, snapToSourcePixels;
 };
 
 #define MAX_GRADIENT_STOPS 8

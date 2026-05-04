@@ -122,13 +122,14 @@ bool TryComputeVirtualCameraSyncBytes(int width, int height, size_t& yBytes, siz
 
 class ScopedTextureFilterGuard {
 public:
-    ScopedTextureFilterGuard(GLuint texture, GLint minFilter, GLint magFilter)
-        : texture_(texture) {
+    ScopedTextureFilterGuard(GLuint texture, GLint minFilter, GLint magFilter, GLenum textureUnit = GL_TEXTURE0,
+                             bool clearBoundSampler = false)
+        : texture_(texture), textureUnit_(textureUnit) {
         if (texture_ == 0) { return; }
 
         glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture_);
-        if (previousActiveTexture_ != GL_TEXTURE0) {
-            glActiveTexture(GL_TEXTURE0);
+        if (previousActiveTexture_ != static_cast<GLint>(textureUnit_)) {
+            glActiveTexture(textureUnit_);
         }
 
         glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTextureBinding_);
@@ -147,7 +148,15 @@ public:
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, magFilter);
         }
 
-        if (previousActiveTexture_ != GL_TEXTURE0) {
+        if (clearBoundSampler && (GLEW_VERSION_3_3 || GLEW_ARB_sampler_objects)) {
+            glGetIntegerv(GL_SAMPLER_BINDING, &previousSampler_);
+            if (previousSampler_ != 0) {
+                glBindSampler(static_cast<GLuint>(textureUnit_ - GL_TEXTURE0), 0);
+                restoreSampler_ = true;
+            }
+        }
+
+        if (previousActiveTexture_ != static_cast<GLint>(textureUnit_)) {
             glActiveTexture(previousActiveTexture_);
         }
 
@@ -159,8 +168,8 @@ public:
 
         GLint currentActiveTexture = 0;
         glGetIntegerv(GL_ACTIVE_TEXTURE, &currentActiveTexture);
-        if (currentActiveTexture != GL_TEXTURE0) {
-            glActiveTexture(GL_TEXTURE0);
+        if (currentActiveTexture != static_cast<GLint>(textureUnit_)) {
+            glActiveTexture(textureUnit_);
         }
 
         GLint currentTextureBinding = 0;
@@ -172,22 +181,28 @@ public:
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, previousMinFilter_);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, previousMagFilter_);
 
+        if (restoreSampler_) {
+            glBindSampler(static_cast<GLuint>(textureUnit_ - GL_TEXTURE0), static_cast<GLuint>(previousSampler_));
+        }
         if (restoreTextureBinding_) {
             BindTextureDirect(GL_TEXTURE_2D, static_cast<GLuint>(previousTextureBinding_));
         }
 
-        if (currentActiveTexture != GL_TEXTURE0) {
+        if (currentActiveTexture != static_cast<GLint>(textureUnit_)) {
             glActiveTexture(currentActiveTexture);
         }
     }
 
 private:
     GLuint texture_ = 0;
+    GLenum textureUnit_ = GL_TEXTURE0;
     GLint previousActiveTexture_ = GL_TEXTURE0;
     GLint previousTextureBinding_ = 0;
     GLint previousMinFilter_ = GL_NEAREST;
     GLint previousMagFilter_ = GL_NEAREST;
+    GLint previousSampler_ = 0;
     bool restoreTextureBinding_ = false;
+    bool restoreSampler_ = false;
     bool active_ = false;
 };
 
@@ -1181,8 +1196,10 @@ const char* passthrough_vert_shader = R"(#version 330 core
 layout(location = 0) in vec2 aPos;
 layout(location = 1) in vec2 aTexCoord;
 out vec2 TexCoord;
+out vec2 BaseTexCoord;
 void main() {
     gl_Position = vec4(aPos, 0.0, 1.0);
+    BaseTexCoord = aTexCoord;
     TexCoord = aTexCoord;
 })";
 
@@ -1190,10 +1207,12 @@ const char* filter_vert_shader = R"(#version 330 core
 layout(location = 0) in vec2 aPos;
 layout(location = 1) in vec2 aTexCoord;
 out vec2 TexCoord;
+out vec2 BaseTexCoord;
 uniform vec4 u_sourceRect;
 
 void main() {
     gl_Position = vec4(aPos, 0.0, 1.0);
+    BaseTexCoord = aTexCoord;
     TexCoord = u_sourceRect.xy + aTexCoord * u_sourceRect.zw;
 })";
 
@@ -1478,11 +1497,23 @@ void main() {
 const char* passthrough_frag_shader = R"(#version 330 core
 out vec4 FragColor;
 in vec2 TexCoord;
+in vec2 BaseTexCoord;
 uniform sampler2D screenTexture;
+uniform vec4 u_sourceRect;
 uniform float u_opacity;
+uniform vec2 u_sourceTexelSize;
+uniform vec2 u_sourcePixelSize;
+uniform int u_snapToSourcePixels;
 
 void main() {
-    FragColor = vec4(texture(screenTexture, TexCoord).rgb, u_opacity);
+    vec2 sampleCoord = TexCoord;
+    if (u_snapToSourcePixels != 0) {
+        vec2 sourcePixel = floor(BaseTexCoord * u_sourcePixelSize);
+        vec2 sourcePixelMax = max(u_sourcePixelSize - vec2(1.0), vec2(0.0));
+        sourcePixel = clamp(sourcePixel, vec2(0.0), sourcePixelMax);
+        sampleCoord = u_sourceRect.xy + (sourcePixel + vec2(0.5)) * u_sourceTexelSize;
+    }
+    FragColor = vec4(texture(screenTexture, sampleCoord).rgb, u_opacity);
 })";
 
 const char* gradient_frag_shader = R"(#version 330 core
@@ -1689,6 +1720,9 @@ void InitializeShaders() {
     g_passthroughShaderLocs.screenTexture = glGetUniformLocation(g_passthroughProgram, "screenTexture");
     g_passthroughShaderLocs.sourceRect = glGetUniformLocation(g_passthroughProgram, "u_sourceRect");
     g_passthroughShaderLocs.opacity = glGetUniformLocation(g_passthroughProgram, "u_opacity");
+    g_passthroughShaderLocs.sourceTexelSize = glGetUniformLocation(g_passthroughProgram, "u_sourceTexelSize");
+    g_passthroughShaderLocs.sourcePixelSize = glGetUniformLocation(g_passthroughProgram, "u_sourcePixelSize");
+    g_passthroughShaderLocs.snapToSourcePixels = glGetUniformLocation(g_passthroughProgram, "u_snapToSourcePixels");
 
     g_gradientShaderLocs.numStops = glGetUniformLocation(g_gradientProgram, "u_numStops");
     g_gradientShaderLocs.stopColors = glGetUniformLocation(g_gradientProgram, "u_stopColors");
@@ -1725,6 +1759,9 @@ void InitializeShaders() {
     glUseProgram(g_passthroughProgram);
     glUniform1i(g_passthroughShaderLocs.screenTexture, 0);
     glUniform1f(g_passthroughShaderLocs.opacity, 1.0f);
+    glUniform2f(g_passthroughShaderLocs.sourceTexelSize, 1.0f, 1.0f);
+    glUniform2f(g_passthroughShaderLocs.sourcePixelSize, 1.0f, 1.0f);
+    glUniform1i(g_passthroughShaderLocs.snapToSourcePixels, 0);
 
     glUseProgram(g_virtualCameraNv12Program);
     glUniform1i(g_virtualCameraNv12ShaderLocs.screenTexture, 0);
@@ -3207,14 +3244,27 @@ static void LogEyeZoomFramebufferStatusThrottled(const char* stage, GLuint textu
 }
 
 static void DrawPassthroughTextureRegion(GLuint textureId, const float sourceRect[4], int dstLeft, int dstBottom, int dstRight,
-                                         int dstTop, int fullW, int fullH, float opacity) {
+                                         int dstTop, int fullW, int fullH, float opacity, bool snapToSourcePixels = false,
+                                         int textureWidth = 0, int textureHeight = 0, int sourcePixelWidth = 0,
+                                         int sourcePixelHeight = 0) {
     if (textureId == 0 || dstRight <= dstLeft || dstTop <= dstBottom || fullW <= 0 || fullH <= 0) { return; }
+
+    ScopedTextureFilterGuard samplingGuard(textureId, GL_NEAREST, GL_NEAREST, GL_TEXTURE0, true);
+    const bool usePixelSnapping =
+        snapToSourcePixels && textureWidth > 0 && textureHeight > 0 && sourcePixelWidth > 0 && sourcePixelHeight > 0;
 
     glUseProgram(g_passthroughProgram);
     glActiveTexture(GL_TEXTURE0);
     BindTextureDirect(GL_TEXTURE_2D, textureId);
     glUniform4f(g_passthroughShaderLocs.sourceRect, sourceRect[0], sourceRect[1], sourceRect[2], sourceRect[3]);
     glUniform1f(g_passthroughShaderLocs.opacity, opacity);
+    glUniform2f(g_passthroughShaderLocs.sourceTexelSize,
+                usePixelSnapping ? 1.0f / static_cast<float>(textureWidth) : 1.0f,
+                usePixelSnapping ? 1.0f / static_cast<float>(textureHeight) : 1.0f);
+    glUniform2f(g_passthroughShaderLocs.sourcePixelSize,
+                usePixelSnapping ? static_cast<float>(sourcePixelWidth) : 1.0f,
+                usePixelSnapping ? static_cast<float>(sourcePixelHeight) : 1.0f);
+    glUniform1i(g_passthroughShaderLocs.snapToSourcePixels, usePixelSnapping ? 1 : 0);
 
     glBindVertexArray(g_fullscreenQuadVAO);
     const int regionW = dstRight - dstLeft;
@@ -5276,6 +5326,9 @@ static void DrawFullscreenPassthroughTexture(GLuint textureId, float opacity) {
     BindTextureDirect(GL_TEXTURE_2D, textureId);
     glUniform4f(g_passthroughShaderLocs.sourceRect, sourceRect[0], sourceRect[1], sourceRect[2], sourceRect[3]);
     glUniform1f(g_passthroughShaderLocs.opacity, opacity);
+    glUniform2f(g_passthroughShaderLocs.sourceTexelSize, 1.0f, 1.0f);
+    glUniform2f(g_passthroughShaderLocs.sourcePixelSize, 1.0f, 1.0f);
+    glUniform1i(g_passthroughShaderLocs.snapToSourcePixels, 0);
     glBindVertexArray(g_fullscreenQuadVAO);
     glDisable(GL_BLEND);
     glDrawArrays(GL_TRIANGLES, 0, 6);
@@ -5289,6 +5342,9 @@ static void DrawFullscreenPassthroughTexture(GLuint textureId, const float sourc
     BindTextureDirect(GL_TEXTURE_2D, textureId);
     glUniform4f(g_passthroughShaderLocs.sourceRect, sourceRect[0], sourceRect[1], sourceRect[2], sourceRect[3]);
     glUniform1f(g_passthroughShaderLocs.opacity, opacity);
+    glUniform2f(g_passthroughShaderLocs.sourceTexelSize, 1.0f, 1.0f);
+    glUniform2f(g_passthroughShaderLocs.sourcePixelSize, 1.0f, 1.0f);
+    glUniform1i(g_passthroughShaderLocs.snapToSourcePixels, 0);
     glBindVertexArray(g_fullscreenQuadVAO);
     glDisable(GL_BLEND);
     glDrawArrays(GL_TRIANGLES, 0, 6);
@@ -5795,6 +5851,8 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
     int dstRight = zoomX + zoomOutputWidth;
     int dstBottom = zoomY_gl;
     int dstTop = zoomY_gl + zoomOutputHeight;
+    const int sourcePixelWidth = srcRight - srcLeft;
+    const int sourcePixelHeight = srcTop - srcBottom;
 
     LogEyeZoomDebugThrottled("render_state",
                              std::string("mode=") + (useSnapshot ? "snapshot" : "live") + " source=" + selectedCaptureSource +
@@ -5939,7 +5997,8 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
             glBindFramebuffer(GL_FRAMEBUFFER, s_eyeZoomTempFBO);
             glDisable(GL_BLEND);
             DrawPassthroughTextureRegion(gameTextureToUse, sourceRect, 0, 0, s_eyeZoomTempWidth, s_eyeZoomTempHeight,
-                                         s_eyeZoomTempWidth, s_eyeZoomTempHeight, 1.0f);
+                                         s_eyeZoomTempWidth, s_eyeZoomTempHeight, 1.0f, true, gameTextureW, gameTextureH,
+                                         sourcePixelWidth, sourcePixelHeight);
             displayTexture = s_eyeZoomTempTexture;
             displaySourceRect = fullSourceRect;
             LogEyeZoomDebugThrottled("present_path",
@@ -5967,7 +6026,8 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
             glDisable(GL_BLEND);
         }
         DrawPassthroughTextureRegion(displayTexture, displaySourceRect, dstLeft, dstBottom, dstRight, dstTop, fullW, fullH,
-                                     opacity);
+                                     opacity, displayTexture == gameTextureToUse, gameTextureW, gameTextureH,
+                                     sourcePixelWidth, sourcePixelHeight);
         if (opacity >= 1.0f && s.fb != 0) {
             ForceOpaqueAlphaInCurrentDrawFbo(dstLeft, dstBottom, zoomOutputWidth, zoomOutputHeight);
         }
@@ -5976,7 +6036,9 @@ void handleEyeZoomMode(const GLState& s, const EyeZoomConfig& zoomConfig, int fu
             glBindFramebuffer(GL_FRAMEBUFFER, s_eyeZoomSnapshotFBO);
             glDisable(GL_BLEND);
             DrawPassthroughTextureRegion(displayTexture, displaySourceRect, 0, 0, s_eyeZoomSnapshotWidth, s_eyeZoomSnapshotHeight,
-                                         s_eyeZoomSnapshotWidth, s_eyeZoomSnapshotHeight, 1.0f);
+                                         s_eyeZoomSnapshotWidth, s_eyeZoomSnapshotHeight, 1.0f,
+                                         displayTexture == gameTextureToUse, gameTextureW, gameTextureH, sourcePixelWidth,
+                                         sourcePixelHeight);
             s_eyeZoomSnapshotValid = true;
         } else {
             s_eyeZoomSnapshotValid = false;
