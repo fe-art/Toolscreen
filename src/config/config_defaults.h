@@ -218,6 +218,7 @@ constexpr bool KEY_REBINDS_ALLOW_SYSTEM_ALT_TAB = false;
 constexpr int KEY_REBINDS_INDICATOR_MODE = 0;
 constexpr int KEY_REBINDS_INDICATOR_POSITION = 1;
 constexpr bool KEY_REBINDS_ALLOW_SYSTEM_ALT_F4 = false;
+constexpr bool KEY_REBINDS_SUPPRESS_CAPS_LOCK_TOGGLE = false;
 inline std::vector<DWORD> GetDefaultKeyRebindsToggleHotkey() { return {}; }
 
 constexpr int DEFAULT_CONFIG_VERSION = 5;

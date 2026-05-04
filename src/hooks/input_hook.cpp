@@ -3522,6 +3522,17 @@ static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM w
                                                   bool isMouseButton, bool isKeyDown, bool isAutoRepeatKeyDown,
                                                   const KeyRebind& rebind);
 
+static bool IsCapsLockSuppressionEnabled() {
+    if (g_isShuttingDown.load(std::memory_order_acquire)) return false;
+    if (!DoesSubclassedWindowOwnForegroundInput()) return false;
+    if (!g_gameWindowActive.load(std::memory_order_acquire)) return false;
+    if (IsHotkeyBindingActive() || IsRebindBindingActive()) return false;
+
+    const auto cfg = GetConfigSnapshot();
+    if (!cfg) return false;
+    return cfg->keyRebinds.suppressCapsLockToggle;
+}
+
 static bool ShouldSuppressLowLevelMenuModifierKey(DWORD rawVk) {
     if (!IsDeepSuppressionEligibleSourceVk(rawVk)) return false;
     if (g_isShuttingDown.load(std::memory_order_acquire)) return false;
@@ -3620,7 +3631,8 @@ static LRESULT CALLBACK LowLevelKeyboardProc(int code, WPARAM wParam, LPARAM lPa
         return CallNextHookEx(s_lowLevelKeyboardHook, code, wParam, lParam);
     }
 
-    if (!ShouldSuppressLowLevelMenuModifierKey(rawVk)) {
+    const bool suppressCapsLock = (rawVk == VK_CAPITAL) && IsCapsLockSuppressionEnabled();
+    if (!suppressCapsLock && !ShouldSuppressLowLevelMenuModifierKey(rawVk)) {
         return CallNextHookEx(s_lowLevelKeyboardHook, code, wParam, lParam);
     }
 
@@ -3748,8 +3760,9 @@ static void UninstallLowLevelKeyboardHook() {
 static void UpdateLowLevelKeyboardHookInstalledState() {
     const bool needsDeepSuppression = HasDeepSuppressionEligibleEnabledRebind();
     const bool needsExactModifierTracking = HasExactModifierTrackingNeed();
+    const bool needsCapsLockSuppression = IsCapsLockSuppressionEnabled();
 
-    if (g_isShuttingDown.load(std::memory_order_acquire) || (!needsDeepSuppression && !needsExactModifierTracking)) {
+    if (g_isShuttingDown.load(std::memory_order_acquire) || (!needsDeepSuppression && !needsExactModifierTracking && !needsCapsLockSuppression)) {
         const HWND targetHwnd = g_subclassedHwnd.load(std::memory_order_acquire);
         ReleaseSuppressedLowLevelRebindKeys(targetHwnd);
         ResetLowLevelExactModifierState();

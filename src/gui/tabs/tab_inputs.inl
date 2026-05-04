@@ -466,6 +466,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                     trc("inputs.resolve_rebind_targets_for_hotkeys"),
                     trc("inputs.allow_system_alt_tab"),
                     trc("inputs.allow_system_alt_f4"),
+                    trc("inputs.suppress_caps_lock_toggle"),
                     trc("inputs.rebind_indicator"),
                     trc("inputs.indicator_position"),
                     trc("inputs.rebind_toggle_hotkey"),
@@ -585,6 +586,12 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
             }
             ImGui::SameLine();
             HelpMarker(trc("inputs.tooltip.allow_system_alt_f4"));
+
+            if (ImGui::Checkbox(trc("inputs.suppress_caps_lock_toggle"), &g_config.keyRebinds.suppressCapsLockToggle)) {
+                g_configIsDirty = true;
+            }
+            ImGui::SameLine();
+            HelpMarker(trc("inputs.tooltip.suppress_caps_lock_toggle"));
 
             {
                 const char* modeLabels[] = {
