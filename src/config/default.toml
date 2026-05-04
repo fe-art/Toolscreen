@@ -236,6 +236,7 @@ enabled = false
 resolveRebindTargetsForHotkeys = true
 allowSystemAltTab = false
 allowSystemAltF4 = false
+suppressCapsLockToggle = false
 indicatorMode = 0
 toggleHotkey = [ ]
 layoutExtraKeys = [ ]
