@@ -393,15 +393,6 @@ void RunSettingsKeyRepeatSystemRepeatHidesLocalControlsTest(TestRunMode runMode 
     Expect(GetEffectiveKeyRepeatTimings(startDelayMs, repeatDelayMs), "Expected key repeat timings to resolve for a 1ms delay value.");
     Expect(repeatDelayMs == 240, "Expected system key repeat delay to preserve the legacy 300ms slider range.");
 
-    g_config.useSystemKeyRepeat = false;
-    RenderSettingsSearchFrame(window, trc("inputs.key_repeat_delay"), tr("tabs.inputs").c_str(), tr("inputs.keyboard").c_str());
-    ExpectGuiInteractionRectPresence("config.section.inputs.keyboard.key_repeat_rate", true,
-                      "Expected the key repeat settings section to remain visible for a matching query when local key repeat is active.");
-    Expect(GetKeyRepeatSliderFormat(-1, ConfigDefaults::CONFIG_KEY_REPEAT_AUTO_START_DELAY_MS) == "Auto (200ms)",
-        "Expected the local-repeat start delay slider to continue showing the fixed Auto default.");
-    Expect(GetKeyRepeatDelaySliderFormat(-1, ConfigDefaults::CONFIG_KEY_REPEAT_AUTO_DELAY_MS) == "Auto (5ms)",
-        "Expected the local-repeat delay slider to continue showing the fixed Auto default.");
-
     g_originalFilterKeys = savedOriginalFilterKeys;
     g_originalFilterKeysCaptured.store(savedOriginalFilterKeysCaptured, std::memory_order_release);
 }

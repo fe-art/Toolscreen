@@ -390,8 +390,8 @@ void RunConfigLoadLegacyVersionUpgradeTest(TestRunMode runMode = TestRunMode::Au
                           Expect(g_config.configVersion == GetConfigVersion(), "Expected legacy config version to upgrade to the current version.");
                           Expect(g_config.disableHookChaining,
                                  "Expected legacy disableHookChaining to remain preserved on the 1.2.1 branch.");
-                             Expect(!g_config.useSystemKeyRepeat,
-                                 "Expected legacy configs without the useSystemKeyRepeat flag to default to local repeat handling.");
+                             Expect(g_config.useSystemKeyRepeat,
+                                 "Expected legacy configs without the useSystemKeyRepeat flag to load with system key repeat forced on.");
                              Expect(g_config.keyRepeatStartDelay == 100,
                                  "Expected legacy non-auto keyRepeatStartDelay to normalize to the minimum supported value.");
                              Expect(g_config.keyRepeatDelay == ConfigDefaults::CONFIG_KEY_REPEAT_DELAY,
@@ -419,8 +419,8 @@ void RunConfigLoadClampGlobalValuesTest(TestRunMode runMode = TestRunMode::Autom
                           Expect(g_config.obsFramerate == 120, "Expected obsFramerate to clamp to the configured maximum.");
                          Expect(g_config.keyRepeatStartDelay == 100,
                              "Expected keyRepeatStartDelay to clamp to the minimum supported non-auto value.");
-                         Expect(g_config.keyRepeatDelay == 50,
-                             "Expected keyRepeatDelay to clamp to the configured maximum.");
+                         Expect(g_config.keyRepeatDelay == 300,
+                             "Expected keyRepeatDelay to clamp to the system-repeat maximum.");
                           Expect(g_config.cursors.title.cursorSize == ConfigDefaults::CURSOR_MAX_SIZE,
                                  "Expected title cursor size to clamp to CURSOR_MAX_SIZE.");
                           Expect(g_config.cursors.wall.cursorSize == ConfigDefaults::CURSOR_MIN_SIZE,

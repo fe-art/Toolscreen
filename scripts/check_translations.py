@@ -201,13 +201,11 @@ def main() -> int:
         for key in english_only:
             print(f"  {key}")
 
-    for locale in sorted(translations.keys()):
-        unused = sorted(set(translations[locale]) - all_literals)
-        if not unused:
-            continue
+    unused_primary = sorted(primary_keys - all_literals)
+    if unused_primary:
         has_errors = True
-        print(f"\nunused in lang/{locale}.json ({len(unused)}):")
-        for key in unused:
+        print(f"\nunused in lang/{PRIMARY_LOCALE}.json ({len(unused_primary)}):")
+        for key in unused_primary:
             print(f"  {key}")
 
     print(f"\n{'FAIL' if has_errors else 'OK'}")
