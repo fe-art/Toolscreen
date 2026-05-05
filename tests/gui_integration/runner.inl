@@ -166,6 +166,7 @@ const auto& GetTestCaseDefinitions() {
         {"settings-gui-basic", &RunSettingsGuiBasicTest},
         {"settings-gui-advanced", &RunSettingsGuiAdvancedTest},
         {"settings-mouse-translation-prefers-live-viewport", &RunSettingsMouseTranslationPrefersLiveViewportTest},
+        {"mode-switch-invalidates-latest-viewport-size", &RunModeSwitchInvalidatesLatestViewportSizeTest},
         {"settings-search-subcategory-filtering", &RunSettingsSearchSubcategoryFilteringTest},
         {"settings-search-specific-options", &RunSettingsSearchSpecificOptionsTest},
         {"settings-search-reset-on-close", &RunSettingsSearchResetOnCloseTest},

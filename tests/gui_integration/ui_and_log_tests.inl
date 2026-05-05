@@ -625,6 +625,98 @@ void ExpectPublishedViewportMatchesMode(const std::string& expectedModeId, const
         }
     }
 
+        void RunModeSwitchInvalidatesLatestViewportSizeTest(TestRunMode runMode = TestRunMode::Automated) {
+            (void)runMode;
+
+            DummyWindow window(kWindowWidth, kWindowHeight, false);
+            const std::filesystem::path root = PrepareCaseDirectory("mode_switch_invalidates_latest_viewport_size");
+            ResetGlobalTestState(root);
+
+            RECT clientRect{};
+            Expect(GetClientRect(window.hwnd(), &clientRect) != FALSE,
+                "Expected mode-switch viewport invalidation test window to expose a client rect.");
+            const int clientWidth = clientRect.right - clientRect.left;
+            const int clientHeight = clientRect.bottom - clientRect.top;
+            Expect(clientWidth > 0 && clientHeight > 0,
+                "Expected mode-switch viewport invalidation test window to expose a positive client size.");
+
+            Config snapshot;
+            Expect(LoadEmbeddedDefaultConfig(snapshot),
+                "LoadEmbeddedDefaultConfig should succeed for the mode-switch viewport invalidation fixture.");
+
+            snapshot.configVersion = GetConfigVersion();
+            snapshot.modes.clear();
+            snapshot.defaultMode = "Fullscreen";
+
+            ModeConfig fullscreenMode;
+            fullscreenMode.id = "Fullscreen";
+            fullscreenMode.width = 1600;
+            fullscreenMode.height = 900;
+            fullscreenMode.manualWidth = 1600;
+            fullscreenMode.manualHeight = 900;
+            fullscreenMode.stretch.enabled = true;
+            fullscreenMode.stretch.x = 0;
+            fullscreenMode.stretch.y = 0;
+            fullscreenMode.stretch.width = 1600;
+            fullscreenMode.stretch.height = 900;
+            snapshot.modes.push_back(fullscreenMode);
+
+            ModeConfig previousMode;
+            previousMode.id = "MouseTranslate";
+            previousMode.width = 800;
+            previousMode.height = 600;
+            previousMode.manualWidth = 800;
+            previousMode.manualHeight = 600;
+            snapshot.modes.push_back(previousMode);
+
+            g_config = snapshot;
+            g_configLoaded.store(true, std::memory_order_release);
+            PublishConfigSnapshot();
+            PublishCurrentModeForTests("MouseTranslate");
+
+            {
+             ScopedCursorVisibilityOverride cursorVisible(true);
+             ScopedLatestGameViewportSizeOverride staleViewport(1280, 720);
+
+             g_showGui.store(false, std::memory_order_release);
+
+             Expect(SwitchToMode("Fullscreen", "test mode switch invalidates viewport", /*forceCut=*/true),
+                 "Expected mode-switch viewport invalidation regression to switch to Fullscreen.");
+
+             int viewportAfterSwitchW = 0;
+             int viewportAfterSwitchH = 0;
+             Expect(!GetLatestGameViewportSize(viewportAfterSwitchW, viewportAfterSwitchH),
+                 "Expected SwitchToMode to invalidate the previous mode's live viewport size.");
+
+             ModeViewportInfo resolvedViewport;
+             Expect(ResolvePresentedGameViewport(resolvedViewport),
+                 "Expected post-switch mouse translation regression to resolve the presented viewport.");
+             Expect(resolvedViewport.width > 0 && resolvedViewport.height > 0,
+                 "Expected post-switch mouse translation regression to resolve positive viewport dimensions.");
+
+             const int mouseClientX = clientWidth / 2;
+             const int mouseClientY = clientHeight / 2;
+             const int expectedTranslatedX = static_cast<int>(static_cast<float>(mouseClientX) *
+                 (static_cast<float>(resolvedViewport.width) / static_cast<float>(clientWidth)));
+             const int expectedTranslatedY = static_cast<int>(static_cast<float>(mouseClientY) *
+                 (static_cast<float>(resolvedViewport.height) / static_cast<float>(clientHeight)));
+
+             LPARAM translatedLParam = MAKELPARAM(mouseClientX, mouseClientY);
+             const InputHandlerResult result = HandleMouseCoordinateTranslationPhase(window.hwnd(), WM_MOUSEMOVE, 0, translatedLParam);
+             const int translatedX = static_cast<int>(static_cast<short>(LOWORD(translatedLParam)));
+             const int translatedY = static_cast<int>(static_cast<short>(HIWORD(translatedLParam)));
+
+             Expect(!result.consumed,
+                 "Expected post-switch mouse translation to adjust WM_MOUSEMOVE in-place without consuming the message.");
+             Expect(translatedX == expectedTranslatedX,
+                 "Expected post-switch mouse translation to use the resolved post-switch viewport width instead of a stale pre-switch viewport width.");
+             Expect(translatedY == expectedTranslatedY,
+                 "Expected post-switch mouse translation to use the resolved post-switch viewport height instead of a stale pre-switch viewport height.");
+             Expect(translatedX != 640 || translatedY != 360,
+                 "Expected post-switch mouse translation to stop using the stale pre-switch live viewport size.");
+            }
+        }
+
 void RunProfileApplyFieldsRoundtripTest(TestRunMode runMode = TestRunMode::Automated) {
     (void)runMode;
     ResetProfileTestState("profile_apply_fields_roundtrip");

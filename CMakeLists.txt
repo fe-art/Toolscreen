@@ -1118,6 +1118,7 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     settings-gui-advanced
     settings-key-repeat-system-repeat-hides-local-controls
     settings-mouse-translation-prefers-live-viewport
+    mode-switch-invalidates-latest-viewport-size
     settings-search-subcategory-filtering
     settings-search-specific-options
     settings-search-reset-on-close

@@ -1741,6 +1741,9 @@ bool SwitchToMode(const std::string& newModeId, const std::string& source, bool 
                 "[MODE_SWITCH] Calling StartModeTransition with Game:" + GameTransitionTypeToString(toModeCopy.gameTransition) +
                     ", Overlay:" + OverlayTransitionTypeToString(toModeCopy.overlayTransition) +
                     ", Bg:" + BackgroundTransitionTypeToString(toModeCopy.backgroundTransition));
+    // The next real game glViewport after a mode switch must republish the live source size.
+    // Until then, input translation should resolve from the new mode snapshot instead of the prior mode's viewport.
+    InvalidateLatestGameViewportSize();
     StartModeTransition(currentMode, newModeId, fromWidth, fromHeight, fromX, fromY, toWidth, toHeight, toX, toY, toModeCopy);
     LogCategory("mode_switch", "[MODE_SWITCH] StartModeTransition completed");
 
