@@ -269,7 +269,11 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.general"))) {
                         modeConfig->stretch.height = safeMaxHeight;
                         if (g_currentModeId == modeId) {
                             HWND hwnd = g_minecraftHwnd.load();
-                            if (hwnd) { RequestWindowClientResize(hwnd, modeConfig->width, modeConfig->height, "gui:basic_fullscreen_width_slider"); }
+                            if (hwnd) {
+                                RetargetActiveModeTransition(*modeConfig);
+                                PublishGuiConfigSnapshot();
+                                RequestWindowClientResize(hwnd, modeConfig->width, modeConfig->height, "gui:basic_fullscreen_width_slider");
+                            }
                         }
                     }
                     g_configIsDirty = true;
@@ -312,7 +316,11 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.general"))) {
                         modeConfig->stretch.height = safeMaxHeight;
                         if (g_currentModeId == modeId) {
                             HWND hwnd = g_minecraftHwnd.load();
-                            if (hwnd) { RequestWindowClientResize(hwnd, modeConfig->width, modeConfig->height, "gui:basic_fullscreen_height_slider"); }
+                            if (hwnd) {
+                                RetargetActiveModeTransition(*modeConfig);
+                                PublishGuiConfigSnapshot();
+                                RequestWindowClientResize(hwnd, modeConfig->width, modeConfig->height, "gui:basic_fullscreen_height_slider");
+                            }
                         }
                     }
                     g_configIsDirty = true;
