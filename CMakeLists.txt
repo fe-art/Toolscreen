@@ -430,18 +430,12 @@ else()
 
     file(GENERATE
         OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/cmake/stage_prebuilt_liblogger_$<CONFIG>.cmake"
-        CONTENT "set(SOURCE_DLL \"${TOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH}\")\nset(SOURCE_PDB \"${TOOLSCREEN_PREBUILT_LIBLOGGER_PDB_PATH}\")\nset(SOURCE_DIR \"${TOOLSCREEN_PREBUILT_LIBLOGGER_DIR}\")\nset(FETCH_SCRIPT \"${TOOLSCREEN_FETCH_LIBLOGGER_SCRIPT_PATH}\")\nset(DEST_DLL \"${TOOLSCREEN_LIBLOGGER_ARTIFACT_DLL_PATH}\")\nset(DEST_PDB \"${TOOLSCREEN_LIBLOGGER_ARTIFACT_PDB_PATH}\")\nset(STAGE_PDB \"${TOOLSCREEN_STAGE_LIBLOGGER_PDB}\")\nget_filename_component(DEST_DIR \"\${DEST_DLL}\" DIRECTORY)\nfile(MAKE_DIRECTORY \"\${DEST_DIR}\")\nif((NOT EXISTS \"\${SOURCE_DLL}\") OR (STAGE_PDB AND NOT EXISTS \"\${SOURCE_PDB}\"))\n  if(NOT EXISTS \"\${FETCH_SCRIPT}\")\n    message(FATAL_ERROR \"Missing liblogger fetch script at '\${FETCH_SCRIPT}'\")\n  endif()\n  execute_process(COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File \"\${FETCH_SCRIPT}\" -DestinationDirectory \"\${SOURCE_DIR}\" RESULT_VARIABLE FETCH_RESULT)\n  if(NOT FETCH_RESULT EQUAL 0)\n    message(FATAL_ERROR \"Failed to download signed liblogger artifacts into '\${SOURCE_DIR}'\")\n  endif()\nendif()\nif(NOT EXISTS \"\${SOURCE_DLL}\")\n  message(FATAL_ERROR \"Expected prebuilt liblogger DLL at '\${SOURCE_DLL}'\")\nendif()\nexecute_process(COMMAND \"${CMAKE_COMMAND}\" -E copy_if_different \"\${SOURCE_DLL}\" \"\${DEST_DLL}\" RESULT_VARIABLE COPY_DLL_RESULT)\nif(NOT COPY_DLL_RESULT EQUAL 0)\n  message(FATAL_ERROR \"Failed to stage prebuilt liblogger DLL from '\${SOURCE_DLL}' to '\${DEST_DLL}'\")\nendif()\nif(STAGE_PDB)\n  if(NOT EXISTS \"\${SOURCE_PDB}\")\n    message(FATAL_ERROR \"Expected prebuilt liblogger PDB at '\${SOURCE_PDB}'\")\n  endif()\n  execute_process(COMMAND \"${CMAKE_COMMAND}\" -E copy_if_different \"\${SOURCE_PDB}\" \"\${DEST_PDB}\" RESULT_VARIABLE COPY_PDB_RESULT)\n  if(NOT COPY_PDB_RESULT EQUAL 0)\n    message(FATAL_ERROR \"Failed to stage prebuilt liblogger PDB from '\${SOURCE_PDB}' to '\${DEST_PDB}'\")\n  endif()\nendif()\n"
+            CONTENT "set(SOURCE_DLL \"${TOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH}\")\nset(SOURCE_PDB \"${TOOLSCREEN_PREBUILT_LIBLOGGER_PDB_PATH}\")\nset(SOURCE_DIR \"${TOOLSCREEN_PREBUILT_LIBLOGGER_DIR}\")\nset(FETCH_SCRIPT \"${TOOLSCREEN_FETCH_LIBLOGGER_SCRIPT_PATH}\")\nset(DEST_DLL \"${TOOLSCREEN_LIBLOGGER_ARTIFACT_DLL_PATH}\")\nset(DEST_PDB \"${TOOLSCREEN_LIBLOGGER_ARTIFACT_PDB_PATH}\")\nset(STAGE_PDB \"${TOOLSCREEN_STAGE_LIBLOGGER_PDB}\")\nget_filename_component(DEST_DIR \"\${DEST_DLL}\" DIRECTORY)\nfile(MAKE_DIRECTORY \"\${DEST_DIR}\")\nif(NOT EXISTS \"\${FETCH_SCRIPT}\")\n  message(FATAL_ERROR \"Missing liblogger fetch script at '\${FETCH_SCRIPT}'\")\nendif()\nexecute_process(COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File \"\${FETCH_SCRIPT}\" -DestinationDirectory \"\${SOURCE_DIR}\" RESULT_VARIABLE FETCH_RESULT)\nif(NOT FETCH_RESULT EQUAL 0)\n  message(FATAL_ERROR \"Failed to download signed liblogger artifacts into '\${SOURCE_DIR}'\")\nendif()\nif(NOT EXISTS \"\${SOURCE_DLL}\")\n  message(FATAL_ERROR \"Expected prebuilt liblogger DLL at '\${SOURCE_DLL}'\")\nendif()\nexecute_process(COMMAND \"${CMAKE_COMMAND}\" -E copy_if_different \"\${SOURCE_DLL}\" \"\${DEST_DLL}\" RESULT_VARIABLE COPY_DLL_RESULT)\nif(NOT COPY_DLL_RESULT EQUAL 0)\n  message(FATAL_ERROR \"Failed to stage prebuilt liblogger DLL from '\${SOURCE_DLL}' to '\${DEST_DLL}'\")\nendif()\nif(STAGE_PDB)\n  if(NOT EXISTS \"\${SOURCE_PDB}\")\n    message(FATAL_ERROR \"Expected prebuilt liblogger PDB at '\${SOURCE_PDB}'\")\n  endif()\n  execute_process(COMMAND \"${CMAKE_COMMAND}\" -E copy_if_different \"\${SOURCE_PDB}\" \"\${DEST_PDB}\" RESULT_VARIABLE COPY_PDB_RESULT)\n  if(NOT COPY_PDB_RESULT EQUAL 0)\n    message(FATAL_ERROR \"Failed to stage prebuilt liblogger PDB from '\${SOURCE_PDB}' to '\${DEST_PDB}'\")\n  endif()\nendif()\n"
     )
 
     set(TOOLSCREEN_LIBLOGGER_STAGE_DEPENDENCIES
         "${CMAKE_CURRENT_BINARY_DIR}/cmake/stage_prebuilt_liblogger_$<CONFIG>.cmake"
     )
-    if(EXISTS "${TOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH}")
-        list(APPEND TOOLSCREEN_LIBLOGGER_STAGE_DEPENDENCIES "${TOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH}")
-    endif()
-    if(TOOLSCREEN_STAGE_LIBLOGGER_PDB AND EXISTS "${TOOLSCREEN_PREBUILT_LIBLOGGER_PDB_PATH}")
-        list(APPEND TOOLSCREEN_LIBLOGGER_STAGE_DEPENDENCIES "${TOOLSCREEN_PREBUILT_LIBLOGGER_PDB_PATH}")
-    endif()
     if(EXISTS "${TOOLSCREEN_FETCH_LIBLOGGER_SCRIPT_PATH}")
         list(APPEND TOOLSCREEN_LIBLOGGER_STAGE_DEPENDENCIES "${TOOLSCREEN_FETCH_LIBLOGGER_SCRIPT_PATH}")
     endif()
@@ -453,18 +447,12 @@ else()
         list(APPEND TOOLSCREEN_LIBLOGGER_STAGE_BYPRODUCTS "${TOOLSCREEN_LIBLOGGER_ARTIFACT_PDB_PATH}")
     endif()
 
-    add_custom_command(
-        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/cmake/stage_prebuilt_liblogger_$<CONFIG>.stamp"
+    add_custom_target(toolscreen_stage_liblogger_artifacts
         BYPRODUCTS ${TOOLSCREEN_LIBLOGGER_STAGE_BYPRODUCTS}
         COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_BINARY_DIR}/cmake/stage_prebuilt_liblogger_$<CONFIG>.cmake"
-        COMMAND ${CMAKE_COMMAND} -E touch "${CMAKE_CURRENT_BINARY_DIR}/cmake/stage_prebuilt_liblogger_$<CONFIG>.stamp"
         DEPENDS ${TOOLSCREEN_LIBLOGGER_STAGE_DEPENDENCIES}
-        COMMENT "Staging prebuilt liblogger artifacts"
+        COMMENT "Fetching and staging prebuilt liblogger artifacts"
         VERBATIM
-    )
-
-    add_custom_target(toolscreen_stage_liblogger_artifacts
-        DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/cmake/stage_prebuilt_liblogger_$<CONFIG>.stamp"
     )
 
     set(TOOLSCREEN_LIBLOGGER_BUILD_DEPENDENCY toolscreen_stage_liblogger_artifacts)
