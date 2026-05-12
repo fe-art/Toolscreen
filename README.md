@@ -62,6 +62,19 @@ Hover over the `(?)` icons for tooltips explaining each setting.
 
 Double-click the Toolscreen installer (`.jar` or `.exe`) and select **Uninstall**.
 
+## Sponsors
+
+<table>
+  <tr>
+    <td width="48" align="center">
+      <img src="https://signpath.org/assets/favicon-50x50.png" alt="SignPath logo" width="24">
+    </td>
+    <td>
+      Free code signing on Windows provided by <a href="https://signpath.io/">SignPath.io</a>, certificate by <a href="https://signpath.org/">SignPath Foundation</a>.
+    </td>
+  </tr>
+</table>
+
 ## Code signing policy
 
 Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
