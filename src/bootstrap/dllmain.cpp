@@ -257,6 +257,7 @@ HANDLE g_resizeThread = NULL;
 std::atomic<bool> g_stopMonitoring{ false };
 std::atomic<bool> g_stopImageMonitoring{ false };
 std::wstring g_stateFilePath;
+std::wstring g_hermesAliveFilePath;
 std::atomic<bool> g_isStateOutputAvailable{ false };
 
 std::vector<DecodedImageData> g_decodedImagesQueue;
@@ -3484,8 +3485,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 
         WCHAR dir[MAX_PATH];
         if (GetCurrentDirectoryW(MAX_PATH, dir) > 0) {
-            g_stateFilePath = std::wstring(dir) + L"\\wpstateout.txt";
-            LogCategory("init", "State file path set to: " + WideToUtf8(g_stateFilePath));
+            g_stateFilePath = std::wstring(dir) + L"\\hermes\\state.json";
+            g_hermesAliveFilePath = std::wstring(dir) + L"\\hermes\\alive";
+            LogCategory("init", "Hermes state file path set to: " + WideToUtf8(g_stateFilePath));
 
             DWORD stateFileAttrs = GetFileAttributesW(g_stateFilePath.c_str());
             bool stateOutputAvailable = (stateFileAttrs != INVALID_FILE_ATTRIBUTES) && !(stateFileAttrs & FILE_ATTRIBUTE_DIRECTORY);
@@ -3493,7 +3495,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             if (!stateOutputAvailable) {
                 LogCategory(
                     "init",
-                    "WARNING: wpstateout.txt not found. Game-state hotkey restrictions will not apply until State Output is installed.");
+                    "WARNING: hermes/state.json not found. Game-state hotkey restrictions will not apply until Hermes is installed.");
             }
         } else {
             Log("FATAL: Could not get current directory for state file path.");

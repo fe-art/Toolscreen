@@ -305,6 +305,7 @@ extern std::mutex g_logFileMutex;
 extern std::wstring g_toolscreenPath;
 extern std::wstring g_modeFilePath;
 extern std::wstring g_stateFilePath;
+extern std::wstring g_hermesAliveFilePath;
 extern std::atomic<bool> g_isStateOutputAvailable;
 extern std::atomic<bool> g_stopMonitoring;
 extern std::atomic<bool> g_stopImageMonitoring;
