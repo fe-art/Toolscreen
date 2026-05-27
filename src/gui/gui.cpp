@@ -2925,12 +2925,13 @@ void RenderSettingsGUI() {
             float buttonWidth = ImGui::CalcTextSize(buttonLabel).x + ImGui::GetStyle().FramePadding.x * 2.0f;
             float iconSize = ImGui::GetFrameHeight();
             float margin = ImGui::GetStyle().ItemSpacing.x;
-            const float topBarY = 30.0f * scaleFactor;
+            ImVec2 savedCursor = ImGui::GetCursorPos();
+            // Anchor to the Basic/Advanced radio row (savedCursor), not a fixed Y, so the update banner shifts these down with the radios instead of overlapping.
+            const float topBarY = savedCursor.y;
             const float screenshotButtonX = ImGui::GetWindowContentRegionMax().x - buttonWidth;
             const float discordButtonX = screenshotButtonX - margin - iconSize;
             const float languageButtonX = discordButtonX - margin - iconSize;
             const float profileButtonX = languageButtonX - margin - iconSize;
-            ImVec2 savedCursor = ImGui::GetCursorPos();
 
             {
                 float activeColor[3] = { kDefaultProfileColor[0], kDefaultProfileColor[1], kDefaultProfileColor[2] };
