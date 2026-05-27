@@ -3682,11 +3682,13 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
     return TRUE;
 }
 
-// JVMTI agent entry point. The JVM calls this when Toolscreen.dll is loaded
-// via -agentpath:. Existing DllMain already ran (DLL_PROCESS_ATTACH) before the
-// JVM looks up this symbol, so initialization is already underway. Returning 0
-// just tells the JVM "valid agent, proceed."
+// DllMain already ran the real init; this just lets the JVM accept the DLL as an agent.
 extern "C" __declspec(dllexport) int Agent_OnLoad(void* /*vm*/, char* /*options*/, void* /*reserved*/) {
     Log("Loaded as JVMTI agent (-agentpath)");
+    // LibLogger is -agentpath'd first; if absent, return non-zero to abort JVM startup (Toolscreen must not run without it).
+    if (GetModuleHandleW(L"liblogger_x64.dll") == nullptr) {
+        Log("LibLogger not loaded; aborting JVM startup (Toolscreen requires LibLogger).");
+        return -1;
+    }
     return 0;
 }

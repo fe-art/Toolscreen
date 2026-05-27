@@ -133,6 +133,21 @@ jint DynamicGetCreatedJavaVMs(JavaVM **vmBuf, jsize bufLen, jsize *nVMs) {
     return ptr(vmBuf, bufLen, nVMs);
 }
 
+// A visible MC window is a JNI-free signal the VM is live; touching JNI/JVMTI before it crashes the half-built VM.
+std::atomic<bool> g_minecraftWindowReady(false);
+bool IsMinecraftWindowReady() {
+    if (g_minecraftWindowReady.load(std::memory_order_acquire)) {
+        return true;
+    }
+    bool hasWindow = false;
+    EnumWindows(EnumWindowsProc, reinterpret_cast<LPARAM>(&hasWindow));
+    if (hasWindow) {
+        g_minecraftWindowReady.store(true, std::memory_order_release);
+        return true;
+    }
+    return false;
+}
+
 // Function to attach thread with custom name via JNI
 // This must be called BEFORE any other JNI operations on the thread
 // Returns the JNIEnv for the attached thread, or nullptr on failure
@@ -146,7 +161,11 @@ JNIEnv* AttachThreadWithName(const std::string& threadName) {
         if (DynamicGetCreatedJavaVMs(&jvm, 1, &vm_count) != JNI_OK || vm_count == 0) {
             return nullptr;
         }
-        
+
+        if (!IsMinecraftWindowReady()) {
+            return nullptr;
+        }
+
         // Check if already attached
         jint getEnvResult = jvm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6);
         
@@ -595,11 +614,15 @@ void LogToMinecraft(const std::string& message) {
         if (DynamicGetCreatedJavaVMs(&jvm, 1, &vm_count) != JNI_OK || vm_count == 0) {
             return;
         }
-        
+
+        if (!IsMinecraftWindowReady()) {
+            return;
+        }
+
         // Try to get env first without attaching
         jint getEnvResult = jvm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6);
         bool needsDetach = false;
-        
+
         if (getEnvResult == JNI_EDETACHED) {
             if (jvm->AttachCurrentThread(reinterpret_cast<void**>(&env), nullptr) != JNI_OK) {
                 return;
@@ -860,12 +883,17 @@ void RunInitialScanOptimized() {
 
 void HandleLoadedModule(HMODULE hModule) {
     if (!hModule) return;
-    
+
+    // Pre-window we're still in the module-load storm; a thread per load here deadlocks the loader. The post-window initial scan re-covers everything skipped.
+    if (!g_minecraftWindowReady.load(std::memory_order_acquire)) {
+        return;
+    }
+
     // Check if Fairplay was already detected
     if (g_FairplayDetected) {
         return;
     }
-    
+
     WCHAR loadedPath[MAX_PATH];
     if (GetModuleFileNameW(hModule, loadedPath, MAX_PATH) == 0) {
         std::thread([]() {
@@ -938,6 +966,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 
         // Run initial scan in a separate thread (don't check in DllMain - can cause deadlock)
         std::thread([]() {
+            WaitForProcessWindow(); // block until the window before any JNI below
             AttachThreadWithName("LibLogger");
             RunInitialScanOptimized();
         }).detach();
@@ -948,4 +977,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         MH_Uninitialize();
     }
     return TRUE;
+}
+
+std::atomic<bool> g_LoadedAsJvmtiAgent(false);
+extern "C" JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* /*vm*/, char* /*options*/, void* /*reserved*/) {
+    g_LoadedAsJvmtiAgent.store(true); // side effect also stops /OPT:ICF folding this stub into an unrelated export
+    return JNI_OK;
 }

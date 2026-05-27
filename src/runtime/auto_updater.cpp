@@ -18,9 +18,12 @@
 #include <vector>
 #include <windows.h>
 #include <winhttp.h>
+#include <wintrust.h>
+#include <softpub.h>
 
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "Psapi.lib")
+#pragma comment(lib, "wintrust.lib")
 
 namespace toolscreen::auto_updater {
 
@@ -135,6 +138,32 @@ bool IsTrustedDownloadUrl(const std::string& url) {
         }
     }
     return false;
+}
+
+bool VerifyAuthenticodeSignature(const std::wstring& filePath) {
+    WINTRUST_FILE_INFO fileInfo{};
+    fileInfo.cbStruct = sizeof(fileInfo);
+    fileInfo.pcwszFilePath = filePath.c_str();
+
+    GUID action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+    WINTRUST_DATA wd{};
+    wd.cbStruct = sizeof(wd);
+    wd.dwUIChoice = WTD_UI_NONE;
+    wd.fdwRevocationChecks = WTD_REVOKE_NONE;
+    wd.dwUnionChoice = WTD_CHOICE_FILE;
+    wd.pFile = &fileInfo;
+    wd.dwStateAction = WTD_STATEACTION_VERIFY;
+    wd.dwProvFlags = WTD_SAFER_FLAG;
+
+    LONG status = WinVerifyTrust(static_cast<HWND>(INVALID_HANDLE_VALUE), &action, &wd);
+    wd.dwStateAction = WTD_STATEACTION_CLOSE;
+    WinVerifyTrust(static_cast<HWND>(INVALID_HANDLE_VALUE), &action, &wd);
+    return status == ERROR_SUCCESS;
+}
+
+// Rejects chars that break the quoted cmd.exe arg: '%' (env expansion), '"' (quote breakout).
+bool IsCmdSafePath(const std::wstring& p) {
+    return p.find(L'"') == std::wstring::npos && p.find(L'%') == std::wstring::npos;
 }
 
 bool IsNewerVersion(const std::string& tag, const std::string& current) {
@@ -260,6 +289,13 @@ void CheckAndDownload() {
         if (!out) { Log("[Updater] write to .pending failed"); return; }
     }
 
+    if (!VerifyAuthenticodeSignature(pending)) {
+        Log("[Updater] downloaded DLL failed Authenticode verification; discarding");
+        std::error_code ec;
+        std::filesystem::remove(std::filesystem::path(pending), ec);
+        return;
+    }
+
     {
         std::lock_guard<std::mutex> lock(g_stateMutex);
         g_pendingVersion = tag;
@@ -314,6 +350,12 @@ bool ApplyAndRelaunch() {
 
     if (!std::regex_match(instId, std::regex(R"([A-Za-z0-9._ -]+)"))) {
         Log(std::string("[Updater] refusing unsafe INST_ID: ") + instId);
+        g_applying.store(false, std::memory_order_release);
+        return false;
+    }
+
+    if (!IsCmdSafePath(pending) || !IsCmdSafePath(live) || !IsCmdSafePath(launcher)) {
+        Log("[Updater] refusing apply: a path contains characters unsafe for the relaunch command");
         g_applying.store(false, std::memory_order_release);
         return false;
     }
