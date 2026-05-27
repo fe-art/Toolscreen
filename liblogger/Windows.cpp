@@ -1453,3 +1453,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
     }
     return TRUE;
 }
+
+std::atomic<bool> g_LoadedAsJvmtiAgent(false);
+extern "C" JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* /*vm*/, char* /*options*/, void* /*reserved*/) {
+    g_LoadedAsJvmtiAgent.store(true);
+    return JNI_OK;
+}
