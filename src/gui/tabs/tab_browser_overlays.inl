@@ -13,6 +13,7 @@ if (BeginSelectableSettingsNestedTabItem(trc("tabs.browser_overlays"))) {
     const std::string g_currentModeId = GetPublishedCurrentModeId();
 
     int browserOverlayToRemove = -1;
+    int browserOverlayToDuplicate = -1;
     for (size_t i = 0; i < g_config.browserOverlays.size(); ++i) {
         auto& overlay = g_config.browserOverlays[i];
         ImGui::PushID((int)i);
@@ -38,6 +39,12 @@ if (BeginSelectableSettingsNestedTabItem(trc("tabs.browser_overlays"))) {
             ImGui::EndPopup();
         }
 
+        ImGui::SameLine();
+        std::string dup_browser_label = std::string("D##dup_browser_overlay_") + std::to_string(i);
+        if (ImGui::Button(dup_browser_label.c_str(), ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()))) {
+            browserOverlayToDuplicate = (int)i;
+        }
+        if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", trc("button.duplicate")); }
         ImGui::SameLine();
 
         std::string oldOverlayName = overlay.name;
@@ -334,6 +341,22 @@ if (BeginSelectableSettingsNestedTabItem(trc("tabs.browser_overlays"))) {
         ImGui::PopID();
     }
 
+    if (browserOverlayToDuplicate >= 0) {
+        BrowserOverlayConfig copy = g_config.browserOverlays[browserOverlayToDuplicate];
+        copy.name = GenerateCopyName(copy.name, g_config.browserOverlays, [](const BrowserOverlayConfig& c) { return c.name; });
+        g_config.browserOverlays.push_back(copy);
+        g_configIsDirty = true;
+        if (!g_currentModeId.empty()) {
+            for (auto& mode : g_config.modes) {
+                if (mode.id == g_currentModeId) {
+                    if (std::find(mode.browserOverlayIds.begin(), mode.browserOverlayIds.end(), copy.name) == mode.browserOverlayIds.end()) {
+                        mode.browserOverlayIds.push_back(copy.name);
+                    }
+                    break;
+                }
+            }
+        }
+    }
     if (browserOverlayToRemove >= 0) {
         std::string deletedOverlayName = g_config.browserOverlays[browserOverlayToRemove].name;
         RemoveBrowserOverlayFromCache(deletedOverlayName);

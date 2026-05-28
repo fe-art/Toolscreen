@@ -78,6 +78,7 @@
     "button.copy_share_link": "复制分享链接",
     "button.copy_debug_info": "复制调试信息",
     "button.debug": "调试",
+    "button.duplicate": "复制",
     "button.licenses": "开源许可证",
     "button.ok": "确定",
     "button.open_config": "打开配置文件夹",

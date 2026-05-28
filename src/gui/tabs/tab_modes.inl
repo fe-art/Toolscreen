@@ -1,6 +1,7 @@
 if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
     g_currentlyEditingMirror = "";
     int mode_to_remove = -1;
+    int mode_to_duplicate = -1;
     static std::string pendingDefaultModeId;
 
     g_imageDragMode.store(false);
@@ -2512,6 +2513,14 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
             }
 
             ImGui::SameLine();
+            if (!resolutionSupported) { ImGui::BeginDisabled(); }
+            std::string dup_mode_label = std::string("D##dup_mode_") + std::to_string(i);
+            if (ImGui::Button(dup_mode_label.c_str(), ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()))) {
+                mode_to_duplicate = (int)i;
+            }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) { ImGui::SetTooltip("%s", trc("button.duplicate")); }
+            if (!resolutionSupported) { ImGui::EndDisabled(); }
+            ImGui::SameLine();
             bool node_open = ImGui::TreeNodeEx("##mode_node", ImGuiTreeNodeFlags_SpanAvailWidth, "%s", mode.id.c_str());
 
             if (node_open) {
@@ -3040,6 +3049,12 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
             }
             ImGui::PopID();
         }
+    }
+    if (mode_to_duplicate != -1) {
+        ModeConfig copy = g_config.modes[mode_to_duplicate];
+        copy.id = GenerateCopyName(copy.id, g_config.modes, [](const ModeConfig& c) { return c.id; });
+        g_config.modes.push_back(copy);
+        g_configIsDirty = true;
     }
     if (mode_to_remove != -1) {
         auto& modeToDelete = g_config.modes[mode_to_remove];

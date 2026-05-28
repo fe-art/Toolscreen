@@ -80,6 +80,23 @@ bool HasDuplicateImageName(const std::string& name, size_t currentIndex);
 bool HasDuplicateWindowOverlayName(const std::string& name, size_t currentIndex);
 bool HasDuplicateBrowserOverlayName(const std::string& name, size_t currentIndex);
 bool HasDuplicateEyeZoomOverlayName(const std::string& name, size_t currentIndex);
+
+template <typename Container, typename GetName>
+std::string GenerateCopyName(const std::string& baseName, const Container& items, GetName getName) {
+    auto nameExists = [&](const std::string& candidate) {
+        for (const auto& item : items) {
+            if (getName(item) == candidate) return true;
+        }
+        return false;
+    };
+    std::string candidate = baseName + " (Copy)";
+    if (!nameExists(candidate)) return candidate;
+    for (int n = 2; ; ++n) {
+        candidate = baseName + " (Copy " + std::to_string(n) + ")";
+        if (!nameExists(candidate)) return candidate;
+    }
+}
+
 EyeZoomConfig GetDefaultEyeZoomConfig();
 
 namespace ImGui {

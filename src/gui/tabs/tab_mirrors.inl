@@ -92,6 +92,7 @@ if (BeginSelectableSettingsNestedTabItem(trc("tabs.mirrors"))) {
     };
 
     int mirror_to_remove = -1;
+    int mirror_to_duplicate = -1;
     for (size_t i = 0; i < g_config.mirrors.size(); ++i) {
         auto& mirror = g_config.mirrors[i];
         ImGui::PushID((int)i);
@@ -126,6 +127,12 @@ if (BeginSelectableSettingsNestedTabItem(trc("tabs.mirrors"))) {
             ImGui::EndPopup();
         }
 
+        ImGui::SameLine();
+        std::string dup_mirror_label = std::string("D##dup_mirror_") + std::to_string(i);
+        if (ImGui::Button(dup_mirror_label.c_str(), ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()))) {
+            mirror_to_duplicate = (int)i;
+        }
+        if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", trc("button.duplicate")); }
         ImGui::SameLine();
 
         std::string oldMirrorName = mirror.name;
@@ -957,6 +964,24 @@ if (BeginSelectableSettingsNestedTabItem(trc("tabs.mirrors"))) {
         }
         ImGui::PopID();
     }
+    if (mirror_to_duplicate != -1) {
+        MirrorConfig copy = g_config.mirrors[mirror_to_duplicate];
+        copy.name = GenerateCopyName(copy.name, g_config.mirrors, [](const MirrorConfig& c) { return c.name; });
+        g_config.mirrors.push_back(copy);
+        g_configIsDirty = true;
+        CreateMirrorGPUResources(copy);
+        const std::string currentModeId = GetPublishedCurrentModeId();
+        if (!currentModeId.empty()) {
+            for (auto& mode : g_config.modes) {
+                if (mode.id == currentModeId) {
+                    if (std::find(mode.mirrorIds.begin(), mode.mirrorIds.end(), copy.name) == mode.mirrorIds.end()) {
+                        mode.mirrorIds.push_back(copy.name);
+                    }
+                    break;
+                }
+            }
+        }
+    }
     if (mirror_to_remove != -1) {
         std::string deletedMirrorName = g_config.mirrors[mirror_to_remove].name;
         g_config.mirrors.erase(g_config.mirrors.begin() + mirror_to_remove);
@@ -1049,6 +1074,7 @@ if (BeginSelectableSettingsNestedTabItem(trc("tabs.mirrors"))) {
     ImGui::SeparatorText(trc("mirrors.mirror_groups"));
 
     int group_to_remove = -1;
+    int group_to_duplicate = -1;
     for (size_t i = 0; i < g_config.mirrorGroups.size(); ++i) {
         auto& group = g_config.mirrorGroups[i];
         ImGui::PushID((int)i + 100000);
@@ -1079,6 +1105,12 @@ if (BeginSelectableSettingsNestedTabItem(trc("tabs.mirrors"))) {
             ImGui::EndPopup();
         }
 
+        ImGui::SameLine();
+        std::string dup_group_label = std::string("D##dup_mirror_group_") + std::to_string(i);
+        if (ImGui::Button(dup_group_label.c_str(), ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()))) {
+            group_to_duplicate = (int)i;
+        }
+        if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", trc("button.duplicate")); }
         ImGui::SameLine();
         bool node_open = ImGui::TreeNodeEx("##mirror_group_node", node_flags, "%s", group.name.c_str());
         if (ImGui::IsItemClicked(0)) { selectedGroupName = group.name; }
@@ -1342,6 +1374,23 @@ if (BeginSelectableSettingsNestedTabItem(trc("tabs.mirrors"))) {
         }
 
         ImGui::PopID();
+    }
+    if (group_to_duplicate != -1) {
+        MirrorGroupConfig copy = g_config.mirrorGroups[group_to_duplicate];
+        copy.name = GenerateCopyName(copy.name, g_config.mirrorGroups, [](const MirrorGroupConfig& c) { return c.name; });
+        g_config.mirrorGroups.push_back(copy);
+        g_configIsDirty = true;
+        const std::string currentModeId = GetPublishedCurrentModeId();
+        if (!currentModeId.empty()) {
+            for (auto& mode : g_config.modes) {
+                if (mode.id == currentModeId) {
+                    if (std::find(mode.mirrorGroupIds.begin(), mode.mirrorGroupIds.end(), copy.name) == mode.mirrorGroupIds.end()) {
+                        mode.mirrorGroupIds.push_back(copy.name);
+                    }
+                    break;
+                }
+            }
+        }
     }
     if (group_to_remove != -1) {
         std::string deletedGroupName = g_config.mirrorGroups[group_to_remove].name;

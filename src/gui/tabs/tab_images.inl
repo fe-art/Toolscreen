@@ -12,6 +12,7 @@ if (BeginSelectableSettingsNestedTabItem(trc("tabs.images"))) {
     ImGui::Separator();
 
     int image_to_remove = -1;
+    int image_to_duplicate = -1;
     for (size_t i = 0; i < g_config.images.size(); ++i) {
         auto& img = g_config.images[i];
         ImGui::PushID(static_cast<int>(i));
@@ -38,6 +39,12 @@ if (BeginSelectableSettingsNestedTabItem(trc("tabs.images"))) {
             ImGui::EndPopup();
         }
 
+        ImGui::SameLine();
+        std::string dup_img_label = std::string("D##dup_image_") + std::to_string(i);
+        if (ImGui::Button(dup_img_label.c_str(), ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()))) {
+            image_to_duplicate = (int)i;
+        }
+        if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", trc("button.duplicate")); }
         ImGui::SameLine();
 
         std::string oldImageName = img.name;
@@ -310,6 +317,22 @@ if (BeginSelectableSettingsNestedTabItem(trc("tabs.images"))) {
             ImGui::TreePop();
         }
         ImGui::PopID();
+    }
+    if (image_to_duplicate != -1) {
+        ImageConfig copy = g_config.images[image_to_duplicate];
+        copy.name = GenerateCopyName(copy.name, g_config.images, [](const ImageConfig& c) { return c.name; });
+        g_config.images.push_back(copy);
+        g_configIsDirty = true;
+        if (!g_currentModeId.empty()) {
+            for (auto& mode : g_config.modes) {
+                if (mode.id == g_currentModeId) {
+                    if (std::find(mode.imageIds.begin(), mode.imageIds.end(), copy.name) == mode.imageIds.end()) {
+                        mode.imageIds.push_back(copy.name);
+                    }
+                    break;
+                }
+            }
+        }
     }
     if (image_to_remove != -1) {
         std::string deletedImageName = g_config.images[image_to_remove].name;

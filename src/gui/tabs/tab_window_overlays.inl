@@ -7,6 +7,7 @@ if (BeginSelectableSettingsNestedTabItem(trc("tabs.window_overlays"))) {
     const std::string g_currentModeId = GetPublishedCurrentModeId();
 
     int windowOverlay_to_remove = -1;
+    int windowOverlay_to_duplicate = -1;
     for (size_t i = 0; i < g_config.windowOverlays.size(); ++i) {
         auto& overlay = g_config.windowOverlays[i];
         ImGui::PushID((int)i);
@@ -32,6 +33,12 @@ if (BeginSelectableSettingsNestedTabItem(trc("tabs.window_overlays"))) {
             ImGui::EndPopup();
         }
 
+        ImGui::SameLine();
+        std::string dup_overlay_label = std::string("D##dup_window_overlay_") + std::to_string(i);
+        if (ImGui::Button(dup_overlay_label.c_str(), ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight()))) {
+            windowOverlay_to_duplicate = (int)i;
+        }
+        if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", trc("button.duplicate")); }
         ImGui::SameLine();
 
         std::string oldOverlayName = overlay.name;
@@ -354,6 +361,22 @@ if (BeginSelectableSettingsNestedTabItem(trc("tabs.window_overlays"))) {
         ImGui::PopID();
     }
 
+    if (windowOverlay_to_duplicate >= 0) {
+        WindowOverlayConfig copy = g_config.windowOverlays[windowOverlay_to_duplicate];
+        copy.name = GenerateCopyName(copy.name, g_config.windowOverlays, [](const WindowOverlayConfig& c) { return c.name; });
+        g_config.windowOverlays.push_back(copy);
+        g_configIsDirty = true;
+        if (!g_currentModeId.empty()) {
+            for (auto& mode : g_config.modes) {
+                if (mode.id == g_currentModeId) {
+                    if (std::find(mode.windowOverlayIds.begin(), mode.windowOverlayIds.end(), copy.name) == mode.windowOverlayIds.end()) {
+                        mode.windowOverlayIds.push_back(copy.name);
+                    }
+                    break;
+                }
+            }
+        }
+    }
     if (windowOverlay_to_remove >= 0) {
         std::string deletedOverlayName = g_config.windowOverlays[windowOverlay_to_remove].name;
         RemoveWindowOverlayFromCache(deletedOverlayName);

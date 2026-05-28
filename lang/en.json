@@ -78,6 +78,7 @@
     "button.copy_share_link": "Copy Share Link",
     "button.copy_debug_info": "Copy Debug Info",
     "button.debug": "Debug",
+    "button.duplicate": "Duplicate",
     "button.licenses": "Open-Source Licenses",
     "button.ok": "OK",
     "button.open_config": "Open Config Folder",
