@@ -1,6 +1,7 @@
 #include "utils.h"
 #include "common/video_media.h"
 #include "gui/gui.h"
+#include "hooks/input_hook.h"
 #include "runtime/logic_thread.h"
 #include "render/mirror_thread.h"
 #include "profiler.h"
@@ -2645,13 +2646,13 @@ bool CheckHotkeyMatch(const std::vector<DWORD>& keys, WPARAM wParam, const std::
             } else if (excluded_key == VK_RSHIFT) {
                 excludedPressed = rshift_down;
             } else if (excluded_key == VK_MENU) {
-                excludedPressed = alt_down_now;
+                excludedPressed = alt_down_now || IsKeyCurrentlyLowLevelSuppressed(VK_LMENU) || IsKeyCurrentlyLowLevelSuppressed(VK_RMENU);
             } else if (excluded_key == VK_LMENU) {
-                excludedPressed = lalt_down;
+                excludedPressed = lalt_down || IsKeyCurrentlyLowLevelSuppressed(VK_LMENU);
             } else if (excluded_key == VK_RMENU) {
-                excludedPressed = ralt_down;
+                excludedPressed = ralt_down || IsKeyCurrentlyLowLevelSuppressed(VK_RMENU);
             } else {
-                excludedPressed = IsConfiguredInputKeyDown(excluded_key);
+                excludedPressed = IsConfiguredInputKeyDown(excluded_key) || IsKeyCurrentlyLowLevelSuppressed(excluded_key);
             }
 
             if (excludedPressed) {

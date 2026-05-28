@@ -3527,6 +3527,11 @@ static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM w
                                                   bool isMouseButton, bool isKeyDown, bool isAutoRepeatKeyDown,
                                                   const KeyRebind& rebind);
 
+bool IsKeyCurrentlyLowLevelSuppressed(DWORD vk) {
+    std::lock_guard<std::mutex> lock(s_lowLevelSuppressedKeysMutex);
+    return s_lowLevelSuppressedKeys.find(vk) != s_lowLevelSuppressedKeys.end();
+}
+
 static bool IsCapsLockSuppressionEnabled() {
     if (g_isShuttingDown.load(std::memory_order_acquire)) return false;
     if (!DoesSubclassedWindowOwnForegroundInput()) return false;
@@ -3965,6 +3970,11 @@ void ResetHotkeyRuntimeStateForTest() {
     s_bestMatchKeyCountByMainVk.clear();
     s_activeHoldHotkey.reset();
     s_shiftHotkeyPollState = {};
+}
+
+void ClearLowLevelSuppressedKeysForTest() {
+    std::lock_guard<std::mutex> lock(s_lowLevelSuppressedKeysMutex);
+    s_lowLevelSuppressedKeys.clear();
 }
 
 void ResetLowLevelExactModifierStateForTest() { ResetLowLevelExactModifierState(); }

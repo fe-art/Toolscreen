@@ -77,7 +77,10 @@ void ResetLocalKeyRepeatState(HWND hWnd);
 
 void ReleaseActiveLowLevelRebindKeys(HWND hWnd);
 
+bool IsKeyCurrentlyLowLevelSuppressed(DWORD vk);
+
 #ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+void ClearLowLevelSuppressedKeysForTest();
 void ResetSyntheticRebindKeyEventsForTest();
 size_t GetSyntheticRebindKeyEventCountForTest();
 bool GetSyntheticRebindKeyEventForTest(size_t index, UINT& outScanCodeWithFlags, bool& outKeyDown);

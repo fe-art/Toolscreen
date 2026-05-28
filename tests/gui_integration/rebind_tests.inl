@@ -628,6 +628,26 @@ void RunHotkeyRuntimeSpecificShiftReleaseMatchesExactKeyupTest(TestRunMode runMo
            "Expected a right-Shift hold/release hotkey not to match a left-Shift keyup.");
 }
 
+void RunHotkeyRuntimeExclusionDetectsLowLevelSuppressedKeyTest(TestRunMode runMode = TestRunMode::Automated) {
+    (void)runMode;
+
+    const std::filesystem::path root = PrepareCaseDirectory("hotkey_runtime_exclusion_detects_low_level_suppressed_key");
+    ResetGlobalTestState(root);
+
+    QueueSuppressedLowLevelKeyForTest(VK_CAPITAL, 0x003A, false);
+
+    Expect(!CheckHotkeyMatch({ 0x46 }, 0x46, { VK_CAPITAL }, false, 1, 0x46, true, true),
+           "Expected hotkey to NOT match when Caps Lock is low-level suppressed and listed as exclusion.");
+
+    Expect(CheckHotkeyMatch({ 0x46 }, 0x46, {}, false, 1, 0x46, true, true),
+           "Expected hotkey to match when no exclusion keys are specified.");
+
+    ClearLowLevelSuppressedKeysForTest();
+
+    Expect(CheckHotkeyMatch({ 0x46 }, 0x46, { VK_CAPITAL }, false, 1, 0x46, true, true),
+           "Expected hotkey to match when Caps Lock exclusion is listed but key is neither pressed nor suppressed.");
+}
+
 void RunKeyRebindRuntimeSplitVkOutputTest(TestRunMode runMode = TestRunMode::Automated) {
     DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
     KeyRebind rebind = MakeEnabledRebind('A', 'B');

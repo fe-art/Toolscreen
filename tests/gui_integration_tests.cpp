@@ -478,6 +478,7 @@ void ResetGlobalTestState(const std::filesystem::path& root) {
     ResetExactKeyboardMessageStateForTest();
     ResetHotkeyRuntimeStateForTest();
     ResetLowLevelExactModifierStateForTest();
+    ClearLowLevelSuppressedKeysForTest();
 
     g_toolscreenPath = root.wstring();
     g_modeFilePath = (root / "mode.txt").wstring();
