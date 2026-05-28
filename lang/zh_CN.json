@@ -868,6 +868,7 @@
     "settings.mirrors_match_colorspace": "匹配色彩空间",
     "settings.performance": "性能",
     "settings.profiler_scale": "分析器缩放",
+    "settings.record_profiler": "记录分析器数据",
     "settings.show_hotkey_debug": "显示快捷键调试",
     "settings.debug_mpeg_video_memory": "MPEG 视频纹理内存",
     "settings.debug_mpeg_video_memory_empty": "当前没有排队或已上传的 MPEG 视频纹理。",

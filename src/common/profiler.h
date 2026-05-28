@@ -3,6 +3,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <fstream>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -129,6 +130,11 @@ class Profiler {
     void SetEnabled(bool enabled) { m_enabled = enabled; }
     bool IsEnabled() const { return m_enabled; }
 
+    void StartRecording(const std::wstring& logsDirectory);
+    void StopRecording();
+    bool IsRecording() const { return m_isRecording.load(std::memory_order_relaxed); }
+    void SetFrameTimings(double hookOverheadMs, double originalFrameTimeMs);
+
     void RegisterThreadBuffer(ThreadRingBuffer* buffer);
 
   private:
@@ -167,6 +173,21 @@ class Profiler {
                           std::vector<std::pair<std::string, ProfileEntry>>& output);
     void PauseCurrentThread();
     void ResumeCurrentThread();
+
+    // CSV recording state (m_csvFile and non-atomic members only touched by EndFrame caller)
+    std::atomic<bool> m_wantRecording{false};
+    std::atomic<bool> m_isRecording{false};
+    std::wstring m_pendingRecordingDir;
+    std::mutex m_recordingDirMutex;
+    std::ofstream m_csvFile;
+    std::chrono::steady_clock::time_point m_recordingStartTime;
+    int m_lastRecordedFrameCount = 0;
+    std::atomic<double> m_hookOverheadMs{0.0};
+    std::atomic<double> m_originalFrameTimeMs{0.0};
+
+    void OpenRecordingFile();
+    void CloseRecordingFile();
+    void WriteRecordingSnapshot(std::chrono::steady_clock::time_point currentTime);
 };
 
 // Convenience macros - completely lock-free on hot path

@@ -407,6 +407,20 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.other"))) {
             if (ImGui::SliderFloat(trc("settings.profiler_scale"), &g_config.debug.profilerScale, 0.25f, 2.0f, "%.2f")) { g_configIsDirty = true; }
             ImGui::SameLine();
             HelpMarker(trc("settings.tooltip.profiler_scale"));
+            {
+                bool recording = Profiler::GetInstance().IsRecording();
+                if (ImGui::Checkbox(trc("settings.record_profiler"), &recording)) {
+                    if (recording) {
+                        if (!g_config.debug.showProfiler) {
+                            g_config.debug.showProfiler = true;
+                            g_configIsDirty = true;
+                        }
+                        Profiler::GetInstance().StartRecording(GetToolscreenPath() + L"\\logs");
+                    } else {
+                        Profiler::GetInstance().StopRecording();
+                    }
+                }
+            }
             if (ImGui::Checkbox(trc("settings.show_hotkey_debug"), &g_config.debug.showHotkeyDebug)) { g_configIsDirty = true; }
             if (ImGui::Checkbox(trc("settings.fake_cursor_overlay"), &g_config.debug.fakeCursor)) { g_configIsDirty = true; }
             ImGui::SameLine();

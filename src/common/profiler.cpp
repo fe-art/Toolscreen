@@ -1,6 +1,8 @@
 #include "profiler.h"
 #include "utils.h"
 #include <algorithm>
+#include <ctime>
+#include <filesystem>
 #include <functional>
 #include <sstream>
 
@@ -66,7 +68,10 @@ Profiler& Profiler::GetInstance() {
     return instance;
 }
 
-Profiler::~Profiler() { StopProcessingThread(); }
+Profiler::~Profiler() {
+    if (m_isRecording.load(std::memory_order_relaxed)) { CloseRecordingFile(); }
+    StopProcessingThread();
+}
 
 // RAII guard to invalidate buffer when thread exits
 struct ThreadBufferGuard {
@@ -384,7 +389,124 @@ void Profiler::BuildDisplayTree(const std::unordered_map<std::string, ProfileEnt
     for (const auto& rootPath : rootEntries) { addEntryWithChildren(rootPath); }
 }
 
+void Profiler::StartRecording(const std::wstring& logsDirectory) {
+    {
+        std::lock_guard<std::mutex> lock(m_recordingDirMutex);
+        m_pendingRecordingDir = logsDirectory;
+    }
+    m_wantRecording.store(true, std::memory_order_relaxed);
+}
+
+void Profiler::StopRecording() {
+    m_wantRecording.store(false, std::memory_order_relaxed);
+}
+
+void Profiler::SetFrameTimings(double hookOverheadMs, double originalFrameTimeMs) {
+    m_hookOverheadMs.store(hookOverheadMs, std::memory_order_relaxed);
+    m_originalFrameTimeMs.store(originalFrameTimeMs, std::memory_order_relaxed);
+}
+
+void Profiler::OpenRecordingFile() {
+    std::wstring dir;
+    {
+        std::lock_guard<std::mutex> lock(m_recordingDirMutex);
+        dir = m_pendingRecordingDir;
+    }
+
+    auto now = std::chrono::system_clock::now();
+    auto time = std::chrono::system_clock::to_time_t(now);
+    struct tm localTime {};
+#ifdef _WIN32
+    localtime_s(&localTime, &time);
+#else
+    localtime_r(&time, &localTime);
+#endif
+    char timeBuf[32];
+    std::strftime(timeBuf, sizeof(timeBuf), "%Y%m%d_%H%M%S", &localTime);
+
+    std::wstring filename = L"profiler_";
+    for (const char* p = timeBuf; *p; ++p) { filename += static_cast<wchar_t>(*p); }
+    filename += L".csv";
+
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+
+    std::filesystem::path filePath = std::filesystem::path(dir) / filename;
+    m_csvFile.open(filePath, std::ios::out);
+    if (m_csvFile.is_open()) {
+        m_csvFile << "timestamp_ms,thread,section,depth,avg_ms,self_ms,calls_per_frame,max_ms,parent_pct,total_pct\n";
+        m_recordingStartTime = std::chrono::steady_clock::now();
+        m_lastRecordedFrameCount = m_frameCountForAveraging;
+        m_isRecording.store(true, std::memory_order_relaxed);
+        Log("Profiler recording started: " + filePath.string());
+    } else {
+        Log("Failed to open profiler recording file: " + filePath.string());
+        m_wantRecording.store(false, std::memory_order_relaxed);
+    }
+}
+
+void Profiler::CloseRecordingFile() {
+    if (m_csvFile.is_open()) { m_csvFile.close(); }
+    m_isRecording.store(false, std::memory_order_relaxed);
+    Log("Profiler recording stopped");
+}
+
+void Profiler::WriteRecordingSnapshot(std::chrono::steady_clock::time_point currentTime) {
+    if (!m_csvFile.is_open()) return;
+
+    auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(currentTime - m_recordingStartTime).count();
+
+    int framesThisInterval = m_frameCountForAveraging - m_lastRecordedFrameCount;
+    m_lastRecordedFrameCount = m_frameCountForAveraging;
+
+    m_csvFile << elapsedMs << ",meta,frame_count,0," << framesThisInterval << ",0,0,0,0,0\n";
+    m_csvFile << elapsedMs << ",meta,hook_overhead,0," << m_hookOverheadMs.load(std::memory_order_relaxed) << ",0,0,0,0,0\n";
+    m_csvFile << elapsedMs << ",meta,original_frame_time,0," << m_originalFrameTimeMs.load(std::memory_order_relaxed) << ",0,0,0,0,0\n";
+
+    auto writeEntries = [&](const char* threadName, const std::unordered_map<std::string, ProfileEntry>& entries) {
+        for (const auto& [path, entry] : entries) {
+            std::string section = entry.displayName.empty() ? path : entry.displayName;
+            bool needsQuoting = section.find(',') != std::string::npos || section.find('"') != std::string::npos;
+
+            m_csvFile << elapsedMs << "," << threadName << ",";
+            if (needsQuoting) {
+                m_csvFile << '"';
+                for (char c : section) {
+                    if (c == '"') m_csvFile << "\"\"";
+                    else m_csvFile << c;
+                }
+                m_csvFile << '"';
+            } else {
+                m_csvFile << section;
+            }
+            m_csvFile << "," << entry.depth
+                      << "," << entry.rollingAverageTime
+                      << "," << entry.rollingSelfTime
+                      << "," << entry.rollingAverageCalls
+                      << "," << entry.maxTimeInLastSecond
+                      << "," << entry.parentPercentage
+                      << "," << entry.totalPercentage
+                      << "\n";
+        }
+    };
+
+    writeEntries("render", m_renderThreadEntries);
+    writeEntries("other", m_otherThreadEntries);
+    m_csvFile.flush();
+}
+
 void Profiler::EndFrame() {
+    {
+        bool want = m_wantRecording.load(std::memory_order_relaxed);
+        bool active = m_isRecording.load(std::memory_order_relaxed);
+        bool enabled = m_enabled.load(std::memory_order_relaxed);
+        if (want && !active && enabled) { OpenRecordingFile(); }
+        else if (active && (!want || !enabled)) {
+            CloseRecordingFile();
+            if (!enabled) { m_wantRecording.store(false, std::memory_order_relaxed); }
+        }
+    }
+
     if (!m_enabled) return;
 
     auto currentTime = std::chrono::steady_clock::now();
@@ -476,6 +598,10 @@ void Profiler::EndFrame() {
             std::lock_guard<std::mutex> lock(m_displayDataMutex);
             BuildDisplayTree(m_renderThreadEntries, m_cachedDisplayData.renderThread);
             BuildDisplayTree(m_otherThreadEntries, m_cachedDisplayData.otherThreads);
+        }
+
+        if (m_isRecording.load(std::memory_order_relaxed)) {
+            WriteRecordingSnapshot(currentTime);
         }
 
         auto resetWindowMaximums = [](std::unordered_map<std::string, ProfileEntry>& entries) {

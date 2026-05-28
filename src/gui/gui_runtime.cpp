@@ -1201,6 +1201,12 @@ void RenderProfilerOverlay(bool showProfiler, bool showPerformanceOverlay) {
     ImGui::SetWindowFontScale(g_config.debug.profilerScale);
 
     ImGui::Text("Toolscreen Profiler (Hierarchical)");
+    if (Profiler::GetInstance().IsRecording()) {
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.2f, 0.2f, 1.0f));
+        ImGui::Text("[REC]");
+        ImGui::PopStyleColor();
+    }
     ImGui::Separator();
 
     auto renderTreeSection = [](const char* sectionTitle, const std::vector<std::pair<std::string, Profiler::ProfileEntry>>& entries,

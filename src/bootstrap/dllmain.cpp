@@ -3306,6 +3306,8 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
         std::chrono::duration<double, std::milli> fp_ms = swapStartTime - startTime;
         g_lastFrameTimeMs = fp_ms.count();
 
+        Profiler::GetInstance().SetFrameTimings(fp_ms.count(), swapDuration.count());
+
         // Update last frame mode ID for next frame's viewport calculations (lock-free)
         {
             int nextIndex = 1 - g_lastFrameModeIdIndex.load(std::memory_order_relaxed);

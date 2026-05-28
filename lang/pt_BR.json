@@ -856,6 +856,7 @@
     "settings.mirrors_match_colorspace": "Corresponder Espaço de Cor",
     "settings.performance": "Desempenho",
     "settings.profiler_scale": "Escala do Perfilador",
+    "settings.record_profiler": "Gravar Dados do Perfilador",
     "settings.show_hotkey_debug": "Mostrar Depuração de Atalhos",
     "settings.debug_mpeg_video_memory": "Memória de Textura de Vídeo MPEG",
     "settings.debug_mpeg_video_memory_empty": "Nenhuma textura de vídeo MPEG está atualmente enfileirada ou carregada.",

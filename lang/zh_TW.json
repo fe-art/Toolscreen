@@ -858,6 +858,7 @@
     "settings.mirrors_match_colorspace": "匹配色彩空間",
     "settings.performance": "效能",
     "settings.profiler_scale": "分析器縮放",
+    "settings.record_profiler": "記錄分析器資料",
     "settings.show_hotkey_debug": "顯示快捷鍵除錯",
     "settings.debug_mpeg_video_memory": "MPEG 視訊材質記憶體",
     "settings.debug_mpeg_video_memory_empty": "目前沒有排隊或已上傳的 MPEG 視訊材質。",

@@ -856,6 +856,7 @@
     "settings.mirrors_match_colorspace": "Match Colorspace",
     "settings.performance": "Performance",
     "settings.profiler_scale": "Profiler Scale",
+    "settings.record_profiler": "Record Profiler Data",
     "settings.show_hotkey_debug": "Show Hotkey Debug",
     "settings.debug_mpeg_video_memory": "MPEG Video Texture Memory",
     "settings.debug_mpeg_video_memory_empty": "No MPEG video textures are currently queued or uploaded.",
