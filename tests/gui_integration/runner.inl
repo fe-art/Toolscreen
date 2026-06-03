@@ -1,6 +1,7 @@
 struct TestCaseDefinition {
     const char* name;
     void (*run)(TestRunMode runMode);
+    bool interactiveOnly = false;
 };
 
 struct TestGroupDefinition {
@@ -108,6 +109,7 @@ const auto& GetTestCaseDefinitions() {
         {"key-rebind-runtime-custom-modifier-output-uses-synthetic-key", &RunKeyRebindRuntimeCustomModifierOutputUsesSyntheticKeyTest},
         {"key-rebind-runtime-wndproc-keeps-synthetic-modifier-held", &RunKeyRebindRuntimeWndProcKeepsSyntheticModifierHeldTest},
         {"key-rebind-runtime-disabled-rebind-ignored", &RunKeyRebindRuntimeDisabledRebindIgnoredTest},
+        {"key-rebind-runtime-cursor-state-keyup-passthrough", &RunKeyRebindRuntimeCursorStateKeyupPassthroughTest, true},
         {"key-rebind-runtime-cursor-state-priority-and-fallback", &RunKeyRebindRuntimeCursorStatePriorityAndFallbackTest},
         {"key-rebind-gui-keyboard-layout-full-bind-and-trigger", &RunKeyRebindGuiKeyboardLayoutFullBindAndTriggerTest},
         {"key-rebind-gui-keyboard-layout-split-bind-and-trigger", &RunKeyRebindGuiKeyboardLayoutSplitBindAndTriggerTest},
@@ -282,6 +284,9 @@ const auto& GetResolvedTestGroupDefinitions() {
 
             for (size_t index = 0; index < testCases.size(); ++index) {
                 const TestCaseDefinition& testCase = testCases[index];
+                if (testCase.interactiveOnly) {
+                    continue;
+                }
                 if (!GroupIncludesTestCaseName(testGroup, testCase.name)) {
                     continue;
                 }
@@ -298,6 +303,9 @@ const auto& GetResolvedTestGroupDefinitions() {
         }
 
         for (size_t index = 0; index < testCases.size(); ++index) {
+            if (testCases[index].interactiveOnly) {
+                continue;
+            }
             if (assignmentCounts[index] == 1) {
                 continue;
             }
@@ -987,6 +995,9 @@ void RunAllTestGroupsInParallel() {
 
 void RunAllTestCases() {
     for (const TestCaseDefinition& testCase : GetTestCaseDefinitions()) {
+        if (testCase.interactiveOnly) {
+            continue;
+        }
         RunTestCaseByName(testCase.name);
     }
 }

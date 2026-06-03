@@ -135,6 +135,7 @@ static std::unordered_set<DWORD> s_lowLevelExactModifierKeysDown;
 static std::deque<LowLevelExactModifierEvent> s_pendingLowLevelExactModifierEvents;
 static std::mutex s_lowLevelExactModifierStateMutex;
 static bool s_systemAltTabPassthroughActive = false;
+static std::unordered_set<DWORD> s_unreboundKeyDownVks;
 static std::unordered_set<DWORD> s_exactKeyboardKeysDown;
 static thread_local std::vector<ExactKeyboardMessageState> s_exactKeyboardMessageStateStack;
 struct ShiftHotkeyPollState {
@@ -617,6 +618,7 @@ class ScopedExactKeyboardMessageState {
 static void ResetExactKeyboardMessageState() {
     s_exactKeyboardKeysDown.clear();
     s_exactKeyboardMessageStateStack.clear();
+    s_unreboundKeyDownVks.clear();
 }
 
 static bool IsTrackedExactAutoRepeatKeyDown(UINT uMsg, WPARAM wParam, LPARAM lParam) {
@@ -3986,6 +3988,8 @@ size_t GetActiveSyntheticRebindOutputCountForTest() {
 
 void ResetExactKeyboardMessageStateForTest() { ResetExactKeyboardMessageState(); }
 
+size_t GetUnreboundKeyDownCountForTest() { return s_unreboundKeyDownVks.size(); }
+
 void ResetHotkeyRuntimeStateForTest() {
     s_bestMatchKeyCount = 0;
     s_bestMatchKeyCountByMainVk.clear();
@@ -4401,6 +4405,11 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
         return { true, 0 };
     }
 
+    const DWORD passthroughVk = isMouseButton ? rawVkCode : NormalizeModifierVkFromKeyMessage(rawVkCode, lParam);
+    if (!isKeyDown && s_unreboundKeyDownVks.erase(passthroughVk) != 0) {
+        return { false, 0 };
+    }
+
     if (isMouseButton && g_showGui.load(std::memory_order_acquire)) { return { false, 0 }; }
 
     const bool isAutoRepeatKeyDown = !isMouseButton && isKeyDown && IsTrackedExactAutoRepeatKeyDown(uMsg, wParam, lParam);
@@ -4430,8 +4439,15 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
         cursorVisible,
         [&](const KeyRebind& rebind) { return MatchesRebindSourceKey(vkCode, rawVkCode, rebind.fromKey); });
     if (matchedRebind != nullptr) {
+        if (isKeyDown && !isAutoRepeatKeyDown) {
+            s_unreboundKeyDownVks.erase(passthroughVk);
+        }
         return ExecuteMatchedKeyRebind(hWnd, uMsg, wParam, lParam, rawVkCode, vkCode, isMouseButton, isKeyDown,
                                        isAutoRepeatKeyDown, *matchedRebind);
+    }
+
+    if (isKeyDown && !isAutoRepeatKeyDown && !isMouseButton) {
+        s_unreboundKeyDownVks.insert(passthroughVk);
     }
 
     if (allowSystemAltTab && !isKeyDown && (currentIsAlt || currentIsTab)) {

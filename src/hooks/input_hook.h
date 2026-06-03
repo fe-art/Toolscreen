@@ -86,6 +86,7 @@ size_t GetSyntheticRebindKeyEventCountForTest();
 bool GetSyntheticRebindKeyEventForTest(size_t index, UINT& outScanCodeWithFlags, bool& outKeyDown);
 size_t GetActiveSyntheticRebindOutputCountForTest();
 void ResetExactKeyboardMessageStateForTest();
+size_t GetUnreboundKeyDownCountForTest();
 void ResetHotkeyRuntimeStateForTest();
 void ResetLowLevelExactModifierStateForTest();
 void SetLowLevelExactModifierDownForTest(DWORD vk, bool isDown);
