@@ -1168,6 +1168,29 @@ InputHandlerResult HandleConfigLoadFailure(HWND hWnd, UINT uMsg, WPARAM wParam, 
     return { false, 0 };
 }
 
+static HCURSOR s_forcedCursorCached = nullptr;
+static uint64_t s_forcedCursorCachedConfigVersion = UINT64_MAX;
+static std::string s_forcedCursorCachedGameState;
+
+static HCURSOR ResolveForcedVisibleGuiCursor(const std::string& gameState) {
+    const uint64_t version = g_configSnapshotVersion.load(std::memory_order_acquire);
+    if (s_forcedCursorCached && version == s_forcedCursorCachedConfigVersion &&
+        gameState == s_forcedCursorCachedGameState) {
+        return s_forcedCursorCached;
+    }
+    static HCURSOR s_arrowCursor = LoadCursorW(NULL, IDC_ARROW);
+    const CursorTextures::CursorData* cursorData = CursorTextures::GetSelectedCursor(gameState, 64);
+    HCURSOR resolved = (cursorData && cursorData->hCursor) ? cursorData->hCursor : s_arrowCursor;
+    s_forcedCursorCached = resolved;
+    s_forcedCursorCachedConfigVersion = version;
+    s_forcedCursorCachedGameState = gameState;
+    return resolved;
+}
+
+static std::string CurrentGameStateForCursor() {
+    return g_gameStateBuffers[g_currentGameStateIndex.load(std::memory_order_acquire)];
+}
+
 InputHandlerResult HandleSetCursor(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, const std::string& gameState) {
     if (uMsg != WM_SETCURSOR) { return { false, 0 }; }
     PROFILE_SCOPE("HandleSetCursor");
@@ -1175,8 +1198,7 @@ InputHandlerResult HandleSetCursor(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     if (g_showGui.load() && g_forceVisibleCursorWhileGuiOpen.load(std::memory_order_acquire) &&
         g_gameVersion >= GameVersion(1, 13, 0)) {
         EnsureSystemCursorVisible();
-        static HCURSOR s_arrowCursor = LoadCursorW(NULL, IDC_ARROW);
-        SetCursor(s_arrowCursor);
+        SetCursor(ResolveForcedVisibleGuiCursor(gameState));
         return { true, true };
     }
 
@@ -1326,8 +1348,7 @@ InputHandlerResult HandleGuiToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         if (!wasCursorVisible && g_gameVersion >= GameVersion(1, 13, 0)) {
             g_forceVisibleCursorWhileGuiOpen.store(true, std::memory_order_release);
             EnsureSystemCursorVisible();
-            static HCURSOR s_arrowCursor = LoadCursorW(NULL, IDC_ARROW);
-            SetCursor(s_arrowCursor);
+            SetCursor(ResolveForcedVisibleGuiCursor(CurrentGameStateForCursor()));
         }
 
         g_configurePromptDismissedThisSession.store(true, std::memory_order_release);
@@ -4855,8 +4876,7 @@ LRESULT CALLBACK SubclassedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
     const bool guiOpen = g_showGui.load(std::memory_order_acquire);
     if (guiOpen && g_forceVisibleCursorWhileGuiOpen.load(std::memory_order_acquire) && g_gameVersion >= GameVersion(1, 13, 0)) {
         EnsureSystemCursorVisible();
-        static HCURSOR s_arrowCursor = LoadCursorW(NULL, IDC_ARROW);
-        SetCursor(s_arrowCursor);
+        SetCursor(ResolveForcedVisibleGuiCursor(CurrentGameStateForCursor()));
     }
     if (!guiOpen && g_forceVisibleCursorWhileGuiOpen.load(std::memory_order_acquire)) {
         EnsureSystemCursorHidden();
