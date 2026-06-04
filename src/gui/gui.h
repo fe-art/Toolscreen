@@ -1317,6 +1317,13 @@ extern std::atomic<bool> g_ninjabrainOverlayDragMode;
 
 extern std::atomic<bool> g_overlayEditorMode;
 
+extern std::atomic<bool> g_interactiveCreateRequested;
+extern std::atomic<bool> g_interactiveCreateRelativeToScreen;
+extern std::atomic<bool> g_interactiveCreateCancel;
+extern std::atomic<int> g_interactiveCreateStage;
+inline bool InteractiveCreateActive() { return g_interactiveCreateStage.load(std::memory_order_relaxed) != 0; }
+void RenderInteractiveCreateBanner();
+
 extern std::string g_gameStateBuffers[2];
 extern std::atomic<int> g_currentGameStateIndex;
 

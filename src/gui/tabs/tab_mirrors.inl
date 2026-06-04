@@ -994,13 +994,43 @@ if (BeginSelectableSettingsNestedTabItem(trc("tabs.mirrors"))) {
         MirrorCaptureConfig newZone;
         newZone.relativeTo = "centerViewport";
         newMirror.input.push_back(newZone);
-        g_config.mirrors.push_back(newMirror);
-        g_configIsDirty = true;
-        CreateMirrorGPUResources(newMirror);
-        const std::string curMode = GetPublishedCurrentModeId();
-        for (auto& mode : g_config.modes) {
-            if (mode.id == curMode) { AddModeSource(mode, ModeSourceType::Mirror, newMirror.name); break; }
+        AddMirrorToCurrentMode(std::move(newMirror));
+    }
+
+    ImGui::SameLine();
+    {
+        const ImVec4 accent = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
+        const ImVec4 accentHover(accent.x * 0.85f + 0.15f, accent.y * 0.85f + 0.15f, accent.z * 0.85f + 0.15f, 1.0f);
+        const ImVec4 accentActive(accent.x * 0.7f, accent.y * 0.7f, accent.z * 0.7f, 1.0f);
+        auto perceivedBrightness = [](const ImVec4& c) { return 0.299f * c.x + 0.587f * c.y + 0.114f * c.z; };
+        const bool accentIsLight = perceivedBrightness(accent) > 0.6f;
+        const ImVec4 accentText = accentIsLight ? ImVec4(0.08f, 0.08f, 0.08f, 1.0f) : ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+        ImGui::PushStyleColor(ImGuiCol_Button, accent);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, accentHover);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, accentActive);
+        ImGui::PushStyleColor(ImGuiCol_Text, accentText);
+        const bool createInteractivelyClicked = ImGui::Button(trc("mirrors.create_interactively"));
+        ImGui::PopStyleColor(4);
+        if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", trc("mirrors.create_interactively_tooltip")); }
+        if (createInteractivelyClicked && !InteractiveCreateActive()) { ImGui::OpenPopup(trc("mirrors.interactive.relative_title")); }
+    }
+
+    if (ImGui::BeginPopupModal(trc("mirrors.interactive.relative_title"), NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextWrapped("%s", trc("mirrors.interactive.relative_question"));
+        ImGui::Separator();
+        if (ImGui::Button(trc("mirrors.interactive.relative_yes"), ImVec2(240, 0))) {
+            g_interactiveCreateRelativeToScreen.store(true, std::memory_order_relaxed);
+            g_interactiveCreateRequested.store(true, std::memory_order_release);
+            ImGui::CloseCurrentPopup();
         }
+        if (ImGui::Button(trc("mirrors.interactive.relative_no"), ImVec2(240, 0))) {
+            g_interactiveCreateRelativeToScreen.store(false, std::memory_order_relaxed);
+            g_interactiveCreateRequested.store(true, std::memory_order_release);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::Separator();
+        if (ImGui::Button(trc("mirrors.interactive.cancel"), ImVec2(240, 0))) { ImGui::CloseCurrentPopup(); }
+        ImGui::EndPopup();
     }
 
     ImGui::SameLine();

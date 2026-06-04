@@ -2543,6 +2543,31 @@ void RenderConfigErrorGUI() {
     }
 }
 
+void RenderInteractiveCreateBanner() {
+    const int stage = g_interactiveCreateStage.load(std::memory_order_relaxed);
+    if (stage == 0) { return; }
+
+    ImGuiIO& io = ImGui::GetIO();
+    const float width = (io.DisplaySize.x - 40.0f < 560.0f) ? (io.DisplaySize.x - 40.0f) : 560.0f;
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, 24.0f), ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+    ImGui::SetNextWindowSize(ImVec2(width, 0.0f), ImGuiCond_Always);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f, 0.08f, 0.10f, 0.92f));
+    if (ImGui::Begin("##interactive_create_banner", nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoNav |
+                         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize |
+                         ImGuiWindowFlags_NoFocusOnAppearing)) {
+        const char* title = (stage == 2) ? trc("mirrors.interactive.draw_dest") : trc("mirrors.interactive.draw_source");
+        const ImVec4 titleColor = (stage == 2) ? ImVec4(1.0f, 0.55f, 0.0f, 1.0f) : ImVec4(0.95f, 0.25f, 0.25f, 1.0f);
+        ImGui::TextColored(titleColor, "%s", title);
+        ImGui::TextDisabled("%s", trc("mirrors.interactive.hint"));
+        if (ImGui::Button(trc("mirrors.interactive.cancel"))) {
+            g_interactiveCreateCancel.store(true, std::memory_order_release);
+        }
+    }
+    ImGui::End();
+    ImGui::PopStyleColor();
+}
+
 void RenderSettingsGUI() {
     ResetTransientBindingUiState();
 

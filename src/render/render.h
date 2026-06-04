@@ -254,6 +254,8 @@ void UploadDecodedImageToGPU_Internal(const DecodedImageData& imgData);
 void InitializeGPUResources();
 void CreateMirrorGPUResources(const MirrorConfig& conf);
 
+void AddMirrorToCurrentMode(MirrorConfig&& mirror);
+
 // Mirror capture helpers are declared in mirror_thread.h
 
 void InvalidateConfigLookupCaches();

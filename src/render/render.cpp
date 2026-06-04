@@ -3,6 +3,7 @@
 #include "features/cursor_trail.h"
 #include "features/ninjabrain_data.h"
 #include "features/fake_cursor.h"
+#include "features/interactive_mirror_create.h"
 #include "gui/gui.h"
 #include "runtime/logic_thread.h"
 #include "mirror_thread.h"
@@ -3283,6 +3284,20 @@ void CreateMirrorGPUResources(const MirrorConfig& conf) {
     BindTextureDirect(GL_TEXTURE_2D, last_texture);
 }
 
+void AddMirrorToCurrentMode(MirrorConfig&& mirror) {
+    g_config.mirrors.push_back(std::move(mirror));
+    g_configIsDirty = true;
+    const MirrorConfig& added = g_config.mirrors.back();
+    CreateMirrorGPUResources(added);
+    const std::string currentModeId = GetPublishedCurrentModeId();
+    for (auto& mode : g_config.modes) {
+        if (mode.id == currentModeId) {
+            AddModeSource(mode, ModeSourceType::Mirror, added.name);
+            break;
+        }
+    }
+}
+
 // MirrorRenderData is defined in render.h so both render units can share the layout.
 
 static bool IsSampleableTexture2D(GLuint texture, int* outW = nullptr, int* outH = nullptr) {
@@ -4892,6 +4907,29 @@ static void CacheSameThreadMirrorCapture(const Config& cfg, const SameThreadOver
 
 static void RenderEditorSelectionHandles(const GLState& s, int fullW, int fullH, const ModeConfig* mode);
 
+namespace {
+struct InteractiveCreateRuntime {
+    bool prevLeft = false;
+    bool prevEsc = false;
+    bool dragging = false;
+    POINT start{};
+    bool sourceValid = false;
+    RECT source{};
+    bool hasCurrent = false;
+    RECT current{};
+};
+InteractiveCreateRuntime g_icreate;
+
+RECT NormalizeDragRect(POINT a, POINT b) {
+    RECT r;
+    r.left = (std::min)(a.x, b.x);
+    r.top = (std::min)(a.y, b.y);
+    r.right = (std::max)(a.x, b.x);
+    r.bottom = (std::max)(a.y, b.y);
+    return r;
+}
+}  // namespace
+
 static void RenderSameThreadImGui(const SameThreadOverlayState& request, bool renderNinjabrainOverlay) {
     const bool shouldRenderAnyImGui = request.shouldRenderGui || request.showPerformanceOverlay || request.showProfiler ||
                                       request.showTextureGrid || request.showEyeZoom || renderNinjabrainOverlay;
@@ -4976,6 +5014,7 @@ static void RenderSameThreadImGui(const SameThreadOverlayState& request, bool re
     if (request.shouldRenderGui) {
         PROFILE_SCOPE_CAT("ImGui Settings Window", "ImGui");
         RenderSettingsGUI();
+        RenderInteractiveCreateBanner();
         RenderMirrorSelectionInfoPanel();
         RenderMirrorGroupSelectionInfoPanel();
         RenderWindowOverlaySelectionInfoPanel();
@@ -7345,13 +7384,93 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
     if (s_editorClickConsumed && !(GetAsyncKeyState(VK_LBUTTON) & 0x8000)) { s_editorClickConsumed = false; }
 
     {
+        PROFILE_SCOPE_CAT("Interactive Mirror Create", "Input Handling");
+        if (g_interactiveCreateRequested.exchange(false, std::memory_order_acq_rel)) {
+            g_icreate = InteractiveCreateRuntime{};
+            g_interactiveCreateStage.store(1, std::memory_order_relaxed);
+        }
+        if (InteractiveCreateActive()) {
+            const bool escDown = (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
+            const bool escEdge = escDown && !g_icreate.prevEsc;
+            const bool guiOpen = g_showGui.load(std::memory_order_relaxed);
+            if (g_interactiveCreateCancel.exchange(false, std::memory_order_acq_rel) || escEdge || !guiOpen) {
+                g_icreate = InteractiveCreateRuntime{};
+                g_icreate.prevEsc = escDown;
+                g_interactiveCreateStage.store(0, std::memory_order_relaxed);
+            } else {
+                HWND hwnd = g_minecraftHwnd.load();
+                const bool left = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+                const bool pointerFree = hwnd && ImGui::GetCurrentContext() && !ImGui::GetIO().WantCaptureMouse;
+                if (pointerFree) {
+                    POINT mp; GetCursorPos(&mp); ScreenToClient(hwnd, &mp);
+                    if (left && !g_icreate.prevLeft) { g_icreate.dragging = true; g_icreate.start = mp; }
+                    if (g_icreate.dragging) { g_icreate.current = NormalizeDragRect(g_icreate.start, mp); g_icreate.hasCurrent = true; }
+                    if (!left && g_icreate.prevLeft && g_icreate.dragging) {
+                        g_icreate.dragging = false;
+                        const RECT r = NormalizeDragRect(g_icreate.start, mp);
+                        const int rw = static_cast<int>(r.right - r.left), rh = static_cast<int>(r.bottom - r.top);
+                        constexpr int kMinDrawPx = 8;
+                        if (rw >= kMinDrawPx && rh >= kMinDrawPx) {
+                            const int stage = g_interactiveCreateStage.load(std::memory_order_relaxed);
+                            if (stage == 1) {
+                                g_icreate.source = r; g_icreate.sourceValid = true; g_icreate.hasCurrent = false;
+                                g_interactiveCreateStage.store(2, std::memory_order_relaxed);
+                            } else if (stage == 2 && g_icreate.sourceValid) {
+                                const InteractiveRect src{ static_cast<int>(g_icreate.source.left), static_cast<int>(g_icreate.source.top),
+                                    static_cast<int>(g_icreate.source.right - g_icreate.source.left),
+                                    static_cast<int>(g_icreate.source.bottom - g_icreate.source.top) };
+                                const InteractiveRect dst{ static_cast<int>(r.left), static_cast<int>(r.top), rw, rh };
+                                const InteractiveMirrorParams p = BuildInteractiveMirrorParams(
+                                    src, dst, g_interactiveCreateRelativeToScreen.load(std::memory_order_relaxed),
+                                    currentGeo.finalX, currentGeo.finalY, currentGeo.finalW, currentGeo.finalH,
+                                    currentGeo.gameW, currentGeo.gameH, fullW, fullH);
+                                MirrorConfig m;
+                                auto nameExists = [&](const std::string& n) {
+                                    for (const auto& mm : g_config.mirrors) { if (mm.name == n) return true; }
+                                    return false;
+                                };
+                                int idx = static_cast<int>(g_config.mirrors.size()) + 1;
+                                std::string name;
+                                do { name = "Mirror " + std::to_string(idx++); } while (nameExists(name));
+                                m.name = name;
+                                m.rawOutput = true;
+                                m.border.type = MirrorBorderType::Static;
+                                m.captureWidth = p.captureWidth;
+                                m.captureHeight = p.captureHeight;
+                                MirrorCaptureConfig zone; zone.relativeTo = p.captureRelativeTo; zone.x = p.inputX; zone.y = p.inputY;
+                                m.input.push_back(zone);
+                                m.output.relativeTo = p.outputRelativeTo;
+                                m.output.x = p.outputX; m.output.y = p.outputY;
+                                m.output.useRelativePosition = p.useRelativePosition;
+                                m.output.relativeX = p.relativeX; m.output.relativeY = p.relativeY;
+                                m.output.separateScale = p.separateScale;
+                                m.output.scaleX = p.scaleX; m.output.scaleY = p.scaleY;
+                                m.output.scale = p.scale;
+                                AddMirrorToCurrentMode(std::move(m));
+                                SaveConfigImmediate();
+                                g_icreate = InteractiveCreateRuntime{};
+                                g_interactiveCreateStage.store(0, std::memory_order_relaxed);
+                            }
+                        }
+                    }
+                } else {
+                    g_icreate.dragging = false;
+                    g_icreate.hasCurrent = false;
+                }
+                g_icreate.prevLeft = left;
+                g_icreate.prevEsc = escDown;
+            }
+        }
+    }
+
+    {
         static bool s_topPrevLeftDown = false;
         const bool topLeftDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
         const bool freshTopPress = topLeftDown && !s_topPrevLeftDown;
         s_topPrevLeftDown = topLeftDown;
         const bool wasCursorOverPopup = s_cursorOverSelectionPopup;
         s_cursorOverSelectionPopup = false;
-        if (freshTopPress && ImGui::GetIO().WantCaptureMouse && !wasCursorOverPopup) {
+        if (freshTopPress && ImGui::GetIO().WantCaptureMouse && !wasCursorOverPopup && !InteractiveCreateActive()) {
             DeselectAllOverlays();
         }
 
@@ -7363,7 +7482,7 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
         }
     }
 
-    if (g_imageDragMode.load() && g_imageOverlaysVisible.load(std::memory_order_acquire)) {
+    if (g_imageDragMode.load() && g_imageOverlaysVisible.load(std::memory_order_acquire) && !InteractiveCreateActive()) {
         PROFILE_SCOPE_CAT("Image Drag Mode", "Input Handling");
         ImGuiIO& io = ImGui::GetIO();
         if (io.WantCaptureMouse) {
@@ -7562,7 +7681,7 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
     }
 
     if (g_showGui.load(std::memory_order_relaxed) && g_windowOverlayDragMode.load(std::memory_order_relaxed) &&
-        g_windowOverlaysVisible.load(std::memory_order_acquire)) {
+        g_windowOverlaysVisible.load(std::memory_order_acquire) && !InteractiveCreateActive()) {
         PROFILE_SCOPE_CAT("Window Overlay Drag Mode", "Input Handling");
 
         ImGuiIO& io = ImGui::GetIO();
@@ -7761,7 +7880,7 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
         s_prevEscDown = escDown;
     }
 
-    if (g_showGui.load(std::memory_order_relaxed) && g_mirrorDragMode.load(std::memory_order_relaxed) && hasMirrors) {
+    if (g_showGui.load(std::memory_order_relaxed) && g_mirrorDragMode.load(std::memory_order_relaxed) && hasMirrors && !InteractiveCreateActive()) {
         PROFILE_SCOPE_CAT("Mirror Drag Mode", "Input Handling");
         MirrorConfig* cachedMirror = nullptr;
         std::string cachedMirrorName;
@@ -8266,7 +8385,7 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
     }
 
     if (g_showGui.load(std::memory_order_relaxed) && g_browserOverlayDragMode.load(std::memory_order_relaxed) &&
-        g_browserOverlaysVisible.load(std::memory_order_acquire)) {
+        g_browserOverlaysVisible.load(std::memory_order_acquire) && !InteractiveCreateActive()) {
         PROFILE_SCOPE_CAT("Browser Overlay Drag Mode", "Input Handling");
 
         ImGuiIO& io = ImGui::GetIO();
@@ -8553,7 +8672,7 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
     }
 
     if (g_showGui && g_ninjabrainOverlayDragMode.load(std::memory_order_relaxed) &&
-        s_ninjabrainOverlayRectValid.load(std::memory_order_relaxed)) {
+        s_ninjabrainOverlayRectValid.load(std::memory_order_relaxed) && !InteractiveCreateActive()) {
         static bool s_nbPrevLeft = false;
         const int rx = s_ninjabrainOverlayRectX, ry = s_ninjabrainOverlayRectY, rw = s_ninjabrainOverlayRectW, rh = s_ninjabrainOverlayRectH;
         HWND hwnd = g_minecraftHwnd.load();
@@ -8661,6 +8780,33 @@ static void RenderEditorSelectionHandles(const GLState& s, int fullW, int fullH,
         POINT corners[4] = { { (LONG)sx, (LONG)sy }, { (LONG)(sx + sw), (LONG)sy }, { (LONG)sx, (LONG)(sy + sh) }, { (LONG)(sx + sw), (LONG)(sy + sh) } };
         for (int c = 0; c < 4; c++) { int dx = mp.x - corners[c].x, dy = mp.y - corners[c].y; if (dx * dx + dy * dy <= 16 * 16) return c; } return -1;
     };
+    auto drawFilledRect = [&](int sx, int sy, int sw, int sh, float r, float g, float b, float a) {
+        if (sw <= 0 || sh <= 0) return;
+        ensureGLState();
+        glUniform4f(g_solidColorShaderLocs.color, r, g, b, a);
+        const float x1 = ((float)sx / fullW) * 2.0f - 1.0f, x2 = ((float)(sx + sw) / fullW) * 2.0f - 1.0f;
+        const float y1 = ((float)(fullH - (sy + sh)) / fullH) * 2.0f - 1.0f, y2 = ((float)(fullH - sy) / fullH) * 2.0f - 1.0f;
+        float verts[12] = { x1, y1, x2, y1, x2, y2, x1, y1, x2, y2, x1, y2 };
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+    };
+
+    if (InteractiveCreateActive()) {
+        const int stage = g_interactiveCreateStage.load(std::memory_order_relaxed);
+        if (g_icreate.sourceValid) {
+            const RECT& s2 = g_icreate.source;
+            drawFilledRect(s2.left, s2.top, s2.right - s2.left, s2.bottom - s2.top, 0.9f, 0.15f, 0.15f, 0.12f);
+            drawSelectionBorder(s2.left, s2.top, s2.right - s2.left, s2.bottom - s2.top, 0.9f, 0.15f, 0.15f);
+        }
+        if (g_icreate.hasCurrent) {
+            const RECT& c2 = g_icreate.current;
+            const int cx = c2.left, cy = c2.top, cw = c2.right - c2.left, ch = c2.bottom - c2.top;
+            const bool orange = (stage == 2);
+            const float r = orange ? 1.0f : 0.9f, g = orange ? 0.55f : 0.15f, b = orange ? 0.0f : 0.15f;
+            drawFilledRect(cx, cy, cw, ch, r, g, b, 0.12f);
+            drawSelectionBorder(cx, cy, cw, ch, r, g, b);
+        }
+    }
 
     if (mode && g_mirrorDragMode.load(std::memory_order_relaxed) && !s_selectedMirrorName.empty()) {
         bool isDirect = false; for (const auto& src : mode->sources) { if (src.type == ModeSourceType::Mirror && src.id == s_selectedMirrorName) { isDirect = true; break; } }

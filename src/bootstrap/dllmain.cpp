@@ -220,6 +220,11 @@ std::atomic<bool> g_ninjabrainOverlayDragMode{ false };
 
 std::atomic<bool> g_overlayEditorMode{ false };
 
+std::atomic<bool> g_interactiveCreateRequested{ false };
+std::atomic<bool> g_interactiveCreateRelativeToScreen{ false };
+std::atomic<bool> g_interactiveCreateCancel{ false };
+std::atomic<int> g_interactiveCreateStage{ 0 };
+
 std::ofstream logFile;
 std::mutex g_logFileMutex;
 static LogSession g_logSession;

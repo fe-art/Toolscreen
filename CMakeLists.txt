@@ -1198,3 +1198,48 @@ foreach(test_group IN LISTS TOOLSCREEN_GUI_INTEGRATION_TEST_GROUPS)
     )
 endforeach()
 
+add_executable(toolscreen_interactive_create_tests
+    tests/interactive_mirror_create_tests.cpp
+    src/features/interactive_mirror_create.cpp
+)
+
+target_include_directories(toolscreen_interactive_create_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_compile_definitions(toolscreen_interactive_create_tests PRIVATE
+    NOMINMAX
+    UNICODE
+    _UNICODE
+)
+
+if(MSVC)
+    target_compile_options(toolscreen_interactive_create_tests PRIVATE
+        /W3
+        /MP
+        /EHsc
+    )
+endif()
+
+toolscreen_configure_target_outputs(toolscreen_interactive_create_tests)
+toolscreen_enable_release_symbols(toolscreen_interactive_create_tests)
+
+set(TOOLSCREEN_INTERACTIVE_CREATE_TEST_CASES
+    unscaled_viewport_maps_one_to_one
+    scaled_viewport_divides_by_scale
+    viewport_offset_subtracted_from_capture
+    source_in_letterbox_gives_negative_input
+    dest_rect_keeps_aspect_and_centers
+    relative_to_screen_sets_fraction_and_anchor
+    fixed_pixels_use_viewport_anchor
+    tiny_source_clamped_to_min
+    huge_dest_scale_clamped
+)
+
+foreach(test_case IN LISTS TOOLSCREEN_INTERACTIVE_CREATE_TEST_CASES)
+    add_test(
+        NAME toolscreen_interactive_create_${test_case}
+        COMMAND $<TARGET_FILE:toolscreen_interactive_create_tests> --run ${test_case}
+    )
+endforeach()
+
