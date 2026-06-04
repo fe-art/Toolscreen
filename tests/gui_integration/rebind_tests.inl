@@ -1170,6 +1170,69 @@ void RunKeyRebindRuntimeMouseSourceEmitsKeyAndCharTest(TestRunMode runMode = Tes
         g_subclassedHwnd.store(previousSubclassedHwnd, std::memory_order_release);
     }
 
+void RunKeyRebindRuntimeModifierSourceDualShiftReleaseTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    PrepareRebindRuntimeCase("key_rebind_runtime_modifier_source_dual_shift_release",
+                 { MakeEnabledRebind(VK_LSHIFT, VK_LCONTROL) });
+
+    ResetSyntheticRebindKeyEventsForTest();
+    Expect(GetSyntheticRebindKeyEventCountForTest() == 0,
+        "Expected the synthetic rebind key event log to start empty for the dual-shift release test.");
+    Expect(GetActiveSyntheticRebindOutputCountForTest() == 0,
+        "Expected no held synthetic rebind outputs before the dual-shift release test runs.");
+
+    ScopedKeyboardStateOverride keyboardState;
+    keyboardState.SetKeyDown(VK_SHIFT, false);
+    keyboardState.Apply();
+
+    const UINT expectedScanCodeWithFlags = static_cast<UINT>(MapVirtualKeyW(VK_LCONTROL, MAPVK_VK_TO_VSC_EX));
+    const LPARAM lShiftDownLParam = BuildTestKeyboardMessageLParam(VK_LSHIFT, true);
+    const LPARAM rShiftDownLParam = BuildTestKeyboardMessageLParam(VK_RSHIFT, true);
+    const LPARAM lShiftUpLParam = BuildTestKeyboardMessageLParam(VK_LSHIFT, false);
+
+    SetPhysicalModifierDownForTest(VK_LSHIFT, true);
+    SetPhysicalModifierDownForTest(VK_RSHIFT, false);
+    keyboardState.SetKeyDown(VK_LSHIFT, true);
+    keyboardState.Apply();
+
+    const InputHandlerResult lShiftDownResult =
+        HandleKeyRebinding(window.hwnd(), WM_KEYDOWN, VK_SHIFT, lShiftDownLParam);
+    Expect(lShiftDownResult.consumed, "Expected the LShift modifier-source rebind to consume WM_KEYDOWN.");
+    Expect(GetSyntheticRebindKeyEventCountForTest() == 1,
+        "Expected one synthetic key-down event after LShift down.");
+    ExpectSyntheticRebindKeyEvent(0, expectedScanCodeWithFlags, true, "Dual-shift LShift keydown");
+    Expect(GetActiveSyntheticRebindOutputCountForTest() == 1,
+        "Expected one held synthetic output after LShift down.");
+
+    SetPhysicalModifierDownForTest(VK_RSHIFT, true);
+    keyboardState.SetKeyDown(VK_RSHIFT, true);
+    keyboardState.Apply();
+
+    const InputHandlerResult rShiftDownResult =
+        HandleKeyRebinding(window.hwnd(), WM_KEYDOWN, VK_SHIFT, rShiftDownLParam);
+    Expect(!rShiftDownResult.consumed, "Expected RShift keydown not to match the LShift-only rebind.");
+    Expect(GetActiveSyntheticRebindOutputCountForTest() == 1,
+        "Expected the synthetic output to remain held after unrelated RShift keydown.");
+
+    keyboardState.SetKeyDown(VK_LSHIFT, false);
+    keyboardState.SetKeyDown(VK_RSHIFT, false);
+    keyboardState.Apply();
+    SetPhysicalModifierDownForTest(VK_LSHIFT, true);
+    SetPhysicalModifierDownForTest(VK_RSHIFT, false);
+
+    const InputHandlerResult lShiftUpResult =
+        HandleKeyRebinding(window.hwnd(), WM_KEYUP, VK_SHIFT, lShiftUpLParam);
+    Expect(lShiftUpResult.consumed,
+        "Expected LShift keyup to release the synthetic output even when VK resolution is inverted by stale physical state.");
+    Expect(GetSyntheticRebindKeyEventCountForTest() == 2,
+        "Expected a matching synthetic key-up event after LShift release.");
+    ExpectSyntheticRebindKeyEvent(1, expectedScanCodeWithFlags, false, "Dual-shift LShift keyup");
+    Expect(GetActiveSyntheticRebindOutputCountForTest() == 0,
+        "Expected no stuck synthetic outputs after LShift release with stale physical state.");
+
+    ResetPhysicalModifierStateForTest();
+}
+
 void RunKeyRebindRuntimeDisabledRebindIgnoredTest(TestRunMode runMode = TestRunMode::Automated) {
     DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
     KeyRebind rebind = MakeEnabledRebind('A', 'B');

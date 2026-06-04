@@ -108,6 +108,7 @@ const auto& GetTestCaseDefinitions() {
         {"key-rebind-runtime-suppressed-caps-lock-released-on-deactivate", &RunKeyRebindRuntimeSuppressedCapsLockReleasedOnDeactivateTest},
         {"key-rebind-runtime-custom-modifier-output-uses-synthetic-key", &RunKeyRebindRuntimeCustomModifierOutputUsesSyntheticKeyTest},
         {"key-rebind-runtime-wndproc-keeps-synthetic-modifier-held", &RunKeyRebindRuntimeWndProcKeepsSyntheticModifierHeldTest},
+        {"key-rebind-runtime-modifier-source-dual-shift-release", &RunKeyRebindRuntimeModifierSourceDualShiftReleaseTest},
         {"key-rebind-runtime-disabled-rebind-ignored", &RunKeyRebindRuntimeDisabledRebindIgnoredTest},
         {"key-rebind-runtime-cursor-state-keyup-passthrough", &RunKeyRebindRuntimeCursorStateKeyupPassthroughTest, true},
         {"key-rebind-runtime-cursor-state-priority-and-fallback", &RunKeyRebindRuntimeCursorStatePriorityAndFallbackTest},
