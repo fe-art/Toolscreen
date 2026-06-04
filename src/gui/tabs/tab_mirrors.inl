@@ -1,8 +1,6 @@
 if (BeginSelectableSettingsNestedTabItem(trc("tabs.mirrors"))) {
     g_currentlyEditingMirror = "";
 
-    wantMirrorDrag = true;
-
     std::string scrollToMirrorThisFrame;
     if (!g_scrollToMirrorName.empty()) {
         g_selectedMirrorName = g_scrollToMirrorName;

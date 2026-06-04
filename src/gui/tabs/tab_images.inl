@@ -1,8 +1,6 @@
 if (BeginSelectableSettingsNestedTabItem(trc("tabs.images"))) {
     g_currentlyEditingMirror = "";
 
-    wantImageDrag = true;
-
     static std::string scrollToThisFrame = "";
     if (!g_scrollToImageName.empty()) {
         scrollToThisFrame = g_scrollToImageName;

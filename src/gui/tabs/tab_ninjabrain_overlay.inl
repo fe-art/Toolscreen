@@ -1,8 +1,6 @@
 if (BeginSelectableSettingsNestedTabItem(trc("ninjabrain.title"))) {
     g_currentlyEditingMirror = "";
 
-    wantNinjabrainDrag = true;
-
     SliderCtrlClickTip();
 
     {

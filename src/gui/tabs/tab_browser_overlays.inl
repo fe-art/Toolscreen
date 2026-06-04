@@ -6,8 +6,6 @@ if (BeginSelectableSettingsNestedTabItem(trc("tabs.browser_overlays"))) {
 
     g_currentlyEditingMirror = "";
 
-    wantBrowserOverlayDrag = true;
-
     SliderCtrlClickTip();
     const std::string g_currentModeId = GetPublishedCurrentModeId();
 

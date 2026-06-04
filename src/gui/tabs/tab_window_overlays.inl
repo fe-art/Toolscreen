@@ -1,8 +1,6 @@
 if (BeginSelectableSettingsNestedTabItem(trc("tabs.window_overlays"))) {
     g_currentlyEditingMirror = "";
 
-    wantWindowOverlayDrag = true;
-
     std::string scrollToWindowOverlayThisFrame;
     if (!g_scrollToWindowOverlayName.empty()) {
         g_selectedWindowOverlayName = g_scrollToWindowOverlayName;
