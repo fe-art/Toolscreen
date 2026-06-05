@@ -1026,6 +1026,54 @@ void RunKeyRebindRuntimeMouseSourceEmitsKeyAndCharTest(TestRunMode runMode = Tes
     ExpectCapturedMessage(capture, 0, WM_KEYUP, 'B', "Mouse-source rebind WM_KEYUP");
 }
 
+void RunKeyRebindRuntimePlainKeyOutputReleasedOnTeardownTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    PrepareRebindRuntimeCase("key_rebind_runtime_plain_key_output_released_on_teardown",
+                             { MakeEnabledRebind('A', 'B') });
+    ScopedRebindMessageCapture capture(window.hwnd());
+
+    const InputHandlerResult keyDownResult =
+        HandleKeyRebinding(window.hwnd(), WM_KEYDOWN, 'A', BuildTestKeyboardMessageLParam('A', true));
+    Expect(keyDownResult.consumed, "Expected the plain key-to-key rebind to consume WM_KEYDOWN.");
+    Expect(capture.messages.size() == 1, "Expected the plain key rebind to forward exactly one WM_KEYDOWN.");
+    ExpectCapturedMessage(capture, 0, WM_KEYDOWN, 'B', "Plain key rebind WM_KEYDOWN");
+
+    capture.Clear();
+    (void)HandleActivate(window.hwnd(), WM_KILLFOCUS, 0, 0);
+    Expect(capture.messages.size() == 1,
+           "Expected losing focus mid-hold to forward a matching WM_KEYUP for the held output key.");
+    ExpectCapturedMessage(capture, 0, WM_KEYUP, 'B', "Plain key rebind forced-release WM_KEYUP");
+
+    capture.Clear();
+    (void)HandleActivate(window.hwnd(), WM_KILLFOCUS, 0, 0);
+    Expect(capture.messages.empty(),
+           "Expected a second teardown to forward nothing once the held output was already released.");
+}
+
+void RunKeyRebindRuntimePassthroughSourceReleasedOnEnableTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    PrepareRebindRuntimeCase("key_rebind_runtime_passthrough_source_released_on_enable",
+                             { MakeEnabledRebind(VK_LCONTROL, 'Z') });
+    g_config.keyRebinds.enabled = false;
+    g_config.keyRebinds.toggleHotkey = { VK_F8 };
+    PublishConfigSnapshot();
+
+    ScopedRebindMessageCapture capture(window.hwnd());
+
+    const InputHandlerResult downResult =
+        HandleKeyRebinding(window.hwnd(), WM_KEYDOWN, VK_CONTROL, BuildTestKeyboardMessageLParam(VK_LCONTROL, true));
+    Expect(!downResult.consumed, "Expected a source keydown while rebinds are disabled to pass through untouched.");
+    Expect(capture.messages.empty(), "Expected the disabled-passthrough keydown not to forward any synthetic message.");
+
+    const InputHandlerResult toggleResult =
+        HandleKeyRebindsToggle(window.hwnd(), WM_KEYDOWN, VK_F8, BuildTestKeyboardMessageLParam(VK_F8, true));
+    Expect(toggleResult.consumed, "Expected the rebind toggle hotkey to be consumed.");
+    Expect(g_config.keyRebinds.enabled, "Expected the toggle hotkey to enable rebinds.");
+
+    Expect(capture.messages.size() == 1, "Expected enabling mid-hold to forward exactly one real source key-up.");
+    ExpectCapturedMessage(capture, 0, WM_KEYUP, VK_CONTROL, "Passthrough source release WM_KEYUP");
+}
+
     void RunKeyRebindRuntimeModifierOutputReleasedOnDeactivateTest(TestRunMode runMode = TestRunMode::Automated) {
         DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
         PrepareRebindRuntimeCase("key_rebind_runtime_modifier_output_released_on_deactivate",

@@ -77,6 +77,8 @@ void ResetLocalKeyRepeatState(HWND hWnd);
 
 void ReleaseActiveLowLevelRebindKeys(HWND hWnd);
 
+void ReleaseHeldPassthroughRebindSources(HWND hWnd);
+
 bool IsKeyCurrentlyLowLevelSuppressed(DWORD vk);
 
 #ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS

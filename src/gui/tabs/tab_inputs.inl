@@ -551,6 +551,8 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                     if (ImGui::Checkbox(trc("inputs.enable_key_rebinding"), &g_config.keyRebinds.enabled)) {
                         if (!g_config.keyRebinds.enabled) {
                             ReleaseActiveLowLevelRebindKeys(g_minecraftHwnd.load(std::memory_order_relaxed));
+                        } else {
+                            ReleaseHeldPassthroughRebindSources(g_minecraftHwnd.load(std::memory_order_relaxed));
                         }
                         g_configIsDirty = true;
                         std::lock_guard<std::mutex> hotkeyLock(g_hotkeyMainKeysMutex);

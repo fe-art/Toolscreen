@@ -136,6 +136,8 @@ static std::deque<LowLevelExactModifierEvent> s_pendingLowLevelExactModifierEven
 static std::mutex s_lowLevelExactModifierStateMutex;
 static bool s_systemAltTabPassthroughActive = false;
 static std::unordered_set<DWORD> s_unreboundKeyDownVks;
+static std::unordered_map<DWORD, LowLevelSuppressedKeyState> s_passthroughHeldWhileDisabled;
+static std::mutex s_passthroughHeldWhileDisabledMutex;
 static std::unordered_set<DWORD> s_exactKeyboardKeysDown;
 static thread_local std::vector<ExactKeyboardMessageState> s_exactKeyboardMessageStateStack;
 struct ShiftHotkeyPollState {
@@ -156,13 +158,16 @@ static std::unordered_map<uint64_t, UINT> s_activeSyntheticRebindOutputsBySource
 static std::unordered_map<UINT, size_t> s_activeSyntheticRebindOutputRefCounts;
 static std::mutex s_activeSyntheticRebindOutputsMutex;
 
-struct HeldShiftRebindOutput {
+struct HeldRebindOutput {
     DWORD msgVk = 0;
     UINT outputScanCode = 0;
     bool altContext = false;
 };
-static std::unordered_map<DWORD, HeldShiftRebindOutput> s_heldShiftRebindOutputs;
+static std::unordered_map<DWORD, HeldRebindOutput> s_heldShiftRebindOutputs;
 static std::mutex s_heldShiftRebindOutputsMutex;
+
+static std::unordered_map<uint64_t, HeldRebindOutput> s_heldKeyRebindOutputs;
+static std::mutex s_heldKeyRebindOutputsMutex;
 
 #ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
 struct SyntheticRebindKeyEventForTest {
@@ -183,10 +188,14 @@ static uint64_t BuildSyntheticRebindOutputSourceId(DWORD rawVkCode, LPARAM lPara
 static void TrackSyntheticRebindOutputHold(uint64_t sourceId, UINT outputScanCode);
 static bool ReleaseTrackedSyntheticRebindOutputHold(uint64_t sourceId);
 static void ReleaseAllTrackedSyntheticRebindOutputHolds();
-static void TrackHeldShiftRebindOutput(DWORD sourceVk, const HeldShiftRebindOutput& out);
+static void TrackHeldShiftRebindOutput(DWORD sourceVk, const HeldRebindOutput& out);
 static void UntrackHeldShiftRebindOutput(DWORD sourceVk);
 static void ReconcileHeldShiftRebindOutputs(HWND hWnd);
 static void ReleaseAllHeldShiftRebindOutputs(HWND hWnd);
+static void TrackHeldKeyRebindOutput(uint64_t sourceId, const HeldRebindOutput& out);
+static void UntrackHeldKeyRebindOutput(uint64_t sourceId);
+static void ReleaseAllHeldKeyRebindOutputs(HWND hWnd);
+static UINT GetScanCodeWithExtendedFlagFromLParam(LPARAM lParam);
 static bool IsNonCharKeyVk(DWORD vk);
 static bool IsLocalRepeatDebugEnabled();
 static const char* GetLocalRepeatMessageName(UINT uMsg);
@@ -631,6 +640,10 @@ static void ResetExactKeyboardMessageState() {
     s_exactKeyboardKeysDown.clear();
     s_exactKeyboardMessageStateStack.clear();
     s_unreboundKeyDownVks.clear();
+    {
+        std::lock_guard<std::mutex> lock(s_passthroughHeldWhileDisabledMutex);
+        s_passthroughHeldWhileDisabled.clear();
+    }
 }
 
 static bool IsTrackedExactAutoRepeatKeyDown(UINT uMsg, WPARAM wParam, LPARAM lParam) {
@@ -1704,12 +1717,17 @@ InputHandlerResult HandleKeyRebindsToggle(HWND hWnd, UINT uMsg, WPARAM wParam, L
     if (nowMs - lastMs < 250) { return { true, 1 }; }
     s_lastToggleMs.store(nowMs, std::memory_order_relaxed);
 
-    if (g_config.keyRebinds.enabled) {
+    const bool wasEnabled = g_config.keyRebinds.enabled;
+    if (wasEnabled) {
         ReleaseActiveLowLevelRebindKeys(hWnd);
     }
 
-    g_config.keyRebinds.enabled = !g_config.keyRebinds.enabled;
+    g_config.keyRebinds.enabled = !wasEnabled;
     g_configIsDirty = true;
+
+    if (!wasEnabled) {
+        ReleaseHeldPassthroughRebindSources(hWnd);
+    }
 
     {
         std::lock_guard<std::mutex> hotkeyLock(g_hotkeyMainKeysMutex);
@@ -3947,6 +3965,26 @@ static void ReleaseSuppressedLowLevelRebindKeys(HWND hWnd) {
     }
 }
 
+void ReleaseHeldPassthroughRebindSources(HWND hWnd) {
+    std::vector<LowLevelSuppressedKeyState> toRelease;
+    {
+        std::lock_guard<std::mutex> lock(s_passthroughHeldWhileDisabledMutex);
+        if (s_passthroughHeldWhileDisabled.empty()) { return; }
+        for (const auto& [vk, state] : s_passthroughHeldWhileDisabled) {
+            (void)vk;
+            toRelease.push_back(state);
+        }
+        s_passthroughHeldWhileDisabled.clear();
+    }
+
+    if (!hWnd) { return; }
+    for (const auto& state : toRelease) {
+        const UINT msg = state.isSystemKey ? WM_SYSKEYUP : WM_KEYUP;
+        const LPARAM lp = BuildKeyboardMessageLParam(state.scanCodeWithFlags, false, state.isSystemKey, 1, true, true);
+        (void)CallWindowProc(g_originalWndProc, hWnd, msg, static_cast<WPARAM>(state.rawVk), lp);
+    }
+}
+
 void ReleaseActiveLowLevelRebindKeys(HWND hWnd) {
     s_systemAltTabPassthroughActive = false;
 
@@ -3954,6 +3992,12 @@ void ReleaseActiveLowLevelRebindKeys(HWND hWnd) {
 
     ReleaseAllTrackedSyntheticRebindOutputHolds();
     ReleaseAllHeldShiftRebindOutputs(hWnd);
+    ReleaseAllHeldKeyRebindOutputs(hWnd);
+
+    {
+        std::lock_guard<std::mutex> lock(s_passthroughHeldWhileDisabledMutex);
+        s_passthroughHeldWhileDisabled.clear();
+    }
 }
 
 static bool SendSynthKeyByScanCode(UINT scanCodeWithFlags, bool keyDown) {
@@ -4315,16 +4359,23 @@ static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM w
     LPARAM newLParam =
         BuildKeyboardMessageLParam(outputScanCode, isKeyDown, outputHasAltContext, repeatCount, previousState, transitionState);
 
-    if (!isMouseButton) {
-        const DWORD shiftSourceVk = NormalizeModifierVkFromKeyMessage(rawVkCode, lParam);
-        if (shiftSourceVk == VK_LSHIFT || shiftSourceVk == VK_RSHIFT) {
-            if (isKeyDown) {
-                if (!isAutoRepeatKeyDown) {
-                    TrackHeldShiftRebindOutput(shiftSourceVk, { msgVk, outputScanCode, outputHasAltContext });
-                }
-            } else {
-                UntrackHeldShiftRebindOutput(shiftSourceVk);
+    const DWORD shiftSourceVk = isMouseButton ? 0 : NormalizeModifierVkFromKeyMessage(rawVkCode, lParam);
+    if (shiftSourceVk == VK_LSHIFT || shiftSourceVk == VK_RSHIFT) {
+        if (isKeyDown) {
+            if (!isAutoRepeatKeyDown) {
+                TrackHeldShiftRebindOutput(shiftSourceVk, { msgVk, outputScanCode, outputHasAltContext });
             }
+        } else {
+            UntrackHeldShiftRebindOutput(shiftSourceVk);
+        }
+    } else {
+        const uint64_t heldKeySourceId = BuildSyntheticRebindOutputSourceId(rawVkCode, lParam, isMouseButton);
+        if (isKeyDown) {
+            if (!isAutoRepeatKeyDown) {
+                TrackHeldKeyRebindOutput(heldKeySourceId, { msgVk, outputScanCode, outputHasAltContext });
+            }
+        } else {
+            UntrackHeldKeyRebindOutput(heldKeySourceId);
         }
     }
 
@@ -4337,7 +4388,7 @@ static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM w
     return { true, keyResult };
 }
 
-static void TrackHeldShiftRebindOutput(DWORD sourceVk, const HeldShiftRebindOutput& out) {
+static void TrackHeldShiftRebindOutput(DWORD sourceVk, const HeldRebindOutput& out) {
     std::lock_guard<std::mutex> lock(s_heldShiftRebindOutputsMutex);
     s_heldShiftRebindOutputs[sourceVk] = out;
 }
@@ -4347,7 +4398,7 @@ static void UntrackHeldShiftRebindOutput(DWORD sourceVk) {
     s_heldShiftRebindOutputs.erase(sourceVk);
 }
 
-static void InjectHeldShiftRebindOutputKeyUp(HWND hWnd, const HeldShiftRebindOutput& out) {
+static void InjectHeldShiftRebindOutputKeyUp(HWND hWnd, const HeldRebindOutput& out) {
     const UINT keyUpMsg = out.altContext ? WM_SYSKEYUP : WM_KEYUP;
     const LPARAM lp = BuildKeyboardMessageLParam(out.outputScanCode, false, out.altContext, 1, true, true);
     (void)CallWindowProc(g_originalWndProc, hWnd, keyUpMsg, out.msgVk, lp);
@@ -4357,7 +4408,7 @@ static void ReconcileHeldShiftRebindOutputs(HWND hWnd) {
     if (!IsPhysicalShiftKeyDown(VK_LSHIFT)) { (void)ReleaseTrackedSyntheticRebindOutputHold(VK_LSHIFT); }
     if (!IsPhysicalShiftKeyDown(VK_RSHIFT)) { (void)ReleaseTrackedSyntheticRebindOutputHold(VK_RSHIFT); }
 
-    std::vector<HeldShiftRebindOutput> toRelease;
+    std::vector<HeldRebindOutput> toRelease;
     {
         std::lock_guard<std::mutex> lock(s_heldShiftRebindOutputsMutex);
         if (s_heldShiftRebindOutputs.empty()) { return; }
@@ -4370,20 +4421,45 @@ static void ReconcileHeldShiftRebindOutputs(HWND hWnd) {
             }
         }
     }
-    for (const HeldShiftRebindOutput& out : toRelease) {
+    for (const HeldRebindOutput& out : toRelease) {
         InjectHeldShiftRebindOutputKeyUp(hWnd, out);
     }
 }
 
 static void ReleaseAllHeldShiftRebindOutputs(HWND hWnd) {
-    std::vector<HeldShiftRebindOutput> toRelease;
+    std::vector<HeldRebindOutput> toRelease;
     {
         std::lock_guard<std::mutex> lock(s_heldShiftRebindOutputsMutex);
         if (s_heldShiftRebindOutputs.empty()) { return; }
         for (const auto& entry : s_heldShiftRebindOutputs) { toRelease.push_back(entry.second); }
         s_heldShiftRebindOutputs.clear();
     }
-    for (const HeldShiftRebindOutput& out : toRelease) {
+    for (const HeldRebindOutput& out : toRelease) {
+        InjectHeldShiftRebindOutputKeyUp(hWnd, out);
+    }
+}
+
+static void TrackHeldKeyRebindOutput(uint64_t sourceId, const HeldRebindOutput& out) {
+    if (sourceId == 0 || out.outputScanCode == 0) { return; }
+    std::lock_guard<std::mutex> lock(s_heldKeyRebindOutputsMutex);
+    s_heldKeyRebindOutputs[sourceId] = out;
+}
+
+static void UntrackHeldKeyRebindOutput(uint64_t sourceId) {
+    if (sourceId == 0) { return; }
+    std::lock_guard<std::mutex> lock(s_heldKeyRebindOutputsMutex);
+    s_heldKeyRebindOutputs.erase(sourceId);
+}
+
+static void ReleaseAllHeldKeyRebindOutputs(HWND hWnd) {
+    std::vector<HeldRebindOutput> toRelease;
+    {
+        std::lock_guard<std::mutex> lock(s_heldKeyRebindOutputsMutex);
+        if (s_heldKeyRebindOutputs.empty()) { return; }
+        for (const auto& entry : s_heldKeyRebindOutputs) { toRelease.push_back(entry.second); }
+        s_heldKeyRebindOutputs.clear();
+    }
+    for (const HeldRebindOutput& out : toRelease) {
         InjectHeldShiftRebindOutputKeyUp(hWnd, out);
     }
 }
@@ -4496,7 +4572,19 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
 
     // Use config snapshot for thread-safe access to key rebinds
     auto rebindCfg = GetConfigSnapshot();
-    if (!rebindCfg || !rebindCfg->keyRebinds.enabled) { return { false, 0 }; }
+    const bool rebindsEnabled = rebindCfg && rebindCfg->keyRebinds.enabled;
+    if (!rebindsEnabled) {
+        if (!isMouseButton && !isAutoRepeatKeyDown) {
+            std::lock_guard<std::mutex> lock(s_passthroughHeldWhileDisabledMutex);
+            if (isKeyDown) {
+                s_passthroughHeldWhileDisabled[passthroughVk] =
+                    { rawVkCode, GetScanCodeWithExtendedFlagFromLParam(lParam), uMsg == WM_SYSKEYDOWN };
+            } else {
+                s_passthroughHeldWhileDisabled.erase(passthroughVk);
+            }
+        }
+        return { false, 0 };
+    }
     const bool cursorVisible = IsCursorVisible();
 
     const bool allowSystemAltTab = !isMouseButton && rebindCfg->keyRebinds.allowSystemAltTab;
