@@ -5006,6 +5006,13 @@ static InputHandlerResult HandleShiftHotkeyPolling(HWND hWnd, UINT uMsg, WPARAM 
 
     const bool leftDownNow = IsPhysicalShiftKeyDown(VK_LSHIFT);
     const bool rightDownNow = IsPhysicalShiftKeyDown(VK_RSHIFT);
+
+    if (!DoesSubclassedWindowOwnForegroundInput() || !g_gameWindowActive.load(std::memory_order_acquire)) {
+        s_shiftHotkeyPollState.lastLeftDown = leftDownNow;
+        s_shiftHotkeyPollState.lastRightDown = rightDownNow;
+        return { true, 0 };
+    }
+
     const bool leftChanged = leftDownNow != s_shiftHotkeyPollState.lastLeftDown;
     const bool rightChanged = rightDownNow != s_shiftHotkeyPollState.lastRightDown;
 
