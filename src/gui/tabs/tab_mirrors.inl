@@ -460,8 +460,10 @@ if (BeginSelectableSettingsNestedTabItem(trc("tabs.mirrors"))) {
                 if (!ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId)) {
                     activeMirrorColorPickerName = mirror.name;
                 }
-                activeMirrorColorPickerIndex = std::clamp(activeMirrorColorPickerIndex, 0,
-                                                          (std::max)(0, static_cast<int>(mirror.colors.targetColors.size()) - 1));
+                if (activeMirrorColorPickerName == mirror.name) {
+                    activeMirrorColorPickerIndex = std::clamp(activeMirrorColorPickerIndex, 0,
+                                                              (std::max)(0, static_cast<int>(mirror.colors.targetColors.size()) - 1));
+                }
                 int target_color_to_remove = -1;
                 const std::string mirrorColorPickerPopupId = std::string("mirror_target_color_picker##") + mirror.name;
                 const std::string mirrorColorPickerPopupTitle = tr("mirrors.color_picker") + "###" + mirrorColorPickerPopupId;
