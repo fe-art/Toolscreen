@@ -1243,3 +1243,59 @@ foreach(test_case IN LISTS TOOLSCREEN_INTERACTIVE_CREATE_TEST_CASES)
     )
 endforeach()
 
+add_executable(toolscreen_game_state_source_tests
+    tests/game_state_source_tests.cpp
+    src/features/game_state_source.cpp
+)
+
+target_include_directories(toolscreen_game_state_source_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${nlohmann_json_SOURCE_DIR}/single_include
+)
+
+target_compile_definitions(toolscreen_game_state_source_tests PRIVATE
+    NOMINMAX
+    UNICODE
+    _UNICODE
+)
+
+if(MSVC)
+    target_compile_options(toolscreen_game_state_source_tests PRIVATE
+        /W3
+        /MP
+        /EHsc
+    )
+endif()
+
+toolscreen_configure_target_outputs(toolscreen_game_state_source_tests)
+toolscreen_enable_release_symbols(toolscreen_game_state_source_tests)
+
+set(TOOLSCREEN_GAME_STATE_SOURCE_TEST_CASES
+    stateoutput_normalizes_unpaused
+    stateoutput_normalizes_paused_and_gamescreen
+    stateoutput_generating_strips_suffix
+    stateoutput_passes_through_canonical
+    stateoutput_trims_whitespace
+    stateoutput_unknown_returns_nullopt
+    hermes_inworld_grabbed_when_no_screen
+    hermes_inworld_free_when_screen
+    hermes_title_when_no_world
+    hermes_loading_screen_generating
+    hermes_seedqueue_wall
+    hermes_invalid_json_nullopt
+    select_prefers_hermes
+    select_falls_back_to_stateoutput
+    select_none
+    alive_fresh_same_pid_true
+    alive_wrong_pid_false
+    alive_stale_heartbeat_false
+    alive_future_skew_within_threshold_true
+)
+
+foreach(test_case IN LISTS TOOLSCREEN_GAME_STATE_SOURCE_TEST_CASES)
+    add_test(
+        NAME toolscreen_game_state_source_${test_case}
+        COMMAND $<TARGET_FILE:toolscreen_game_state_source_tests> --run ${test_case}
+    )
+endforeach()
+

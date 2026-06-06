@@ -283,7 +283,9 @@ std::atomic<bool> g_stopMonitoring{ false };
 std::atomic<bool> g_stopImageMonitoring{ false };
 std::wstring g_stateFilePath;
 std::wstring g_hermesAliveFilePath;
+std::wstring g_stateOutputFilePath;
 std::atomic<bool> g_isStateOutputAvailable{ false };
+std::atomic<GameStateSourceKind> g_activeGameStateSource{ GameStateSourceKind::None };
 
 std::vector<DecodedImageData> g_decodedImagesQueue;
 std::mutex g_decodedImagesMutex;
@@ -3512,15 +3514,21 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         if (GetCurrentDirectoryW(MAX_PATH, dir) > 0) {
             g_stateFilePath = std::wstring(dir) + L"\\hermes\\state.json";
             g_hermesAliveFilePath = std::wstring(dir) + L"\\hermes\\alive";
-            LogCategory("init", "Hermes state file path set to: " + WideToUtf8(g_stateFilePath));
+            g_stateOutputFilePath = std::wstring(dir) + L"\\wpstateout.txt";
+            LogCategory("init", "Hermes state path: " + WideToUtf8(g_stateFilePath) +
+                                    "; State Output path: " + WideToUtf8(g_stateOutputFilePath));
 
-            DWORD stateFileAttrs = GetFileAttributesW(g_stateFilePath.c_str());
-            bool stateOutputAvailable = (stateFileAttrs != INVALID_FILE_ATTRIBUTES) && !(stateFileAttrs & FILE_ATTRIBUTE_DIRECTORY);
-            g_isStateOutputAvailable.store(stateOutputAvailable, std::memory_order_release);
-            if (!stateOutputAvailable) {
-                LogCategory(
-                    "init",
-                    "WARNING: hermes/state.json not found. Game-state hotkey restrictions will not apply until Hermes is installed.");
+            auto fileExists = [](const std::wstring& path) {
+                DWORD attrs = GetFileAttributesW(path.c_str());
+                return (attrs != INVALID_FILE_ATTRIBUTES) && !(attrs & FILE_ATTRIBUTE_DIRECTORY);
+            };
+            const bool hermesPresent = fileExists(g_stateFilePath);
+            const bool stateOutputPresent = fileExists(g_stateOutputFilePath);
+            g_isStateOutputAvailable.store(hermesPresent || stateOutputPresent, std::memory_order_release);
+            if (!hermesPresent && !stateOutputPresent) {
+                LogCategory("init",
+                            "WARNING: neither hermes/state.json nor wpstateout.txt found. Game-state hotkey restrictions "
+                            "will not apply until Hermes (recommended) or State Output is installed.");
             }
         } else {
             Log("FATAL: Could not get current directory for state file path.");

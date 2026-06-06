@@ -1074,7 +1074,7 @@ void RunKeyRebindRuntimePassthroughSourceReleasedOnEnableTest(TestRunMode runMod
     ExpectCapturedMessage(capture, 0, WM_KEYUP, VK_CONTROL, "Passthrough source release WM_KEYUP");
 }
 
-void RunHotkeyExclusionHonoredOnTriggerOnReleaseTest(TestRunMode /*runMode*/ = TestRunMode::Automated) {
+void RunHotkeyRuntimeExclusionHonoredOnTriggerOnReleaseTest(TestRunMode /*runMode*/ = TestRunMode::Automated) {
     const std::vector<DWORD> keys = { VK_MENU };
     const std::vector<DWORD> exclusions = { VK_SHIFT };
 

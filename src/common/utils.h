@@ -18,6 +18,7 @@
 #include <windows.h>
 
 #include "gui/gui.h"
+#include "features/game_state_source.h"
 
 // Config access: Reader threads use GetConfigSnapshot() for safe, lock-free access.
 // g_config is the mutable draft, only touched by the GUI/main thread.
@@ -307,7 +308,9 @@ extern std::wstring g_toolscreenPath;
 extern std::wstring g_modeFilePath;
 extern std::wstring g_stateFilePath;
 extern std::wstring g_hermesAliveFilePath;
+extern std::wstring g_stateOutputFilePath;
 extern std::atomic<bool> g_isStateOutputAvailable;
+extern std::atomic<GameStateSourceKind> g_activeGameStateSource;
 extern std::atomic<bool> g_stopMonitoring;
 extern std::atomic<bool> g_stopImageMonitoring;
 extern std::atomic<bool> g_isShuttingDown;

@@ -1,5 +1,6 @@
 #include "utils.h"
 #include "common/video_media.h"
+#include "features/game_state_source.h"
 #include "gui/gui.h"
 #include "hooks/input_hook.h"
 #include "runtime/logic_thread.h"
@@ -2401,68 +2402,31 @@ void LoadAllImages() {
 }
 
 namespace {
-constexpr const char* kHermesLoadingScreenClass    = "net.minecraft.class_3928"; // leveloadingscreen
-constexpr const char* kHermesSeedQueueWallClass    = "me.contaria.seedqueue.gui.wall.SeedQueueWallScreen";
-constexpr const char* kHermesSeedQueuePreviewClass = "me.contaria.seedqueue.gui.wall.SeedQueuePreview";
-
-std::optional<std::string> DeriveStateFromHermesJson(const std::string& text) {
-    if (text.empty()) { return std::nullopt; }
-    nlohmann::json j = nlohmann::json::parse(text, nullptr, /*allow_exceptions=*/false);
-    if (j.is_discarded() || !j.is_object()) { return std::nullopt; }
-
-    const bool inWorld = j.contains("world") && !j["world"].is_null();
-
-    std::string screenClass;
-    if (auto s = j.find("screen"); s != j.end() && s->is_object()) {
-        if (auto c = s->find("class"); c != s->end() && c->is_string()) { screenClass = c->get<std::string>(); }
-    }
-
-    // loading + seedqueue wall show while world is set
-    if (screenClass == kHermesLoadingScreenClass) { return std::string("generating"); }
-    if (screenClass == kHermesSeedQueueWallClass || screenClass == kHermesSeedQueuePreviewClass) { return std::string("wall"); }
-
-    if (inWorld) {
-        return screenClass.empty() ? std::string("inworld,cursor_grabbed") : std::string("inworld,cursor_free");
-    }
-    return std::string("title");
-}
-
-constexpr long long kHermesAliveStaleThresholdMs = 3000;
-
-uint64_t ReadBigEndianU64(const unsigned char* bytes) {
-    uint64_t value = 0;
-    for (int i = 0; i < 8; ++i) { value = (value << 8) | bytes[i]; }
-    return value;
-}
-
 long long NowEpochMillis() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
-// alive: [pid u64 be][heartbeat epoch-ms u64 be, ticks every sec]
-bool ReadHermesAlive(const std::wstring& alivePath, uint64_t& outPid, long long& outHeartbeatMs) {
+bool ReadAliveFileBytes(const std::wstring& alivePath, unsigned char (&bytes)[16]) {
     HANDLE file = CreateFileW(alivePath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
                               FILE_ATTRIBUTE_NORMAL, NULL);
     if (file == INVALID_HANDLE_VALUE) { return false; }
-    unsigned char bytes[16] = {};
     DWORD bytesRead = 0;
     const bool readWholeFile = ReadFile(file, bytes, sizeof(bytes), &bytesRead, NULL) && bytesRead == sizeof(bytes);
     CloseHandle(file);
-    if (!readWholeFile) { return false; }
-
-    outPid = ReadBigEndianU64(bytes);
-    outHeartbeatMs = static_cast<long long>(ReadBigEndianU64(bytes + 8));
-    return true;
+    return readWholeFile;
 }
 
 bool IsHermesAlive(const std::wstring& alivePath) {
-    uint64_t pid = 0;
-    long long heartbeatMs = 0;
-    if (alivePath.empty() || !ReadHermesAlive(alivePath, pid, heartbeatMs)) { return false; }
+    if (alivePath.empty()) { return false; }
+    unsigned char bytes[16] = {};
+    if (!ReadAliveFileBytes(alivePath, bytes)) { return false; }
+    return game_state_source::EvaluateHermesAlive(bytes, static_cast<uint64_t>(GetCurrentProcessId()), NowEpochMillis());
+}
 
-    const bool isThisProcess = pid == static_cast<uint64_t>(GetCurrentProcessId());
-    const bool heartbeatFresh = std::llabs(NowEpochMillis() - heartbeatMs) < kHermesAliveStaleThresholdMs;
-    return isThisProcess && heartbeatFresh;
+bool StateOutputFileAvailable(const std::wstring& path) {
+    if (path.empty()) { return false; }
+    const DWORD attrs = GetFileAttributesW(path.c_str());
+    return attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY);
 }
 }  // namespace
 
@@ -2472,42 +2436,60 @@ DWORD WINAPI FileMonitorThread(LPVOID lpParam) {
     try {
         Log("[FMON] FileMonitorThread started.");
         g_isStateOutputAvailable.store(false, std::memory_order_release);
-
-        HANDLE hFile = INVALID_HANDLE_VALUE;
-        while (!g_stopMonitoring) {
-            hFile = CreateFileW(g_stateFilePath.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
-                                FILE_ATTRIBUTE_NORMAL, NULL);
-            if (hFile != INVALID_HANDLE_VALUE) { break; }
-            Sleep(500);
-        }
-        if (hFile == INVALID_HANDLE_VALUE) {
-            Log("[FMON] Stopped before Hermes state.json became available.");
-            return 0;
-        }
+        g_activeGameStateSource.store(GameStateSourceKind::None, std::memory_order_release);
 
         auto steadyNowMs = []() {
             return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
         };
 
-        g_isStateOutputAvailable.store(IsHermesAlive(g_hermesAliveFilePath), std::memory_order_release);
-
         std::vector<char> buffer;
         buffer.reserve(512);
 
+        HANDLE hFile = INVALID_HANDLE_VALUE;
+        GameStateSourceKind openSource = GameStateSourceKind::None;
         FILETIME lastWriteTime{};
         bool haveLastWriteTime = false;
+
         constexpr DWORD kFileMonitorSleepMs = 8;
         constexpr DWORD kMaxStateFileSize = 65536;
-        constexpr long long kAliveCheckIntervalMs = 1000;
-        long long lastAliveCheckMs = steadyNowMs();
+        constexpr long long kSourceCheckIntervalMs = 1000;
+        long long lastSourceCheckMs = steadyNowMs() - kSourceCheckIntervalMs;
+        GameStateSourceKind activeSource = GameStateSourceKind::None;
+
+        auto closeActiveFile = [&]() {
+            if (hFile != INVALID_HANDLE_VALUE) {
+                CloseHandle(hFile);
+                hFile = INVALID_HANDLE_VALUE;
+            }
+            openSource = GameStateSourceKind::None;
+            haveLastWriteTime = false;
+        };
 
         while (!g_stopMonitoring) {
             Sleep(kFileMonitorSleepMs);
 
-            const long long aliveTickMs = steadyNowMs();
-            if (aliveTickMs - lastAliveCheckMs >= kAliveCheckIntervalMs) {
-                lastAliveCheckMs = aliveTickMs;
-                g_isStateOutputAvailable.store(IsHermesAlive(g_hermesAliveFilePath), std::memory_order_release);
+            const long long nowMs = steadyNowMs();
+            if (nowMs - lastSourceCheckMs >= kSourceCheckIntervalMs) {
+                lastSourceCheckMs = nowMs;
+                const bool hermesAlive = IsHermesAlive(g_hermesAliveFilePath);
+                const bool stateOutputAvailable = StateOutputFileAvailable(g_stateOutputFilePath);
+                activeSource = game_state_source::Select(hermesAlive, stateOutputAvailable);
+                g_activeGameStateSource.store(activeSource, std::memory_order_release);
+                g_isStateOutputAvailable.store(activeSource != GameStateSourceKind::None, std::memory_order_release);
+            }
+
+            if (activeSource == GameStateSourceKind::None) {
+                closeActiveFile();
+                continue;
+            }
+
+            if (activeSource != openSource) {
+                closeActiveFile();
+                const std::wstring& path = (activeSource == GameStateSourceKind::Hermes) ? g_stateFilePath : g_stateOutputFilePath;
+                hFile = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+                                    FILE_ATTRIBUTE_NORMAL, NULL);
+                if (hFile == INVALID_HANDLE_VALUE) { continue; }
+                openSource = activeSource;
             }
 
             FILETIME curWriteTime{};
@@ -2524,8 +2506,10 @@ DWORD WINAPI FileMonitorThread(LPVOID lpParam) {
             DWORD bytesRead = 0;
             if (!ReadFile(hFile, buffer.data(), fileSize, &bytesRead, NULL) || bytesRead != fileSize) { continue; }
 
-            std::optional<std::string> state = DeriveStateFromHermesJson(std::string(buffer.data(), bytesRead));
-            // partial read mid-write, retry next poll (don't bump lastWriteTime)
+            std::string content(buffer.data(), bytesRead);
+            std::optional<std::string> state = (openSource == GameStateSourceKind::Hermes)
+                                                   ? game_state_source::DeriveStateFromHermesJson(content)
+                                                   : game_state_source::DeriveStateFromStateOutputText(content);
             if (!state) { continue; }
 
             lastWriteTime = curWriteTime;
@@ -2539,7 +2523,7 @@ DWORD WINAPI FileMonitorThread(LPVOID lpParam) {
             }
         }
 
-        CloseHandle(hFile);
+        closeActiveFile();
         Log("[FMON] FileMonitorThread stopped.");
         return 0;
     } catch (const SE_Exception& e) {

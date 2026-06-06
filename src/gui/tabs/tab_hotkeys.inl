@@ -2,10 +2,17 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
     if (BeginSelectableSettingsTopTabItem(trc("tabs.hotkeys"))) {
         g_currentlyEditingMirror = "";
 
-        if (!g_isStateOutputAvailable.load(std::memory_order_acquire)) {
+        {
+            const GameStateSourceKind stateSource = g_activeGameStateSource.load(std::memory_order_acquire);
             ImGui::Spacing();
-            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.25f, 1.0f), "%s", trc("hotkeys.warning_hermes"));
-            ImGui::TextWrapped("%s", trc("hotkeys.tooltip.warning_hermes"));
+            if (stateSource == GameStateSourceKind::None) {
+                ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.25f, 1.0f), "%s", trc("hotkeys.state_source.warning"));
+                ImGui::TextWrapped("%s", trc("hotkeys.state_source.warning_tooltip"));
+            } else {
+                const char* sourceName = (stateSource == GameStateSourceKind::Hermes) ? trc("hotkeys.state_source.hermes")
+                                                                                      : trc("hotkeys.state_source.stateoutput");
+                ImGui::TextColored(ImVec4(0.45f, 0.9f, 0.45f, 1.0f), "%s %s", trc("hotkeys.state_source.active"), sourceName);
+            }
             ImGui::Separator();
         }
 
@@ -331,7 +338,7 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                         g_configIsDirty = true;
                     }
 
-                    const bool hermesUnavailable = !g_isStateOutputAvailable.load(std::memory_order_acquire);
+                    const bool stateSourceUnavailable = !g_isStateOutputAvailable.load(std::memory_order_acquire);
 
                     for (const char* state : guiGameStates) {
                         auto it = std::find(hotkey.conditions.gameState.begin(), hotkey.conditions.gameState.end(), state);
@@ -343,7 +350,7 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                         }
 
                         const bool disableThisState =
-                            hermesUnavailable && strcmp(state, "any,cursor_free") != 0 && strcmp(state, "any,cursor_grabbed") != 0;
+                            stateSourceUnavailable && strcmp(state, "any,cursor_free") != 0 && strcmp(state, "any,cursor_grabbed") != 0;
                         if (disableThisState) { ImGui::BeginDisabled(); }
 
                         const char* friendlyName = getGameStateFriendlyName(state);
@@ -378,7 +385,7 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
 
                         if (disableThisState) { ImGui::EndDisabled(); }
                         if (disableThisState && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-                            ImGui::SetTooltip("%s", trc("hotkeys.tooltip.warning_hermes"));
+                            ImGui::SetTooltip("%s", trc("hotkeys.state_source.warning_tooltip"));
                         }
                     }
 
@@ -564,7 +571,7 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                         g_configIsDirty = true;
                     }
 
-                    const bool hermesUnavailable = !g_isStateOutputAvailable.load(std::memory_order_acquire);
+                    const bool stateSourceUnavailable = !g_isStateOutputAvailable.load(std::memory_order_acquire);
 
                     for (const char* state : guiGameStates) {
                         auto it = std::find(sensHotkey.conditions.gameState.begin(), sensHotkey.conditions.gameState.end(), state);
@@ -577,7 +584,7 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
                         }
 
                         const bool disableThisState =
-                            hermesUnavailable && strcmp(state, "any,cursor_free") != 0 && strcmp(state, "any,cursor_grabbed") != 0;
+                            stateSourceUnavailable && strcmp(state, "any,cursor_free") != 0 && strcmp(state, "any,cursor_grabbed") != 0;
                         if (disableThisState) { ImGui::BeginDisabled(); }
 
                         const char* friendlyName = getGameStateFriendlyName(state);
@@ -612,7 +619,7 @@ if (IsResolutionChangeSupported(g_gameVersion)) {
 
                         if (disableThisState) { ImGui::EndDisabled(); }
                         if (disableThisState && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-                            ImGui::SetTooltip("%s", trc("hotkeys.tooltip.warning_hermes"));
+                            ImGui::SetTooltip("%s", trc("hotkeys.state_source.warning_tooltip"));
                         }
                     }
 

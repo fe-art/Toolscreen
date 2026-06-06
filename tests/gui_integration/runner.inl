@@ -106,7 +106,7 @@ const auto& GetTestCaseDefinitions() {
         {"key-rebind-runtime-mouse-source-emits-key-and-char", &RunKeyRebindRuntimeMouseSourceEmitsKeyAndCharTest},
         {"key-rebind-runtime-plain-key-output-released-on-teardown", &RunKeyRebindRuntimePlainKeyOutputReleasedOnTeardownTest},
         {"key-rebind-runtime-passthrough-source-released-on-enable", &RunKeyRebindRuntimePassthroughSourceReleasedOnEnableTest},
-        {"hotkey-exclusion-honored-on-trigger-on-release", &RunHotkeyExclusionHonoredOnTriggerOnReleaseTest},
+        {"hotkey-runtime-exclusion-honored-on-trigger-on-release", &RunHotkeyRuntimeExclusionHonoredOnTriggerOnReleaseTest},
         {"key-rebind-runtime-modifier-output-released-on-deactivate", &RunKeyRebindRuntimeModifierOutputReleasedOnDeactivateTest},
         {"key-rebind-runtime-suppressed-caps-lock-released-on-deactivate", &RunKeyRebindRuntimeSuppressedCapsLockReleasedOnDeactivateTest},
         {"key-rebind-runtime-custom-modifier-output-uses-synthetic-key", &RunKeyRebindRuntimeCustomModifierOutputUsesSyntheticKeyTest},
