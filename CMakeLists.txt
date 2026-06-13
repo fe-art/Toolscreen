@@ -1001,6 +1001,8 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     config-load-clamp-global-values
     config-load-mode-default-dimensions-restored
     config-load-mode-source-lists-loaded
+    config-downgrade-sources-compat
+    config-migrate-version-applies
     config-load-mode-percentage-dimensions-detected
     config-load-mode-typed-sources-loaded
     config-load-mode-source-helpers
