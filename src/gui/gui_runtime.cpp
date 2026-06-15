@@ -8,6 +8,7 @@
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_win32.h"
 #include "platform/resource.h"
+#include "render/animated_texture_playback.h"
 #include "render/obs_thread.h"
 #include "render/render.h"
 #include "runtime/logic_thread.h"
@@ -16,8 +17,12 @@
 #include <GL/glew.h>
 #include <array>
 #include <algorithm>
+#include <cctype>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
+#include <fstream>
+#include <limits>
 
 static std::recursive_mutex s_imguiContextMutex;
 
@@ -882,10 +887,42 @@ bool IsRebindIndicatorVisible() {
     return false;
 }
 
-static GLuint s_rebindIndicatorTexEnabled = 0;
-static int s_rebindIndicatorTexEnabledW = 0, s_rebindIndicatorTexEnabledH = 0;
-static GLuint s_rebindIndicatorTexDisabled = 0;
-static int s_rebindIndicatorTexDisabledW = 0, s_rebindIndicatorTexDisabledH = 0;
+constexpr int kMaxRebindIndicatorFrames = 256;
+constexpr unsigned long long kMaxRebindIndicatorGifBytes = 64ull * 1024ull * 1024ull;
+constexpr unsigned long long kMaxRebindIndicatorDecodedBytes = 64ull * 1024ull * 1024ull;
+
+struct RebindIndicatorTexture {
+    GLuint textureId = 0;
+    int width = 0;
+    int height = 0;
+    int textureStorageHeight = 0;
+    int frameCount = 1;
+    int framesPerTexture = 1;
+    bool isAnimated = false;
+    std::vector<GLuint> frameTextures;
+    std::vector<int> frameTextureHeights;
+    std::vector<int> frameDelays;
+    std::vector<uint64_t> frameEndTimesMs;
+    uint64_t totalAnimationDurationMs = 0;
+    size_t currentFrame = 0;
+    std::chrono::steady_clock::time_point lastFrameTime;
+
+    bool Empty() const { return textureId == 0 && frameTextures.empty(); }
+
+    void ResetForContextLoss() { *this = RebindIndicatorTexture{}; }
+
+    void DeleteAndClear() {
+        if (!frameTextures.empty()) {
+            glDeleteTextures(static_cast<GLsizei>(frameTextures.size()), frameTextures.data());
+        } else if (textureId != 0) {
+            glDeleteTextures(1, &textureId);
+        }
+        *this = RebindIndicatorTexture{};
+    }
+};
+
+static RebindIndicatorTexture s_rebindIndicatorEnabled;
+static RebindIndicatorTexture s_rebindIndicatorDisabled;
 static GLuint s_rebindIndicatorProgram = 0;
 static GLuint s_rebindIndicatorVao = 0;
 static GLuint s_rebindIndicatorVbo = 0;
@@ -898,7 +935,65 @@ void InvalidateRebindIndicatorTexture() {
     s_rebindIndicatorTextureInvalid.store(true, std::memory_order_release);
 }
 
-static bool LoadTextureFromFile(const std::string& path, GLuint& outTex, int& outW, int& outH) {
+static void UploadIndicatorFrames(RebindIndicatorTexture& slot, const unsigned char* data, int w, int frameHeight,
+                                  int frameCount, const int* delaysMs, GLenum filter) {
+    slot.width = w;
+    slot.height = frameHeight;
+
+    GLint maxTextureSize = 0;
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTextureSize);
+    if (maxTextureSize > 0 && (w > maxTextureSize || frameHeight > maxTextureSize)) {
+        frameCount = 1;
+    }
+
+    auto allocPage = [&](int pageHeight, const unsigned char* pageData) -> GLuint {
+        GLuint tex = 0;
+        glGenTextures(1, &tex);
+        BindTextureDirect(GL_TEXTURE_2D, tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+        glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, pageHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, pageData);
+        BindTextureDirect(GL_TEXTURE_2D, 0);
+        return tex;
+    };
+
+    if (frameCount <= 1) {
+        slot.frameCount = 1;
+        slot.isAnimated = false;
+        slot.textureId = allocPage(frameHeight, data);
+        return;
+    }
+
+    const int framesPerTexture = (std::max)(1, maxTextureSize > 0 ? (maxTextureSize / (std::max)(1, frameHeight)) : frameCount);
+    slot.frameCount = frameCount;
+    slot.framesPerTexture = framesPerTexture;
+    slot.textureStorageHeight = frameHeight * (std::min)(frameCount, framesPerTexture);
+    slot.isAnimated = true;
+    if (delaysMs) slot.frameDelays.assign(delaysMs, delaysMs + frameCount);
+
+    for (int frameStart = 0; frameStart < frameCount; frameStart += framesPerTexture) {
+        const int framesThisTexture = (std::min)(framesPerTexture, frameCount - frameStart);
+        const unsigned char* pageData = data + (static_cast<size_t>(frameStart) * frameHeight * w * 4ull);
+        slot.frameTextures.push_back(allocPage(frameHeight * framesThisTexture, pageData));
+        slot.frameTextureHeights.push_back(frameHeight * framesThisTexture);
+    }
+    slot.textureId = slot.frameTextures.front();
+    InitializeAnimatedTexturePlayback(slot, static_cast<size_t>(frameCount));
+}
+
+static bool PathHasGifExtension(const std::string& path) {
+    std::string ext = std::filesystem::path(path).extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return ext == ".gif";
+}
+
+static bool LoadIndicatorTextureFromFile(const std::string& path, RebindIndicatorTexture& slot) {
     if (path.empty()) return false;
 
     std::string resolvedPath = path;
@@ -907,32 +1002,51 @@ static bool LoadTextureFromFile(const std::string& path, GLuint& outTex, int& ou
     }
 
     stbi_set_flip_vertically_on_load_thread(0);
-    int w = 0, h = 0, channels = 0;
-    unsigned char* pixels = stbi_load(resolvedPath.c_str(), &w, &h, &channels, 4);
+
+    int w = 0, h = 0, channels = 0, frameCount = 0;
+    int* delays = nullptr;
+    unsigned char* pixels = nullptr;
+
+    if (PathHasGifExtension(resolvedPath)) {
+        std::error_code ec;
+        const std::uintmax_t fileSize = std::filesystem::file_size(resolvedPath, ec);
+        if (!ec && fileSize > 0 && fileSize <= kMaxRebindIndicatorGifBytes &&
+            fileSize <= static_cast<std::uintmax_t>((std::numeric_limits<int>::max)())) {
+            std::ifstream file(resolvedPath, std::ios::binary);
+            std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            if (bytes.size() == fileSize) {
+                pixels = stbi_load_gif_from_memory(bytes.data(), static_cast<int>(bytes.size()), &delays, &w, &h, &frameCount, &channels, 4);
+            }
+        }
+    }
+
+    if (!pixels) {
+        if (delays) { stbi_image_free(delays); delays = nullptr; }
+        frameCount = 1;
+        pixels = stbi_load(resolvedPath.c_str(), &w, &h, &channels, 4);
+    }
+
     if (!pixels || w <= 0 || h <= 0) {
         if (pixels) stbi_image_free(pixels);
+        if (delays) stbi_image_free(delays);
         return false;
     }
 
-    glGenTextures(1, &outTex);
-    BindTextureDirect(GL_TEXTURE_2D, outTex);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-    glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
-    glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-    BindTextureDirect(GL_TEXTURE_2D, 0);
-    outW = w;
-    outH = h;
+    if (frameCount < 1) frameCount = 1;
+    const unsigned long long decodedBytes = static_cast<unsigned long long>(w) * h * frameCount * 4ull;
+    if (frameCount > 1 && (frameCount > kMaxRebindIndicatorFrames || decodedBytes > kMaxRebindIndicatorDecodedBytes)) {
+        frameCount = 1;
+        if (delays) { stbi_image_free(delays); delays = nullptr; }
+    }
+
+    UploadIndicatorFrames(slot, pixels, w, h, frameCount, delays, GL_LINEAR);
+
     stbi_image_free(pixels);
+    if (delays) stbi_image_free(delays);
     return true;
 }
 
-static void LoadDefaultIndicatorFromResource(int resourceId, GLuint& outTex, int& outW, int& outH) {
+static void LoadDefaultIndicatorFromResource(int resourceId, RebindIndicatorTexture& slot) {
     stbi_set_flip_vertically_on_load_thread(0);
 
     HMODULE hModule = NULL;
@@ -951,47 +1065,31 @@ static void LoadDefaultIndicatorFromResource(int resourceId, GLuint& outTex, int
 
     int w = 0, h = 0, channels = 0;
     unsigned char* pixels = stbi_load_from_memory(rawData, (int)dataSize, &w, &h, &channels, 4);
-    if (!pixels || w <= 0 || h <= 0) return;
+    if (!pixels || w <= 0 || h <= 0) {
+        if (pixels) stbi_image_free(pixels);
+        return;
+    }
 
-    glGenTextures(1, &outTex);
-    BindTextureDirect(GL_TEXTURE_2D, outTex);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-    glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
-    glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-    BindTextureDirect(GL_TEXTURE_2D, 0);
-    outW = w;
-    outH = h;
+    UploadIndicatorFrames(slot, pixels, w, h, 1, nullptr, GL_NEAREST);
     stbi_image_free(pixels);
 }
 
 static void EnsureRebindIndicatorTextures() {
     if (s_rebindIndicatorTextureInvalid.exchange(false, std::memory_order_acquire)) {
-        if (s_rebindIndicatorTexEnabled != 0) { glDeleteTextures(1, &s_rebindIndicatorTexEnabled); s_rebindIndicatorTexEnabled = 0; }
-        if (s_rebindIndicatorTexDisabled != 0) { glDeleteTextures(1, &s_rebindIndicatorTexDisabled); s_rebindIndicatorTexDisabled = 0; }
-        s_rebindIndicatorTexEnabledW = s_rebindIndicatorTexEnabledH = 0;
-        s_rebindIndicatorTexDisabledW = s_rebindIndicatorTexDisabledH = 0;
+        s_rebindIndicatorEnabled.DeleteAndClear();
+        s_rebindIndicatorDisabled.DeleteAndClear();
     }
 
     const int mode = g_config.keyRebinds.indicatorMode;
 
-    if ((mode == 1 || mode == 3) && s_rebindIndicatorTexEnabled == 0) {
-        if (!LoadTextureFromFile(g_config.keyRebinds.indicatorImageEnabled, s_rebindIndicatorTexEnabled,
-                                 s_rebindIndicatorTexEnabledW, s_rebindIndicatorTexEnabledH)) {
-            LoadDefaultIndicatorFromResource(IDR_REBIND_ON_PNG, s_rebindIndicatorTexEnabled,
-                                             s_rebindIndicatorTexEnabledW, s_rebindIndicatorTexEnabledH);
+    if ((mode == 1 || mode == 3) && s_rebindIndicatorEnabled.Empty()) {
+        if (!LoadIndicatorTextureFromFile(g_config.keyRebinds.indicatorImageEnabled, s_rebindIndicatorEnabled)) {
+            LoadDefaultIndicatorFromResource(IDR_REBIND_ON_PNG, s_rebindIndicatorEnabled);
         }
     }
-    if ((mode == 2 || mode == 3) && s_rebindIndicatorTexDisabled == 0) {
-        if (!LoadTextureFromFile(g_config.keyRebinds.indicatorImageDisabled, s_rebindIndicatorTexDisabled,
-                                 s_rebindIndicatorTexDisabledW, s_rebindIndicatorTexDisabledH)) {
-            LoadDefaultIndicatorFromResource(IDR_REBIND_OFF_PNG, s_rebindIndicatorTexDisabled,
-                                             s_rebindIndicatorTexDisabledW, s_rebindIndicatorTexDisabledH);
+    if ((mode == 2 || mode == 3) && s_rebindIndicatorDisabled.Empty()) {
+        if (!LoadIndicatorTextureFromFile(g_config.keyRebinds.indicatorImageDisabled, s_rebindIndicatorDisabled)) {
+            LoadDefaultIndicatorFromResource(IDR_REBIND_OFF_PNG, s_rebindIndicatorDisabled);
         }
     }
 }
@@ -1015,10 +1113,8 @@ void RenderRebindIndicator() {
         s_rebindIndicatorVao = 0;
         s_rebindIndicatorVbo = 0;
         s_rebindIndicatorLocOpacity = -1;
-        s_rebindIndicatorTexEnabled = 0;
-        s_rebindIndicatorTexDisabled = 0;
-        s_rebindIndicatorTexEnabledW = s_rebindIndicatorTexEnabledH = 0;
-        s_rebindIndicatorTexDisabledW = s_rebindIndicatorTexDisabledH = 0;
+        s_rebindIndicatorEnabled.ResetForContextLoss();
+        s_rebindIndicatorDisabled.ResetForContextLoss();
     }
 
     if (s_rebindIndicatorProgram == 0) {
@@ -1065,19 +1161,25 @@ void main() {
     EnsureRebindIndicatorTextures();
     if (s_rebindIndicatorProgram == 0) return;
 
-    struct IndicatorDraw { GLuint tex; int w, h; float opacity; };
+    struct IndicatorDraw { GLuint tex; int w, h; float opacity; float vTop, vBot; };
     IndicatorDraw draws[2];
     int drawCount = 0;
 
-    if (mode == 1 && alpha > 0.0f && s_rebindIndicatorTexEnabled != 0) {
-        draws[drawCount++] = { s_rebindIndicatorTexEnabled, s_rebindIndicatorTexEnabledW, s_rebindIndicatorTexEnabledH, alpha };
-    } else if (mode == 2 && (1.0f - alpha) > 0.0f && s_rebindIndicatorTexDisabled != 0) {
-        draws[drawCount++] = { s_rebindIndicatorTexDisabled, s_rebindIndicatorTexDisabledW, s_rebindIndicatorTexDisabledH, 1.0f - alpha };
+    auto pushDraw = [&](RebindIndicatorTexture& slot, float opacity) {
+        if (slot.Empty() || opacity <= 0.0f) return;
+        const auto frame = ResolveAnimatedTexture(slot);
+        if (frame.textureId == 0) return;
+        draws[drawCount++] = { frame.textureId, slot.width, slot.height, opacity, frame.sourceRect[1],
+                               frame.sourceRect[1] + frame.sourceRect[3] };
+    };
+
+    if (mode == 1) {
+        pushDraw(s_rebindIndicatorEnabled, alpha);
+    } else if (mode == 2) {
+        pushDraw(s_rebindIndicatorDisabled, 1.0f - alpha);
     } else if (mode == 3) {
-        if (s_rebindIndicatorTexDisabled != 0 && (1.0f - alpha) > 0.0f)
-            draws[drawCount++] = { s_rebindIndicatorTexDisabled, s_rebindIndicatorTexDisabledW, s_rebindIndicatorTexDisabledH, 1.0f - alpha };
-        if (s_rebindIndicatorTexEnabled != 0 && alpha > 0.0f)
-            draws[drawCount++] = { s_rebindIndicatorTexEnabled, s_rebindIndicatorTexEnabledW, s_rebindIndicatorTexEnabledH, alpha };
+        pushDraw(s_rebindIndicatorDisabled, 1.0f - alpha);
+        pushDraw(s_rebindIndicatorEnabled, alpha);
     }
 
     if (drawCount == 0) return;
@@ -1128,13 +1230,15 @@ void main() {
         float ny_top = 1.0f - (py1 / vpH) * 2.0f;
         float ny_bot = 1.0f - ((py1 + drawH) / vpH) * 2.0f;
 
+        const float vTop = draws[i].vTop;
+        const float vBot = draws[i].vBot;
         float verts[] = {
-            nx1, ny_bot, 0.0f, 1.0f,
-            nx2, ny_bot, 1.0f, 1.0f,
-            nx2, ny_top, 1.0f, 0.0f,
-            nx1, ny_bot, 0.0f, 1.0f,
-            nx2, ny_top, 1.0f, 0.0f,
-            nx1, ny_top, 0.0f, 0.0f,
+            nx1, ny_bot, 0.0f, vBot,
+            nx2, ny_bot, 1.0f, vBot,
+            nx2, ny_top, 1.0f, vTop,
+            nx1, ny_bot, 0.0f, vBot,
+            nx2, ny_top, 1.0f, vTop,
+            nx1, ny_top, 0.0f, vTop,
         };
 
         glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
