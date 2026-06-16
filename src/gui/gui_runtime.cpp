@@ -74,12 +74,18 @@ struct GuiFontPathResolutionCache {
 
 GuiFontPathResolutionCache s_guiFontPathResolutionCache;
 
-constexpr std::array<const char*, 5> kLocalizedFallbackFontPaths = {
+constexpr std::array<const char*, 5> kCjkFallbackFontPaths = {
     "c:\\Windows\\Fonts\\msyh.ttc",
     "c:\\Windows\\Fonts\\msyhbd.ttc",
     "c:\\Windows\\Fonts\\Deng.ttf",
     "c:\\Windows\\Fonts\\simhei.ttf",
     "c:\\Windows\\Fonts\\simsun.ttc",
+};
+
+constexpr std::array<const char*, 3> kBroadScriptFallbackFontPaths = {
+    "c:\\Windows\\Fonts\\segoeui.ttf",
+    "c:\\Windows\\Fonts\\tahoma.ttf",
+    "c:\\Windows\\Fonts\\malgun.ttf",
 };
 
 std::string ResolveRuntimeFontPath(const std::string& path) {
@@ -129,15 +135,20 @@ void AddMergedLocalizedFallbackFont(ImFontAtlas* atlas, float size, const std::v
     mergeCfg.OversampleV = 2;
 
     const ImWchar* ranges = GetGlyphRangesOrDefault(atlas, glyphRanges);
-    for (const char* fallbackPath : kLocalizedFallbackFontPaths) {
-        if (!FontFileExists(fallbackPath)) {
-            continue;
-        }
 
-        if (atlas->AddFontFromFileTTF(fallbackPath, size, &mergeCfg, ranges) != nullptr) {
-            return;
+    auto mergeFonts = [&](const auto& candidatePaths, bool stopAfterFirst) {
+        for (const char* fallbackPath : candidatePaths) {
+            if (!FontFileExists(fallbackPath)) {
+                continue;
+            }
+            if (atlas->AddFontFromFileTTF(fallbackPath, size, &mergeCfg, ranges) != nullptr && stopAfterFirst) {
+                return;
+            }
         }
-    }
+    };
+
+    mergeFonts(kCjkFallbackFontPaths, true);
+    mergeFonts(kBroadScriptFallbackFontPaths, false);
 }
 
 }
@@ -188,11 +199,16 @@ static ImFont* AddFontWithFallback(ImFontAtlas* atlas, const std::string& fontPa
     return font;
 }
 
-static ImFont* AddKeyboardFontWithFallback(ImFontAtlas* atlas, const std::string& fontPath, float preferredSize, const ImFontConfig& config) {
+static ImFont* AddKeyboardFontWithFallback(ImFontAtlas* atlas, const std::string& fontPath, float preferredSize,
+                                           const ImFontConfig& config, const std::vector<ImWchar>& glyphRanges) {
     static constexpr float kSteps[] = { 1.00f, 0.90f, 0.80f, 0.70f, 0.62f, 0.55f };
     for (float step : kSteps) {
-        ImFont* font = AddFontWithFallback(atlas, fontPath, preferredSize * step, &config);
-        if (font) { return font; }
+        const float size = preferredSize * step;
+        ImFont* font = AddFontWithFallback(atlas, fontPath, size, &config);
+        if (font) {
+            AddMergedLocalizedFallbackFont(atlas, size, glyphRanges);
+            return font;
+        }
     }
     return nullptr;
 }
@@ -223,8 +239,8 @@ static void RebuildImGuiFontAtlas(float scaleFactor, float keyboardPrimarySize, 
     const float primarySize = (keyboardPrimarySize > 0.0f) ? keyboardPrimarySize : (baseFontSize * 2.80f);
     const float secondarySize = (keyboardSecondarySize > 0.0f) ? keyboardSecondarySize : (baseFontSize * 2.00f);
 
-    g_keyboardLayoutPrimaryFont = AddKeyboardFontWithFallback(io.Fonts, resolvedFontPath, primarySize, keyFontCfg);
-    g_keyboardLayoutSecondaryFont = AddKeyboardFontWithFallback(io.Fonts, resolvedFontPath, secondarySize, keyFontCfg);
+    g_keyboardLayoutPrimaryFont = AddKeyboardFontWithFallback(io.Fonts, resolvedFontPath, primarySize, keyFontCfg, localizedGlyphRanges);
+    g_keyboardLayoutSecondaryFont = AddKeyboardFontWithFallback(io.Fonts, resolvedFontPath, secondarySize, keyFontCfg, localizedGlyphRanges);
 
     if (!g_keyboardLayoutPrimaryFont) g_keyboardLayoutPrimaryFont = baseFont;
     if (!g_keyboardLayoutSecondaryFont) g_keyboardLayoutSecondaryFont = baseFont;
