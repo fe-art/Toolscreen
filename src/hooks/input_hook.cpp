@@ -1364,6 +1364,7 @@ InputHandlerResult HandleGuiToggle(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         CloseSettingsGuiWindow();
     } else if (!isEscape) {
         g_showGui = true;
+        ReleaseActiveLowLevelRebindKeys(hWnd);
         InvalidateImGuiCache();
         const bool wasCursorVisible = IsCursorVisible();
         g_wasCursorVisible = wasCursorVisible;
@@ -4371,16 +4372,9 @@ static InputHandlerResult ExecuteMatchedKeyRebind(HWND hWnd, UINT uMsg, WPARAM w
             UntrackHeldShiftRebindOutput(shiftSourceVk);
         }
     } else {
-        const uint64_t heldKeySourceId = BuildSyntheticRebindOutputSourceId(rawVkCode, lParam, isMouseButton);
-        if (isKeyDown) {
-            if (!isAutoRepeatKeyDown) {
-                TrackHeldKeyRebindOutput(heldKeySourceId, { msgVk, outputScanCode, outputHasAltContext });
-            }
-        } else {
-            LRESULT releasedResult = 0;
-            if (ReleaseTrackedHeldKeyRebindOutput(hWnd, heldKeySourceId, releasedResult)) {
-                return { true, releasedResult };
-            }
+        if (isKeyDown && !isAutoRepeatKeyDown) {
+            const uint64_t heldKeySourceId = BuildSyntheticRebindOutputSourceId(rawVkCode, lParam, isMouseButton);
+            TrackHeldKeyRebindOutput(heldKeySourceId, { msgVk, outputScanCode, outputHasAltContext });
         }
     }
 
@@ -4572,6 +4566,12 @@ InputHandlerResult HandleKeyRebinding(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
     }
     if (!isKeyDown && ReleaseTrackedSyntheticRebindOutputHold(syntheticOutputSourceId)) {
         return { true, 0 };
+    }
+    if (!isKeyDown) {
+        LRESULT releasedResult = 0;
+        if (ReleaseTrackedHeldKeyRebindOutput(hWnd, syntheticOutputSourceId, releasedResult)) {
+            return { true, releasedResult };
+        }
     }
 
     const DWORD passthroughVk = isMouseButton ? rawVkCode : NormalizeModifierVkFromKeyMessage(rawVkCode, lParam);

@@ -1415,6 +1415,140 @@ void RunKeyRebindRuntimeHeldOutputReleasedOnRebindChangeTest(TestRunMode runMode
         "Release must key-up the output asserted on keydown (F3), not the output the now-active rebind resolves to.");
 }
 
+void RunKeyRebindRuntimeHeldOutputReleasedOnNoMatchUpTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+
+    PrepareRebindRuntimeCase("key_rebind_runtime_held_output_released_on_no_match_up",
+                             { MakeEnabledRebind('A', VK_F3) });
+    ScopedRebindMessageCapture capture(window.hwnd());
+
+    ScopedKeyboardStateOverride keyboardState;
+    keyboardState.SetKeyDown(VK_SHIFT, false);
+    keyboardState.SetToggle(VK_CAPITAL, false);
+    keyboardState.Apply();
+
+    ScopedCursorVisibilityOverride cursorVisible(true);
+
+    const LPARAM downLParam = BuildTestKeyboardMessageLParam('A', true);
+    const LPARAM upLParam = BuildTestKeyboardMessageLParam('A', false);
+
+    HandleKeyRebinding(window.hwnd(), WM_KEYDOWN, 'A', downLParam);
+    ExpectCapturedMessage(capture, 0, WM_KEYDOWN, VK_F3, "Held-output DOWN forwards F3");
+
+    capture.Clear();
+    g_config.keyRebinds.rebinds = {};
+    PublishConfigSnapshot();
+
+    HandleKeyRebinding(window.hwnd(), WM_KEYUP, 'A', upLParam);
+    Expect(capture.messages.size() == 1,
+        "Expected the held F3 to be released even though no rebind matches the keyup.");
+    ExpectCapturedMessage(capture, 0, WM_KEYUP, VK_F3,
+        "Expected exactly the F3 key-up that the keydown asserted.");
+}
+
+void RunKeyRebindRuntimeHeldOutputReleasedOnMouseOutputUpTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+
+    PrepareRebindRuntimeCase("key_rebind_runtime_held_output_released_on_mouse_output_up",
+                             { MakeEnabledRebind('A', VK_F3) });
+    ScopedRebindMessageCapture capture(window.hwnd());
+
+    ScopedKeyboardStateOverride keyboardState;
+    keyboardState.SetKeyDown(VK_SHIFT, false);
+    keyboardState.SetToggle(VK_CAPITAL, false);
+    keyboardState.Apply();
+
+    ScopedCursorVisibilityOverride cursorVisible(true);
+
+    const LPARAM downLParam = BuildTestKeyboardMessageLParam('A', true);
+    const LPARAM upLParam = BuildTestKeyboardMessageLParam('A', false);
+
+    HandleKeyRebinding(window.hwnd(), WM_KEYDOWN, 'A', downLParam);
+    ExpectCapturedMessage(capture, 0, WM_KEYDOWN, VK_F3, "Held-output DOWN forwards F3");
+
+    capture.Clear();
+    g_config.keyRebinds.rebinds = { MakeEnabledRebind('A', VK_RBUTTON) };
+    PublishConfigSnapshot();
+
+    HandleKeyRebinding(window.hwnd(), WM_KEYUP, 'A', upLParam);
+    Expect(capture.messages.size() == 1,
+        "Expected the held F3 to be released even though the keyup now resolves to a mouse-button output.");
+    ExpectCapturedMessage(capture, 0, WM_KEYUP, VK_F3,
+        "Expected the F3 key-up the keydown asserted, not a mouse-button up.");
+}
+
+void RunKeyRebindRuntimeHeldOutputReleasedOnModifierOutputUpTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+
+    PrepareRebindRuntimeCase("key_rebind_runtime_held_output_released_on_modifier_output_up",
+                             { MakeEnabledRebind('A', VK_F3) });
+    ScopedRebindMessageCapture capture(window.hwnd());
+
+    ScopedKeyboardStateOverride keyboardState;
+    keyboardState.SetKeyDown(VK_SHIFT, false);
+    keyboardState.SetToggle(VK_CAPITAL, false);
+    keyboardState.Apply();
+
+    ScopedCursorVisibilityOverride cursorVisible(true);
+
+    const LPARAM downLParam = BuildTestKeyboardMessageLParam('A', true);
+    const LPARAM upLParam = BuildTestKeyboardMessageLParam('A', false);
+
+    HandleKeyRebinding(window.hwnd(), WM_KEYDOWN, 'A', downLParam);
+    ExpectCapturedMessage(capture, 0, WM_KEYDOWN, VK_F3, "Held-output DOWN forwards F3");
+
+    capture.Clear();
+    g_config.keyRebinds.rebinds = { MakeEnabledRebind('A', VK_LSHIFT) };
+    PublishConfigSnapshot();
+
+    HandleKeyRebinding(window.hwnd(), WM_KEYUP, 'A', upLParam);
+    Expect(capture.messages.size() == 1,
+        "Expected the held F3 to be released even though the keyup now resolves to a modifier output.");
+    ExpectCapturedMessage(capture, 0, WM_KEYUP, VK_F3,
+        "Expected the F3 key-up the keydown asserted, not a modifier release.");
+}
+
+void RunKeyRebindRuntimeHeldOutputReleasedOnGuiOpenTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+
+    PrepareRebindRuntimeCase("key_rebind_runtime_held_output_released_on_gui_open",
+                             { MakeEnabledRebind(VK_LBUTTON, VK_F3) });
+    g_config.guiHotkey = { VK_F6 };
+    ScopedRebindMessageCapture capture(window.hwnd());
+
+    ScopedKeyboardStateOverride keyboardState;
+    keyboardState.SetKeyDown(VK_SHIFT, false);
+    keyboardState.SetToggle(VK_CAPITAL, false);
+    keyboardState.Apply();
+
+    ScopedCursorVisibilityOverride cursorVisible(true);
+
+    g_showGui.store(false, std::memory_order_release);
+    const bool previousGlInitialized = g_glInitialized.load(std::memory_order_acquire);
+    g_glInitialized.store(true, std::memory_order_release);
+
+    const InputHandlerResult downResult =
+        HandleKeyRebinding(window.hwnd(), WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(12, 34));
+    Expect(downResult.consumed, "Expected the mouse-source rebind to consume the button down.");
+    ExpectCapturedMessage(capture, 0, WM_KEYDOWN, VK_F3, "Mouse-source DOWN forwards F3");
+
+    capture.Clear();
+
+    const InputHandlerResult toggleResult =
+        HandleGuiToggle(window.hwnd(), WM_KEYDOWN, VK_F6, BuildTestKeyboardMessageLParam(VK_F6, true));
+    const bool guiOpened = g_showGui.load(std::memory_order_acquire);
+
+    g_showGui.store(false, std::memory_order_release);
+    g_glInitialized.store(previousGlInitialized, std::memory_order_release);
+
+    Expect(toggleResult.consumed, "Expected the GUI toggle hotkey to be handled.");
+    Expect(guiOpened, "Expected the GUI to open on the toggle hotkey.");
+    Expect(capture.messages.size() == 1,
+        "Expected opening the GUI while a rebind output is held to release it.");
+    ExpectCapturedMessage(capture, 0, WM_KEYUP, VK_F3,
+        "Expected the held F3 to be released when the Toolscreen GUI opens mid-hold.");
+}
+
 void RunKeyRebindRuntimeCursorStatePriorityAndFallbackTest(TestRunMode runMode = TestRunMode::Automated) {
     DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
 

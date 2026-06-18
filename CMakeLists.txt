@@ -1050,6 +1050,10 @@ set(TOOLSCREEN_GUI_INTEGRATION_TEST_CASES
     key-rebind-runtime-disabled-rebind-ignored
     key-rebind-runtime-cursor-state-keyup-passthrough
     key-rebind-runtime-held-output-released-on-rebind-change
+    key-rebind-runtime-held-output-released-on-no-match-up
+    key-rebind-runtime-held-output-released-on-mouse-output-up
+    key-rebind-runtime-held-output-released-on-modifier-output-up
+    key-rebind-runtime-held-output-released-on-gui-open
     key-rebind-runtime-cursor-state-priority-and-fallback
     key-rebind-gui-keyboard-layout-full-bind-and-trigger
     key-rebind-gui-keyboard-layout-split-bind-and-trigger
