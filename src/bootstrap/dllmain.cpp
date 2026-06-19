@@ -2837,6 +2837,14 @@ static void AttemptHookGlBindFramebufferViaWgl() {
     }
 }
 
+// Runs from a destructor during exception unwind, so a fault here must not escape (-> terminate).
+static void RestoreGLStateNoThrow(const GLState& s) {
+    __try {
+        RestoreGLState(s);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
 static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
     if (!next) return FALSE;
 
@@ -3189,6 +3197,11 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
             PROFILE_SCOPE_CAT("OpenGL State Backup", "SwapBuffers");
             SaveGLState(&s);
         }
+        struct GLStateGuard {
+            const GLState* st;
+            bool armed;
+            ~GLStateGuard() { if (armed) RestoreGLStateNoThrow(*st); }
+        } glStateGuard{ &s, true };
 
         {
             PROFILE_SCOPE_CAT("Texture Cleanup", "SwapBuffers");
@@ -3258,6 +3271,7 @@ static BOOL SwapBuffersHook_Impl(WGLSWAPBUFFERS next, HDC hDc) {
         {
             PROFILE_SCOPE_CAT("OpenGL State Restore", "SwapBuffers");
             RestoreGLState(s);
+            glStateGuard.armed = false;
         }
 
         Profiler::GetInstance().EndFrame();
