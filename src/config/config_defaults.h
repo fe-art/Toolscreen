@@ -17,6 +17,9 @@ constexpr float COLOR_WHITE_B = 1.0f;
 
 inline const std::string BACKGROUND_SELECTED_MODE = "color";
 inline const std::string BACKGROUND_IMAGE_FIT = "stretch";
+constexpr float BACKGROUND_IMAGE_CENTER_SCALE = 1.0f;
+constexpr float BACKGROUND_IMAGE_TILE_SCALE = 1.0f;
+constexpr int BACKGROUND_IMAGE_TILE_SPACING = 0;
 
 constexpr int MIRROR_CAPTURE_X = 0;
 constexpr int MIRROR_CAPTURE_Y = 0;
@@ -268,3 +271,5 @@ inline const std::string OVERLAY_TRANSITION_CUT = "Cut";
 inline const std::string BACKGROUND_TRANSITION_CUT = "Cut";
 
 }
+
+

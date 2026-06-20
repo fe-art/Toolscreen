@@ -179,6 +179,9 @@ struct BackgroundConfig {
     std::string selectedMode = "color";
     std::string image;
     std::string imageFit = ConfigDefaults::BACKGROUND_IMAGE_FIT;
+    float imageCenterScale = ConfigDefaults::BACKGROUND_IMAGE_CENTER_SCALE;
+    float imageTileScale = ConfigDefaults::BACKGROUND_IMAGE_TILE_SCALE;
+    int imageTileSpacing = ConfigDefaults::BACKGROUND_IMAGE_TILE_SPACING;
     Color color;
 
     std::vector<GradientColorStop> gradientStops;
