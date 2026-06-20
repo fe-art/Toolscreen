@@ -2555,3 +2555,4 @@ void RunVisualLoop(DummyWindow& window, std::string_view testCaseName, RenderFra
 #include "gui_integration/render_tests.inl"
 #include "gui_integration/ui_and_log_tests.inl"
 #include "gui_integration/runner.inl"
+

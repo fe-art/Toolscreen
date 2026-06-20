@@ -25,9 +25,13 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
     const std::string g_currentModeId = GetPublishedCurrentModeId();
 
     auto renderBackgroundImageOptions = [&](ModeConfig& mode, const std::string& idSuffix) {
+        if (mode.background.image.empty()) {
+            ImGui::TextDisabled("%s", trc("modes.image_fit.no_image"));
+            return;
+        }
         const char* fitLabels[] = { trc("modes.image_fit.fill"), trc("modes.image_fit.fit"), trc("modes.image_fit.stretch"),
-                                    trc("modes.image_fit.center") };
-        const char* fitValues[] = { "fill", "fit", "stretch", "center" };
+                                    trc("modes.image_fit.center"), trc("modes.image_fit.tile") };
+        const char* fitValues[] = { "fill", "fit", "stretch", "center", "tile" };
 
         int currentFit = 0;
         for (int fitIndex = 0; fitIndex < IM_ARRAYSIZE(fitValues); ++fitIndex) {
@@ -42,10 +46,39 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
             mode.background.imageFit = fitValues[currentFit];
             g_configIsDirty = true;
         }
+        ImGui::SameLine();
+        HelpMarker(trc("modes.tooltip.image_fit"));
 
-        ImGui::SetNextItemWidth(160);
-        if (ImGui::ColorEdit3((tr("modes.background_color") + "##" + idSuffix).c_str(), &mode.background.color.r)) {
-            g_configIsDirty = true;
+        const BackgroundImageFit fit = ParseBackgroundImageFit(mode.background.imageFit);
+
+        if (fit == BackgroundImageFit::Center) {
+            float scalePercent = mode.background.imageCenterScale * 100.0f;
+            ImGui::SetNextItemWidth(160);
+            if (ImGui::SliderFloat((tr("modes.image_scale") + "##" + idSuffix).c_str(), &scalePercent, kBackgroundImageScaleMin * 100.0f,
+                                   kBackgroundImageScaleMax * 100.0f, "%.0f%%")) {
+                mode.background.imageCenterScale = scalePercent / 100.0f;
+                g_configIsDirty = true;
+            }
+        } else if (fit == BackgroundImageFit::Tile) {
+            float tilePercent = mode.background.imageTileScale * 100.0f;
+            ImGui::SetNextItemWidth(160);
+            if (ImGui::SliderFloat((tr("modes.image_tile_size") + "##" + idSuffix).c_str(), &tilePercent, kBackgroundImageScaleMin * 100.0f,
+                                   kBackgroundImageScaleMax * 100.0f, "%.0f%%")) {
+                mode.background.imageTileScale = tilePercent / 100.0f;
+                g_configIsDirty = true;
+            }
+            ImGui::SetNextItemWidth(160);
+            if (ImGui::SliderInt((tr("modes.image_tile_spacing") + "##" + idSuffix).c_str(), &mode.background.imageTileSpacing, 0,
+                                 kBackgroundImageSpacingMax, "%dpx")) {
+                g_configIsDirty = true;
+            }
+        }
+
+        if (BackgroundImageFitShowsBackdrop(fit)) {
+            ImGui::SetNextItemWidth(160);
+            if (ImGui::ColorEdit3((tr("modes.background_color") + "##" + idSuffix).c_str(), &mode.background.color.r)) {
+                g_configIsDirty = true;
+            }
         }
     };
 
@@ -2845,3 +2878,5 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
 
     ImGui::EndTabItem();
 }
+
+

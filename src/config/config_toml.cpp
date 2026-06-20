@@ -4,6 +4,7 @@
 #include "gui/gui.h"
 #include "runtime/logic_thread.h"
 #include "common/utils.h"
+#include "render/background_fit_layout.h"
 
 #include <algorithm>
 #include <cctype>
@@ -669,6 +670,9 @@ void BackgroundConfigToToml(const BackgroundConfig& cfg, toml::table& out) {
     out.insert("selectedMode", cfg.selectedMode);
     out.insert("image", cfg.image);
     out.insert("imageFit", cfg.imageFit);
+    out.insert("imageCenterScale", cfg.imageCenterScale);
+    out.insert("imageTileScale", cfg.imageTileScale);
+    out.insert("imageTileSpacing", cfg.imageTileSpacing);
     out.insert("color", ColorToTomlArray(cfg.color));
 
     GradientConfig gradientCfg;
@@ -683,12 +687,15 @@ void BackgroundConfigToToml(const BackgroundConfig& cfg, toml::table& out) {
 void BackgroundConfigFromToml(const toml::table& tbl, BackgroundConfig& cfg) {
     cfg.selectedMode = GetStringOr(tbl, "selectedMode", ConfigDefaults::BACKGROUND_SELECTED_MODE);
     cfg.image = GetStringOr(tbl, "image", "");
-    cfg.imageFit = GetStringOr(tbl, "imageFit", ConfigDefaults::BACKGROUND_IMAGE_FIT);
-    std::transform(cfg.imageFit.begin(), cfg.imageFit.end(), cfg.imageFit.begin(),
-                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-    if (cfg.imageFit != "fill" && cfg.imageFit != "fit" && cfg.imageFit != "stretch" && cfg.imageFit != "center") {
-        cfg.imageFit = ConfigDefaults::BACKGROUND_IMAGE_FIT;
-    }
+    cfg.imageFit = BackgroundImageFitToString(ParseBackgroundImageFit(GetStringOr(tbl, "imageFit", ConfigDefaults::BACKGROUND_IMAGE_FIT)));
+    cfg.imageCenterScale = (std::min)(kBackgroundImageScaleMax,
+                                      (std::max)(kBackgroundImageScaleMin,
+                                                 GetOr(tbl, "imageCenterScale", ConfigDefaults::BACKGROUND_IMAGE_CENTER_SCALE)));
+    cfg.imageTileScale = (std::min)(kBackgroundImageScaleMax,
+                                    (std::max)(kBackgroundImageScaleMin,
+                                               GetOr(tbl, "imageTileScale", ConfigDefaults::BACKGROUND_IMAGE_TILE_SCALE)));
+    cfg.imageTileSpacing = (std::min)(kBackgroundImageSpacingMax,
+                                      (std::max)(0, GetOr(tbl, "imageTileSpacing", ConfigDefaults::BACKGROUND_IMAGE_TILE_SPACING)));
     cfg.color = ColorFromTomlArray(GetArray(tbl, "color"), { 0.0f, 0.0f, 0.0f });
 
     GradientConfig gradientCfg;
@@ -3900,3 +3907,5 @@ EyeZoomConfig GetDefaultEyeZoomConfigFromEmbedded() {
 
     return eyezoom;
 }
+
+
