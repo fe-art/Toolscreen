@@ -8530,8 +8530,15 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
     }
 
     const bool wantCursorTrail = configSnap && configSnap->cursorTrail.enabled && IsCursorVisible();
+    bool wantNinjabrainOverlay = false;
+    {
+        SameThreadOverlayState nbProbe;
+        nbProbe.modeId = modeToRender->id;
+        nbProbe.excludeOnlyOnMyScreen = excludeOnlyOnMyScreen;
+        wantNinjabrainOverlay = ShouldRenderNinjabrainOverlayForRequest(nbProbe);
+    }
     const bool wantOverlayThisFrame = wantOverlayElements || wantAnyImGui || wantWelcomeToast || wantRebindIndicator ||
-                                      wantCursorTrail;
+                                      wantCursorTrail || wantNinjabrainOverlay;
     const auto populateOverlayState = [&](auto& target) {
         const bool slideAnimationsEnabled = transitionState.active && transitionState.gameTransition == GameTransitionType::Bounce;
 
