@@ -793,7 +793,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                             ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), trc("images.name_duplicate"));
                         }
 
-                        if (ImGui::InputText((tr("label.path") + "##ezov").c_str(), &ov.path)) {
+                        if (RenderMaskedPathInput((tr("label.path") + "##ezov").c_str(), ov.path)) {
                             g_configIsDirty = true;
                         }
                         if (ImGui::IsItemDeactivatedAfterEdit() && !ov.path.empty()) {
@@ -1174,7 +1174,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                             }*/
                         }
                     } else if (mode.background.selectedMode == "image") {
-                        if (ImGui::InputText(tr("modes.bg_image_path").c_str(), &mode.background.image)) {
+                        if (RenderMaskedPathInput(tr("modes.bg_image_path").c_str(), mode.background.image)) {
                             ClearImageError("eyezoom_bg");
                             g_configIsDirty = true;
                             g_allImagesLoaded = false;
@@ -1466,7 +1466,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                             }
                         }
                     } else if (mode.background.selectedMode == "image") {
-                        if (ImGui::InputText((tr("modes.bg_image_path") + "##preemptive_bg").c_str(), &mode.background.image)) {
+                        if (RenderMaskedPathInput((tr("modes.bg_image_path") + "##preemptive_bg").c_str(), mode.background.image)) {
                             ClearImageError("preemptive_bg");
                             g_configIsDirty = true;
                             g_allImagesLoaded = false;
@@ -1811,7 +1811,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                         }
                     } else if (mode.background.selectedMode == "image") {
                         std::string thinErrorKey = "mode_bg_thin";
-                        if (ImGui::InputText((tr("modes.bg_image_path") + "##Thin").c_str(), &mode.background.image)) {
+                        if (RenderMaskedPathInput((tr("modes.bg_image_path") + "##Thin").c_str(), mode.background.image)) {
                             ClearImageError(thinErrorKey);
                             g_configIsDirty = true;
                             g_allImagesLoaded = false;
@@ -2120,7 +2120,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                         }
                     } else if (mode.background.selectedMode == "image") {
                         std::string wideErrorKey = "mode_bg_wide";
-                        if (ImGui::InputText((tr("modes.bg_image_path") + "##Wide").c_str(), &mode.background.image)) {
+                        if (RenderMaskedPathInput((tr("modes.bg_image_path") + "##Wide").c_str(), mode.background.image)) {
                             ClearImageError(wideErrorKey);
                             g_configIsDirty = true;
                             g_allImagesLoaded = false;
@@ -2548,7 +2548,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                         }
                     } else if (mode.background.selectedMode == "image") {
                         std::string modeErrorKey = "mode_bg_" + mode.id;
-                        if (ImGui::InputText(trc("modes.bg_image_path"), &mode.background.image)) {
+                        if (RenderMaskedPathInput(trc("modes.bg_image_path"), mode.background.image)) {
                             ClearImageError(modeErrorKey);
                             g_configIsDirty = true;
                             g_allImagesLoaded = false;

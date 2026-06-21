@@ -455,6 +455,7 @@
     "label.overlay_visibility_hotkeys": "Atalhos de Visibilidade de Sobreposição",
     "label.overlays": "Sobreposições",
     "label.path": "Caminho",
+    "label.path_hint": "Digite o caminho do arquivo ou clique em Procurar",
     "label.placement": "Posicionamento",
     "label.position_x": "Posição X",
     "label.position_y": "Posição Y",

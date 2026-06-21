@@ -457,6 +457,7 @@
     "label.overlay_visibility_hotkeys": "覆盖层可见性快捷键",
     "label.overlays": "覆盖层",
     "label.path": "路径",
+    "label.path_hint": "输入文件路径或点击浏览",
     "label.placement": "放置",
     "label.position_x": "位置 X",
     "label.position_y": "位置 Y",

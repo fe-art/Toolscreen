@@ -455,6 +455,7 @@
     "label.overlay_visibility_hotkeys": "Overlay Visibility Hotkeys",
     "label.overlays": "Overlays",
     "label.path": "Path",
+    "label.path_hint": "Enter the file path or click Browse",
     "label.placement": "Placement",
     "label.position_x": "Position X",
     "label.position_y": "Position Y",

@@ -96,11 +96,11 @@ jobs:
 
       - name: Build DLLs and GUI integration test runner
         shell: pwsh
-        run: cmake --build --preset ci-release --parallel --target Toolscreen toolscreen_gui_integration_tests
+        run: cmake --build --preset ci-release --parallel --target Toolscreen toolscreen_gui_integration_tests toolscreen_interactive_create_tests toolscreen_game_state_source_tests toolscreen_path_sanitize_tests
 
       - name: Run fast CTest smoke tests
         shell: pwsh
-        run: ctest --preset ci-release --tests-regex "^(toolscreen_artifact_exists|liblogger_artifact_exists)$"
+        run: ctest --preset ci-release --exclude-regex "^toolscreen_integration_"
 
       - name: Run GUI integration tests in parallel
         shell: pwsh

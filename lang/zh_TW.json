@@ -457,6 +457,7 @@
     "label.overlay_visibility_hotkeys": "圖層可見性快捷鍵",
     "label.overlays": "圖層",
     "label.path": "路徑",
+    "label.path_hint": "輸入檔案路徑或點擊瀏覽",
     "label.placement": "放置",
     "label.position_x": "位置 X",
     "label.position_y": "位置 Y",

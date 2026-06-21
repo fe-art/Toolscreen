@@ -404,7 +404,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
 
                             ImGui::Text(trc("cursor_trail.sprite_path"));
                             ImGui::SetNextItemWidth(sliderW);
-                            if (ImGui::InputText("##cursor_trail_sprite_path", &trail.spritePath)) {
+                            if (RenderMaskedPathInput("##cursor_trail_sprite_path", trail.spritePath)) {
                                 g_configIsDirty = true;
                             }
                             ImGui::SameLine();
@@ -630,7 +630,8 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                     }
                     ImGui::PopStyleVar();
                     if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip("%s", path.empty() ? trc("inputs.tooltip.default_indicator_image") : path.c_str());
+                        std::string tooltipPath = FileNameForDisplay(path);
+                        ImGui::SetTooltip("%s", path.empty() ? trc("inputs.tooltip.default_indicator_image") : tooltipPath.c_str());
                     }
                     ImGui::SameLine();
                     ImGui::Text("%s", label);

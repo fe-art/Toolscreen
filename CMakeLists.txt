@@ -1251,6 +1251,59 @@ foreach(test_case IN LISTS TOOLSCREEN_INTERACTIVE_CREATE_TEST_CASES)
     )
 endforeach()
 
+add_executable(toolscreen_path_sanitize_tests
+    tests/path_sanitize_tests.cpp
+)
+
+target_include_directories(toolscreen_path_sanitize_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_compile_definitions(toolscreen_path_sanitize_tests PRIVATE
+    NOMINMAX
+    UNICODE
+    _UNICODE
+)
+
+if(MSVC)
+    target_compile_options(toolscreen_path_sanitize_tests PRIVATE
+        /W3
+        /MP
+        /EHsc
+    )
+endif()
+
+target_link_libraries(toolscreen_path_sanitize_tests PRIVATE
+    shell32
+    shlwapi
+    ole32
+)
+
+toolscreen_configure_target_outputs(toolscreen_path_sanitize_tests)
+toolscreen_enable_release_symbols(toolscreen_path_sanitize_tests)
+
+set(TOOLSCREEN_PATH_SANITIZE_TEST_CASES
+    home_prefix_collapses_to_tilde
+    home_prefix_exact_match_collapses
+    mid_string_users_occurrence_masked
+    case_insensitive_on_drive_and_users
+    non_home_path_untouched
+    empty_string_passthrough
+    home_prefix_does_not_partial_match_segment
+    utf8_overload_uses_resolved_home
+    filename_from_windows_path
+    filename_from_forward_slash_path
+    filename_no_separator_passthrough
+    filename_empty_passthrough
+)
+
+foreach(test_case IN LISTS TOOLSCREEN_PATH_SANITIZE_TEST_CASES)
+    add_test(
+        NAME toolscreen_path_sanitize_${test_case}
+        COMMAND $<TARGET_FILE:toolscreen_path_sanitize_tests> --run ${test_case}
+    )
+endforeach()
+
 add_executable(toolscreen_game_state_source_tests
     tests/game_state_source_tests.cpp
     src/features/game_state_source.cpp

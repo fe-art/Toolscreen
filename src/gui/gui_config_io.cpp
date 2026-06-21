@@ -844,7 +844,7 @@ void LoadConfig() {
         g_configLoaded = true;
         Log("Config loaded successfully and marked as ready.");
     } catch (const std::exception& e) {
-        std::string errorMessage = "Error parsing config.toml: " + std::string(e.what()) +
+        std::string errorMessage = "Error parsing config.toml: " + SanitizePathForDisplay(std::string(e.what())) +
                                    "\n\nPlease fix the error in the config file or delete it to generate a new one.";
         Log(errorMessage);
         g_configLoadFailed = true;

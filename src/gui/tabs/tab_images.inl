@@ -102,7 +102,7 @@ if (BeginSelectableSettingsNestedTabItem(trc("tabs.images"))) {
             }
 
             std::string imgErrorKey = "img_" + img.name;
-            if (ImGui::InputText(trc("images.path"), &img.path)) {
+            if (RenderMaskedPathInput(trc("images.path"), img.path)) {
                 ClearImageError(imgErrorKey);
                 g_configIsDirty = true;
             }

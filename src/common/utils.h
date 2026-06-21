@@ -345,6 +345,9 @@ void LogCategory(const char* category, const std::string& message);
 
 std::wstring Utf8ToWide(const std::string& utf8_string);
 std::string WideToUtf8(const std::wstring& wstr);
+std::string SanitizePathForDisplay(const std::string& path);
+std::wstring SanitizePathForDisplay(const std::wstring& path);
+std::string FileNameForDisplay(const std::string& path);
 std::wstring GetToolscreenPath();
 
 bool CompressFileToGzip(const std::wstring& srcPath, const std::wstring& dstPath);

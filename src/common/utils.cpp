@@ -23,6 +23,7 @@ extern std::atomic<GLuint> g_cachedGameTextureId;
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
+#include <cwctype>
 #include <eh.h>
 #include <filesystem>
 #include <fstream>
@@ -1235,6 +1236,8 @@ std::string WideToUtf8(const std::wstring& wstr) {
     WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), &strTo[0], size_needed, NULL, NULL);
     return strTo;
 }
+
+#include "common/path_sanitize.inl"
 
 void LogException(const std::string& context, const std::exception& e) {
     std::stringstream ss;

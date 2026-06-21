@@ -120,6 +120,8 @@ struct FontPickerOption {
 struct FontPickerUiState {
     bool editingCustom = false;
     std::string customPath;
+    std::string customPathDisplay;
+    bool editingCustomPathInput = false;
     std::string searchQuery;
     bool comboOpen = false;
     bool focusSearch = false;
@@ -1371,8 +1373,18 @@ void RenderCustomFontPathEditor(const char* inputId, const char* browseButtonSuf
     }
 
     ImGui::SetNextItemWidth(inputWidth);
-    if (ImGui::InputText(inputId, &state.customPath)) {
-        ApplyFontPickerPathValue(state, options, currentPath, state.customPath, onChanged);
+    if (state.editingCustomPathInput) {
+        if (ImGui::InputText(inputId, &state.customPath)) {
+            ApplyFontPickerPathValue(state, options, currentPath, state.customPath, onChanged);
+        }
+        state.editingCustomPathInput = ImGui::IsItemActive();
+    } else {
+        state.customPathDisplay = FileNameForDisplay(state.customPath);
+        ImGui::InputText(inputId, &state.customPathDisplay, ImGuiInputTextFlags_ReadOnly);
+        if (ImGui::IsItemActivated()) {
+            state.editingCustomPathInput = true;
+            ImGui::SetKeyboardFocusHere(-1);
+        }
     }
     ImGui::SameLine();
     if (ImGui::Button((tr("button.browse") + browseButtonSuffix).c_str())) {
@@ -1385,6 +1397,43 @@ void RenderCustomFontPathEditor(const char* inputId, const char* browseButtonSuf
         ImGui::SameLine();
         ImGui::TextDisabled("%s", trc(hintKey));
     }
+}
+
+struct MaskedPathEdit {
+    std::string buffer;
+    bool focusPending = false;
+};
+
+bool RenderMaskedPathInput(const char* label, std::string& path) {
+    static std::unordered_map<ImGuiID, MaskedPathEdit> s_edits;
+    const ImGuiID id = ImGui::GetID(label);
+    const auto it = s_edits.find(id);
+    bool changed = false;
+    if (it != s_edits.end()) {
+        ImGui::PushID("##maskedpathedit");
+        if (it->second.focusPending) {
+            ImGui::SetKeyboardFocusHere();
+            it->second.focusPending = false;
+        }
+        const bool committed = ImGui::InputTextWithHint(label, trc("label.path_hint"), &it->second.buffer,
+                                                        ImGuiInputTextFlags_EnterReturnsTrue);
+        const bool deactivated = ImGui::IsItemDeactivated();
+        ImGui::PopID();
+        if (committed || deactivated) {
+            if (!it->second.buffer.empty()) {
+                path = it->second.buffer;
+                changed = true;
+            }
+            s_edits.erase(id);
+        }
+    } else {
+        std::string fileName = FileNameForDisplay(path);
+        ImGui::InputText(label, &fileName, ImGuiInputTextFlags_ReadOnly);
+        if (ImGui::IsItemActivated()) {
+            s_edits[id] = MaskedPathEdit{ std::string(), true };
+        }
+    }
+    return changed;
 }
 
 enum class UploadStatus {
@@ -1888,7 +1937,7 @@ bool UploadTextToMclogs(const std::string& uploadLabel, const std::string& textC
 
         return false;
     } catch (const std::exception& e) {
-        outError = std::string("Failed to upload text: ") + e.what();
+        outError = std::string("Failed to upload text: ") + SanitizePathForDisplay(std::string(e.what()));
         return false;
     }
 }
