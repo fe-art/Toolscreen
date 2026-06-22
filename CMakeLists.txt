@@ -592,32 +592,43 @@ if(BUILD_TESTING AND TOOLSCREEN_ENABLE_NINJABRAIN_API_MANUAL_TESTS)
 endif()
 
 if(TOOLSCREEN_ENABLE_JAR_PACKAGING OR TOOLSCREEN_ENABLE_EXE_PACKAGING)
-    if(TOOLSCREEN_ENABLE_JAR_PACKAGING)
-        find_package(Java COMPONENTS Development REQUIRED)
+    # Both JAR and EXE packaging now run through Maven (the EXE is built via the
+    # GraalVM Native Image profile of EasyInjectBundled), so Maven is always required.
+    find_package(Java COMPONENTS Development REQUIRED)
 
-        find_program(TOOLSCREEN_MAVEN_EXECUTABLE NAMES mvn.cmd mvn)
+    find_program(TOOLSCREEN_MAVEN_EXECUTABLE NAMES mvn.cmd mvn)
 
-        if(NOT TOOLSCREEN_MAVEN_EXECUTABLE)
-            FetchContent_Declare(
-                maven
-                URL https://archive.apache.org/dist/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.zip
-                URL_HASH SHA512=8beac8d11ef208f1e2a8df0682b9448a9a363d2ad13ca74af43705549e72e74c9378823bf689287801cbbfc2f6ea9596201d19ccacfdfb682ee8a2ff4c4418ba
-            )
+    if(NOT TOOLSCREEN_MAVEN_EXECUTABLE)
+        FetchContent_Declare(
+            maven
+            URL https://archive.apache.org/dist/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.zip
+            URL_HASH SHA512=8beac8d11ef208f1e2a8df0682b9448a9a363d2ad13ca74af43705549e72e74c9378823bf689287801cbbfc2f6ea9596201d19ccacfdfb682ee8a2ff4c4418ba
+        )
 
-            FetchContent_GetProperties(maven)
-            if(NOT maven_POPULATED)
-                FetchContent_Populate(maven)
-            endif()
+        FetchContent_GetProperties(maven)
+        if(NOT maven_POPULATED)
+            FetchContent_Populate(maven)
+        endif()
 
-            set(TOOLSCREEN_MAVEN_EXECUTABLE "${maven_SOURCE_DIR}/bin/mvn.cmd")
+        set(TOOLSCREEN_MAVEN_EXECUTABLE "${maven_SOURCE_DIR}/bin/mvn.cmd")
+    endif()
+
+    if(TOOLSCREEN_ENABLE_EXE_PACKAGING)
+        find_program(TOOLSCREEN_NATIVE_IMAGE_EXECUTABLE NAMES native-image native-image.cmd
+            HINTS ENV JAVA_HOME PATH_SUFFIXES bin)
+        if(NOT TOOLSCREEN_NATIVE_IMAGE_EXECUTABLE)
+            message(FATAL_ERROR
+                "native-image not found. EXE packaging requires GraalVM JDK 25+.\n"
+                "Install GraalVM Community Edition and point JAVA_HOME at it.")
         endif()
     endif()
 
     FetchContent_Declare(
         easyinjectbundled
-        GIT_REPOSITORY https://github.com/jojoe77777/EasyInjectBundled.git
+        GIT_REPOSITORY https://github.com/fe-art/EasyInjectBundled.git
+        # GraalVM Native Image branch: produces both the JAR and the native EXE.
         # pinned commit isn't the branch tip, so no shallow clone (it can't reach it)
-        GIT_TAG 090fe9b7ed2241a3cfba3040f0cff32858ff8aad
+        GIT_TAG 9d4b02a598abecb1e4817973d2b91da3782a9ea7
     )
 
     FetchContent_GetProperties(easyinjectbundled)
@@ -657,19 +668,42 @@ if(TOOLSCREEN_ENABLE_JAR_PACKAGING OR TOOLSCREEN_ENABLE_EXE_PACKAGING)
         list(APPEND TOOLSCREEN_PACKAGING_DEPENDENCIES ${TOOLSCREEN_LIBLOGGER_BUILD_DEPENDENCY})
     endif()
 
+    # EXE packaging adds -Pnative; the same Maven run then produces both JAR and EXE.
+    set(TOOLSCREEN_MAVEN_PROFILE_ARGS)
+    if(TOOLSCREEN_ENABLE_EXE_PACKAGING)
+        set(TOOLSCREEN_MAVEN_PROFILE_ARGS -Pnative)
+    endif()
+
+    # Copy DLLs into EasyInjectBundled before Maven runs (shared by JAR and EXE builds).
+    add_custom_target(toolscreen_prepare_easyinject_inputs
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${easyinjectbundled_SOURCE_DIR}/custom-dlls"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${easyinjectbundled_SOURCE_DIR}/src/main/resources/dlls"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${TOOLSCREEN_ARTIFACT_ROOT}/$<CONFIG>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TOOLSCREEN_PACKAGING_DLL_SOURCE}" "${easyinjectbundled_SOURCE_DIR}/custom-dlls/Toolscreen.dll"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TOOLSCREEN_PACKAGING_LOGGER_SOURCE}" "${easyinjectbundled_SOURCE_DIR}/src/main/resources/dlls/liblogger_x64.dll"
+        COMMAND ${CMAKE_COMMAND} -E rm -f "${easyinjectbundled_SOURCE_DIR}/custom-dlls/WebView2Loader.dll"
+        DEPENDS ${TOOLSCREEN_PACKAGING_DEPENDENCIES}
+        COMMENT "Preparing EasyInjectBundled packaging inputs"
+        VERBATIM
+    )
+
+    # Single Maven invocation — produces JAR and (with -Pnative) native EXE in one shot.
+    add_custom_target(toolscreen_easyinject_maven_build
+        COMMAND ${TOOLSCREEN_MAVEN_EXECUTABLE} -f "${easyinjectbundled_SOURCE_DIR}/pom.xml"
+                -q --batch-mode --no-transfer-progress
+                ${TOOLSCREEN_MAVEN_PROFILE_ARGS}
+                package -Dbrand.name=Toolscreen
+        DEPENDS toolscreen_prepare_easyinject_inputs
+        COMMENT "Building EasyInjectBundled"
+        VERBATIM
+    )
+
     if(TOOLSCREEN_ENABLE_JAR_PACKAGING)
         set(TOOLSCREEN_JAR_TARGET_COMMANDS
-            COMMAND ${CMAKE_COMMAND} -E make_directory "${easyinjectbundled_SOURCE_DIR}/custom-dlls"
-            COMMAND ${CMAKE_COMMAND} -E make_directory "${easyinjectbundled_SOURCE_DIR}/src/main/resources/dlls"
-            COMMAND ${CMAKE_COMMAND} -E make_directory "${TOOLSCREEN_ARTIFACT_ROOT}/$<CONFIG>"
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TOOLSCREEN_PACKAGING_DLL_SOURCE}" "${easyinjectbundled_SOURCE_DIR}/custom-dlls/Toolscreen.dll"
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TOOLSCREEN_PACKAGING_LOGGER_SOURCE}" "${easyinjectbundled_SOURCE_DIR}/src/main/resources/dlls/liblogger_x64.dll"
-            COMMAND ${CMAKE_COMMAND} -E rm -f "${easyinjectbundled_SOURCE_DIR}/custom-dlls/WebView2Loader.dll"
-            COMMAND ${TOOLSCREEN_MAVEN_EXECUTABLE} -f "${easyinjectbundled_SOURCE_DIR}/pom.xml" -q --batch-mode --no-transfer-progress package
-                    -Dbrand.name=Toolscreen
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${easyinjectbundled_SOURCE_DIR}/target/${JAR_NAME}" "${JAR_OUTPUT}"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${easyinjectbundled_SOURCE_DIR}/target/${JAR_NAME}" "${JAR_OUTPUT}"
         )
-        set(TOOLSCREEN_JAR_TARGET_COMMENT "Building ${JAR_NAME}")
+        set(TOOLSCREEN_JAR_TARGET_COMMENT "Copying ${JAR_NAME}")
 
         if(TOOLSCREEN_BUILD_DOWNLOADER_ARTIFACTS)
             file(GENERATE
@@ -685,94 +719,34 @@ if(TOOLSCREEN_ENABLE_JAR_PACKAGING OR TOOLSCREEN_ENABLE_EXE_PACKAGING)
 
         add_custom_target(jar ALL
             ${TOOLSCREEN_JAR_TARGET_COMMANDS}
-            DEPENDS ${TOOLSCREEN_PACKAGING_DEPENDENCIES}
+            DEPENDS toolscreen_easyinject_maven_build
             COMMENT "${TOOLSCREEN_JAR_TARGET_COMMENT}"
             VERBATIM
         )
     endif()
 
     if(TOOLSCREEN_ENABLE_EXE_PACKAGING)
-        FetchContent_Declare(
-            easyinjectbundled_exe
-            GIT_REPOSITORY https://github.com/jojoe77777/EasyInjectBundled.git
-            GIT_TAG exe
-            GIT_SHALLOW TRUE
+        # The native EXE is produced by EasyInjectBundled's -Pnative Maven profile
+        # (GraalVM Native Image) in the shared build above; just copy it into place.
+        set(TOOLSCREEN_EXE_TARGET_COMMANDS
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${easyinjectbundled_SOURCE_DIR}/target/${EXE_NAME}" "${EXE_OUTPUT}"
         )
+        set(TOOLSCREEN_EXE_TARGET_COMMENT "Copying ${EXE_NAME}")
 
-        FetchContent_GetProperties(easyinjectbundled_exe)
-        if(NOT easyinjectbundled_exe_POPULATED)
-            FetchContent_Populate(easyinjectbundled_exe)
+        if(TOOLSCREEN_BUILD_DOWNLOADER_ARTIFACTS)
+            list(APPEND TOOLSCREEN_EXE_TARGET_COMMANDS
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${easyinjectbundled_SOURCE_DIR}/target/${DOWNLOADER_EXE_NAME}" "${DOWNLOADER_EXE_OUTPUT}"
+            )
+            set(TOOLSCREEN_EXE_TARGET_COMMENT "Copying ${EXE_NAME} and ${DOWNLOADER_EXE_NAME}")
         endif()
 
-        file(REMOVE "${easyinjectbundled_exe_SOURCE_DIR}/custom-dlls/WebView2Loader.dll")
-
-        set(TOOLSCREEN_EASYINJECT_EXE_BRANDING_PROPERTIES "${easyinjectbundled_exe_SOURCE_DIR}/branding.properties")
-        toolscreen_set_brand_version("${TOOLSCREEN_EASYINJECT_EXE_BRANDING_PROPERTIES}" "${PROJECT_VERSION}")
-        toolscreen_write_text_file_if_different(
-            "${easyinjectbundled_exe_SOURCE_DIR}/exe/src/embedded_resources.rc.in"
-            [=[#include <winres.h>
-
-1 ICON "@APP_ICON_FILE_RC@"
-
-VS_VERSION_INFO VERSIONINFO
- FILEVERSION @TOOLSCREEN_VERSION_MAJOR@,@TOOLSCREEN_VERSION_MINOR@,@TOOLSCREEN_VERSION_PATCH@,0
- PRODUCTVERSION @TOOLSCREEN_VERSION_MAJOR@,@TOOLSCREEN_VERSION_MINOR@,@TOOLSCREEN_VERSION_PATCH@,0
- FILEFLAGSMASK 0x3fL
-#ifdef _DEBUG
- FILEFLAGS 0x1L
-#else
- FILEFLAGS 0x0L
-#endif
- FILEOS 0x40004L
- FILETYPE 0x1L
- FILESUBTYPE 0x0L
-BEGIN
-    BLOCK "StringFileInfo"
-    BEGIN
-        BLOCK "040904b0"
-        BEGIN
-            VALUE "CompanyName", "@TOOLSCREEN_COMPANY_NAME@\0"
-            VALUE "FileDescription", "@TOOLSCREEN_INSTALLER_FILE_DESCRIPTION@\0"
-            VALUE "FileVersion", "@TOOLSCREEN_VERSION@\0"
-            VALUE "InternalName", "Toolscreen\0"
-            VALUE "LegalCopyright", "@TOOLSCREEN_COPYRIGHT@\0"
-            VALUE "OriginalFilename", "Toolscreen-@BRAND_VERSION@-double-click-me.exe\0"
-            VALUE "ProductName", "@TOOLSCREEN_PROJECT_NAME@\0"
-            VALUE "ProductVersion", "@TOOLSCREEN_VERSION@\0"
-        END
-    END
-    BLOCK "VarFileInfo"
-    BEGIN
-        VALUE "Translation", 0x409, 1200
-    END
-END
-
-@BRANDING_RESOURCE_ID@ RCDATA "@BRANDING_FILE_RC@"
-@DLL_INDEX_RESOURCE_ID@ RCDATA "@EMBED_DLL_INDEX_FILE_RC@"
-@EMBED_DLL_RESOURCE_LINES@
-]=]
-        )
-
-        file(MAKE_DIRECTORY "${easyinjectbundled_exe_SOURCE_DIR}/custom-dlls")
-        add_subdirectory("${easyinjectbundled_exe_SOURCE_DIR}/exe" "${CMAKE_CURRENT_BINARY_DIR}/easyinjectbundled-exe")
-        toolscreen_configure_target_outputs(EasyInjectExe)
-
-        add_custom_target(toolscreen_prepare_easyinject_exe_inputs
-            COMMAND ${CMAKE_COMMAND} -E make_directory "${easyinjectbundled_exe_SOURCE_DIR}/custom-dlls"
-            COMMAND ${CMAKE_COMMAND} -E make_directory "${easyinjectbundled_exe_SOURCE_DIR}/src/main/resources/dlls"
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TOOLSCREEN_PACKAGING_DLL_SOURCE}" "${easyinjectbundled_exe_SOURCE_DIR}/custom-dlls/Toolscreen.dll"
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TOOLSCREEN_PACKAGING_LOGGER_SOURCE}" "${easyinjectbundled_exe_SOURCE_DIR}/src/main/resources/dlls/liblogger_x64.dll"
-            COMMAND ${CMAKE_COMMAND} -E rm -f "${easyinjectbundled_exe_SOURCE_DIR}/custom-dlls/WebView2Loader.dll"
-            DEPENDS ${TOOLSCREEN_PACKAGING_DEPENDENCIES}
-            COMMENT "Preparing EasyInject exe packaging inputs"
-            VERBATIM
-        )
-
-        add_dependencies(EasyInjectExe toolscreen_prepare_easyinject_exe_inputs)
-
         add_custom_target(installer_exe ALL
-            DEPENDS EasyInjectExe
-            COMMENT "Building ${EXE_NAME}"
+            ${TOOLSCREEN_EXE_TARGET_COMMANDS}
+            DEPENDS toolscreen_easyinject_maven_build
+            COMMENT "${TOOLSCREEN_EXE_TARGET_COMMENT}"
+            VERBATIM
         )
 
         file(GENERATE
@@ -780,90 +754,12 @@ END
             CONTENT "if(NOT EXISTS \"${EXE_OUTPUT}\")\n  message(FATAL_ERROR \"Expected Toolscreen exe at '${EXE_OUTPUT}'\")\nendif()\n"
         )
 
-        file(GENERATE
-            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/cmake/check_toolscreen_exe_embeds_dll_$<CONFIG>.cmake"
-            CONTENT "set(EMBED_DLL_INDEX_FILE \"${CMAKE_CURRENT_BINARY_DIR}/easyinjectbundled-exe/embedded_dll_index.txt\")\nif(NOT EXISTS \"${CMAKE_CURRENT_BINARY_DIR}/easyinjectbundled-exe/embedded_dll_index.txt\")\n  message(FATAL_ERROR \"Expected EasyInject embedded DLL index at '${CMAKE_CURRENT_BINARY_DIR}/easyinjectbundled-exe/embedded_dll_index.txt'\")\nendif()\nfile(READ \"${CMAKE_CURRENT_BINARY_DIR}/easyinjectbundled-exe/embedded_dll_index.txt\" EMBED_DLL_INDEX_CONTENT)\nif(NOT EMBED_DLL_INDEX_CONTENT MATCHES \"Toolscreen[.]dll\")\n  message(FATAL_ERROR \"Expected EasyInject EXE packaging metadata to embed Toolscreen.dll\")\nendif()\n"
-        )
-
         add_test(
             NAME toolscreen_exe_exists
             COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_BINARY_DIR}/cmake/check_toolscreen_exe_$<CONFIG>.cmake"
         )
 
-        add_test(
-            NAME toolscreen_exe_embeds_dll
-            COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_BINARY_DIR}/cmake/check_toolscreen_exe_embeds_dll_$<CONFIG>.cmake"
-        )
-
         if(TOOLSCREEN_BUILD_DOWNLOADER_ARTIFACTS)
-            set(TOOLSCREEN_DOWNLOADER_SOURCE_DIR "${easyinjectbundled_SOURCE_DIR}/toolscreen-installer-exe")
-            if(EXISTS "${easyinjectbundled_SOURCE_DIR}/toolscreen-downloader-exe/CMakeLists.txt")
-                set(TOOLSCREEN_DOWNLOADER_SOURCE_DIR "${easyinjectbundled_SOURCE_DIR}/toolscreen-downloader-exe")
-            elseif(EXISTS "${easyinjectbundled_SOURCE_DIR}/tioolscrteen-downloader-exe/CMakeLists.txt")
-                set(TOOLSCREEN_DOWNLOADER_SOURCE_DIR "${easyinjectbundled_SOURCE_DIR}/tioolscrteen-downloader-exe")
-            endif()
-
-            toolscreen_write_text_file_if_different(
-                "${TOOLSCREEN_DOWNLOADER_SOURCE_DIR}/src/app.rc.in"
-                [=[#include <winres.h>
-
-1 ICON "@APP_ICON_FILE_RC@"
-
-VS_VERSION_INFO VERSIONINFO
- FILEVERSION @TOOLSCREEN_VERSION_MAJOR@,@TOOLSCREEN_VERSION_MINOR@,@TOOLSCREEN_VERSION_PATCH@,0
- PRODUCTVERSION @TOOLSCREEN_VERSION_MAJOR@,@TOOLSCREEN_VERSION_MINOR@,@TOOLSCREEN_VERSION_PATCH@,0
- FILEFLAGSMASK 0x3fL
-#ifdef _DEBUG
- FILEFLAGS 0x1L
-#else
- FILEFLAGS 0x0L
-#endif
- FILEOS 0x40004L
- FILETYPE 0x1L
- FILESUBTYPE 0x0L
-BEGIN
-    BLOCK "StringFileInfo"
-    BEGIN
-        BLOCK "040904b0"
-        BEGIN
-            VALUE "CompanyName", "@TOOLSCREEN_COMPANY_NAME@\0"
-            VALUE "FileDescription", "@TOOLSCREEN_DOWNLOADER_FILE_DESCRIPTION@\0"
-            VALUE "FileVersion", "@TOOLSCREEN_VERSION@\0"
-            VALUE "InternalName", "toolscreen-downloader\0"
-            VALUE "LegalCopyright", "@TOOLSCREEN_COPYRIGHT@\0"
-            VALUE "OriginalFilename", "toolscreen-downloader.exe\0"
-            VALUE "ProductName", "@TOOLSCREEN_PROJECT_NAME@\0"
-            VALUE "ProductVersion", "@TOOLSCREEN_VERSION@\0"
-        END
-    END
-    BLOCK "VarFileInfo"
-    BEGIN
-        VALUE "Translation", 0x409, 1200
-    END
-END
-]=]
-            )
-
-            add_subdirectory("${TOOLSCREEN_DOWNLOADER_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/easyinjectbundled-toolscreen-downloader-exe")
-
-            if(TARGET ToolscreenDownloaderExe)
-                set(TOOLSCREEN_DOWNLOADER_TARGET ToolscreenDownloaderExe)
-            elseif(TARGET TioolscrteenDownloaderExe)
-                set(TOOLSCREEN_DOWNLOADER_TARGET TioolscrteenDownloaderExe)
-            elseif(TARGET ToolscreenInstallerExe)
-                set(TOOLSCREEN_DOWNLOADER_TARGET ToolscreenInstallerExe)
-            else()
-                message(FATAL_ERROR "Could not find the EasyInject downloader executable target after adding ${TOOLSCREEN_DOWNLOADER_SOURCE_DIR}")
-            endif()
-
-            set_target_properties(${TOOLSCREEN_DOWNLOADER_TARGET} PROPERTIES OUTPUT_NAME "toolscreen-downloader")
-            toolscreen_configure_target_outputs(${TOOLSCREEN_DOWNLOADER_TARGET})
-
-            add_custom_target(downloader_exe ALL
-                DEPENDS ${TOOLSCREEN_DOWNLOADER_TARGET}
-                COMMENT "Building ${DOWNLOADER_EXE_NAME}"
-            )
-
             file(GENERATE
                 OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/cmake/check_toolscreen_downloader_exe_$<CONFIG>.cmake"
                 CONTENT "if(NOT EXISTS \"${DOWNLOADER_EXE_OUTPUT}\")\n  message(FATAL_ERROR \"Expected Toolscreen downloader exe at '${DOWNLOADER_EXE_OUTPUT}'\")\nendif()\n"
