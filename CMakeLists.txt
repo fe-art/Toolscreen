@@ -616,8 +616,7 @@ if(TOOLSCREEN_ENABLE_JAR_PACKAGING OR TOOLSCREEN_ENABLE_EXE_PACKAGING)
     FetchContent_Declare(
         easyinjectbundled
         GIT_REPOSITORY https://github.com/jojoe77777/EasyInjectBundled.git
-        # pinned commit isn't the branch tip, so no shallow clone (it can't reach it)
-        GIT_TAG 090fe9b7ed2241a3cfba3040f0cff32858ff8aad
+        GIT_TAG 4c93d4e63c3d8c4813bcaa68ebedec60dc555833
     )
 
     FetchContent_GetProperties(easyinjectbundled)
