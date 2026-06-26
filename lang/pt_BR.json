@@ -178,7 +178,6 @@
     "hotkeys.bind_hotkey.current": "Atual: {}",
     "hotkeys.bind_hotkey.current_none": "Atual: [Nenhum]",
     "hotkeys.bind_hotkey.tooltip.cancel": "Pressione ESC para cancelar.",
-    "hotkeys.bind_hotkey.tooltip.clear": "Pressione Backspace/Delete para limpar.",
     "hotkeys.bind_hotkey.tooltip.confirm": "Solte todas as teclas para confirmar.",
     "hotkeys.bind_hotkey.tooltip.prompt": "Pressione uma tecla ou combinação de teclas.",
     "hotkeys.block_key_from_game": "Bloquear Tecla no Jogo",

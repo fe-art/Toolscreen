@@ -178,7 +178,6 @@
     "hotkeys.bind_hotkey.current": "Current: {}",
     "hotkeys.bind_hotkey.current_none": "Current: [None]",
     "hotkeys.bind_hotkey.tooltip.cancel": "Press ESC to cancel.",
-    "hotkeys.bind_hotkey.tooltip.clear": "Press Backspace/Delete to clear.",
     "hotkeys.bind_hotkey.tooltip.confirm": "Release all keys to confirm.",
     "hotkeys.bind_hotkey.tooltip.prompt": "Press a key or key combination.",
     "hotkeys.block_key_from_game": "Block Key from Game",

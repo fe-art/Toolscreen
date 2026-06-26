@@ -178,7 +178,6 @@
     "hotkeys.bind_hotkey.current": "目前：{}",
     "hotkeys.bind_hotkey.current_none": "目前：[無]",
     "hotkeys.bind_hotkey.tooltip.cancel": "按 ESC 取消。",
-    "hotkeys.bind_hotkey.tooltip.clear": "按退格鍵/刪除鍵清除。",
     "hotkeys.bind_hotkey.tooltip.confirm": "放開所有鍵以確認。",
     "hotkeys.bind_hotkey.tooltip.prompt": "按下一個鍵或組合鍵。",
     "hotkeys.block_key_from_game": "阻止按鍵傳遞給遊戲",

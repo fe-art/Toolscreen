@@ -2689,7 +2689,6 @@ void RenderSettingsGUI() {
 
         ImGui::Text(trc("hotkeys.bind_hotkey.tooltip.prompt"));
         ImGui::Text(trc("hotkeys.bind_hotkey.tooltip.confirm"));
-        ImGui::Text(trc("hotkeys.bind_hotkey.tooltip.clear"));
         ImGui::Text(trc("hotkeys.bind_hotkey.tooltip.cancel"));
         ImGui::Separator();
 
@@ -2789,14 +2788,6 @@ void RenderSettingsGUI() {
                 ImGui::CloseCurrentPopup();
                 (void)capturedLParam;
                 (void)capturedIsMouse;
-                ImGui::EndPopup();
-                return;
-            }
-
-            const bool canClear = (s_exclusionToBind.hotkey_idx == -1);
-            if (canClear && (capturedVk == VK_BACK || capturedVk == VK_DELETE)) {
-                Log("Binding cleared from Backspace/Delete.");
-                finalize_bind({});
                 ImGui::EndPopup();
                 return;
             }
