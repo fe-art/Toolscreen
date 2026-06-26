@@ -90,6 +90,7 @@ const auto& GetTestCaseDefinitions() {
         {"config-load-key-rebind-shift-layer-caps-lock-defaulted", &RunConfigLoadKeyRebindShiftLayerCapsLockDefaultedTest},
         {"config-load-key-rebind-cursor-state-defaulted", &RunConfigLoadKeyRebindCursorStateDefaultedTest},
         {"config-publish-key-rebind-cannot-type-clears-typed-output", &RunConfigPublishKeyRebindCannotTypeClearsTypedOutputTest},
+        {"hotkey-runtime-hold-rebound-source-survives-autorepeat", &RunHotkeyRuntimeHoldReboundSourceSurvivesAutoRepeatTest},
         {"hotkey-runtime-specific-shift-release-matches-exact-keyup", &RunHotkeyRuntimeSpecificShiftReleaseMatchesExactKeyupTest},
         {"hotkey-runtime-exclusion-detects-low-level-suppressed-key", &RunHotkeyRuntimeExclusionDetectsLowLevelSuppressedKeyTest},
         {"hotkey-runtime-exclusion-detects-suppressed-ctrl-shift", &RunHotkeyRuntimeExclusionDetectsSuppressedCtrlShiftTest},

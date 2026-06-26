@@ -152,6 +152,11 @@ struct ActiveHoldHotkeyState {
     std::vector<DWORD> keys;
     DWORD mainKey = 0;
     bool blockKey = false;
+    // Physical source key that triggered activation when the hotkey matched via a rebind
+    // (e.g. H held, rebound to the hotkey's output key). 0 when matched directly. The rebind
+    // output is delivered to the game as a synthetic window message, so OS key-state for the
+    // output VK is never set -- we must track the real physical key to know the hold is alive.
+    DWORD sourceVk = 0;
 };
 static std::optional<ActiveHoldHotkeyState> s_activeHoldHotkey;
 static std::unordered_map<uint64_t, UINT> s_activeSyntheticRebindOutputsBySource;
@@ -681,15 +686,31 @@ static bool AreConfiguredKeysCurrentlyDown(const std::vector<DWORD>& keys) {
     return true;
 }
 
-static void ActivateHoldHotkeyState(const std::vector<DWORD>& keys, const std::string& hotkeyId, bool blockKey) {
+static void ActivateHoldHotkeyState(const std::vector<DWORD>& keys, const std::string& hotkeyId, bool blockKey, DWORD sourceVk) {
     if (keys.empty() || hotkeyId.empty()) return;
 
-    s_activeHoldHotkey = ActiveHoldHotkeyState{ hotkeyId, keys, keys.back(), blockKey };
+    s_activeHoldHotkey = ActiveHoldHotkeyState{ hotkeyId, keys, keys.back(), blockKey, sourceVk };
+}
+
+// True when the physical key that triggered a rebind-matched hold hotkey is still held.
+// Mirrors IsPhysicalShiftKeyDown: a rebind source can be low-level suppressed (so its OS
+// key-state reads up while physically held), hence the suppression fallback.
+static bool IsHoldSourceKeyStillHeld(DWORD sourceVk) {
+    if (sourceVk == 0) return false;
+
+#ifdef TOOLSCREEN_GUI_INTEGRATION_TESTS
+    if (const auto overrideIt = s_physicalModifierDownOverridesForTests.find(sourceVk);
+        overrideIt != s_physicalModifierDownOverridesForTests.end()) {
+        return overrideIt->second;
+    }
+#endif
+
+    return (GetAsyncKeyState(static_cast<int>(sourceVk)) & 0x8000) != 0 || IsKeyCurrentlyLowLevelSuppressed(sourceVk);
 }
 
 static bool TryHandleBrokenHoldHotkey(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, DWORD vkCode, DWORD rawVkCode,
-                                      DWORD rebindTargetVk, bool isKeyDown, const Config& cfg, bool enableHotkeyDebug,
-                                      InputHandlerResult& outResult) {
+                                      DWORD rebindTargetVk, bool isKeyDown, bool isAutoRepeatKeyDown, const Config& cfg,
+                                      bool enableHotkeyDebug, InputHandlerResult& outResult) {
     outResult = { false, 0 };
 
     if (!s_activeHoldHotkey.has_value()) {
@@ -697,7 +718,21 @@ static bool TryHandleBrokenHoldHotkey(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
     }
 
     const ActiveHoldHotkeyState activeHold = *s_activeHoldHotkey;
-    if (AreConfiguredKeysCurrentlyDown(activeHold.keys)) {
+
+    // An OS auto-repeat keydown (begins ~500ms after press) of the held key itself means it is
+    // still physically down -- never treat it as a release. Scoped to the hold's own key so that
+    // an unrelated key's auto-repeat still falls through to the liveness check below (otherwise a
+    // lost source key-up could be masked indefinitely by an unrelated repeating key).
+    if (isAutoRepeatKeyDown &&
+        (rawVkCode == activeHold.sourceVk || rawVkCode == activeHold.mainKey || vkCode == activeHold.mainKey)) {
+        return false;
+    }
+
+    // The hold is alive if the configured (output) keys read as down, OR the originating
+    // physical source key is still held. For a rebind-matched hold the output VK (e.g. F15)
+    // is only ever delivered as a synthetic window message, so AreConfiguredKeysCurrentlyDown
+    // would spuriously report it up while the real key (e.g. H) is still pressed.
+    if (AreConfiguredKeysCurrentlyDown(activeHold.keys) || IsHoldSourceKeyStillHeld(activeHold.sourceVk)) {
         return false;
     }
 
@@ -2121,8 +2156,8 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
     bool s_enableHotkeyDebug = cfg.debug.showHotkeyDebug;
 
     InputHandlerResult brokenHoldResult;
-    if (TryHandleBrokenHoldHotkey(hWnd, uMsg, wParam, lParam, vkCode, rawVkCode, rebindTargetVk, isKeyDown, cfg, s_enableHotkeyDebug,
-                                  brokenHoldResult)) {
+    if (TryHandleBrokenHoldHotkey(hWnd, uMsg, wParam, lParam, vkCode, rawVkCode, rebindTargetVk, isKeyDown, isAutoRepeatKeyDown, cfg,
+                                  s_enableHotkeyDebug, brokenHoldResult)) {
         if (brokenHoldResult.consumed) {
             return brokenHoldResult;
         }
@@ -2178,7 +2213,7 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
 
         // Hold-mode helper: activate target mode on press, revert to default on release
         auto handleHoldMode = [&](const std::vector<DWORD>& holdKeys, const std::string& targetMode, const std::string& hotkeyId,
-                                  bool blockKey) -> InputHandlerResult {
+                                  bool blockKey, DWORD sourceVk) -> InputHandlerResult {
             if (isKeyDown) {
                 if (isAutoRepeatKeyDown) {
                     if (s_enableHotkeyDebug) { Log("[Hotkey] HOLD DOWN repeat ignored: " + hotkeyId); }
@@ -2199,7 +2234,7 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                     }
                 }
                 if (!debounced && !targetMode.empty()) {
-                    ActivateHoldHotkeyState(holdKeys, hotkeyId, blockKey);
+                    ActivateHoldHotkeyState(holdKeys, hotkeyId, blockKey, sourceVk);
                     if (s_enableHotkeyDebug) { Log("[Hotkey] HOLD DOWN: " + hotkeyId + " -> " + targetMode); }
                     SwitchToMode(targetMode, "hotkey (hold)");
                 }
@@ -2230,7 +2265,7 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                     (void)SendMenuMaskKeyTap();
                 }
 
-                if (hotkey.triggerOnHold) { return handleHoldMode(alt.keys, alt.mode, hotkeyId, blockKey); }
+                if (hotkey.triggerOnHold) { return handleHoldMode(alt.keys, alt.mode, hotkeyId, blockKey, matchedViaRebind ? rawVkCode : 0); }
 
                 // Handle trigger-on-release invalidation tracking
                 if (hotkey.triggerOnRelease) {
@@ -2313,7 +2348,7 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
 
                 if (hotkey.triggerOnHold) {
                     if (currentSecMode.empty()) { currentSecMode = GetHotkeySecondaryMode(hotkeyIdx); }
-                    return handleHoldMode(hotkey.keys, currentSecMode, hotkeyId, blockKey);
+                    return handleHoldMode(hotkey.keys, currentSecMode, hotkeyId, blockKey, matchedViaRebind ? rawVkCode : 0);
                 }
 
                 if (hotkey.triggerOnRelease) {
@@ -4082,6 +4117,8 @@ void ResetHotkeyRuntimeStateForTest() {
     s_activeHoldHotkey.reset();
     s_shiftHotkeyPollState = {};
 }
+
+bool IsHoldHotkeyActiveForTest() { return s_activeHoldHotkey.has_value(); }
 
 void ClearLowLevelSuppressedKeysForTest() {
     std::lock_guard<std::mutex> lock(s_lowLevelSuppressedKeysMutex);

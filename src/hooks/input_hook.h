@@ -90,6 +90,7 @@ size_t GetActiveSyntheticRebindOutputCountForTest();
 void ResetExactKeyboardMessageStateForTest();
 size_t GetUnreboundKeyDownCountForTest();
 void ResetHotkeyRuntimeStateForTest();
+bool IsHoldHotkeyActiveForTest();
 void ResetLowLevelExactModifierStateForTest();
 void SetLowLevelExactModifierDownForTest(DWORD vk, bool isDown);
 void SetPhysicalModifierDownForTest(DWORD vk, bool isDown);
