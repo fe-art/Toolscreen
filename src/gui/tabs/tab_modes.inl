@@ -2229,6 +2229,8 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                     ImGui::TreePop();
                 }
 
+                renderModeSourceAssignments(mode, mode.id);
+
                 if (ImGui::TreeNode(trc("modes.sensitivity_override"))) {
                     if (ImGui::Checkbox(trc("modes.override_sensitivity"), &mode.sensitivityOverrideEnabled)) { g_configIsDirty = true; }
                     HelpMarker(trc("modes.tooltip.override_sensitivity"));
