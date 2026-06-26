@@ -1347,6 +1347,107 @@ void RunKeyRebindRuntimeModifierSourceDualShiftReleaseTest(TestRunMode runMode =
     ResetPhysicalModifierStateForTest();
 }
 
+// Regression: a "trigger only when holding" mode hotkey configured on a REBOUND source key
+// (physical H rebound to F15, hotkey bound to F15) used to self-deactivate after ~0.5s while H
+// was still held. Root cause: the broken-hold liveness check probed the injected OUTPUT VK (F15),
+// which the OS never reports as down. The fix tracks the physical source key. This drives the real
+// WndProc and observes hold state via IsHoldHotkeyActiveForTest().
+void RunHotkeyRuntimeHoldReboundSourceSurvivesAutoRepeatTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+
+    PrepareRebindRuntimeCase("hotkey-runtime-hold-rebound-source-survives-autorepeat",
+                             { MakeEnabledRebind('H', VK_F15) });
+
+    const std::string kDefaultMode = "Primary";
+    const std::string kSecondaryMode = "Secondary";
+
+    ModeConfig primaryMode;
+    primaryMode.id = kDefaultMode;
+    primaryMode.width = 1280;
+    primaryMode.height = 720;
+    ModeConfig secondaryMode;
+    secondaryMode.id = kSecondaryMode;
+    secondaryMode.width = 1024;
+    secondaryMode.height = 768;
+    g_config.modes = { primaryMode, secondaryMode };
+    g_config.defaultMode = kDefaultMode;
+
+    // The rebind output must be resolvable during hotkey matching for the rebind path to fire.
+    g_config.keyRebinds.resolveRebindTargetsForHotkeys = true;
+
+    HotkeyConfig hotkey;
+    hotkey.keys = { VK_F15 };
+    hotkey.secondaryMode = kSecondaryMode;
+    hotkey.triggerOnHold = true;
+    hotkey.debounce = 0;
+    g_config.hotkeys = { hotkey };
+
+    ResizeHotkeySecondaryModes(g_config.hotkeys.size());
+    ResetAllHotkeySecondaryModes(g_config);
+    {
+        std::lock_guard<std::mutex> hotkeyLock(g_hotkeyMainKeysMutex);
+        RebuildHotkeyMainKeys_Internal();
+    }
+    PublishConfigSnapshot();
+
+    // SubclassedWndProc reads the active mode/game-state from the double-buffers.
+    g_modeIdBuffers[0] = kDefaultMode;
+    g_modeIdBuffers[1] = kDefaultMode;
+    g_currentModeIdIndex.store(0, std::memory_order_release);
+    g_gameStateBuffers[0].clear();
+    g_gameStateBuffers[1].clear();
+    g_currentGameStateIndex.store(0, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lock(g_modeIdMutex);
+        g_currentModeId = kDefaultMode;
+    }
+
+    ResetHotkeyRuntimeStateForTest();
+    ResetPhysicalModifierStateForTest();
+
+    ScopedSubclassedInputCapture capture(window.hwnd());
+
+    const LPARAM downLParam = BuildTestKeyboardMessageLParam('H', true);
+    const LPARAM autoRepeatLParam = downLParam | (static_cast<LPARAM>(1) << 30); // bit 30 = previous key state (auto-repeat)
+    const LPARAM upLParam = BuildTestKeyboardMessageLParam('H', false);
+
+    try {
+        // Physical H pressed and held -> hold activates.
+        SetPhysicalModifierDownForTest('H', true);
+        (void)SubclassedWndProc(window.hwnd(), WM_KEYDOWN, 'H', downLParam);
+        Expect(IsHoldHotkeyActiveForTest(),
+               "Expected the rebound-source hold hotkey to activate on key-down.");
+
+        // ~500ms later the OS emits an auto-repeat key-down while H is still physically held.
+        (void)SubclassedWndProc(window.hwnd(), WM_KEYDOWN, 'H', autoRepeatLParam);
+        Expect(IsHoldHotkeyActiveForTest(),
+               "Expected the hold to survive an auto-repeat key-down of the rebound source "
+               "(regression: it self-deactivated after ~0.5s).");
+
+        // Unrelated key auto-repeat while the source is still held must not end the hold either.
+        SetPhysicalModifierDownForTest('K', true);
+        const LPARAM unrelatedDown = BuildTestKeyboardMessageLParam('K', true);
+        (void)SubclassedWndProc(window.hwnd(), WM_KEYDOWN, 'K', unrelatedDown);
+        (void)SubclassedWndProc(window.hwnd(), WM_KEYDOWN, 'K', unrelatedDown | (static_cast<LPARAM>(1) << 30));
+        Expect(IsHoldHotkeyActiveForTest(),
+               "Expected the hold to stay active while the source key is still physically held.");
+        SetPhysicalModifierDownForTest('K', false);
+
+        // Physical release of the source key ends the hold (anti-over-hold check).
+        SetPhysicalModifierDownForTest('H', false);
+        (void)SubclassedWndProc(window.hwnd(), WM_KEYUP, 'H', upLParam);
+        Expect(!IsHoldHotkeyActiveForTest(),
+               "Expected the hold to deactivate when the rebound source key is released.");
+    } catch (...) {
+        ResetPhysicalModifierStateForTest();
+        ResetHotkeyRuntimeStateForTest();
+        throw;
+    }
+
+    ResetPhysicalModifierStateForTest();
+    ResetHotkeyRuntimeStateForTest();
+}
+
 void RunKeyRebindRuntimeDisabledRebindIgnoredTest(TestRunMode runMode = TestRunMode::Automated) {
     DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
     KeyRebind rebind = MakeEnabledRebind('A', 'B');
