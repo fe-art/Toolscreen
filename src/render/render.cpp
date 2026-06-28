@@ -4685,6 +4685,8 @@ struct SameThreadOverlayState {
 
     bool showWelcomeToast = false;
     bool welcomeToastIsFullscreen = false;
+    int startupIndicatorMode = 1;
+    std::string startupIndicatorImagePath;
     bool showRebindIndicator = false;
     bool showCursorTrail = false;
     bool modeHasMirrors = false;
@@ -5342,7 +5344,9 @@ static bool RenderSameThreadOverlayPass(const SameThreadOverlayState& request, c
     RenderSameThreadImGui(request, renderNinjabrainOverlay);
     if (request.showWelcomeToast) {
         PROFILE_SCOPE_CAT("Render Welcome Toast", "Rendering");
-        RenderWelcomeToast(request.welcomeToastIsFullscreen);
+        RenderWelcomeToast(request.welcomeToastIsFullscreen,
+                           request.startupIndicatorMode,
+                           request.startupIndicatorImagePath);
     }
     return !activeMirrors.empty() || !eyeZoomSlideOutMirrors->empty() || !transitionSlideOutMirrors->empty() || !activeImages.empty() ||
             !activeWindowOverlays.empty() || !activeBrowserOverlays.empty() || request.shouldRenderGui || request.showPerformanceOverlay || request.showProfiler ||
@@ -6127,6 +6131,8 @@ bool RenderSameThreadObsFrame(const ModeConfig* modeToRender, const GLState& s, 
             request.textureGridModeHeight = 0;
             request.showWelcomeToast = false;
             request.welcomeToastIsFullscreen = false;
+            request.startupIndicatorMode = 0;
+            request.startupIndicatorImagePath.clear();
             request.showCursorTrail = cfgSnap->cursorTrail.enabled && IsCursorVisible();
             request.modeHasMirrors = ModeHasAnyMirrorSources(*modeToRender);
             request.modeHasImages = g_imageOverlaysVisible.load(std::memory_order_acquire) &&
@@ -8540,6 +8546,7 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
     const bool wantRebindIndicator = IsRebindIndicatorVisible();
     const bool isFullscreenMode = EqualsIgnoreCase(modeToRender->id, "Fullscreen");
 
+    const int startupIndicatorMode = configSnap ? configSnap->startupIndicatorMode : 1;
     bool wantWelcomeToast = false;
     {
         static bool s_prevFullscreen = false;
@@ -8548,7 +8555,8 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
         if (isFullscreenMode && !s_prevFullscreen) { s_fullscreenEnterTime = now; }
         s_prevFullscreen = isFullscreenMode;
 
-        if (isFullscreenMode && !g_configurePromptDismissedThisSession.load(std::memory_order_relaxed)) {
+        if (isFullscreenMode && startupIndicatorMode != 0 &&
+            !g_configurePromptDismissedThisSession.load(std::memory_order_relaxed)) {
             constexpr float kHoldSeconds = 10.0f;
             constexpr float kFadeSeconds = 1.5f;
             const float elapsed = std::chrono::duration_cast<std::chrono::duration<float>>(now - s_fullscreenEnterTime).count();
@@ -8661,6 +8669,8 @@ void RenderModeInternal(const ModeConfig* modeToRender, const GLState& s, int cu
             PROFILE_SCOPE_CAT("Populate Overlay Element State", "Rendering");
             target.welcomeToastIsFullscreen = isFullscreenMode;
             target.showWelcomeToast = wantWelcomeToast;
+            target.startupIndicatorMode = startupIndicatorMode;
+            target.startupIndicatorImagePath = configSnap ? configSnap->startupIndicatorImagePath : std::string{};
             target.showRebindIndicator = wantRebindIndicator;
             target.showCursorTrail = wantCursorTrail;
             target.modeHasMirrors = hasMirrors;

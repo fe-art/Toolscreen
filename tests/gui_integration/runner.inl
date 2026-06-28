@@ -63,6 +63,7 @@ const auto& GetTestCaseDefinitions() {
         {"config-load-mode-default-dimensions-restored", &RunConfigLoadModeDefaultDimensionsRestoredTest},
         {"config-load-mode-source-lists-loaded", &RunConfigLoadModeSourceListsLoadedTest},
         {"config-downgrade-sources-compat", &RunConfigDowngradeSourcesCompatTest},
+        {"config-startup-indicator", &RunStartupIndicatorConfigTest},
         {"config-migrate-version-applies", &RunConfigMigrateVersionAppliesTest},
         {"config-load-mode-percentage-dimensions-detected", &RunConfigLoadModePercentageDimensionsDetectedTest},
         {"config-load-mode-typed-sources-loaded", &RunConfigLoadModeTypedSourcesLoadedTest},

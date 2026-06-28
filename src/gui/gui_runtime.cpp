@@ -607,7 +607,10 @@ static void RenderFullscreenWelcomeToastImGui(float toastOpacity) {
     RenderImGuiWithStateProtection(true);
 }
 
-void RenderWelcomeToast(bool isFullscreen) {
+static bool RenderCustomStartupIndicator(const std::string& path, float opacity);
+
+void RenderWelcomeToast(bool isFullscreen, int startupIndicatorMode, const std::string& customImagePath) {
+    if (startupIndicatorMode == 0) { return; }
     if (isFullscreen && g_configurePromptDismissedThisSession.load(std::memory_order_relaxed)) { return; }
 
     static bool s_prevFullscreen = false;
@@ -644,6 +647,13 @@ void RenderWelcomeToast(bool isFullscreen) {
                 return;
             }
         }
+    }
+
+    if (startupIndicatorMode == 2) {
+        if (!RenderCustomStartupIndicator(customImagePath, toastOpacity)) {
+            RenderFullscreenWelcomeToastImGui(toastOpacity);
+        }
+        return;
     }
 
     if (isFullscreen) {
@@ -1274,6 +1284,168 @@ void main() {
     if (savedScissor) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
     if (savedStencil) glEnable(GL_STENCIL_TEST); else glDisable(GL_STENCIL_TEST);
     glBlendFuncSeparate(savedBlendSrcRGB, savedBlendDstRGB, savedBlendSrcA, savedBlendDstA);
+}
+
+static RebindIndicatorTexture s_startupIndicatorTex;
+static GLuint s_startupIndProgram = 0;
+static GLuint s_startupIndVao = 0;
+static GLuint s_startupIndVbo = 0;
+static GLint s_startupIndLocOpacity = -1;
+static HGLRC s_startupIndLastCtx = NULL;
+static std::string s_startupIndLoadedPath;
+static bool s_startupIndTriedAndFailed = false;
+static std::atomic<bool> s_startupIndInvalid{ false };
+
+void InvalidateStartupIndicatorTexture() {
+    s_startupIndInvalid.store(true, std::memory_order_release);
+}
+
+static bool EnsureStartupIndicatorTexture(const std::string& path) {
+    if (s_startupIndInvalid.exchange(false, std::memory_order_acquire) || path != s_startupIndLoadedPath) {
+        s_startupIndicatorTex.DeleteAndClear();
+        s_startupIndLoadedPath = path;
+        s_startupIndTriedAndFailed = false;
+    }
+    if (s_startupIndicatorTex.Empty()) {
+        if (s_startupIndTriedAndFailed) return false;
+        if (path.empty() || !LoadIndicatorTextureFromFile(path, s_startupIndicatorTex)) {
+            s_startupIndTriedAndFailed = true;
+            if (!path.empty()) {
+                Log("[startup_indicator] custom image could not be loaded: " + path + " — falling back to shortcut reminder");
+            }
+            return false;
+        }
+    }
+    return !s_startupIndicatorTex.Empty();
+}
+
+static bool RenderCustomStartupIndicator(const std::string& path, float opacity) {
+    GLint viewport[4];
+    glGetIntegerv(GL_VIEWPORT, viewport);
+    int vpW = viewport[2], vpH = viewport[3];
+    if (vpW <= 0 || vpH <= 0) return false;
+
+    HGLRC currentCtx = wglGetCurrentContext();
+    if (currentCtx != s_startupIndLastCtx) {
+        s_startupIndLastCtx = currentCtx;
+        s_startupIndProgram = 0;
+        s_startupIndVao = 0;
+        s_startupIndVbo = 0;
+        s_startupIndLocOpacity = -1;
+        s_startupIndicatorTex.ResetForContextLoss();
+    }
+
+    if (s_startupIndProgram == 0) {
+        const char* vtxSrc = R"(#version 330 core
+layout(location = 0) in vec2 aPos;
+layout(location = 1) in vec2 aTexCoord;
+out vec2 TexCoord;
+void main() {
+    gl_Position = vec4(aPos, 0.0, 1.0);
+    TexCoord = aTexCoord;
+})";
+        const char* fragSrc = R"(#version 330 core
+out vec4 FragColor;
+in vec2 TexCoord;
+uniform sampler2D uTexture;
+uniform float uOpacity;
+void main() {
+    vec4 c = texture(uTexture, TexCoord);
+    FragColor = vec4(c.rgb, c.a * uOpacity);
+})";
+        s_startupIndProgram = CreateShaderProgram(vtxSrc, fragSrc);
+        if (s_startupIndProgram != 0) {
+            GLint locTex = glGetUniformLocation(s_startupIndProgram, "uTexture");
+            s_startupIndLocOpacity = glGetUniformLocation(s_startupIndProgram, "uOpacity");
+            glUseProgram(s_startupIndProgram);
+            glUniform1i(locTex, 0);
+            glUseProgram(0);
+        }
+    }
+    if (s_startupIndVao == 0) glGenVertexArrays(1, &s_startupIndVao);
+    if (s_startupIndVbo == 0) {
+        glGenBuffers(1, &s_startupIndVbo);
+        glBindVertexArray(s_startupIndVao);
+        glBindBuffer(GL_ARRAY_BUFFER, s_startupIndVbo);
+        glBufferData(GL_ARRAY_BUFFER, 6 * 4 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
+        glBindVertexArray(0);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+    }
+    if (s_startupIndProgram == 0) return false;
+
+    if (!EnsureStartupIndicatorTexture(path)) return false;
+
+    const auto frame = ResolveAnimatedTexture(s_startupIndicatorTex);
+    if (frame.textureId == 0) return false;
+
+    GLint savedProgram, savedVAO, savedVBO, savedTex, savedActiveTex;
+    GLint savedBlendSrcRGB, savedBlendDstRGB, savedBlendSrcA, savedBlendDstA;
+    GLboolean savedBlend, savedDepthTest, savedScissor, savedStencil;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &savedProgram);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &savedVAO);
+    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &savedVBO);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &savedActiveTex);
+    glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &savedTex);
+    savedBlend = glIsEnabled(GL_BLEND);
+    savedDepthTest = glIsEnabled(GL_DEPTH_TEST);
+    savedScissor = glIsEnabled(GL_SCISSOR_TEST);
+    savedStencil = glIsEnabled(GL_STENCIL_TEST);
+    glGetIntegerv(GL_BLEND_SRC_RGB, &savedBlendSrcRGB);
+    glGetIntegerv(GL_BLEND_DST_RGB, &savedBlendDstRGB);
+    glGetIntegerv(GL_BLEND_SRC_ALPHA, &savedBlendSrcA);
+    glGetIntegerv(GL_BLEND_DST_ALPHA, &savedBlendDstA);
+
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_STENCIL_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glUseProgram(s_startupIndProgram);
+    glBindVertexArray(s_startupIndVao);
+    glBindBuffer(GL_ARRAY_BUFFER, s_startupIndVbo);
+
+    float scale = (static_cast<float>(vpH) / 1080.0f) * 0.45f;
+    float drawW = s_startupIndicatorTex.width * scale;
+    float drawH = s_startupIndicatorTex.height * scale;
+    float px1 = 0.0f, py1 = 0.0f;
+    float nx1 = (px1 / vpW) * 2.0f - 1.0f;
+    float nx2 = ((px1 + drawW) / vpW) * 2.0f - 1.0f;
+    float ny_top = 1.0f - (py1 / vpH) * 2.0f;
+    float ny_bot = 1.0f - ((py1 + drawH) / vpH) * 2.0f;
+
+    const float vTop = frame.sourceRect[1];
+    const float vBot = frame.sourceRect[1] + frame.sourceRect[3];
+    float verts[] = {
+        nx1, ny_bot, 0.0f, vBot,
+        nx2, ny_bot, 1.0f, vBot,
+        nx2, ny_top, 1.0f, vTop,
+        nx1, ny_bot, 0.0f, vBot,
+        nx2, ny_top, 1.0f, vTop,
+        nx1, ny_top, 0.0f, vTop,
+    };
+
+    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
+    BindTextureDirect(GL_TEXTURE_2D, frame.textureId);
+    glUniform1f(s_startupIndLocOpacity, opacity);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    glUseProgram(savedProgram);
+    glBindVertexArray(savedVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, savedVBO);
+    glActiveTexture(GL_TEXTURE0);
+    BindTextureDirect(GL_TEXTURE_2D, savedTex);
+    glActiveTexture(savedActiveTex);
+    if (savedBlend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+    if (savedDepthTest) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+    if (savedScissor) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
+    if (savedStencil) glEnable(GL_STENCIL_TEST); else glDisable(GL_STENCIL_TEST);
+    glBlendFuncSeparate(savedBlendSrcRGB, savedBlendDstRGB, savedBlendSrcA, savedBlendDstA);
+    return true;
 }
 
 void RenderPerformanceOverlay(bool showPerformanceOverlay) {

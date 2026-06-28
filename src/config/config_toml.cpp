@@ -2252,7 +2252,10 @@ void ConfigToToml(const Config& config, toml::table& out) {
     out.insert("basicModeEnabled", config.basicModeEnabled);
     out.insert("restoreWindowedModeOnFullscreenExit", config.restoreWindowedModeOnFullscreenExit);
     out.insert("disableFullscreenPrompt", config.disableFullscreenPrompt);
-    out.insert("disableConfigurePrompt", config.disableConfigurePrompt);
+    out.insert("startupIndicatorMode", config.startupIndicatorMode);
+    if (!config.startupIndicatorImagePath.empty()) {
+        out.insert("startupIndicatorImagePath", config.startupIndicatorImagePath);
+    }
 
     toml::array guiHotkeyArr;
     for (const auto& key : config.guiHotkey) { guiHotkeyArr.push_back(static_cast<int64_t>(key)); }
@@ -2534,7 +2537,16 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
     config.restoreWindowedModeOnFullscreenExit =
         GetOr(tbl, "restoreWindowedModeOnFullscreenExit", ConfigDefaults::CONFIG_RESTORE_WINDOWED_MODE_ON_FULLSCREEN_EXIT);
     config.disableFullscreenPrompt = GetOr(tbl, "disableFullscreenPrompt", ConfigDefaults::CONFIG_DISABLE_FULLSCREEN_PROMPT);
-    config.disableConfigurePrompt = GetOr(tbl, "disableConfigurePrompt", ConfigDefaults::CONFIG_DISABLE_CONFIGURE_PROMPT);
+
+    if (tbl.contains("startupIndicatorMode")) {
+        int m = GetOr(tbl, "startupIndicatorMode", ConfigDefaults::STARTUP_INDICATOR_MODE);
+        if (m < 0 || m > 2) m = ConfigDefaults::STARTUP_INDICATOR_MODE;
+        config.startupIndicatorMode = m;
+    } else {
+        config.startupIndicatorMode = ConfigDefaults::STARTUP_INDICATOR_MODE;
+    }
+    config.startupIndicatorImagePath =
+        GetStringOr(tbl, "startupIndicatorImagePath", ConfigDefaults::STARTUP_INDICATOR_IMAGE_PATH);
 
     config.guiHotkey.clear();
     if (auto arr = GetArray(tbl, "guiHotkey")) {
@@ -2994,7 +3006,8 @@ const std::vector<std::string>& GetConfigTomlOrderedKeys() {
         "basicModeEnabled",
         "restoreWindowedModeOnFullscreenExit",
         "disableFullscreenPrompt",
-        "disableConfigurePrompt",
+        "startupIndicatorMode",
+        "startupIndicatorImagePath",
         "guiHotkey",
         "borderlessHotkey",
         "autoBorderless",
