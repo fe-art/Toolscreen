@@ -1147,6 +1147,47 @@ void RunKeyRebindRuntimePassthroughSourceReleasedOnEnableTest(TestRunMode runMod
     ExpectCapturedMessage(capture, 0, WM_KEYUP, VK_CONTROL, "Passthrough source release WM_KEYUP");
 }
 
+static bool AltReachedGame(const ScopedSubclassedInputCapture& capture) {
+    for (const CapturedWindowMessage& message : capture.messages) {
+        if (message.wParam == VK_MENU && (message.message == WM_SYSKEYDOWN || message.message == WM_SYSKEYUP)) { return true; }
+    }
+    return false;
+}
+
+void RunHotkeyRuntimeDisabledKeyNotForwardedTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    PrepareRebindRuntimeCase("hotkey_runtime_disabled_key_not_forwarded", { MakeEnabledRebind(VK_LMENU, 0) });
+
+    HotkeyConfig hotkey;
+    hotkey.keys = { VK_MENU };
+    hotkey.mainMode = "Fullscreen";
+    hotkey.secondaryMode = "Thin";
+    hotkey.debounce = 0;
+    g_config.hotkeys.push_back(hotkey);
+    PublishConfigSnapshot();
+
+    Expect(window.PumpMessages(), "Expected the test window to stay open before disabled-key capture setup.");
+    ScopedSubclassedInputCapture capture(window.hwnd());
+    Expect(window.PumpMessages(), "Expected the test window to stay open after disabled-key capture setup.");
+    capture.Clear();
+
+    ScopedKeyboardStateOverride keyboardState;
+    keyboardState.SetKeyDown(VK_MENU, true);
+    keyboardState.Apply();
+
+    Expect(PostMessageW(window.hwnd(), WM_SYSKEYDOWN, VK_MENU, BuildTestKeyboardMessageLParam(VK_LMENU, true, true)) != FALSE,
+           "Expected the Alt key-down to post.");
+    Expect(window.PumpMessages(), "Expected Alt key-down dispatch to keep the window open.");
+    Expect(!AltReachedGame(capture), "Expected a disabled Alt to stay hidden from the game when a non-blocking hotkey also uses it.");
+
+    keyboardState.SetKeyDown(VK_MENU, false);
+    keyboardState.Apply();
+    Expect(PostMessageW(window.hwnd(), WM_SYSKEYUP, VK_MENU, BuildTestKeyboardMessageLParam(VK_LMENU, false, true)) != FALSE,
+           "Expected the Alt key-up to post.");
+    Expect(window.PumpMessages(), "Expected Alt key-up dispatch to keep the window open.");
+    Expect(!AltReachedGame(capture), "Expected the key-up of a swallowed Alt key-down to be swallowed as well.");
+}
+
 void RunHotkeyRuntimeExclusionHonoredOnTriggerOnReleaseTest(TestRunMode /*runMode*/ = TestRunMode::Automated) {
     const std::vector<DWORD> keys = { VK_MENU };
     const std::vector<DWORD> exclusions = { VK_SHIFT };

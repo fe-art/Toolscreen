@@ -97,6 +97,7 @@ const auto& GetTestCaseDefinitions() {
         {"hotkey-runtime-vulkan-gui-uses-low-level-exact-modifier-state", &RunVulkanGuiHotkeyUsesLowLevelExactModifierStateTest},
         {"hotkey-runtime-low-level-hook-runs-on-dedicated-thread", &RunLowLevelKeyboardHookRunsOnDedicatedThreadTest},
         {"hotkey-runtime-exclusion-detects-low-level-suppressed-key", &RunHotkeyRuntimeExclusionDetectsLowLevelSuppressedKeyTest},
+        {"hotkey-runtime-disabled-key-not-forwarded", &RunHotkeyRuntimeDisabledKeyNotForwardedTest},
         {"hotkey-runtime-exclusion-detects-suppressed-ctrl-shift", &RunHotkeyRuntimeExclusionDetectsSuppressedCtrlShiftTest},
         {"key-rebind-deep-suppression-eligibility", &RunKeyRebindDeepSuppressionEligibilityTest},
         {"key-rebind-runtime-full-forwarding", &RunKeyRebindRuntimeFullForwardingTest},

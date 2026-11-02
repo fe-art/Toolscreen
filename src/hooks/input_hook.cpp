@@ -2483,10 +2483,14 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
     const Config& cfg = *cfgSnap;
 
     DWORD rebindTargetVk = 0;
-    const bool cursorVisible = (cfg.keyRebinds.enabled && cfg.keyRebinds.resolveRebindTargetsForHotkeys) ? IsCursorVisible() : false;
-    if (cfg.keyRebinds.enabled && cfg.keyRebinds.resolveRebindTargetsForHotkeys) {
-        const KeyRebind* matchedRebind = FindPreferredEnabledKeyRebindForInput(cfg, cursorVisible, vkCode, rawVkCode);
-        if (matchedRebind != nullptr) {
+    bool sourceKeyDisabled = false;
+    if (cfg.keyRebinds.enabled) {
+        const KeyRebind* matchedRebind = FindPreferredEnabledKeyRebindForInput(cfg, IsCursorVisible(), vkCode, rawVkCode);
+        const ULONG_PTR messageExtraInfo = GetMessageExtraInfo();
+        const bool isToolscreenInput =
+            messageExtraInfo == kToolscreenInjectedExtraInfo || messageExtraInfo == kToolscreenMenuMaskExtraInfo;
+        sourceKeyDisabled = isKeyDown && !isToolscreenInput && matchedRebind != nullptr && IsConsumeOnlyKeyRebind(*matchedRebind);
+        if (matchedRebind != nullptr && cfg.keyRebinds.resolveRebindTargetsForHotkeys) {
             const bool shiftLayerActive = IsShiftLayerActiveForRebind(*matchedRebind, vkCode, rawVkCode, isKeyDown);
             const DWORD effectiveCustomOutputVk = ResolveEffectiveCustomOutputVk(*matchedRebind, shiftLayerActive);
             rebindTargetVk = (effectiveCustomOutputVk != 0) ? effectiveCustomOutputVk : matchedRebind->toKey;
@@ -2619,7 +2623,7 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                                     CheckHotkeyMatch(alt.keys, rebindTargetVk, hotkey.conditions.exclusions, skipLiveKeyStateChecks,
                                                      s_bestMatchKeyCount, 0, false, false, skipExclusionChecks);
             if (matched || matchedViaRebind) {
-                bool blockKey = hotkey.blockKeyFromGame || matchedViaRebind;
+                bool blockKey = hotkey.blockKeyFromGame || matchedViaRebind || sourceKeyDisabled;
                 std::string hotkeyId = GetKeyComboString(alt.keys);
 
                 if (ShouldMaskWindowsKeyForHotkey(alt.keys, isKeyDown, isAutoRepeatKeyDown)) {
@@ -2637,6 +2641,7 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                     } else {
                         // Pass the key-up on when its key-down was not blocked, so the game does not see the key stuck.
                         const HotkeyKeyDownDisposition downDisposition = TakeHotkeyKeyDownDisposition(vkCode);
+                        if (downDisposition == HotkeyKeyDownDisposition::Blocked) { blockKey = true; }
                         if (blockKey && !matchedViaRebind && downDisposition != HotkeyKeyDownDisposition::Blocked) {
                             if (downDisposition == HotkeyKeyDownDisposition::Forwarded) {
                                 return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
@@ -2720,7 +2725,7 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                                     CheckHotkeyMatch(hotkey.keys, rebindTargetVk, hotkey.conditions.exclusions, skipLiveKeyStateChecks,
                                                      s_bestMatchKeyCount, 0, false, false, skipExclusionChecks);
             if (matched || matchedViaRebind) {
-                bool blockKey = hotkey.blockKeyFromGame || matchedViaRebind;
+                bool blockKey = hotkey.blockKeyFromGame || matchedViaRebind || sourceKeyDisabled;
                 std::string hotkeyId = GetKeyComboString(hotkey.keys);
 
                 if (ShouldMaskWindowsKeyForHotkey(hotkey.keys, isKeyDown, isAutoRepeatKeyDown)) {
@@ -2741,6 +2746,7 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                     } else {
                         // Pass the key-up on when its key-down was not blocked, so the game does not see the key stuck.
                         const HotkeyKeyDownDisposition downDisposition = TakeHotkeyKeyDownDisposition(vkCode);
+                        if (downDisposition == HotkeyKeyDownDisposition::Blocked) { blockKey = true; }
                         if (blockKey && !matchedViaRebind && downDisposition != HotkeyKeyDownDisposition::Blocked) {
                             if (downDisposition == HotkeyKeyDownDisposition::Forwarded) {
                                 return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
@@ -2855,7 +2861,7 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                                     CheckHotkeyMatch(sensHotkey.keys, rebindTargetVk, sensHotkey.conditions.exclusions, false,
                                                      s_bestMatchKeyCount);
             if (matched || matchedViaRebind) {
-                bool blockKey = matchedViaRebind;
+                bool blockKey = matchedViaRebind || sourceKeyDisabled;
                 std::string hotkeyId = "sens_" + GetKeyComboString(sensHotkey.keys);
 
                 if (ShouldMaskWindowsKeyForHotkey(sensHotkey.keys, isKeyDown, isAutoRepeatKeyDown)) {
