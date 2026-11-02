@@ -98,6 +98,7 @@ const auto& GetTestCaseDefinitions() {
         {"hotkey-runtime-low-level-hook-runs-on-dedicated-thread", &RunLowLevelKeyboardHookRunsOnDedicatedThreadTest},
         {"hotkey-runtime-exclusion-detects-low-level-suppressed-key", &RunHotkeyRuntimeExclusionDetectsLowLevelSuppressedKeyTest},
         {"hotkey-runtime-disabled-key-not-forwarded", &RunHotkeyRuntimeDisabledKeyNotForwardedTest},
+        {"hotkey-runtime-key-up-reaches-rebind-after-unmatched-key-down", &RunHotkeyRuntimeKeyUpReachesRebindAfterUnmatchedKeyDownTest},
         {"hotkey-runtime-exclusion-detects-suppressed-ctrl-shift", &RunHotkeyRuntimeExclusionDetectsSuppressedCtrlShiftTest},
         {"key-rebind-deep-suppression-eligibility", &RunKeyRebindDeepSuppressionEligibilityTest},
         {"key-rebind-runtime-full-forwarding", &RunKeyRebindRuntimeFullForwardingTest},

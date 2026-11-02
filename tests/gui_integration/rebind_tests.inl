@@ -1188,6 +1188,45 @@ void RunHotkeyRuntimeDisabledKeyNotForwardedTest(TestRunMode runMode = TestRunMo
     Expect(!AltReachedGame(capture), "Expected the key-up of a swallowed Alt key-down to be swallowed as well.");
 }
 
+void RunHotkeyRuntimeKeyUpReachesRebindAfterUnmatchedKeyDownTest(TestRunMode runMode = TestRunMode::Automated) {
+    DummyWindow window(kWindowWidth, kWindowHeight, runMode == TestRunMode::Visual);
+    PrepareRebindRuntimeCase("hotkey_runtime_key_up_reaches_rebind_after_unmatched_key_down", { MakeEnabledRebind('J', 'K') });
+
+    HotkeyConfig hotkey;
+    hotkey.keys = { VK_CONTROL, 'J' };
+    hotkey.mainMode = "Fullscreen";
+    hotkey.secondaryMode = "Thin";
+    hotkey.debounce = 0;
+    g_config.hotkeys.push_back(hotkey);
+    PublishConfigSnapshot();
+
+    Expect(window.PumpMessages(), "Expected the test window to stay open before stuck-key capture setup.");
+    ScopedSubclassedInputCapture capture(window.hwnd());
+    Expect(window.PumpMessages(), "Expected the test window to stay open after stuck-key capture setup.");
+    capture.Clear();
+
+    ScopedKeyboardStateOverride keyboardState;
+    keyboardState.SetKeyDown(VK_CONTROL, false);
+    keyboardState.Apply();
+
+    auto postAndPump = [&](UINT message, WPARAM wParam, LPARAM lParam, const std::string& label) {
+        Expect(PostMessageW(window.hwnd(), message, wParam, lParam) != FALSE, label + " should post successfully.");
+        Expect(window.PumpMessages(), label + " should keep the window open while dispatching messages.");
+    };
+
+    postAndPump(WM_KEYDOWN, 'J', BuildTestKeyboardMessageLParam('J', true), "J keydown without Ctrl");
+    Expect(!capture.messages.empty(), "Expected the rebound J keydown to reach the game.");
+    ExpectCapturedMessage(capture, 0, WM_KEYDOWN, 'K', "Rebound J keydown");
+
+    keyboardState.SetKeyDown(VK_CONTROL, true);
+    keyboardState.Apply();
+    capture.Clear();
+
+    postAndPump(WM_KEYUP, 'J', BuildTestKeyboardMessageLParam('J', false), "J keyup with Ctrl now held");
+    Expect(capture.messages.size() == 1, "Expected releasing J to forward exactly one message.");
+    ExpectCapturedMessage(capture, 0, WM_KEYUP, 'K', "Rebound J keyup must release the held K output");
+}
+
 void RunHotkeyRuntimeExclusionHonoredOnTriggerOnReleaseTest(TestRunMode /*runMode*/ = TestRunMode::Automated) {
     const std::vector<DWORD> keys = { VK_MENU };
     const std::vector<DWORD> exclusions = { VK_SHIFT };

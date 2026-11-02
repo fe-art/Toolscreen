@@ -200,6 +200,11 @@ static HotkeyKeyDownDisposition TakeHotkeyKeyDownDisposition(DWORD vk) {
     return disposition;
 }
 
+static void RecordHotkeyKeyDownDisposition(DWORD vk, bool blockKey, bool isAutoRepeatKeyDown) {
+    if (isAutoRepeatKeyDown) { return; }
+    SetHotkeyKeyDownDisposition(vk, blockKey ? HotkeyKeyDownDisposition::Blocked : HotkeyKeyDownDisposition::Forwarded);
+}
+
 static void ResetHotkeyKeyDownDispositions() {
     for (auto& disposition : s_hotkeyKeyDownDispositions) { disposition = HotkeyKeyDownDisposition::None; }
 }
@@ -2583,6 +2588,8 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                     return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
                 }
 
+                RecordHotkeyKeyDownDisposition(vkCode, blockKey, false);
+
                 auto now = std::chrono::steady_clock::now();
                 bool debounced = false;
                 {
@@ -2634,19 +2641,13 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
 
                 if (!hotkey.triggerOnRelease) {
                     if (isKeyDown) {
-                        if (!isAutoRepeatKeyDown) {
-                            SetHotkeyKeyDownDisposition(vkCode, blockKey ? HotkeyKeyDownDisposition::Blocked
-                                                                         : HotkeyKeyDownDisposition::Forwarded);
-                        }
+                        RecordHotkeyKeyDownDisposition(vkCode, blockKey, isAutoRepeatKeyDown);
                     } else {
-                        // Pass the key-up on when its key-down was not blocked, so the game does not see the key stuck.
                         const HotkeyKeyDownDisposition downDisposition = TakeHotkeyKeyDownDisposition(vkCode);
+                        if (downDisposition == HotkeyKeyDownDisposition::None) { return { false, 0 }; }
                         if (downDisposition == HotkeyKeyDownDisposition::Blocked) { blockKey = true; }
-                        if (blockKey && !matchedViaRebind && downDisposition != HotkeyKeyDownDisposition::Blocked) {
-                            if (downDisposition == HotkeyKeyDownDisposition::Forwarded) {
-                                return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
-                            }
-                            return { false, 0 };
+                        if (blockKey && !matchedViaRebind && downDisposition == HotkeyKeyDownDisposition::Forwarded) {
+                            return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
                         }
                     }
                 }
@@ -2654,6 +2655,7 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
                 // Handle trigger-on-release invalidation tracking
                 if (hotkey.triggerOnRelease) {
                     if (isKeyDown) {
+                        RecordHotkeyKeyDownDisposition(vkCode, blockKey, isAutoRepeatKeyDown);
                         std::lock_guard<std::mutex> lock(g_triggerOnReleaseMutex);
                         for (const auto& pendingHotkeyId : g_triggerOnReleasePending) {
                             if (pendingHotkeyId != hotkeyId) { g_triggerOnReleaseInvalidated.insert(pendingHotkeyId); }
@@ -2739,25 +2741,20 @@ InputHandlerResult HandleHotkeys(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
 
                 if (!hotkey.triggerOnRelease) {
                     if (isKeyDown) {
-                        if (!isAutoRepeatKeyDown) {
-                            SetHotkeyKeyDownDisposition(vkCode, blockKey ? HotkeyKeyDownDisposition::Blocked
-                                                                         : HotkeyKeyDownDisposition::Forwarded);
-                        }
+                        RecordHotkeyKeyDownDisposition(vkCode, blockKey, isAutoRepeatKeyDown);
                     } else {
-                        // Pass the key-up on when its key-down was not blocked, so the game does not see the key stuck.
                         const HotkeyKeyDownDisposition downDisposition = TakeHotkeyKeyDownDisposition(vkCode);
+                        if (downDisposition == HotkeyKeyDownDisposition::None) { return { false, 0 }; }
                         if (downDisposition == HotkeyKeyDownDisposition::Blocked) { blockKey = true; }
-                        if (blockKey && !matchedViaRebind && downDisposition != HotkeyKeyDownDisposition::Blocked) {
-                            if (downDisposition == HotkeyKeyDownDisposition::Forwarded) {
-                                return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
-                            }
-                            return { false, 0 };
+                        if (blockKey && !matchedViaRebind && downDisposition == HotkeyKeyDownDisposition::Forwarded) {
+                            return { true, CallWindowProc(g_originalWndProc, hWnd, uMsg, wParam, lParam) };
                         }
                     }
                 }
 
                 if (hotkey.triggerOnRelease) {
                     if (isKeyDown) {
+                        RecordHotkeyKeyDownDisposition(vkCode, blockKey, isAutoRepeatKeyDown);
                         std::lock_guard<std::mutex> lock(g_triggerOnReleaseMutex);
                         // Invalidate all other pending trigger-on-release hotkeys
                         for (const auto& pendingHotkeyId : g_triggerOnReleasePending) {
