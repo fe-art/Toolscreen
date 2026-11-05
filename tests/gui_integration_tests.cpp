@@ -1639,6 +1639,7 @@ void PopulateRichConfigFixture() {
     g_config.basicModeEnabled = false;
     g_config.restoreWindowedModeOnFullscreenExit = false;
     g_config.disableFullscreenPrompt = true;
+    g_config.betaUpdates = true;
     g_config.startupIndicatorMode = 2;
     g_config.startupIndicatorImagePath = "C:\\images\\startup.gif";
     g_config.guiHotkey = { VK_CONTROL, VK_SHIFT, 'G' };
@@ -2082,6 +2083,7 @@ void VerifyRichGlobalSettings() {
     Expect(!g_config.basicModeEnabled, "Expected basicModeEnabled to roundtrip.");
     Expect(!g_config.restoreWindowedModeOnFullscreenExit, "Expected restoreWindowedModeOnFullscreenExit to roundtrip.");
     Expect(g_config.disableFullscreenPrompt, "Expected disableFullscreenPrompt to roundtrip.");
+    Expect(g_config.betaUpdates, "Expected betaUpdates to roundtrip.");
     Expect(g_config.startupIndicatorMode == 2, "Expected startupIndicatorMode to roundtrip.");
     Expect(g_config.startupIndicatorImagePath == "C:\\images\\startup.gif", "Expected startupIndicatorImagePath to roundtrip.");
     ExpectVectorEquals(g_config.guiHotkey, std::vector<DWORD>{ VK_CONTROL, VK_SHIFT, 'G' }, "Expected GUI hotkey to roundtrip.");

@@ -1054,6 +1054,7 @@ struct Config {
     bool basicModeEnabled = false;
     bool restoreWindowedModeOnFullscreenExit = ConfigDefaults::CONFIG_RESTORE_WINDOWED_MODE_ON_FULLSCREEN_EXIT;
     bool disableFullscreenPrompt = false;
+    bool betaUpdates = ConfigDefaults::CONFIG_BETA_UPDATES;
     bool disableConfigurePrompt = false;
     int startupIndicatorMode = ConfigDefaults::STARTUP_INDICATOR_MODE;
     std::string startupIndicatorImagePath = ConfigDefaults::STARTUP_INDICATOR_IMAGE_PATH;

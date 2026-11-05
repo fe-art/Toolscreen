@@ -57,6 +57,7 @@ set(TOOLSCREEN_PACKAGING_ARM64_LIBLOGGER_PATH "" CACHE FILEPATH "ARM64 liblogger
 set(TOOLSCREEN_PREBUILT_LIBLOGGER_DLL_PATH "" CACHE FILEPATH "Path to the signed prebuilt liblogger DLL to stage into build outputs")
 set(TOOLSCREEN_PREBUILT_LIBLOGGER_PDB_PATH "" CACHE FILEPATH "Path to the matching prebuilt liblogger PDB to stage into build outputs")
 option(TOOLSCREEN_BUILD_LIBLOGGER_FROM_SOURCE "Build liblogger locally instead of using a prebuilt signed artifact" OFF)
+option(TOOLSCREEN_UPDATER_TEST "Test only: the updater pretends to be version 1.0.0 and trusts the release publisher. Never enable for releases." OFF)
 
 if(NOT TOOLSCREEN_TARGET_ARCH)
     if(CMAKE_GENERATOR_PLATFORM)
@@ -422,6 +423,10 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
     UNICODE
     _UNICODE
 )
+
+if(TOOLSCREEN_UPDATER_TEST)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE TOOLSCREEN_UPDATER_TEST)
+endif()
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
     Toolscreen::minhook
@@ -1424,6 +1429,46 @@ foreach(test_case IN LISTS TOOLSCREEN_INTERACTIVE_CREATE_TEST_CASES)
     add_test(
         NAME toolscreen_interactive_create_${test_case}
         COMMAND $<TARGET_FILE:toolscreen_interactive_create_tests> --run ${test_case}
+    )
+endforeach()
+
+add_executable(toolscreen_pe_exports_tests
+    tests/pe_exports_tests.cpp
+)
+
+target_include_directories(toolscreen_pe_exports_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_compile_definitions(toolscreen_pe_exports_tests PRIVATE
+    NOMINMAX
+    UNICODE
+    _UNICODE
+)
+
+if(MSVC)
+    target_compile_options(toolscreen_pe_exports_tests PRIVATE
+        /W3
+        /MP
+        /EHsc
+    )
+endif()
+
+toolscreen_configure_target_outputs(toolscreen_pe_exports_tests)
+toolscreen_enable_release_symbols(toolscreen_pe_exports_tests)
+
+foreach(test_case IN ITEMS
+    finds_exported_symbol
+    rejects_unexported_symbol
+    requires_exact_name
+    rejects_missing_file
+    rejects_non_pe_file
+    rejects_empty_file
+    rejects_truncated_pe
+    rejects_corrupt_export_table)
+    add_test(
+        NAME toolscreen_pe_exports_${test_case}
+        COMMAND $<TARGET_FILE:toolscreen_pe_exports_tests> --run ${test_case}
     )
 endforeach()
 

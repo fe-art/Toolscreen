@@ -2267,6 +2267,7 @@ void ConfigToToml(const Config& config, toml::table& out) {
     out.insert("basicModeEnabled", config.basicModeEnabled);
     out.insert("restoreWindowedModeOnFullscreenExit", config.restoreWindowedModeOnFullscreenExit);
     out.insert("disableFullscreenPrompt", config.disableFullscreenPrompt);
+    out.insert("betaUpdates", config.betaUpdates);
     out.insert("startupIndicatorMode", config.startupIndicatorMode);
     if (!config.startupIndicatorImagePath.empty()) {
         out.insert("startupIndicatorImagePath", config.startupIndicatorImagePath);
@@ -2553,6 +2554,7 @@ void ConfigFromToml(const toml::table& tbl, Config& config) {
     config.restoreWindowedModeOnFullscreenExit =
         GetOr(tbl, "restoreWindowedModeOnFullscreenExit", ConfigDefaults::CONFIG_RESTORE_WINDOWED_MODE_ON_FULLSCREEN_EXIT);
     config.disableFullscreenPrompt = GetOr(tbl, "disableFullscreenPrompt", ConfigDefaults::CONFIG_DISABLE_FULLSCREEN_PROMPT);
+    config.betaUpdates = GetOr(tbl, "betaUpdates", ConfigDefaults::CONFIG_BETA_UPDATES);
 
     if (tbl.contains("startupIndicatorMode")) {
         int m = GetOr(tbl, "startupIndicatorMode", ConfigDefaults::STARTUP_INDICATOR_MODE);
@@ -3025,6 +3027,7 @@ const std::vector<std::string>& GetConfigTomlOrderedKeys() {
         "basicModeEnabled",
         "restoreWindowedModeOnFullscreenExit",
         "disableFullscreenPrompt",
+        "betaUpdates",
         "startupIndicatorMode",
         "startupIndicatorImagePath",
         "guiHotkey",

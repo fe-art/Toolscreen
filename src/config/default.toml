@@ -15,6 +15,7 @@ captureFakeCursor = false
 limitCaptureFramerate = false
 restoreWindowedModeOnFullscreenExit = true
 disableFullscreenPrompt = false
+betaUpdates = false
 startupIndicatorMode = 1
 startupIndicatorImagePath = ''
 keyRepeatDelay = -1

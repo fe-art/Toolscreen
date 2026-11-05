@@ -16,6 +16,14 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.misc"))) {
     }
 
     ImGui::Spacing();
+    if (toolscreen::auto_updater::IsActive()) {
+        ImGui::SeparatorText(trc("label.updates"));
+        if (ImGui::Checkbox(trc("misc.beta_updates"), &g_config.betaUpdates)) { g_configIsDirty = true; }
+        ImGui::SameLine();
+        HelpMarker(trc("tooltip.beta_updates"));
+
+        ImGui::Spacing();
+    }
     ImGui::SeparatorText(trc("label.toolscreen"));
     if (ImGui::Button(trc("button.open_config"))) {
         if (g_toolscreenPath.empty()) {

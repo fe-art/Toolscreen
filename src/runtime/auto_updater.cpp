@@ -1,50 +1,87 @@
 #include "runtime/auto_updater.h"
 
 #include "common/utils.h"
+#include "runtime/auto_updater_script.h"
+#include "runtime/jar_extract.h"
+#include "runtime/pe_exports.h"
+#include "runtime/release_select.h"
+#include "runtime/signature_check.h"
 #include "version.h"
 
 #include <Psapi.h>
 #include <TlHelp32.h>
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <regex>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <vector>
 #include <windows.h>
 #include <winhttp.h>
-#include <wintrust.h>
-#include <softpub.h>
 
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "Psapi.lib")
-#pragma comment(lib, "wintrust.lib")
 
 namespace toolscreen::auto_updater {
 
 namespace {
 
 constexpr const wchar_t* kReleasesApiUrl =
-    L"https://api.github.com/repos/fe-art/Toolscreen/releases/latest";
-constexpr const char* kDllName = "Toolscreen.dll";
+    L"https://api.github.com/repos/jojoe77777/Toolscreen/releases?per_page=20";
+constexpr const char* kTrustedDownloadPrefix = "https://github.com/jojoe77777/Toolscreen/releases/download/";
+constexpr const wchar_t* kExpectedProductName = L"Toolscreen";
+constexpr const char* kAgentEntryPoint = "Agent_OnLoad";
+
+#ifdef TOOLSCREEN_UPDATER_TEST
+constexpr const char* kCurrentVersion = "1.0.0";
+constexpr const wchar_t* kTestAssumedSigner = L"C=US, S=Delaware, L=Lewes, O=SignPath Foundation, CN=SignPath Foundation";
+#else
+constexpr const char* kCurrentVersion = TOOLSCREEN_VERSION_STRING;
+#endif
+
+#if defined(_M_ARM64)
+constexpr const char* kJarEntryName = "dlls/Toolscreen_arm64.dll";
+constexpr WORD kExpectedMachine = IMAGE_FILE_MACHINE_ARM64;
+#else
+constexpr const char* kJarEntryName = "dlls/Toolscreen_x64.dll";
+constexpr WORD kExpectedMachine = IMAGE_FILE_MACHINE_AMD64;
+#endif
+
+constexpr int kResolveTimeoutMs = 5000;
+constexpr int kConnectTimeoutMs = 5000;
+constexpr int kSendTimeoutMs = 15000;
+constexpr int kReceiveTimeoutMs = 30000;
+constexpr int kMaxLauncherHops = 8;
+constexpr DWORD kEnvBufferSize = 4096;
+constexpr int kCloseWaitPolls = 20;
+constexpr int kMaxApplyLogLines = 40;
+constexpr size_t kMaxApiBytes = 4u * 1024u * 1024u;
+constexpr size_t kMaxDownloadBytes = 96u * 1024u * 1024u;
+constexpr size_t kMaxDllBytes = 64u * 1024u * 1024u;
 
 std::atomic<bool> g_started{false};
 std::atomic<bool> g_ready{false};
 std::atomic<bool> g_applying{false};
+std::atomic<bool> g_active{false};
 
 std::mutex g_stateMutex;
 std::string g_pendingVersion;
+bool g_pendingIsBeta = false;
 std::wstring g_pendingDllPath;
 std::wstring g_liveDllPath;
 std::wstring g_launcherExePath;
 std::string g_instId;
 
-bool HttpGet(const std::wstring& url, const std::wstring& userAgent, std::string& outBody, std::string& outError) {
+bool HttpGet(const std::wstring& url, const std::wstring& userAgent, size_t maxBytes, std::string& outBody, std::string& outError) {
     URL_COMPONENTS u{};
     u.dwStructSize = sizeof(u);
     u.dwSchemeLength = u.dwHostNameLength = u.dwUrlPathLength = u.dwExtraInfoLength = (DWORD)-1;
@@ -57,7 +94,7 @@ bool HttpGet(const std::wstring& url, const std::wstring& userAgent, std::string
     HINTERNET hSession = WinHttpOpen(userAgent.c_str(), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                                      WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) { outError = "WinHttpOpen"; return false; }
-    WinHttpSetTimeouts(hSession, 5000, 5000, 15000, 30000);
+    WinHttpSetTimeouts(hSession, kResolveTimeoutMs, kConnectTimeoutMs, kSendTimeoutMs, kReceiveTimeoutMs);
 
     HINTERNET hConnect = WinHttpConnect(hSession, host.c_str(), u.nPort, 0);
     if (!hConnect) { WinHttpCloseHandle(hSession); outError = "WinHttpConnect"; return false; }
@@ -67,7 +104,7 @@ bool HttpGet(const std::wstring& url, const std::wstring& userAgent, std::string
                                         WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
     if (!hReq) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); outError = "WinHttpOpenRequest"; return false; }
 
-    DWORD redirectPolicy = WINHTTP_OPTION_REDIRECT_POLICY_ALWAYS;
+    DWORD redirectPolicy = WINHTTP_OPTION_REDIRECT_POLICY_DISALLOW_HTTPS_TO_HTTP;
     WinHttpSetOption(hReq, WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicy, sizeof(redirectPolicy));
 
     bool ok = false;
@@ -91,6 +128,7 @@ bool HttpGet(const std::wstring& url, const std::wstring& userAgent, std::string
             std::vector<char> buf(avail);
             DWORD read = 0;
             if (!WinHttpReadData(hReq, buf.data(), avail, &read)) { outError = "WinHttpReadData"; break; }
+            if (outBody.size() + read > maxBytes) { outError = "response too large"; break; }
             outBody.append(buf.data(), read);
         } while (avail > 0);
 
@@ -103,78 +141,30 @@ bool HttpGet(const std::wstring& url, const std::wstring& userAgent, std::string
     return ok;
 }
 
-bool ParseRelease(const std::string& body, std::string& outTag, std::string& outDllUrl) {
-    try {
-        auto j = nlohmann::json::parse(body, nullptr, /*allow_exceptions=*/false);
-        if (j.is_discarded() || !j.is_object()) return false;
-        if (!j.contains("tag_name") || !j["tag_name"].is_string()) return false;
-        outTag = j["tag_name"].get<std::string>();
-
-        if (!j.contains("assets") || !j["assets"].is_array()) return false;
-        for (const auto& a : j["assets"]) {
-            if (!a.is_object() || !a.contains("name") || !a["name"].is_string()) continue;
-            std::string name = a["name"].get<std::string>();
-            if (_stricmp(name.c_str(), kDllName) != 0) continue;
-            if (!a.contains("browser_download_url") || !a["browser_download_url"].is_string()) continue;
-            outDllUrl = a["browser_download_url"].get<std::string>();
-            return !outDllUrl.empty();
-        }
-    } catch (...) {
-        return false;
-    }
-    return false;
-}
-
 bool IsTrustedDownloadUrl(const std::string& url) {
-    static const std::vector<std::string> trustedHosts = {
-        "https://github.com/",
-        "https://objects.githubusercontent.com/",
-        "https://release-assets.githubusercontent.com/",
-    };
-    for (const auto& prefix : trustedHosts) {
-        if (url.size() >= prefix.size() &&
-            _strnicmp(url.c_str(), prefix.c_str(), prefix.size()) == 0) {
-            return true;
-        }
-    }
-    return false;
+    const std::string prefix = kTrustedDownloadPrefix;
+    return url.size() > prefix.size() && _strnicmp(url.c_str(), prefix.c_str(), prefix.size()) == 0;
 }
 
-bool VerifyAuthenticodeSignature(const std::wstring& filePath) {
-    WINTRUST_FILE_INFO fileInfo{};
-    fileInfo.cbStruct = sizeof(fileInfo);
-    fileInfo.pcwszFilePath = filePath.c_str();
-
-    GUID action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
-    WINTRUST_DATA wd{};
-    wd.cbStruct = sizeof(wd);
-    wd.dwUIChoice = WTD_UI_NONE;
-    wd.fdwRevocationChecks = WTD_REVOKE_NONE;
-    wd.dwUnionChoice = WTD_CHOICE_FILE;
-    wd.pFile = &fileInfo;
-    wd.dwStateAction = WTD_STATEACTION_VERIFY;
-    wd.dwProvFlags = WTD_SAFER_FLAG;
-
-    LONG status = WinVerifyTrust(static_cast<HWND>(INVALID_HANDLE_VALUE), &action, &wd);
-    wd.dwStateAction = WTD_STATEACTION_CLOSE;
-    WinVerifyTrust(static_cast<HWND>(INVALID_HANDLE_VALUE), &action, &wd);
-    return status == ERROR_SUCCESS;
+bool PeMachineMatches(const std::wstring& filePath) {
+    std::ifstream in(std::filesystem::path(filePath), std::ios::binary);
+    IMAGE_DOS_HEADER dos{};
+    if (!in.read(reinterpret_cast<char*>(&dos), sizeof(dos)) || dos.e_magic != IMAGE_DOS_SIGNATURE) return false;
+    in.seekg(dos.e_lfanew, std::ios::beg);
+    DWORD signature = 0;
+    IMAGE_FILE_HEADER header{};
+    if (!in.read(reinterpret_cast<char*>(&signature), sizeof(signature)) || signature != IMAGE_NT_SIGNATURE) return false;
+    if (!in.read(reinterpret_cast<char*>(&header), sizeof(header))) return false;
+    return header.Machine == kExpectedMachine;
 }
 
-// Rejects chars that break the quoted cmd.exe arg: '%' (env expansion), '"' (quote breakout).
 bool IsCmdSafePath(const std::wstring& p) {
     return p.find(L'"') == std::wstring::npos && p.find(L'%') == std::wstring::npos;
 }
 
-bool IsNewerVersion(const std::string& tag, const std::string& current) {
-    std::regex re(R"(\D*(\d+)\.(\d+)\.(\d+))");
-    std::smatch a, b;
-    if (!std::regex_search(tag, a, re) || !std::regex_search(current, b, re)) return false;
-    int ta = std::stoi(a[1]), tb = std::stoi(a[2]), tc = std::stoi(a[3]);
-    int ca = std::stoi(b[1]), cb = std::stoi(b[2]), cc = std::stoi(b[3]);
-    if (ta != ca) return ta > ca;
-    if (tb != cb) return tb > cb;
-    return tc > cc;
+bool IsSafeInstanceId(const std::string& instId) {
+    static const std::regex pattern(R"([A-Za-z0-9._ -]+)");
+    return std::regex_match(instId, pattern);
 }
 
 std::wstring GetThisDllPath() {
@@ -186,13 +176,13 @@ std::wstring GetThisDllPath() {
     }
     wchar_t buf[MAX_PATH * 2] = {0};
     DWORD len = GetModuleFileNameW(hMod, buf, sizeof(buf) / sizeof(wchar_t));
-    if (!len) return L"";
+    if (!len || len >= sizeof(buf) / sizeof(wchar_t)) return L"";
     return std::wstring(buf, len);
 }
 
 std::wstring FindLauncherAncestor() {
     DWORD pid = GetCurrentProcessId();
-    for (int hop = 0; hop < 8; ++hop) {
+    for (int hop = 0; hop < kMaxLauncherHops; ++hop) {
         HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
         if (snap == INVALID_HANDLE_VALUE) break;
 
@@ -229,18 +219,85 @@ std::wstring FindLauncherAncestor() {
 }
 
 std::string ReadEnvVar(const char* name) {
-    char buf[4096];
+    char buf[kEnvBufferSize];
     DWORD len = GetEnvironmentVariableA(name, buf, sizeof(buf));
     if (len == 0 || len >= sizeof(buf)) return "";
     return std::string(buf, len);
 }
 
-void CheckAndDownload() {
+bool CanApplyHere(const std::wstring& live, const std::wstring& launcher, const std::string& instId) {
+    if (live.empty() || launcher.empty() || instId.empty()) {
+        Log("[Updater] cannot apply here: no PrismLauncher/MultiMC ancestor or no INST_ID");
+        return false;
+    }
+    if (!IsSafeInstanceId(instId)) {
+        Log(std::string("[Updater] refusing unsafe INST_ID: ") + instId);
+        return false;
+    }
+    if (!IsCmdSafePath(live) || !IsCmdSafePath(launcher)) {
+        Log("[Updater] cannot apply here: a path contains characters unsafe for the apply script");
+        return false;
+    }
+    return true;
+}
+
+std::wstring FailureFlagPath(const std::wstring& liveDll) {
+    return liveDll + L".update_failed.flag";
+}
+
+std::wstring ApplyLogPath(const std::wstring& liveDll) {
+    return liveDll + L".update.log";
+}
+
+void ReportAndClearPreviousApply(const std::wstring& liveDll) {
+    std::error_code ec;
+    std::filesystem::remove(std::filesystem::path(liveDll + L".pending"), ec);
+
+    const std::filesystem::path logFile(ApplyLogPath(liveDll));
+    if (std::filesystem::exists(logFile, ec)) {
+        std::ifstream in(logFile);
+        std::string line;
+        for (int shown = 0; shown < kMaxApplyLogLines && std::getline(in, line); ++shown) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            Log("[Updater apply] " + line);
+        }
+        in.close();
+        std::filesystem::remove(logFile, ec);
+    }
+
+    const std::filesystem::path flag(FailureFlagPath(liveDll));
+    if (!std::filesystem::exists(flag, ec)) return;
+    std::string reason;
+    {
+        std::ifstream in(flag);
+        std::getline(in, reason);
+    }
+    Log("[Updater] previous update did not apply: " + reason);
+    std::filesystem::remove(flag, ec);
+}
+
+void CheckAndDownload(bool includeBetas) {
     std::wstring liveDll = GetThisDllPath();
     if (liveDll.empty()) { Log("[Updater] cannot resolve own DLL path"); return; }
 
+    ReportAndClearPreviousApply(liveDll);
+
+    std::wstring ownSigner;
+    if (!VerifySignedAndGetSigner(liveDll, false, ownSigner)) {
+#ifdef TOOLSCREEN_UPDATER_TEST
+        ownSigner = kTestAssumedSigner;
+        Log("[Updater] TEST BUILD: running DLL is unsigned, trusting the release publisher and pretending to be version 1.0.0");
+#else
+        Log("[Updater] running DLL is not validly signed (development build); updater disabled");
+        return;
+#endif
+    }
+
     std::wstring launcher = FindLauncherAncestor();
     std::string instId = ReadEnvVar("INST_ID");
+    if (!CanApplyHere(liveDll, launcher, instId)) return;
+    Log(std::string("[Updater] can apply here: launcher found, instance ") + instId);
+    g_active.store(true, std::memory_order_release);
 
     {
         std::lock_guard<std::mutex> lock(g_stateMutex);
@@ -249,20 +306,27 @@ void CheckAndDownload() {
         g_instId = instId;
     }
 
+    const std::wstring userAgent = L"Toolscreen-AutoUpdater/" TOOLSCREEN_VERSION_STRING;
+
     std::string body, err;
-    if (!HttpGet(kReleasesApiUrl, L"Toolscreen-AutoUpdater/" TOOLSCREEN_VERSION_STRING, body, err)) {
+    if (!HttpGet(kReleasesApiUrl, userAgent, kMaxApiBytes, body, err)) {
         Log(std::string("[Updater] release fetch failed: ") + err);
         return;
     }
 
-    std::string tag, dllUrl;
-    if (!ParseRelease(body, tag, dllUrl)) {
-        Log("[Updater] could not parse release JSON or no .dll asset");
+    Log("[Updater] release list fetched, " + std::to_string(body.size()) + " bytes");
+
+    ReleaseChoice release;
+    if (!SelectRelease(body, includeBetas, release)) {
+        Log("[Updater] could not parse the release list or find a release JAR asset");
         return;
     }
+    std::string tag = release.tag;
+    const std::string jarUrl = release.jarUrl;
+    Log("[Updater] newest eligible release: " + release.tag + (release.isBeta ? " (beta)" : ""));
     if (!tag.empty() && (tag[0] == 'v' || tag[0] == 'V')) tag = tag.substr(1);
 
-    std::string current = TOOLSCREEN_VERSION_STRING;
+    const std::string current = kCurrentVersion;
     if (!IsNewerVersion(tag, current)) {
         Log(std::string("[Updater] current=") + current + " latest=" + tag + " (no update)");
         return;
@@ -270,58 +334,110 @@ void CheckAndDownload() {
 
     Log(std::string("[Updater] update available: ") + tag);
 
-    if (!IsTrustedDownloadUrl(dllUrl)) {
-        Log(std::string("[Updater] refusing untrusted download URL: ") + dllUrl);
+    if (!IsTrustedDownloadUrl(jarUrl)) {
+        Log(std::string("[Updater] refusing untrusted download URL: ") + jarUrl);
         return;
     }
 
-    std::string dllBody;
-    if (!HttpGet(Utf8ToWide(dllUrl), L"Toolscreen-AutoUpdater/" TOOLSCREEN_VERSION_STRING, dllBody, err)) {
-        Log(std::string("[Updater] DLL download failed: ") + err);
-        return;
+    std::string dllBytes;
+    {
+        std::string jarBody;
+        if (!HttpGet(Utf8ToWide(jarUrl), userAgent, kMaxDownloadBytes, jarBody, err)) {
+            Log(std::string("[Updater] JAR download failed: ") + err);
+            return;
+        }
+        Log("[Updater] release JAR downloaded, " + std::to_string(jarBody.size()) + " bytes");
+        if (!ExtractZipEntry(jarBody, kJarEntryName, kMaxDllBytes, dllBytes)) {
+            Log(std::string("[Updater] release JAR has no usable ") + kJarEntryName);
+            return;
+        }
+        Log(std::string("[Updater] extracted ") + kJarEntryName + ", " + std::to_string(dllBytes.size()) + " bytes");
     }
 
     std::wstring pending = liveDll + L".pending";
     {
         std::ofstream out(std::filesystem::path(pending), std::ios::binary | std::ios::trunc);
         if (!out) { Log("[Updater] cannot open .pending for write"); return; }
-        out.write(dllBody.data(), (std::streamsize)dllBody.size());
+        out.write(dllBytes.data(), (std::streamsize)dllBytes.size());
         if (!out) { Log("[Updater] write to .pending failed"); return; }
     }
 
-    if (!VerifyAuthenticodeSignature(pending)) {
-        Log("[Updater] downloaded DLL failed Authenticode verification; discarding");
+    const auto discardPending = [&](const char* reason) {
+        Log(std::string("[Updater] ") + reason + "; discarding");
         std::error_code ec;
         std::filesystem::remove(std::filesystem::path(pending), ec);
+    };
+
+    if (!PeMachineMatches(pending)) { discardPending("downloaded DLL is for a different CPU architecture"); return; }
+    if (!pe::ExportsSymbol(pending, kAgentEntryPoint)) { discardPending("downloaded DLL does not export Agent_OnLoad and could not be loaded as an agent"); return; }
+
+    std::wstring newSigner;
+    if (!VerifySignedAndGetSigner(pending, true, newSigner)) {
+        discardPending("downloaded DLL failed Authenticode verification");
         return;
     }
+    if (newSigner != ownSigner) { discardPending("downloaded DLL is signed by a different publisher"); return; }
+    if (ReadProductName(pending) != kExpectedProductName) { discardPending("downloaded DLL is not a Toolscreen build"); return; }
+    Log("[Updater] downloaded DLL passed the architecture, agent export, signature, publisher and product checks");
 
     {
         std::lock_guard<std::mutex> lock(g_stateMutex);
         g_pendingVersion = tag;
+        g_pendingIsBeta = release.isBeta;
         g_pendingDllPath = pending;
     }
     g_ready.store(true, std::memory_order_release);
-    Log(std::string("[Updater] downloaded ") + tag + " to .pending; awaiting user apply");
+    Log(std::string("[Updater] downloaded ") + tag + (release.isBeta ? " (beta)" : "") + " to .pending; awaiting user apply");
+}
+
+bool WriteApplyScript(const std::wstring& scriptPath, const std::wstring& script) {
+    std::ofstream out(std::filesystem::path(scriptPath), std::ios::binary | std::ios::trunc);
+    if (!out) return false;
+    const std::string utf8 = WideToUtf8(script);
+    out.write(utf8.data(), (std::streamsize)utf8.size());
+    return static_cast<bool>(out);
+}
+
+std::wstring SystemDirectory() {
+    wchar_t buf[MAX_PATH] = {0};
+    UINT len = GetSystemDirectoryW(buf, MAX_PATH);
+    if (len == 0 || len >= MAX_PATH) return L"";
+    return std::wstring(buf, len);
+}
+
+std::wstring ApplyScriptPath(DWORD pid) {
+    wchar_t buf[MAX_PATH] = {0};
+    DWORD len = GetTempPathW(MAX_PATH, buf);
+    if (len == 0 || len >= MAX_PATH) return L"";
+    return std::wstring(buf, len) + L"toolscreen_update_" + std::to_wstring(pid) + L".cmd";
 }
 
 } // namespace
 
-void Start() {
+void Start(bool includeBetas) {
     bool expected = false;
     if (!g_started.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) return;
-    Log("[Updater] starting check thread");
-    std::thread([]() {
-        try { CheckAndDownload(); }
-        catch (const std::exception& e) { Log(std::string("[Updater] exception: ") + e.what()); }
-        catch (...) { Log("[Updater] unknown exception"); }
-    }).detach();
+    Log(std::string("[Updater] starting check thread, betas ") + (includeBetas ? "on" : "off"));
+    try {
+        std::thread([includeBetas]() {
+            try { CheckAndDownload(includeBetas); }
+            catch (const std::exception& e) { Log(std::string("[Updater] exception: ") + e.what()); }
+            catch (...) { Log("[Updater] unknown exception"); }
+        }).detach();
+    } catch (...) {
+        Log("[Updater] could not start check thread");
+    }
 }
 
-bool IsUpdateReady(std::string& outVersion) {
+bool IsActive() {
+    return g_active.load(std::memory_order_acquire);
+}
+
+bool IsUpdateReady(std::string& outVersion, bool& outIsBeta) {
     if (!g_ready.load(std::memory_order_acquire)) return false;
     std::lock_guard<std::mutex> lock(g_stateMutex);
     outVersion = g_pendingVersion;
+    outIsBeta = g_pendingIsBeta;
     return true;
 }
 
@@ -342,39 +458,38 @@ bool ApplyAndRelaunch() {
         launcher = g_launcherExePath;
         instId = g_instId;
     }
-    if (pending.empty() || live.empty() || launcher.empty() || instId.empty()) {
-        Log("[Updater] cannot apply: missing pending/live/launcher/instId");
+
+    const DWORD selfPid = GetCurrentProcessId();
+    const std::wstring scriptPath = ApplyScriptPath(selfPid);
+    const std::wstring systemDir = SystemDirectory();
+
+    if (pending.empty() || scriptPath.empty() || systemDir.empty() || !IsCmdSafePath(scriptPath) ||
+        !CanApplyHere(live, launcher, instId)) {
+        Log("[Updater] cannot apply: missing or unsafe paths");
         g_applying.store(false, std::memory_order_release);
         return false;
     }
 
-    if (!std::regex_match(instId, std::regex(R"([A-Za-z0-9._ -]+)"))) {
-        Log(std::string("[Updater] refusing unsafe INST_ID: ") + instId);
+    ApplyScriptParams params;
+    params.gamePid = selfPid;
+    params.closeWaitPolls = kCloseWaitPolls;
+    params.pendingDll = pending;
+    params.liveDll = live;
+    params.launcherExe = launcher;
+    params.instanceId = Utf8ToWide(instId);
+    params.failureFlag = FailureFlagPath(live);
+    params.logFile = ApplyLogPath(live);
+
+    if (!WriteApplyScript(scriptPath, BuildApplyScript(params))) {
+        Log("[Updater] cannot write the apply script");
         g_applying.store(false, std::memory_order_release);
         return false;
     }
 
-    if (!IsCmdSafePath(pending) || !IsCmdSafePath(live) || !IsCmdSafePath(launcher)) {
-        Log("[Updater] refusing apply: a path contains characters unsafe for the relaunch command");
-        g_applying.store(false, std::memory_order_release);
-        return false;
-    }
-
-    DWORD selfPid = GetCurrentProcessId();
-    std::wstring instIdW = Utf8ToWide(instId);
-    std::wstring failFlag = live + L".update_failed.flag";
-
-    std::wstring cmdLine =
-        L"cmd.exe /c \"taskkill /F /PID " + std::to_wstring(selfPid) + L" >nul 2>&1"
-        L" & timeout /T 2 /NOBREAK >nul"
-        L" & ( move /Y \"" + pending + L"\" \"" + live + L"\""
-        L"     && start \"\" \"" + launcher + L"\" --launch \"" + instIdW + L"\""
-        L"   ) || ( echo failed > \"" + failFlag + L"\""
-        L"          & start \"\" \"" + launcher + L"\" --launch \"" + instIdW + L"\""
-        L"        )\"";
-
+    std::wstring cmdLine = L"cmd.exe /c \"\"" + scriptPath + L"\"\"";
     std::vector<wchar_t> cmdBuf(cmdLine.begin(), cmdLine.end());
     cmdBuf.push_back(L'\0');
+    const std::wstring cmdExe = systemDir + L"\\cmd.exe";
 
     STARTUPINFOW si{};
     si.cb = sizeof(si);
@@ -382,14 +497,15 @@ bool ApplyAndRelaunch() {
     si.wShowWindow = SW_HIDE;
     PROCESS_INFORMATION pi{};
 
-    // Hide banner before spawning helper; survives helper failure.
     g_ready.store(false, std::memory_order_release);
 
-    BOOL ok = CreateProcessW(nullptr, cmdBuf.data(), nullptr, nullptr, FALSE,
-                             CREATE_NO_WINDOW | DETACHED_PROCESS,
-                             nullptr, nullptr, &si, &pi);
+    BOOL ok = CreateProcessW(cmdExe.c_str(), cmdBuf.data(), nullptr, nullptr, FALSE,
+                             CREATE_NO_WINDOW,
+                             nullptr, systemDir.c_str(), &si, &pi);
     if (!ok) {
         Log("[Updater] CreateProcess failed: " + std::to_string(GetLastError()));
+        std::error_code ec;
+        std::filesystem::remove(std::filesystem::path(scriptPath), ec);
         g_ready.store(true, std::memory_order_release);
         g_applying.store(false, std::memory_order_release);
         return false;
@@ -397,7 +513,7 @@ bool ApplyAndRelaunch() {
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
 
-    Log("[Updater] helper spawned; this process will be killed shortly");
+    Log("[Updater] apply script started (pid " + std::to_string(selfPid) + "); it will close the game, swap the DLL and relaunch");
     return true;
 }
 

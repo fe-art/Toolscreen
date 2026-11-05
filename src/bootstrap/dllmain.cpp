@@ -4690,8 +4690,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         LogVersionInfo();
         if (g_toolscreenPath.empty()) { Log("FATAL: Could not get toolscreen directory."); }
         
-        toolscreen::auto_updater::Start();
-
         g_gameVersion = GetGameVersionFromCommandLine();
         // Layer activation is capability-based: it is inert for OpenGL-only
         // clients and works when a launcher omits a Minecraft version flag.
@@ -4894,13 +4892,28 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
     return TRUE;
 }
 
-// DllMain already ran the real init; this just lets the JVM accept the DLL as an agent.
+static bool IsLibLoggerModuleLoaded() {
+    HMODULE modules[1024];
+    DWORD needed = 0;
+    if (!EnumProcessModules(GetCurrentProcess(), modules, sizeof(modules), &needed)) return false;
+    const size_t count = (std::min)(static_cast<size_t>(needed / sizeof(HMODULE)), sizeof(modules) / sizeof(modules[0]));
+    for (size_t i = 0; i < count; ++i) {
+        wchar_t path[MAX_PATH];
+        const DWORD len = GetModuleFileNameW(modules[i], path, MAX_PATH);
+        if (len == 0 || len >= MAX_PATH) continue;
+        const wchar_t* slash = wcsrchr(path, L'\\');
+        const wchar_t* name = slash ? slash + 1 : path;
+        if (_wcsnicmp(name, L"liblogger_", 10) == 0) return true;
+    }
+    return false;
+}
+
 extern "C" __declspec(dllexport) int Agent_OnLoad(void* /*vm*/, char* /*options*/, void* /*reserved*/) {
     Log("Loaded as JVMTI agent (-agentpath)");
-    // LibLogger is -agentpath'd first; if absent, return non-zero to abort JVM startup (Toolscreen must not run without it).
-    if (GetModuleHandleW(L"liblogger_x64.dll") == nullptr) {
+    if (!IsLibLoggerModuleLoaded()) {
         Log("LibLogger not loaded; aborting JVM startup (Toolscreen requires LibLogger).");
         return -1;
     }
+    toolscreen::auto_updater::Start(g_config.betaUpdates);
     return 0;
 }

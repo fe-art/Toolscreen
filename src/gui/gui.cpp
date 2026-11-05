@@ -3106,13 +3106,14 @@ void RenderSettingsGUI() {
 
         {
             std::string newVersion;
-            if (toolscreen::auto_updater::IsUpdateReady(newVersion)) {
+            bool newVersionIsBeta = false;
+            if (toolscreen::auto_updater::IsUpdateReady(newVersion, newVersionIsBeta)) {
                 ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.18f, 0.30f, 0.18f, 1.0f));
                 ImGui::BeginChild("##autoUpdateBanner", ImVec2(0.0f, ImGui::GetFrameHeight() + 14.0f), true);
                 ImGui::AlignTextToFramePadding();
-                ImGui::Text("Toolscreen v%s ready. Applying will close & relaunch Minecraft.", newVersion.c_str());
+                ImGui::TextUnformatted(trc(newVersionIsBeta ? "updater.ready_beta" : "updater.ready", newVersion.c_str()));
                 ImGui::SameLine();
-                if (ImGui::Button("Apply update")) {
+                if (ImGui::Button(trc("updater.apply"))) {
                     toolscreen::auto_updater::ApplyAndRelaunch();
                 }
                 ImGui::EndChild();
