@@ -859,15 +859,11 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                         }
 
                         ImGui::SameLine();
-                        if (ImGui::Button((tr("button.browse") + "##ezov_" + std::to_string(ovi)).c_str())) {
-                            ImagePickerResult result = OpenImagePickerAndValidate(g_minecraftHwnd.load(), g_toolscreenPath, g_toolscreenPath);
-                            if (result.completed) {
-                                if (result.success) {
-                                    ov.path = result.path;
-                                    g_configIsDirty = true;
-                                    LoadImageAsync(DecodedImageData::UserImage, "ezoverlay_" + ov.name, ov.path, g_toolscreenPath);
-                                }
-                            }
+                        ImagePickerResult result;
+                        if (ImagePickerButton((tr("button.browse") + "##ezov_" + std::to_string(ovi)).c_str(), result) && result.success) {
+                            ov.path = result.path;
+                            g_configIsDirty = true;
+                            LoadImageAsync(DecodedImageData::UserImage, "ezoverlay_" + ov.name, ov.path, g_toolscreenPath);
                         }
 
                         // File-found badge
@@ -1239,20 +1235,16 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                             g_pendingImageLoad = true;
                         }
                         ImGui::SameLine();
-                        if (ImGui::Button((tr("button.browse") + "##eyezoom_bg").c_str())) {
-                            ImagePickerResult result =
-                                OpenImagePickerAndValidate(g_minecraftHwnd.load(), g_toolscreenPath, g_toolscreenPath);
-
-                            if (result.completed) {
-                                if (result.success) {
-                                    mode.background.image = result.path;
-                                    ClearImageError("eyezoom_bg");
-                                    g_allImagesLoaded = false;
-                                    g_pendingImageLoad = true;
-                                    g_configIsDirty = true;
-                                } else if (!result.error.empty()) {
-                                    SetImageError("eyezoom_bg", result.error);
-                                }
+                        ImagePickerResult result;
+                        if (ImagePickerButton((tr("button.browse") + "##eyezoom_bg").c_str(), result)) {
+                            if (result.success) {
+                                mode.background.image = result.path;
+                                ClearImageError("eyezoom_bg");
+                                g_allImagesLoaded = false;
+                                g_pendingImageLoad = true;
+                                g_configIsDirty = true;
+                            } else if (!result.error.empty()) {
+                                SetImageError("eyezoom_bg", result.error);
                             }
                         }
 
@@ -1533,20 +1525,16 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                             g_pendingImageLoad = true;
                         }
                         ImGui::SameLine();
-                        if (ImGui::Button((tr("button.browse") + "##preemptive_bg").c_str())) {
-                            ImagePickerResult result =
-                                OpenImagePickerAndValidate(g_minecraftHwnd.load(), g_toolscreenPath, g_toolscreenPath);
-
-                            if (result.completed) {
-                                if (result.success) {
-                                    mode.background.image = result.path;
-                                    ClearImageError("preemptive_bg");
-                                    g_allImagesLoaded = false;
-                                    g_pendingImageLoad = true;
-                                    g_configIsDirty = true;
-                                } else if (!result.error.empty()) {
-                                    SetImageError("preemptive_bg", result.error);
-                                }
+                        ImagePickerResult result;
+                        if (ImagePickerButton((tr("button.browse") + "##preemptive_bg").c_str(), result)) {
+                            if (result.success) {
+                                mode.background.image = result.path;
+                                ClearImageError("preemptive_bg");
+                                g_allImagesLoaded = false;
+                                g_pendingImageLoad = true;
+                                g_configIsDirty = true;
+                            } else if (!result.error.empty()) {
+                                SetImageError("preemptive_bg", result.error);
                             }
                         }
 
@@ -1880,19 +1868,16 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                             g_pendingImageLoad = true;
                         }
                         ImGui::SameLine();
-                        if (ImGui::Button((tr("button.browse") + "##thin_bg").c_str())) {
-                            ImagePickerResult result =
-                                OpenImagePickerAndValidate(g_minecraftHwnd.load(), g_toolscreenPath, g_toolscreenPath);
-                            if (result.completed) {
-                                if (result.success) {
-                                    mode.background.image = result.path;
-                                    ClearImageError(thinErrorKey);
-                                    g_allImagesLoaded = false;
-                                    g_pendingImageLoad = true;
-                                    g_configIsDirty = true;
-                                } else if (!result.error.empty()) {
-                                    SetImageError(thinErrorKey, result.error);
-                                }
+                        ImagePickerResult result;
+                        if (ImagePickerButton((tr("button.browse") + "##thin_bg").c_str(), result)) {
+                            if (result.success) {
+                                mode.background.image = result.path;
+                                ClearImageError(thinErrorKey);
+                                g_allImagesLoaded = false;
+                                g_pendingImageLoad = true;
+                                g_configIsDirty = true;
+                            } else if (!result.error.empty()) {
+                                SetImageError(thinErrorKey, result.error);
                             }
                         }
                         renderBackgroundImageOptions(mode, "thin_bg_fit");
@@ -2190,19 +2175,16 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                             g_pendingImageLoad = true;
                         }
                         ImGui::SameLine();
-                        if (ImGui::Button((tr("button.browse") + "##wide_bg").c_str())) {
-                            ImagePickerResult result =
-                                OpenImagePickerAndValidate(g_minecraftHwnd.load(), g_toolscreenPath, g_toolscreenPath);
-                            if (result.completed) {
-                                if (result.success) {
-                                    mode.background.image = result.path;
-                                    ClearImageError(wideErrorKey);
-                                    g_allImagesLoaded = false;
-                                    g_pendingImageLoad = true;
-                                    g_configIsDirty = true;
-                                } else if (!result.error.empty()) {
-                                    SetImageError(wideErrorKey, result.error);
-                                }
+                        ImagePickerResult result;
+                        if (ImagePickerButton((tr("button.browse") + "##wide_bg").c_str(), result)) {
+                            if (result.success) {
+                                mode.background.image = result.path;
+                                ClearImageError(wideErrorKey);
+                                g_allImagesLoaded = false;
+                                g_pendingImageLoad = true;
+                                g_configIsDirty = true;
+                            } else if (!result.error.empty()) {
+                                SetImageError(wideErrorKey, result.error);
                             }
                         }
                         renderBackgroundImageOptions(mode, "wide_bg_fit");
@@ -2621,20 +2603,16 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.modes"))) {
                             g_pendingImageLoad = true;
                         }
                         ImGui::SameLine();
-                        if (ImGui::Button(("Browse...##mode_bg_" + mode.id).c_str())) {
-                            ImagePickerResult result =
-                                OpenImagePickerAndValidate(g_minecraftHwnd.load(), g_toolscreenPath, g_toolscreenPath);
-
-                            if (result.completed) {
-                                if (result.success) {
-                                    mode.background.image = result.path;
-                                    ClearImageError(modeErrorKey);
-                                    g_allImagesLoaded = false;
-                                    g_pendingImageLoad = true;
-                                    g_configIsDirty = true;
-                                } else if (!result.error.empty()) {
-                                    SetImageError(modeErrorKey, result.error);
-                                }
+                        ImagePickerResult result;
+                        if (ImagePickerButton(("Browse...##mode_bg_" + mode.id).c_str(), result)) {
+                            if (result.success) {
+                                mode.background.image = result.path;
+                                ClearImageError(modeErrorKey);
+                                g_allImagesLoaded = false;
+                                g_pendingImageLoad = true;
+                                g_configIsDirty = true;
+                            } else if (!result.error.empty()) {
+                                SetImageError(modeErrorKey, result.error);
                             }
                         }
 

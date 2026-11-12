@@ -117,18 +117,15 @@ if (BeginSelectableSettingsNestedTabItem(trc("tabs.images"))) {
                 g_configIsDirty = true;
             }
             ImGui::SameLine();
-            if (ImGui::Button((tr("button.browse") + "##img_" + img.name).c_str())) {
-                ImagePickerResult result = OpenImagePickerAndValidate(g_minecraftHwnd.load(), g_toolscreenPath, g_toolscreenPath);
-
-                if (result.completed) {
-                    if (result.success) {
-                        img.path = result.path;
-                        ClearImageError(imgErrorKey);
-                        g_configIsDirty = true;
-                        LoadImageAsync(DecodedImageData::UserImage, img.name, img.path, g_toolscreenPath);
-                    } else if (!result.error.empty()) {
-                        SetImageError(imgErrorKey, result.error);
-                    }
+            ImagePickerResult result;
+            if (ImagePickerButton((tr("button.browse") + "##img_" + img.name).c_str(), result)) {
+                if (result.success) {
+                    img.path = result.path;
+                    ClearImageError(imgErrorKey);
+                    g_configIsDirty = true;
+                    LoadImageAsync(DecodedImageData::UserImage, img.name, img.path, g_toolscreenPath);
+                } else if (!result.error.empty()) {
+                    SetImageError(imgErrorKey, result.error);
                 }
             }
             ImGui::SameLine();

@@ -46,7 +46,6 @@ static void SendMenuMaskKeyTap() {
 }
 
 static std::mutex g_imagePickerMutex;
-static std::map<std::string, ImagePickerResult> g_imagePickerResults;
 static std::map<std::string, std::future<ImagePickerResult>> g_imagePickerFutures;
 static std::map<std::string, std::string> g_imageErrorMessages;
 static std::map<std::string, std::chrono::steady_clock::time_point> g_imageErrorTimes;
@@ -251,23 +250,22 @@ std::string ValidateImageFile(const std::string& path, const std::wstring& tools
     return "";
 }
 
-ImagePickerResult OpenImagePickerAndValidate(HWND ownerHwnd, const std::wstring& initialDir, const std::wstring& toolscreenPath) {
+static void RestoreMinecraftWindowIfMinimized() {
+    const HWND hwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
+    if (hwnd == NULL || !IsWindow(hwnd) || !IsIconic(hwnd)) { return; }
+
+    PostMessage(hwnd, WM_SYSCOMMAND, SC_RESTORE, 0);
+    SetForegroundWindow(hwnd);
+}
+
+static ImagePickerResult OpenImagePickerAndValidate(const std::wstring& toolscreenPath) {
     ImagePickerResult result;
-
-    HWND safeOwner = NULL;
-    if (ownerHwnd != NULL && IsWindow(ownerHwnd)) {
-        HWND foreground = GetForegroundWindow();
-        DWORD windowThreadId = GetWindowThreadProcessId(ownerHwnd, NULL);
-        DWORD currentThreadId = GetCurrentThreadId();
-
-        if (foreground == ownerHwnd || windowThreadId == currentThreadId) { safeOwner = ownerHwnd; }
-    }
 
     OPENFILENAMEW ofn;
     WCHAR szFile[MAX_PATH] = { 0 };
     ZeroMemory(&ofn, sizeof(ofn));
     ofn.lStructSize = sizeof(ofn);
-    ofn.hwndOwner = safeOwner;
+    ofn.hwndOwner = NULL;
     ofn.lpstrFile = szFile;
     ofn.nMaxFile = sizeof(szFile) / sizeof(WCHAR);
     ofn.lpstrFilter =
@@ -275,11 +273,14 @@ ImagePickerResult OpenImagePickerAndValidate(HWND ownerHwnd, const std::wstring&
     ofn.nFilterIndex = 1;
     ofn.lpstrFileTitle = NULL;
     ofn.nMaxFileTitle = 0;
-    std::wstring pickerInitialDir = GetImagePickerInitialDirectory(initialDir);
+    std::wstring pickerInitialDir = GetImagePickerInitialDirectory(toolscreenPath);
     ofn.lpstrInitialDir = pickerInitialDir.empty() ? NULL : pickerInitialDir.c_str();
     ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
 
-    if (GetOpenFileNameW(&ofn) == TRUE) {
+    const BOOL picked = GetOpenFileNameW(&ofn);
+    RestoreMinecraftWindowIfMinimized();
+
+    if (picked == TRUE) {
         result.path = WideToUtf8(ofn.lpstrFile);
 
         std::string error = ValidateImageFile(result.path, toolscreenPath);
@@ -294,7 +295,6 @@ ImagePickerResult OpenImagePickerAndValidate(HWND ownerHwnd, const std::wstring&
         result.success = false;
     }
 
-    result.completed = true;
     return result;
 }
 
@@ -329,42 +329,38 @@ void ClearImageError(const std::string& key) {
     g_imageErrorTimes.erase(key);
 }
 
-void StartAsyncImagePicker(const std::string& pickerId, const std::wstring& initialDir) {
+static void StartAsyncImagePicker(const std::string& pickerId) {
     std::lock_guard<std::mutex> lock(g_imagePickerMutex);
 
     auto existing = g_imagePickerFutures.find(pickerId);
-    if (existing != g_imagePickerFutures.end() &&
-        existing->second.valid() &&
-        existing->second.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
-        return;
-    }
+    if (existing != g_imagePickerFutures.end()) { return; }
 
-    g_imagePickerResults.erase(pickerId);
-
-    const HWND ownerHwnd = g_minecraftHwnd.load(std::memory_order_relaxed);
     const std::wstring toolscreenPath = g_toolscreenPath;
-    g_imagePickerFutures[pickerId] = std::async(std::launch::async, [ownerHwnd, initialDir, toolscreenPath]() {
-        return OpenImagePickerAndValidate(ownerHwnd, initialDir, toolscreenPath);
+    g_imagePickerFutures[pickerId] = std::async(std::launch::async, [toolscreenPath]() {
+        return OpenImagePickerAndValidate(toolscreenPath);
     });
 }
 
-bool CheckAsyncImagePicker(const std::string& pickerId, std::string& outPath, std::string& outError) {
+static bool PollAsyncImagePicker(const std::string& pickerId, ImagePickerResult& outResult) {
     std::lock_guard<std::mutex> lock(g_imagePickerMutex);
 
     auto futureIt = g_imagePickerFutures.find(pickerId);
-    if (futureIt != g_imagePickerFutures.end() && futureIt->second.valid() &&
-        futureIt->second.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-        g_imagePickerResults[pickerId] = futureIt->second.get();
-        g_imagePickerFutures.erase(futureIt);
+    if (futureIt == g_imagePickerFutures.end() ||
+        futureIt->second.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+        return false;
     }
 
-    auto resultIt = g_imagePickerResults.find(pickerId);
-    if (resultIt == g_imagePickerResults.end() || !resultIt->second.completed) { return false; }
-
-    outPath = resultIt->second.path;
-    outError = resultIt->second.error;
-    g_imagePickerResults.erase(resultIt);
+    std::future<ImagePickerResult> finished = std::move(futureIt->second);
+    g_imagePickerFutures.erase(futureIt);
+    outResult = finished.get();
     return true;
+}
+
+bool ImagePickerButton(const char* label, ImagePickerResult& outResult, const ImVec2& size) {
+    const bool clicked = ImGui::Button(label, size);
+    const std::string pickerId = std::to_string(ImGui::GetItemID());
+    if (clicked) { StartAsyncImagePicker(pickerId); }
+    return PollAsyncImagePicker(pickerId, outResult);
 }
 
 void HelpMarker(const char* desc) {

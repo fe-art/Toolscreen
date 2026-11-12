@@ -177,9 +177,9 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.other"))) {
         ImGui::Indent();
         ImGui::TextUnformatted(trc("startup_indicator.image_path"));
 
-        if (ImGui::Button(trc("button.browse"))) {
-            ImagePickerResult result = OpenImagePickerAndValidate(g_minecraftHwnd.load(), g_toolscreenPath, g_toolscreenPath);
-            if (result.completed && result.success) {
+        ImagePickerResult result;
+        if (ImagePickerButton(trc("button.browse"), result)) {
+            if (result.success) {
                 if (DetectVisualMediaKindFromPath(result.path) == VisualMediaKind::VideoMpeg1) {
                     SetImageError("startup_indicator", trc("startup_indicator.error.video_unsupported"));
                 } else {
@@ -188,7 +188,7 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.other"))) {
                     g_configIsDirty = true;
                     InvalidateStartupIndicatorTexture();
                 }
-            } else if (result.completed && !result.success && !result.error.empty()) {
+            } else if (!result.error.empty()) {
                 SetImageError("startup_indicator", result.error);
             }
         }

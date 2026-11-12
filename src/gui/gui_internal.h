@@ -21,7 +21,6 @@ struct SupporterRoleEntry {
 };
 
 struct ImagePickerResult {
-    bool completed = false;
     bool success = false;
     std::string path;
     std::string error;
@@ -53,13 +52,11 @@ bool EnsureSupporterTierTexture(const SupporterRoleEntry& role, uintptr_t& outTe
 void ClearSupporterTierTextureCache();
 
 std::string ValidateImageFile(const std::string& path, const std::wstring& toolscreenPath, int maxDimension = 16384);
-ImagePickerResult OpenImagePickerAndValidate(HWND ownerHwnd, const std::wstring& initialDir, const std::wstring& toolscreenPath);
 void ClearExpiredImageErrors();
 void SetImageError(const std::string& key, const std::string& error);
 std::string GetImageError(const std::string& key);
 void ClearImageError(const std::string& key);
-void StartAsyncImagePicker(const std::string& pickerId, const std::wstring& initialDir);
-bool CheckAsyncImagePicker(const std::string& pickerId, std::string& outPath, std::string& outError);
+bool ImagePickerButton(const char* label, ImagePickerResult& outResult, const ImVec2& size = ImVec2(0, 0));
 
 void HelpMarker(const char* desc);
 void SliderCtrlClickTip();

@@ -408,13 +408,10 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                                 g_configIsDirty = true;
                             }
                             ImGui::SameLine();
-                            if (ImGui::Button((tr("button.browse") + "##cursor_trail_browse").c_str())) {
-                                ImagePickerResult result = OpenImagePickerAndValidate(
-                                    g_minecraftHwnd.load(), g_toolscreenPath, g_toolscreenPath);
-                                if (result.completed && result.success) {
-                                    trail.spritePath = result.path;
-                                    g_configIsDirty = true;
-                                }
+                            ImagePickerResult result;
+                            if (ImagePickerButton((tr("button.browse") + "##cursor_trail_browse").c_str(), result) && result.success) {
+                                trail.spritePath = result.path;
+                                g_configIsDirty = true;
                             }
                             ImGui::SameLine();
                             if (ImGui::Button((tr("button.clear") + "##cursor_trail_clear").c_str())) {
@@ -620,13 +617,11 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
                     float btnW = ImGui::CalcTextSize(displayName.c_str()).x + ImGui::GetStyle().FramePadding.x * 2.0f;
                     btnW = (std::max)(btnW, 80.0f);
                     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, path.empty() ? 0.5f : 1.0f);
-                    if (ImGui::Button((displayName + browseId).c_str(), ImVec2(btnW, 0))) {
-                        ImagePickerResult result = OpenImagePickerAndValidate(g_minecraftHwnd.load(), g_toolscreenPath, g_toolscreenPath);
-                        if (result.completed && result.success) {
-                            path = result.path;
-                            g_configIsDirty = true;
-                            InvalidateRebindIndicatorTexture();
-                        }
+                    ImagePickerResult result;
+                    if (ImagePickerButton((displayName + browseId).c_str(), result, ImVec2(btnW, 0)) && result.success) {
+                        path = result.path;
+                        g_configIsDirty = true;
+                        InvalidateRebindIndicatorTexture();
                     }
                     ImGui::PopStyleVar();
                     if (ImGui::IsItemHovered()) {
@@ -647,12 +642,12 @@ if (BeginSelectableSettingsTopTabItem(trc("tabs.inputs"))) {
 
                 if (g_config.keyRebinds.indicatorMode == 1 || g_config.keyRebinds.indicatorMode == 3) {
                     indicatorImageField(trc("inputs.indicator_image_enabled"), g_config.keyRebinds.indicatorImageEnabled,
-                                        "##rebind_ind_on", "X##rebind_img_on");
+                                        "###rebind_ind_on", "X##rebind_img_on");
                 }
 
                 if (g_config.keyRebinds.indicatorMode == 2 || g_config.keyRebinds.indicatorMode == 3) {
                     indicatorImageField(trc("inputs.indicator_image_disabled"), g_config.keyRebinds.indicatorImageDisabled,
-                                        "##rebind_ind_off", "X##rebind_img_off");
+                                        "###rebind_ind_off", "X##rebind_img_off");
                 }
             }
 
